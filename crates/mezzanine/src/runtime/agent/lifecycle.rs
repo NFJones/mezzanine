@@ -119,7 +119,8 @@ impl RuntimeSessionService {
         if matches!(
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) {
+        ) && !self.terminal_result_claimed_by_execution(turn_id)
+        {
             self.emit_subagent_task_result_for_state(&turn, state)?;
         }
         if let Some(footer) = runtime_agent_finished_footer_line(&turn, state) {
@@ -197,7 +198,8 @@ impl RuntimeSessionService {
         if matches!(
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) {
+        ) && !self.terminal_result_claimed_by_execution(&turn.turn_id)
+        {
             self.emit_subagent_task_result_for_state(turn, state)?;
         }
         if let Some(footer) = runtime_agent_finished_footer_line(turn, state) {

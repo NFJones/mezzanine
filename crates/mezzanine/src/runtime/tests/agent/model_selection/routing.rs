@@ -550,6 +550,7 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
     service
         .emit_subagent_task_result_for_execution(&first_worker_turn, &patched_execution)
         .unwrap();
+    assert!(service.terminal_result_claimed_by_execution(&first_worker_turn_id));
     service
         .complete_running_agent_turn_and_start_ready(
             &first_worker_turn,
@@ -611,6 +612,14 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
     service
         .emit_subagent_task_result_for_execution(&second_worker_turn, &patch_free_execution)
         .unwrap();
+    assert!(service.terminal_result_claimed_by_execution(&second_worker_turn_id));
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &second_worker_turn,
+            AgentTurnState::Completed,
+            "routed_loop_terminal_iteration_settled",
+        )
+        .unwrap();
 
     let workflow = service
         .routed_workflow_for_tests(&parent_turn_id)
@@ -624,6 +633,54 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
         workflow.child_turn_id.as_deref(),
         Some(second_worker_turn_id.as_str())
     );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!pane_text.contains("result committed: subagent task completed"));
+}
+
+/// Verifies a routed child that terminates without an execution record resumes
+/// the blocked parent through bounded failure recovery rather than false success.
+#[test]
+fn runtime_routed_child_missing_execution_recovers_parent() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 recover missing routed execution");
+
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &worker_turn,
+            AgentTurnState::Completed,
+            "routed_worker_missing_execution",
+        )
+        .unwrap();
+
+    let workflow = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .expect("missing execution should retain routed recovery state");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+    );
+    assert!(
+        workflow
+            .diagnostic
+            .as_deref()
+            .is_some_and(|value| value.contains("completed without an execution record"))
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent_turn_id)
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!pane_text.contains("result committed: subagent task completed"));
 }
 
 /// Verifies routed loop continuation queue failure terminates the controller

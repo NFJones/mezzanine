@@ -35,6 +35,27 @@ struct RoutedChildTurnRequest<'a> {
 }
 
 impl RuntimeSessionService {
+    /// Returns the active parent workflow that authoritatively owns one child.
+    ///
+    /// The reverse index is accepted only when it agrees with workflow state;
+    /// a workflow scan recovers safely when that optimization is absent.
+    pub(crate) fn routed_parent_turn_id_for_child(&self, child_turn_id: &str) -> Option<String> {
+        if let Some(parent_turn_id) = self.agent.routed_workflow_by_child_turn.get(child_turn_id)
+            && self
+                .agent
+                .routed_workflows_by_parent_turn
+                .get(parent_turn_id)
+                .is_some_and(|workflow| workflow.child_turn_id.as_deref() == Some(child_turn_id))
+        {
+            return Some(parent_turn_id.clone());
+        }
+        self.agent
+            .routed_workflows_by_parent_turn
+            .iter()
+            .find(|(_, workflow)| workflow.child_turn_id.as_deref() == Some(child_turn_id))
+            .map(|(parent_turn_id, _)| parent_turn_id.clone())
+    }
+
     /// Makes a routed parent eligible for its next provider request without
     /// bypassing scheduler capacity or fairness.
     ///
@@ -767,20 +788,7 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<bool> {
-        let parent_turn_id = self
-            .agent
-            .routed_workflow_by_child_turn
-            .get(&turn.turn_id)
-            .cloned()
-            .or_else(|| {
-                self.agent
-                    .routed_workflows_by_parent_turn
-                    .iter()
-                    .find(|(_, workflow)| {
-                        workflow.child_turn_id.as_deref() == Some(turn.turn_id.as_str())
-                    })
-                    .map(|(parent_turn_id, _)| parent_turn_id.clone())
-            });
+        let parent_turn_id = self.routed_parent_turn_id_for_child(&turn.turn_id);
         let Some(parent_turn_id) = parent_turn_id else {
             return Ok(false);
         };
@@ -794,6 +802,46 @@ impl RuntimeSessionService {
             plan_routed_workflow_transition(&state, RoutedWorkflowEvent::ChildCancelled)
                 .map_err(MezError::invalid_state)?;
         let RoutedWorkflowTransitionPlan::ChildCancellation(failure) = transition else {
+            self.agent
+                .routed_workflow_by_child_turn
+                .remove(&turn.turn_id);
+            self.agent.subagent_task_routes.remove(&turn.turn_id);
+            return Ok(true);
+        };
+        let parent_turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|candidate| candidate.turn_id == parent_turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("routed parent turn is unavailable"))?;
+        self.apply_routed_failure_plan(&parent_turn, failure)?;
+        self.clear_routed_workflow_runtime_state(&parent_turn_id);
+        self.agent.subagent_task_routes.remove(&turn.turn_id);
+        Ok(true)
+    }
+
+    /// Recovers an active routed workflow whose child has no execution record.
+    pub(crate) fn handle_routed_child_missing_execution(
+        &mut self,
+        turn: &AgentTurnRecord,
+        terminal_state: AgentTurnState,
+    ) -> Result<bool> {
+        let Some(parent_turn_id) = self.routed_parent_turn_id_for_child(&turn.turn_id) else {
+            return Ok(false);
+        };
+        let state = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get(&parent_turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("routed workflow state is unavailable"))?;
+        let transition = plan_routed_workflow_transition(
+            &state,
+            RoutedWorkflowEvent::ChildTerminatedWithoutExecution(terminal_state),
+        )
+        .map_err(MezError::invalid_state)?;
+        let RoutedWorkflowTransitionPlan::ChildMissingExecution(failure) = transition else {
             self.agent
                 .routed_workflow_by_child_turn
                 .remove(&turn.turn_id);
@@ -844,6 +892,10 @@ impl RuntimeSessionService {
                 self.retain_routed_loop_completion(parent_turn_id, completion)?;
             }
         }
+        self.agent
+            .routed_workflows_by_parent_turn
+            .remove(parent_turn_id);
+        self.clear_routed_workflow_runtime_state(parent_turn_id);
         if let Some(child_agent_id) = state.child_agent_id.as_deref() {
             self.remove_subagent_authority_state(child_agent_id);
             self.integration
@@ -896,10 +948,6 @@ impl RuntimeSessionService {
             self.agent.subagent_task_routes.remove(child_turn_id);
         }
         self.agent.routed_presentation_turns.remove(parent_turn_id);
-        self.agent
-            .routed_workflows_by_parent_turn
-            .remove(parent_turn_id);
-        self.clear_routed_workflow_runtime_state(parent_turn_id);
         Ok(true)
     }
 

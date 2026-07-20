@@ -178,6 +178,8 @@ pub enum RoutedWorkflowEvent<'a> {
     ChildSettled(&'a AgentTurnExecution),
     /// The current managed child turn was cancelled by the runtime.
     ChildCancelled,
+    /// The current managed child reached a terminal state without execution output.
+    ChildTerminatedWithoutExecution(AgentTurnState),
     /// The parent presentation or failure-explanation request settled.
     PresentationSettled(AgentTurnState),
 }
@@ -264,6 +266,8 @@ pub enum RoutedWorkflowTransitionPlan {
     Worker(RoutedWorkerCompletionPlan),
     /// Apply phase-specific child-cancellation recovery in the product runtime.
     ChildCancellation(RoutedFailurePlan),
+    /// Apply phase-specific recovery for a child missing its execution record.
+    ChildMissingExecution(RoutedFailurePlan),
     /// Apply one parent-presentation settlement effect in the product runtime.
     Presentation(RoutedPresentationCompletionPlan),
     /// Ignore a duplicate, stale, non-terminal, or phase-inapplicable observation.
@@ -297,6 +301,11 @@ pub fn plan_routed_workflow_transition(
         RoutedWorkflowEvent::ChildCancelled => Ok(plan_routed_child_cancellation(state)
             .map(RoutedWorkflowTransitionPlan::ChildCancellation)
             .unwrap_or(RoutedWorkflowTransitionPlan::Ignored)),
+        RoutedWorkflowEvent::ChildTerminatedWithoutExecution(terminal_state) => {
+            Ok(plan_routed_child_missing_execution(state, terminal_state)
+                .map(RoutedWorkflowTransitionPlan::ChildMissingExecution)
+                .unwrap_or(RoutedWorkflowTransitionPlan::Ignored))
+        }
         RoutedWorkflowEvent::PresentationSettled(terminal_state) => {
             Ok(plan_routed_presentation_settlement(state, terminal_state)
                 .map(RoutedWorkflowTransitionPlan::Presentation)
@@ -596,6 +605,36 @@ fn plan_routed_child_cancellation(state: &RoutedWorkflowState) -> Option<RoutedF
             stage: "summary request".to_string(),
             child_output: state.worker_final_result.clone().unwrap_or_default(),
             diagnostic: "routed handoff was cancelled".to_string(),
+            parent_context_blocks: Vec::new(),
+            worker_final_result_update: None,
+        }),
+        _ => None,
+    }
+}
+
+/// Classifies recovery when a managed child terminates without provider output.
+fn plan_routed_child_missing_execution(
+    state: &RoutedWorkflowState,
+    terminal_state: AgentTurnState,
+) -> Option<RoutedFailurePlan> {
+    let state_name = match terminal_state {
+        AgentTurnState::Completed => "completed",
+        AgentTurnState::Failed => "failed",
+        AgentTurnState::Interrupted => "was interrupted",
+        AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked => return None,
+    };
+    match state.phase {
+        RoutedWorkflowPhase::WaitingForWorkerResult => Some(RoutedFailurePlan {
+            stage: "worker".to_string(),
+            child_output: String::new(),
+            diagnostic: format!("routed child {state_name} without an execution record"),
+            parent_context_blocks: Vec::new(),
+            worker_final_result_update: None,
+        }),
+        RoutedWorkflowPhase::WaitingForHandoff => Some(RoutedFailurePlan {
+            stage: "summary request".to_string(),
+            child_output: state.worker_final_result.clone().unwrap_or_default(),
+            diagnostic: format!("routed child {state_name} without an execution record"),
             parent_context_blocks: Vec::new(),
             worker_final_result_update: None,
         }),
@@ -969,10 +1008,32 @@ mod tests {
         };
         assert_eq!(failure.diagnostic, "routed worker was cancelled");
 
+        let RoutedWorkflowTransitionPlan::ChildMissingExecution(failure) =
+            plan_routed_workflow_transition(
+                &worker_state,
+                RoutedWorkflowEvent::ChildTerminatedWithoutExecution(AgentTurnState::Completed),
+            )
+            .unwrap()
+        else {
+            panic!("active worker missing execution should request recovery")
+        };
+        assert_eq!(
+            failure.diagnostic,
+            "routed child completed without an execution record"
+        );
+
         let mut stale = state();
         stale.phase = RoutedWorkflowPhase::ReadyForPresentation;
         assert_eq!(
             plan_routed_workflow_transition(&stale, RoutedWorkflowEvent::ChildCancelled).unwrap(),
+            RoutedWorkflowTransitionPlan::Ignored
+        );
+        assert_eq!(
+            plan_routed_workflow_transition(
+                &stale,
+                RoutedWorkflowEvent::ChildTerminatedWithoutExecution(AgentTurnState::Failed),
+            )
+            .unwrap(),
             RoutedWorkflowTransitionPlan::Ignored
         );
         assert_eq!(

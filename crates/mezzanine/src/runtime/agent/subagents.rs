@@ -11,9 +11,10 @@ use super::{
     AgentTurnRecord, AgentTurnState, AuditActor, AuditRecord, Envelope, EventKind,
     JoinedSubagentDependency, MezError, PaneId, Recipient, Result, RuntimeAgentLoopCompletion,
     RuntimeAgentLoopSettlement, RuntimeSessionService, SenderIdentity, SubagentSpawnRequest,
-    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, current_unix_seconds,
-    json_escape, runtime_agent_terminal_preview, runtime_agent_turn_state_from_action_results,
-    runtime_agent_turn_state_name, runtime_cooperation_mode, runtime_cooperation_mode_name,
+    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TerminalResultDisposition,
+    current_unix_seconds, json_escape, runtime_agent_terminal_preview,
+    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
+    runtime_cooperation_mode, runtime_cooperation_mode_name,
     runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
     runtime_pane_by_id, runtime_spawn_json_agent_and_turn, runtime_subagent_display_label,
     runtime_subagent_placement_mode, runtime_subagent_result_status_label,
@@ -24,6 +25,8 @@ use super::{
 const SETTLED_ROUTED_PARENT_RESULT_LIMIT: usize = 4096;
 /// Maximum terminal subagent result idempotency keys retained by the runtime actor.
 const SETTLED_SUBAGENT_RESULT_LIMIT: usize = 4096;
+/// Maximum execution-aware terminal settlement claims retained by the runtime actor.
+const TERMINAL_RESULT_DISPOSITION_LIMIT: usize = 4096;
 
 /// Converts controller-owned loop completion metadata into the ordinary join shape.
 fn joined_dependency_from_loop_completion(
@@ -39,6 +42,27 @@ fn joined_dependency_from_loop_completion(
 }
 
 impl RuntimeSessionService {
+    /// Records which subsystem owns one terminal result before generic cleanup runs.
+    fn record_terminal_result_disposition(
+        &mut self,
+        turn_id: &str,
+        disposition: TerminalResultDisposition,
+    ) {
+        self.agent
+            .terminal_result_dispositions
+            .insert(turn_id.to_string(), disposition);
+        while self.agent.terminal_result_dispositions.len() > TERMINAL_RESULT_DISPOSITION_LIMIT {
+            self.agent.terminal_result_dispositions.pop_first();
+        }
+    }
+
+    /// Reports whether execution-aware settlement already claimed this terminal turn.
+    pub(crate) fn terminal_result_claimed_by_execution(&self, turn_id: &str) -> bool {
+        self.agent
+            .terminal_result_dispositions
+            .contains_key(turn_id)
+    }
+
     /// Records a routed parent result idempotency key within a bounded set.
     fn record_settled_routed_parent_result(&mut self, turn_id: &str) {
         self.agent
@@ -383,30 +407,28 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
-    ) -> Result<()> {
+    ) -> Result<TerminalResultDisposition> {
         if self
             .agent
             .settled_subagent_result_turns
             .contains(&turn.turn_id)
         {
-            return Ok(());
+            return Ok(TerminalResultDisposition::Delivered);
         }
         if self
             .agent
             .settled_routed_parent_result_turns
             .contains(&turn.turn_id)
         {
-            return Ok(());
+            return Ok(TerminalResultDisposition::PresentationDelivered);
         }
-        let routed_parent_turn_id = self
-            .agent
-            .routed_workflow_by_child_turn
-            .get(&turn.turn_id)
-            .cloned();
+        let routed_parent_turn_id = self.routed_parent_turn_id_for_child(&turn.turn_id);
         let loop_settlement = self.settle_agent_loop_after_terminal_execution(turn, execution)?;
         if loop_settlement == RuntimeAgentLoopSettlement::Continued {
             self.agent.subagent_task_routes.remove(&turn.turn_id);
-            return Ok(());
+            let disposition = TerminalResultDisposition::RetainedByLoop;
+            self.record_terminal_result_disposition(&turn.turn_id, disposition);
+            return Ok(disposition);
         }
         if let (
             Some(parent_turn_id),
@@ -418,11 +440,15 @@ impl RuntimeSessionService {
             self.retain_routed_loop_completion(parent_turn_id, completion.clone())?;
         }
         if self.handle_routed_child_execution_result(turn, execution)? {
-            return Ok(());
+            let disposition = TerminalResultDisposition::RetainedByRoutedWorkflow;
+            self.record_terminal_result_disposition(&turn.turn_id, disposition);
+            return Ok(disposition);
         }
         if self.routed_presentation_turn(&turn.turn_id) {
             self.emit_terminal_routed_parent_result(turn, execution)?;
-            return Ok(());
+            let disposition = TerminalResultDisposition::PresentationDelivered;
+            self.record_terminal_result_disposition(&turn.turn_id, disposition);
+            return Ok(disposition);
         }
         let success = execution.terminal_state == AgentTurnState::Completed;
         let summary = if success {
@@ -449,7 +475,10 @@ impl RuntimeSessionService {
             success,
             summary,
             &output,
-        )
+        )?;
+        let disposition = TerminalResultDisposition::Delivered;
+        self.record_terminal_result_disposition(&turn.turn_id, disposition);
+        Ok(disposition)
     }
 
     /// Runs the emit cancelled subagent task result operation for this subsystem.
@@ -568,6 +597,9 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         state: AgentTurnState,
     ) -> Result<()> {
+        if self.terminal_result_claimed_by_execution(&turn.turn_id) {
+            return Ok(());
+        }
         if self
             .agent
             .settled_subagent_result_turns
@@ -575,14 +607,10 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
-        if turn.cooperation_mode.as_deref() == Some("routed-worker") {
+        if self.handle_routed_child_missing_execution(turn, state)? {
             return Ok(());
         }
-        if self
-            .agent
-            .routed_workflow_by_child_turn
-            .contains_key(&turn.turn_id)
-        {
+        if turn.cooperation_mode.as_deref() == Some("routed-worker") {
             return Ok(());
         }
         let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);

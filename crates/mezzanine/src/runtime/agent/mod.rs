@@ -79,6 +79,19 @@ use mez_agent::{
 };
 use mez_mux::command::CommandInvocation;
 
+/// Exactly-once ownership outcome for one execution-aware terminal settlement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalResultDisposition {
+    /// An ordinary child result was delivered directly to its parent.
+    Delivered,
+    /// A continued loop retained ownership of the logical result.
+    RetainedByLoop,
+    /// A routed workflow retained ownership until parent presentation.
+    RetainedByRoutedWorkflow,
+    /// Routed parent presentation delivered the joined result.
+    PresentationDelivered,
+}
+
 mod approvals;
 mod audit;
 mod bookkeeping;
@@ -277,6 +290,8 @@ pub(crate) struct RuntimeAgentComponent {
     settled_routed_parent_result_turns: BTreeSet<String>,
     /// Subagent terminal results already committed through their parent handoff.
     settled_subagent_result_turns: BTreeSet<String>,
+    /// Execution-aware terminal settlements claimed before lifecycle cleanup.
+    terminal_result_dispositions: BTreeMap<String, TerminalResultDisposition>,
     /// Test-only one-shot failure injected after a routed worker spawn succeeds.
     #[cfg(test)]
     fail_routed_worker_after_spawn: bool,
