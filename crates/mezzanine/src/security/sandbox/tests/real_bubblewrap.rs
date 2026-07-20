@@ -9,8 +9,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::net::TcpListener;
+use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::symlink;
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{SocketAddr, UnixListener};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -182,6 +183,11 @@ fn execute_plan(plan: BubblewrapLaunchPlan, command: &str) -> Output {
     let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
     let mut child = Command::new("/bin/sh")
         .env("MEZ_REAL_SANDBOX_SECRET", "must-not-leak")
+        .env("SSH_AUTH_SOCK", "/run/user/1000/ssh-agent.sock")
+        .env("GPG_AGENT_INFO", "/run/user/1000/gnupg/S.gpg-agent")
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+        .env("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+        .env("DISPLAY", ":99")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -364,6 +370,65 @@ fn typed_launch_failure_has_no_unsandboxed_fallback_side_effect() {
         String::from_utf8_lossy(&output.stdout).contains(";D;127;mez_marker="),
         "stdout={:?} stderr={:?}",
         String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+/// Proves the private network and PID namespaces block IPv6 loopback, DNS,
+/// Linux abstract Unix sockets, and visibility of a known host process while
+/// the minimal environment removes representative credential and IPC handles.
+fn real_bubblewrap_blocks_extended_host_network_ipc_and_process_access() {
+    let config = config();
+    let Some(capability) = verified_capability(&config) else {
+        return;
+    };
+    if !Path::new("/usr/bin/python3").is_file() {
+        eprintln!("skipping extended real Bubblewrap test: /usr/bin/python3 is unavailable");
+        return;
+    }
+    let ipv6_listener = match TcpListener::bind("[::1]:0") {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("skipping extended real Bubblewrap test: IPv6 loopback unavailable: {error}");
+            return;
+        }
+    };
+    let ipv6_port = ipv6_listener.local_addr().unwrap().port();
+    let abstract_name = format!(
+        "mez-bwrap-{}-{}",
+        std::process::id(),
+        NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let abstract_address = SocketAddr::from_abstract_name(abstract_name.as_bytes()).unwrap();
+    let _abstract_listener = UnixListener::bind_addr(&abstract_address).unwrap();
+    let host_pid = std::process::id();
+    let fixture = RealBubblewrapFixture::new("extended-isolation");
+    let mut unknown = effects();
+    unknown.unknown = true;
+    let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
+    let plan = real_plan(&config, capability, &fixture.authority(), &evaluation);
+    let command = format!(
+        "set -eu\n\
+         test -z \"${{SSH_AUTH_SOCK+x}}\"\n\
+         test -z \"${{GPG_AGENT_INFO+x}}\"\n\
+         test -z \"${{DBUS_SESSION_BUS_ADDRESS+x}}\"\n\
+         test -z \"${{DOCKER_HOST+x}}\"\n\
+         test -z \"${{DISPLAY+x}}\"\n\
+         test ! -e /proc/{}\n\
+         /usr/bin/python3 -c 'import socket,sys; s=socket.socket(socket.AF_INET6); s.settimeout(0.2); sys.exit(0 if s.connect_ex((\"::1\", {})) != 0 else 1)'\n\
+         if /usr/bin/python3 -c 'import socket; socket.getaddrinfo(\"example.com\", 80)' 2>/dev/null; then exit 22; fi\n\
+         /usr/bin/python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(0.2); sys.exit(0 if s.connect_ex(\"\\0{}\") != 0 else 1)'\n\
+         printf '%s\\n' REAL_BWRAP_EXTENDED_OK",
+        host_pid, ipv6_port, abstract_name,
+    );
+
+    let output = execute_plan(plan, &command);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("REAL_BWRAP_EXTENDED_OK"),
+        "status={:?} stdout={stdout:?} stderr={:?}",
+        output.status,
         String::from_utf8_lossy(&output.stderr)
     );
 }
