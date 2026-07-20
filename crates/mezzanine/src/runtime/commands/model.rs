@@ -508,13 +508,13 @@ impl RuntimeSessionService {
             .catalog
             .reasoning_levels_for(model_name)
             .map(<[String]>::to_vec)
-            .unwrap_or_else(|| {
-                provider_config
-                    .map(|provider_config| {
-                        runtime_configured_reasoning_levels_for_model(provider_config, model_name)
-                    })
-                    .unwrap_or_default()
-            });
+            .unwrap_or_default();
+        if let Some(provider_config) = provider_config {
+            levels.extend(runtime_configured_reasoning_levels_for_model(
+                provider_config,
+                model_name,
+            ));
+        }
         if let Some(reasoning) = active_profile.reasoning_profile
             && !levels.iter().any(|level| level == &reasoning)
         {

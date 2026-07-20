@@ -94,7 +94,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\", \"gpt-5.4\"]\ndefault_model = \"gpt-5.5\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n"
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\", \"gpt-5.4\"]\ndefault_model = \"gpt-5.5\"\n\n[providers.openai.options]\nreasoning_effort = \"medium\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"low\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"low\"\n"
                 .to_string(),
         }])
         .unwrap();
@@ -189,6 +189,10 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
         .pane_agent_status_selector()
         .map(|selector| selector.items.clone())
         .unwrap_or_default();
+    assert!(
+        reasoning_items.iter().any(|item| item == "medium"),
+        "reasoning selector should retain configured provider levels alongside partial catalog levels: {reasoning_items:?}"
+    );
     let reasoning_index = reasoning_items
         .iter()
         .position(|item| item == "high")
