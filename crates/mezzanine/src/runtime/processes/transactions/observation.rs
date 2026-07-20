@@ -56,15 +56,7 @@ impl RuntimeSessionService {
             match event {
                 TerminalOscEvent::ShellIntegration { .. } => {}
                 TerminalOscEvent::TitleChanged { .. } | TerminalOscEvent::Clipboard(_) => {}
-                TerminalOscEvent::ShellPromptStart => {
-                    if !observed_harness_transaction_end {
-                        observed =
-                            observed.saturating_add(self.observe_passive_shell_prompt_candidate(
-                                output_pane_id,
-                                "osc133-prompt-start",
-                            )?);
-                    }
-                }
+                TerminalOscEvent::ShellPromptStart => {}
                 TerminalOscEvent::ShellPromptEnd => {
                     if !observed_harness_transaction_end {
                         observed =
@@ -74,15 +66,7 @@ impl RuntimeSessionService {
                             )?);
                     }
                 }
-                TerminalOscEvent::ShellCommandFinished { .. } => {
-                    if !observed_harness_transaction_end {
-                        observed =
-                            observed.saturating_add(self.observe_passive_shell_prompt_candidate(
-                                output_pane_id,
-                                "osc133-command-finished",
-                            )?);
-                    }
-                }
+                TerminalOscEvent::ShellCommandFinished { .. } => {}
                 TerminalOscEvent::ShellCommandOutputStart => {
                     if !observed_harness_transaction_end {
                         observed =

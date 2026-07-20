@@ -109,6 +109,43 @@ fn runtime_service_restarts_restored_panes_drain_initial_prompt_output_for_each_
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies only the completed-prompt OSC 133 marker authorizes passive shell
+/// readiness. Prompt-start and ordinary command-finished markers can precede
+/// visible PS1 bytes, so treating either as actionable would let hidden
+/// bootstrap output suppression consume a separately delivered prompt.
+#[test]
+fn runtime_passive_readiness_waits_for_prompt_end_marker() {
+    let mut service = test_runtime_service();
+
+    let prompt_start = service
+        .observe_agent_shell_transaction_events("%1", &[TerminalOscEvent::ShellPromptStart])
+        .unwrap();
+    assert_eq!(prompt_start, 0);
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Unknown
+    );
+
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+    let command_finished = service
+        .observe_agent_shell_transaction_events(
+            "%1",
+            &[TerminalOscEvent::ShellCommandFinished { exit_code: Some(0) }],
+        )
+        .unwrap();
+    assert_eq!(command_finished, 0);
+    assert_eq!(service.pane_readiness_state("%1"), PaneReadinessState::Busy);
+
+    let prompt_end = service
+        .observe_agent_shell_transaction_events("%1", &[TerminalOscEvent::ShellPromptEnd])
+        .unwrap();
+    assert_eq!(prompt_end, 1);
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
+}
+
 /// Verifies a degraded pane can recover from later prompt-boundary evidence.
 ///
 /// A failed probe or bootstrap can leave a pane `degraded` even after the user

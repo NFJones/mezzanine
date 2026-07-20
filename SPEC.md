@@ -3309,6 +3309,9 @@ markers.
 When passive shell integration is enabled, prompt start, prompt end, command
 output start, and command finished markers MUST use the OSC 133 `A`, `B`, `C`,
 and `D` conventions.
+Prompt start (`A`) and command finished (`D`) MUST NOT by themselves authorize
+harness input. Only prompt end (`B`), after visible prompt bytes, establishes the
+passive completed-prompt boundary; prompt retention MUST NOT depend on PTY chunking.
 
 Mezzanine MAY also recognize richer shell-integration markers such as OSC 633
 `A`, `B`, `C`, `D`, `E`, and `P` when they are produced by the pane shell or a

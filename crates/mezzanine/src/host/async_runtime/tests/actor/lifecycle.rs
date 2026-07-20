@@ -910,12 +910,12 @@ async fn async_actor_handles_control_requests_with_snapshot_repository() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Verifies that bootstrap dispatch is driven by typed pane-output events
-/// instead of a later compatibility tick. A prompt marker makes the pending
-/// pane bootstrap-ready; the actor should immediately enqueue the hidden
-/// bootstrap wrapper for the async pane worker and schedule its timeout timer.
+/// Verifies that bootstrap waits for a completed prompt when OSC 133 prompt
+/// markers and visible prompt bytes arrive in separate pane-output events.
+/// Prompt start must not activate hidden bootstrap rendering before the PS1 is
+/// retained; prompt end should then dispatch bootstrap without a later tick.
 #[tokio::test(flavor = "current_thread")]
-async fn async_actor_dispatches_bootstrap_after_prompt_ready_output_event() {
+async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
     let mut service = test_service();
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
@@ -937,6 +937,45 @@ async fn async_actor_dispatches_bootstrap_after_prompt_ready_output_event() {
             bytes: b"\x1b]133;A\x1b\\".to_vec(),
         }));
 
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 1);
+
+        assert!(
+            handle
+                .drain_pane_io_side_effects(pane_id.as_str(), 8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "prompt start must not dispatch bootstrap before visible PS1 bytes"
+        );
+        assert!(
+            handle.drain_timer_side_effects(8).await.unwrap().is_empty(),
+            "prompt start must not schedule a bootstrap timeout"
+        );
+
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: pane_id.clone(),
+            bytes: b"split-prompt> ".to_vec(),
+        }));
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 1);
+        assert!(
+            handle
+                .drain_pane_io_side_effects(pane_id.as_str(), 8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "visible prompt bytes alone must not dispatch bootstrap"
+        );
+
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: pane_id.clone(),
+            bytes: b"\x1b]133;B\x1b\\".to_vec(),
+        }));
         let report = handle.submit_runtime_events(batch).await.unwrap();
         assert_eq!(report.accepted, 1);
         assert_eq!(report.applied, 1);
@@ -974,9 +1013,20 @@ async fn async_actor_dispatches_bootstrap_after_prompt_ready_output_event() {
             RuntimeLifecycleState::Running
         );
         let _ = process.terminate(Duration::from_millis(10));
+        pane_id
     };
 
-    let ((), mut exit) = tokio::join!(client, actor.run());
+    let (pane_id, mut exit) = tokio::join!(client, actor.run());
+    let visible_content = exit
+        .service
+        .pane_screen(pane_id.as_str())
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        visible_content.contains("split-prompt>"),
+        "PS1 emitted between prompt start and end must remain visible: {visible_content:?}"
+    );
     assert!(exit.service.terminate_all_pane_processes().is_ok());
 }
 
