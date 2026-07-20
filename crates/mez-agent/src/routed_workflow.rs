@@ -1140,6 +1140,7 @@ mod tests {
             status,
             content: vec![ActionContentBlock::text(text)],
             structured_content_json: None,
+            permission_evaluation: None,
             is_error: status != ActionStatus::Succeeded,
             error: None,
         }

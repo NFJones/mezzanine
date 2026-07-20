@@ -14,6 +14,7 @@ use super::{
     runtime_agent_terminal_preview, runtime_execution_ready_for_provider_continuation,
     runtime_marker_for_action, runtime_pane_readiness_state_name,
 };
+use mez_agent::permissions::PermissionEvaluation;
 
 impl RuntimeSessionService {
     /// Runs the dispatch shell action to pane operation for this subsystem.
@@ -28,6 +29,7 @@ impl RuntimeSessionService {
         command: &str,
         stateful: bool,
         timeout_ms: Option<u64>,
+        permission_evaluation: Option<&PermissionEvaluation>,
     ) -> Result<()> {
         self.require_pane_ready_for_agent_command(&turn.pane_id)?;
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
@@ -117,7 +119,13 @@ impl RuntimeSessionService {
                 marker_id
             ),
         )?;
-        self.append_agent_shell_command_audit(turn, action, command, "sent")?;
+        self.append_agent_shell_command_audit(
+            turn,
+            action,
+            command,
+            permission_evaluation,
+            "sent",
+        )?;
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,

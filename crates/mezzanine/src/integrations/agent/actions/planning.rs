@@ -31,12 +31,14 @@ impl<'a, P> AgentTurnRunner<'a, P> {
             .map_err(MezError::invalid_args)?,
             _ => None,
         };
-        let local_rule_decision = local_plan
-            .as_ref()
-            .map(|plan| self.permissions.evaluate_command(&plan.policy_command));
-        let network_rule_decision = network_plan
-            .as_ref()
-            .map(|plan| self.permissions.evaluate_command(&plan.policy_command));
+        let local_permission_evaluation = local_plan.as_ref().map(|plan| {
+            self.permissions
+                .evaluate_command_structured(&plan.policy_command)
+        });
+        let network_permission_evaluation = network_plan.as_ref().map(|plan| {
+            self.permissions
+                .evaluate_command_structured(&plan.policy_command)
+        });
         let mcp_approval_required = match &action.payload {
             AgentActionPayload::McpCall { server, tool, .. } => {
                 self.mcp_tool_requires_approval(server, tool)
@@ -49,9 +51,11 @@ impl<'a, P> AgentTurnRunner<'a, P> {
             action,
             ActionPlanningInput {
                 local_plan: local_plan.as_ref(),
-                local_rule_decision,
+                local_rule_decision: None,
+                local_permission_evaluation: local_permission_evaluation.as_ref(),
                 network_plan: network_plan.as_ref(),
-                network_rule_decision,
+                network_rule_decision: None,
+                network_permission_evaluation: network_permission_evaluation.as_ref(),
                 approval_policy: self.permissions.approval_policy(),
                 approval_bypass: self.permissions.approval_bypass(),
                 mcp_approval_required,

@@ -14,7 +14,7 @@ use crate::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentTurnExecution,
     AgentTurnResultIdentity, AgentTurnState, ApprovalPolicy, LocalActionPlan, MaapBatch,
     MemoryActionBudget, ModelRequest, ModelResponse, ModelTokenUsage, NetworkActionPlan,
-    RuleDecision, SayStatus, network_action_structured_content_json,
+    PermissionEvaluation, RuleDecision, SayStatus, network_action_structured_content_json,
     shell_read_observations_for_command, turn_state_from_action_results,
 };
 
@@ -25,10 +25,14 @@ pub struct ActionPlanningInput<'a> {
     pub local_plan: Option<&'a LocalActionPlan>,
     /// Product permission decision for the local plan.
     pub local_rule_decision: Option<RuleDecision>,
+    /// Structured permission evaluation for the local plan.
+    pub local_permission_evaluation: Option<&'a PermissionEvaluation>,
     /// Lowered network execution plan, when this is a network action.
     pub network_plan: Option<&'a NetworkActionPlan>,
     /// Product permission decision for the network plan.
     pub network_rule_decision: Option<RuleDecision>,
+    /// Structured permission evaluation for the network plan.
+    pub network_permission_evaluation: Option<&'a PermissionEvaluation>,
     /// Active prompt handling policy.
     pub approval_policy: ApprovalPolicy,
     /// Whether fresh approval prompts are bypassed by product policy.
@@ -44,8 +48,10 @@ impl Default for ActionPlanningInput<'_> {
         Self {
             local_plan: None,
             local_rule_decision: None,
+            local_permission_evaluation: None,
             network_plan: None,
             network_rule_decision: None,
+            network_permission_evaluation: None,
             approval_policy: ApprovalPolicy::Ask,
             approval_bypass: false,
             mcp_approval_required: true,
@@ -228,10 +234,15 @@ fn plan_local_action(
         )
         .map_err(ActionPlanningError::from_contract);
     }
-    let decision = input
-        .local_rule_decision
+    let permission_evaluation = input.local_permission_evaluation;
+    let decision = permission_evaluation
+        .map(|evaluation| evaluation.decision)
+        .or(input.local_rule_decision)
         .ok_or_else(|| ActionPlanningError::new("local action permission decision is required"))?;
-    match decision {
+    let matched_rule_ids = permission_evaluation
+        .map(|evaluation| evaluation.matched_rule_ids.as_slice())
+        .unwrap_or_default();
+    let result = match decision {
         RuleDecision::Allow => Ok(ActionResult::running(
             turn,
             action,
@@ -242,7 +253,7 @@ fn plan_local_action(
                 Some("pending_local_dispatch"),
                 false,
                 serde_json::Value::Null,
-                &[],
+                matched_rule_ids,
                 serde_json::json!({"state":"pending_dispatch"}),
             )),
         )),
@@ -264,7 +275,7 @@ fn plan_local_action(
                     Some("pending_local_dispatch"),
                     false,
                     auto_allow_approval_json(action, action.action_type(), input),
-                    &[],
+                    matched_rule_ids,
                     serde_json::json!({"state":"pending_dispatch"}),
                 )),
             ))
@@ -279,7 +290,7 @@ fn plan_local_action(
                 Some("pending_local_dispatch"),
                 false,
                 serde_json::json!({"state":"pending","kind":action.action_type(),"action_id":action.id,"command":plan.policy_command}),
-                &[],
+                matched_rule_ids,
                 serde_json::json!({"state":"pending_approval"}),
             ),
         )),
@@ -291,7 +302,8 @@ fn plan_local_action(
             "local action denied by permission policy",
         )
         .map_err(ActionPlanningError::from_contract),
-    }
+    }?;
+    Ok(result.with_permission_evaluation(permission_evaluation.cloned()))
 }
 
 /// Plans one network action after product permission classification.
@@ -303,9 +315,13 @@ fn plan_network_action(
     let plan = input
         .network_plan
         .ok_or_else(|| ActionPlanningError::new("network action plan is required"))?;
-    let decision = input.network_rule_decision.ok_or_else(|| {
-        ActionPlanningError::new("network action permission decision is required")
-    })?;
+    let permission_evaluation = input.network_permission_evaluation;
+    let decision = permission_evaluation
+        .map(|evaluation| evaluation.decision)
+        .or(input.network_rule_decision)
+        .ok_or_else(|| {
+            ActionPlanningError::new("network action permission decision is required")
+        })?;
     let (content, approval, response) = match decision {
         RuleDecision::Allow => (vec!["network action accepted for runtime execution".to_string()], serde_json::Value::Null, serde_json::json!({"state":"pending_runtime_network"})),
         RuleDecision::Prompt if input.approval_policy == ApprovalPolicy::AutoAllow && action_supports_auto_allow(action, input) => (
@@ -315,8 +331,9 @@ fn plan_network_action(
             turn, action, vec!["approval required before executing network action".to_string()],
             network_action_structured_content_json(action, serde_json::json!({"state":"pending","kind":action.action_type(),"action_id":action.id,"policy_command":plan.policy_command}), serde_json::json!({"state":"pending_approval"}))
                 .map_err(ActionPlanningError::from_network)?,
-        )),
+        ).with_permission_evaluation(permission_evaluation.cloned())),
         RuleDecision::Forbid => return ActionResult::failed(turn, action, ActionStatus::Denied, "policy_forbidden", "network action denied by permission policy")
+            .map(|result| result.with_permission_evaluation(permission_evaluation.cloned()))
             .map_err(ActionPlanningError::from_contract),
     };
     Ok(ActionResult::running(
@@ -327,7 +344,8 @@ fn plan_network_action(
             network_action_structured_content_json(action, approval, response)
                 .map_err(ActionPlanningError::from_network)?,
         ),
-    ))
+    )
+    .with_permission_evaluation(permission_evaluation.cloned()))
 }
 
 /// Plans one configuration mutation against approval policy facts.
@@ -522,7 +540,13 @@ impl Error for ActionPlanningError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AgentActionResultIdentity, ContextBlock, ContextSourceKind, LocalActionKind};
+    use crate::{
+        AgentActionResultIdentity, ContextBlock, ContextSourceKind, LocalActionKind,
+        permissions::{
+            CommandRule, CommandRuleScope, DeclaredCommandEffects, EffectCompleteness,
+            PermissionPolicy, RuleMatch,
+        },
+    };
 
     struct TestTurn;
     impl AgentTurnResultIdentity for TestTurn {
@@ -633,6 +657,52 @@ mod tests {
             .unwrap();
             assert_eq!(result.status, status);
         }
+    }
+
+    #[test]
+    /// Verifies the planner retains the exact structured permission evaluation
+    /// and exposes stable matched rule identities in shell result metadata.
+    fn action_planning_retains_structured_permission_evaluation() {
+        let action = shell_action("inspect repository files");
+        let plan = local_plan();
+        let mut policy = PermissionPolicy::default();
+        policy.add_rule(
+            CommandRule::new(["rg", "--files"], RuleDecision::Allow, RuleMatch::Exact)
+                .unwrap()
+                .with_scope(CommandRuleScope::Session)
+                .with_id("repository-files")
+                .unwrap()
+                .with_declared_effects(DeclaredCommandEffects {
+                    completeness: EffectCompleteness::Complete,
+                    read_scopes: vec![".".to_string()],
+                    write_scopes: Vec::new(),
+                    network: Some(false),
+                    credentials: Some(false),
+                    process_control: Some(false),
+                })
+                .unwrap(),
+        );
+        let evaluation = policy.evaluate_shell_command_structured(&plan.policy_command);
+
+        let result = plan_action_result(
+            &TestTurn,
+            &action,
+            ActionPlanningInput {
+                local_plan: Some(&plan),
+                local_permission_evaluation: Some(&evaluation),
+                ..ActionPlanningInput::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.status, ActionStatus::Running);
+        assert_eq!(result.permission_evaluation.as_deref(), Some(&evaluation));
+        assert_eq!(
+            result.permission_evaluation.as_ref().unwrap().effects.reads,
+            ["."]
+        );
+        let structured = result.structured_content_json.as_deref().unwrap();
+        assert!(structured.contains(r#""matched_rules":["repository-files"]"#));
     }
 
     #[test]

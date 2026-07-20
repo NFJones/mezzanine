@@ -361,7 +361,8 @@ pub use openai_response::{
 };
 pub use openai_schema::openai_maap_current_action_batch_description;
 pub use permissions::{
-    AgentShellPermissionSummary, ApprovalPolicy, PermissionPlanning, PermissionPreset, RuleDecision,
+    AgentShellPermissionSummary, ApprovalPolicy, PermissionEvaluation, PermissionPlanning,
+    PermissionPreset, RuleDecision,
 };
 pub use progress::{
     RationaleSuppression, normalize_progress_say_entry, normalize_rationale_entry,

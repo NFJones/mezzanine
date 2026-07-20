@@ -318,6 +318,29 @@ fn policy_can_evaluate_with_session_approvals() {
     );
 }
 
+/// Verifies approval changes only the command-wide authorization decision and
+/// preserves the structured candidates and effects computed by policy.
+#[test]
+fn structured_approval_preserves_resource_effects() {
+    let policy = PermissionPolicy::default();
+    let command = "env";
+    let before = policy.evaluate_shell_command_structured(command);
+    let mut approvals = SessionApprovalStore::default();
+    approvals
+        .decide_prefix(["env"], ApprovalScope::Session, ApprovalDecision::Approve)
+        .unwrap();
+
+    let after =
+        policy.evaluate_shell_command_structured_with_approvals_scoped(command, &approvals, None);
+
+    assert_eq!(before.decision, RuleDecision::Prompt);
+    assert_eq!(after.decision, RuleDecision::Allow);
+    assert_eq!(after.candidates, before.candidates);
+    assert_eq!(after.matched_rule_ids, before.matched_rule_ids);
+    assert_eq!(after.effects, before.effects);
+    assert_eq!(after.completeness, before.completeness);
+}
+
 /// Verifies session approvals do not override configured denies.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -1113,4 +1136,138 @@ fn broad_interpreters_classify_as_unknown_effects() {
 
     assert_eq!(effects.len(), 1);
     assert!(effects[0].unknown);
+}
+
+/// Verifies structured evaluation retains the stable rule identity and the
+/// complete resource requirements declared for an otherwise broad command.
+#[test]
+fn structured_evaluation_retains_complete_declared_effects() {
+    let mut policy = PermissionPolicy::default();
+    policy.add_rule(
+        CommandRule::new(["cargo", "test"], RuleDecision::Allow, RuleMatch::Prefix)
+            .unwrap()
+            .with_scope(CommandRuleScope::Session)
+            .with_id("cargo-test")
+            .unwrap()
+            .with_declared_effects(DeclaredCommandEffects {
+                completeness: EffectCompleteness::Complete,
+                read_scopes: vec!["src".to_string()],
+                write_scopes: vec!["target".to_string()],
+                network: Some(false),
+                credentials: Some(false),
+                process_control: Some(false),
+            })
+            .unwrap(),
+    );
+
+    let evaluation = policy.evaluate_shell_command_structured("cargo test --all-targets");
+
+    assert_eq!(evaluation.decision, RuleDecision::Allow);
+    assert_eq!(evaluation.candidates.len(), 1);
+    assert_eq!(evaluation.candidates[0].matched_rule_ids, ["cargo-test"]);
+    assert_eq!(
+        evaluation.candidates[0].completeness,
+        EffectCompleteness::Complete
+    );
+    assert_eq!(evaluation.effects.reads, ["src"]);
+    assert_eq!(evaluation.effects.writes, ["target"]);
+    assert!(!evaluation.effects.unknown);
+}
+
+/// Verifies one incomplete candidate makes filesystem narrowing unknown while
+/// known security-relevant facts from another candidate remain available.
+#[test]
+fn structured_evaluation_preserves_known_facts_across_unknown_candidates() {
+    let mut policy = PermissionPolicy::default();
+    policy.add_rule(
+        CommandRule::new(["curl"], RuleDecision::Allow, RuleMatch::Prefix)
+            .unwrap()
+            .with_scope(CommandRuleScope::Session)
+            .with_id("network-client")
+            .unwrap()
+            .with_declared_effects(DeclaredCommandEffects {
+                completeness: EffectCompleteness::Complete,
+                read_scopes: Vec::new(),
+                write_scopes: Vec::new(),
+                network: Some(true),
+                credentials: Some(false),
+                process_control: Some(false),
+            })
+            .unwrap(),
+    );
+    policy.add_rule(
+        CommandRule::new(["python3"], RuleDecision::Allow, RuleMatch::Prefix)
+            .unwrap()
+            .with_scope(CommandRuleScope::Session)
+            .with_id("legacy-python")
+            .unwrap(),
+    );
+
+    let evaluation = policy.evaluate_shell_command_structured("curl example.test | python3");
+
+    assert_eq!(evaluation.decision, RuleDecision::Allow);
+    assert_eq!(evaluation.candidates.len(), 2);
+    assert_eq!(evaluation.completeness, EffectCompleteness::Unknown);
+    assert!(evaluation.effects.unknown);
+    assert!(evaluation.effects.network);
+    assert_eq!(
+        evaluation.matched_rule_ids,
+        ["legacy-python", "network-client"]
+    );
+}
+
+/// Verifies one structured evaluation retains stable rule identity and uses a
+/// complete declaration to replace the classifier's conservative unknown for
+/// a broad command family.
+#[test]
+fn structured_permission_evaluation_uses_complete_declared_effects() {
+    let mut policy = PermissionPolicy::default();
+    policy.add_rule(
+        CommandRule::new(["cargo", "test"], RuleDecision::Allow, RuleMatch::Prefix)
+            .unwrap()
+            .with_scope(CommandRuleScope::User)
+            .with_id("cargo-test")
+            .unwrap()
+            .with_declared_effects(DeclaredCommandEffects {
+                completeness: EffectCompleteness::Complete,
+                read_scopes: vec![".".to_string()],
+                write_scopes: vec!["target".to_string()],
+                network: Some(false),
+                credentials: Some(false),
+                process_control: Some(false),
+            })
+            .unwrap(),
+    );
+
+    let evaluation = policy.evaluate_shell_command_structured("cargo test --all-targets");
+
+    assert_eq!(evaluation.decision, RuleDecision::Allow);
+    assert_eq!(evaluation.completeness, EffectCompleteness::Complete);
+    assert_eq!(evaluation.candidates.len(), 1);
+    assert_eq!(evaluation.candidates[0].command, "cargo test --all-targets");
+    assert_eq!(evaluation.candidates[0].matched_rule_ids, ["cargo-test"]);
+    assert_eq!(evaluation.effects.reads, ["."]);
+    assert_eq!(evaluation.effects.writes, ["target"]);
+    assert!(!evaluation.effects.unknown);
+}
+
+/// Verifies an undeclared allow rule preserves its authorization decision but
+/// leaves filesystem narrowing unknown rather than trusting the command name.
+#[test]
+fn structured_permission_evaluation_keeps_undeclared_rule_effects_unknown() {
+    let mut policy = PermissionPolicy::default();
+    policy.add_rule(
+        CommandRule::new(["cargo", "test"], RuleDecision::Allow, RuleMatch::Prefix)
+            .unwrap()
+            .with_scope(CommandRuleScope::User)
+            .with_id("cargo-test")
+            .unwrap(),
+    );
+
+    let evaluation = policy.evaluate_shell_command_structured("cargo test");
+
+    assert_eq!(evaluation.decision, RuleDecision::Allow);
+    assert_eq!(evaluation.completeness, EffectCompleteness::Unknown);
+    assert_eq!(evaluation.candidates[0].matched_rule_ids, ["cargo-test"]);
+    assert!(evaluation.effects.unknown);
 }

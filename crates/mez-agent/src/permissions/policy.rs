@@ -6,8 +6,9 @@
 
 use super::{
     ApprovalDecision, ApprovalPolicy, BTreeMap, BlockedApprovalQueue, BlockedApprovalRequest,
-    BlockedApprovalState, CommandRule, CommandRuleScope, CommandRuleStore,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, MezError, PathScopes, PermissionAuthorityChange,
+    BlockedApprovalState, CandidateEvaluation, CommandRule, CommandRuleScope, CommandRuleStore,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeclaredCommandEffects, EffectCompleteness,
+    EffectiveCommandEffects, MezError, PathScopes, PermissionAuthorityChange, PermissionEvaluation,
     PermissionPolicy, PermissionPreset, Result, RuleDecision, RuleMatch, SessionApprovalStore,
     analyze_shell, classify_tokens, decode_rule_record, encode_rule_record, exact_command_sha256,
     normalize_exact_command_text, tokenize_shell_words, tokenize_single_candidate,
@@ -349,6 +350,158 @@ impl PermissionPolicy {
         self.evaluate_shell_command_scoped(command, None)
     }
 
+    /// Evaluates one shell policy command into authorization and resource
+    /// effects without requiring later consumers to rematch command text.
+    pub fn evaluate_shell_command_structured(&self, command: &str) -> PermissionEvaluation {
+        self.evaluate_shell_command_structured_scoped(command, None)
+    }
+
+    /// Evaluates one shell policy command with shell-resolved path evidence.
+    pub fn evaluate_shell_command_structured_in_scope(
+        &self,
+        command: &str,
+        scopes: &PathScopes,
+    ) -> PermissionEvaluation {
+        self.evaluate_shell_command_structured_scoped(command, Some(scopes))
+    }
+
+    fn evaluate_shell_command_structured_scoped(
+        &self,
+        command: &str,
+        scopes: Option<&PathScopes>,
+    ) -> PermissionEvaluation {
+        let decision = self.evaluate_shell_command_scoped(command, scopes);
+        let analysis = analyze_shell(command);
+        let mut candidates = Vec::with_capacity(analysis.candidates.len());
+        for candidate in analysis.candidates {
+            candidates.push(self.evaluate_candidate_structured(
+                candidate,
+                scopes,
+                analysis.unsafe_syntax,
+                DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+            ));
+        }
+        let completeness = if !candidates.is_empty()
+            && candidates
+                .iter()
+                .all(|candidate| candidate.completeness == EffectCompleteness::Complete)
+        {
+            EffectCompleteness::Complete
+        } else {
+            EffectCompleteness::Unknown
+        };
+        let effects = aggregate_candidate_effects(&candidates, completeness);
+        let mut matched_rule_ids = candidates
+            .iter()
+            .flat_map(|candidate| candidate.matched_rule_ids.iter().cloned())
+            .collect::<Vec<_>>();
+        matched_rule_ids.sort();
+        matched_rule_ids.dedup();
+        PermissionEvaluation {
+            decision,
+            candidates,
+            matched_rule_ids,
+            effects,
+            completeness,
+        }
+    }
+
+    fn evaluate_candidate_structured(
+        &self,
+        command: String,
+        scopes: Option<&PathScopes>,
+        unsafe_syntax: bool,
+        shell_classification: &str,
+    ) -> CandidateEvaluation {
+        let exact_sha_rules = self.matching_exact_sha256_rules(&command, shell_classification);
+        if !exact_sha_rules.is_empty() {
+            return candidate_evaluation_from_rules(
+                command,
+                exact_sha_rules,
+                EffectiveCommandEffects::unknown(),
+            );
+        }
+
+        let tokens = tokenize_shell_words(&command);
+        if unsafe_syntax {
+            let exact_rules = tokens
+                .as_ref()
+                .map(|tokens| self.matching_exact_token_rules(tokens))
+                .unwrap_or_default();
+            if !exact_rules.is_empty() {
+                return candidate_evaluation_from_rules(
+                    command,
+                    exact_rules,
+                    EffectiveCommandEffects::unknown(),
+                );
+            }
+            let matching_rules = tokens
+                .as_ref()
+                .map(|tokens| self.matching_token_rules(tokens, scopes))
+                .unwrap_or_default();
+            let decision = if matching_rules
+                .iter()
+                .any(|rule| rule.decision == RuleDecision::Forbid)
+            {
+                RuleDecision::Forbid
+            } else {
+                RuleDecision::Prompt
+            };
+            return CandidateEvaluation {
+                command,
+                decision,
+                matched_rule_ids: stable_rule_ids(&matching_rules),
+                effects: EffectiveCommandEffects::unknown(),
+                completeness: EffectCompleteness::Unknown,
+            };
+        }
+
+        let Some(tokens) = tokens else {
+            return CandidateEvaluation {
+                command,
+                decision: RuleDecision::Prompt,
+                matched_rule_ids: Vec::new(),
+                effects: EffectiveCommandEffects::unknown(),
+                completeness: EffectCompleteness::Unknown,
+            };
+        };
+        let matching_rules = self.matching_token_rules(&tokens, scopes);
+        let decision = self.evaluate_tokens(&tokens, scopes);
+        let classified = classify_tokens(&tokens, scopes);
+        candidate_evaluation_from_rules_with_decision(command, matching_rules, classified, decision)
+    }
+
+    fn matching_exact_sha256_rules(
+        &self,
+        candidate: &str,
+        shell_classification: &str,
+    ) -> Vec<&CommandRule> {
+        let normalized = normalize_exact_command_text(candidate, false);
+        let digest_hex = exact_command_sha256(shell_classification, &normalized);
+        self.rules
+            .iter()
+            .filter(|rule| rule.exact_sha256_matches(&digest_hex, shell_classification))
+            .collect()
+    }
+
+    fn matching_exact_token_rules(&self, tokens: &[String]) -> Vec<&CommandRule> {
+        self.rules
+            .iter()
+            .filter(|rule| matches!(rule.rule_match, RuleMatch::Exact) && rule.pattern == tokens)
+            .collect()
+    }
+
+    fn matching_token_rules(
+        &self,
+        tokens: &[String],
+        scopes: Option<&PathScopes>,
+    ) -> Vec<&CommandRule> {
+        self.rules
+            .iter()
+            .filter(|rule| rule.matches(tokens, scopes))
+            .collect()
+    }
+
     /// Runs the evaluate shell command for shell classification operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -515,11 +668,25 @@ impl PermissionPolicy {
         approvals: &SessionApprovalStore,
         scopes: Option<&PathScopes>,
     ) -> RuleDecision {
-        let base_decision = self.evaluate_shell_command_scoped(command, scopes);
+        self.evaluate_shell_command_structured_with_approvals_scoped(command, approvals, scopes)
+            .decision
+    }
+
+    /// Applies session approval state to one structured permission evaluation
+    /// without changing its candidates, matched rules, effects, or
+    /// completeness.
+    pub fn evaluate_shell_command_structured_with_approvals_scoped(
+        &self,
+        command: &str,
+        approvals: &SessionApprovalStore,
+        scopes: Option<&PathScopes>,
+    ) -> PermissionEvaluation {
+        let mut evaluation = self.evaluate_shell_command_structured_scoped(command, scopes);
+        let base_decision = evaluation.decision;
         let scope_requires_fresh_approval = scopes.is_some()
             && base_decision == RuleDecision::Prompt
             && self.evaluate_shell_command(command) == RuleDecision::Allow;
-        match approvals.evaluate(command) {
+        evaluation.decision = match approvals.evaluate(command) {
             Some(ApprovalDecision::Approve)
                 if base_decision == RuleDecision::Prompt && !scope_requires_fresh_approval =>
             {
@@ -528,7 +695,8 @@ impl PermissionPolicy {
             Some(ApprovalDecision::Approve) => base_decision,
             Some(ApprovalDecision::Disapprove | ApprovalDecision::Redirect) => RuleDecision::Forbid,
             None => base_decision,
-        }
+        };
+        evaluation
     }
 
     /// Runs the apply approval policy operation for this subsystem.
@@ -589,6 +757,157 @@ impl PermissionPolicy {
         } else {
             RuleDecision::Allow
         }
+    }
+}
+
+/// Builds one candidate evaluation from matching rules and classifier facts.
+fn candidate_evaluation_from_rules(
+    command: String,
+    rules: Vec<&CommandRule>,
+    classified: EffectiveCommandEffects,
+) -> CandidateEvaluation {
+    let decision = rules
+        .iter()
+        .map(|rule| rule.decision)
+        .min()
+        .unwrap_or(RuleDecision::Prompt);
+    candidate_evaluation_from_rules_with_decision(command, rules, classified, decision)
+}
+
+/// Builds one candidate evaluation while preserving the already-computed
+/// authorization decision.
+fn candidate_evaluation_from_rules_with_decision(
+    command: String,
+    rules: Vec<&CommandRule>,
+    classified: EffectiveCommandEffects,
+    decision: RuleDecision,
+) -> CandidateEvaluation {
+    let matched_rule_ids = stable_rule_ids(&rules);
+    let (effects, completeness) = merge_candidate_effects(classified, &rules, decision);
+    CandidateEvaluation {
+        command,
+        decision,
+        matched_rule_ids,
+        effects,
+        completeness,
+    }
+}
+
+/// Returns sorted, deduplicated configured rule identities.
+fn stable_rule_ids(rules: &[&CommandRule]) -> Vec<String> {
+    let mut ids = rules
+        .iter()
+        .filter_map(|rule| rule.id.clone())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// Merges classifier facts with declared effects without allowing declarations
+/// to erase known security-sensitive requirements.
+fn merge_candidate_effects(
+    mut effects: EffectiveCommandEffects,
+    rules: &[&CommandRule],
+    decision: RuleDecision,
+) -> (EffectiveCommandEffects, EffectCompleteness) {
+    let configured_allow_rules = rules
+        .iter()
+        .copied()
+        .filter(|rule| {
+            rule.decision == RuleDecision::Allow && rule.scope != CommandRuleScope::BuiltIn
+        })
+        .collect::<Vec<_>>();
+    if decision != RuleDecision::Allow || configured_allow_rules.is_empty() {
+        let completeness = if effects.unknown {
+            EffectCompleteness::Unknown
+        } else {
+            EffectCompleteness::Complete
+        };
+        return (effects, completeness);
+    }
+
+    let complete = configured_allow_rules.iter().all(|rule| {
+        rule.declared_effects
+            .as_ref()
+            .is_some_and(|declared| declared.completeness == EffectCompleteness::Complete)
+    });
+    for declared in configured_allow_rules
+        .iter()
+        .filter_map(|rule| rule.declared_effects.as_ref())
+    {
+        merge_declared_effects(&mut effects, declared);
+    }
+    effects.unknown = !complete;
+    normalize_effect_paths(&mut effects);
+    (
+        effects,
+        if complete {
+            EffectCompleteness::Complete
+        } else {
+            EffectCompleteness::Unknown
+        },
+    )
+}
+
+/// Adds one declaration to accumulated classifier facts.
+fn merge_declared_effects(
+    effects: &mut EffectiveCommandEffects,
+    declared: &DeclaredCommandEffects,
+) {
+    effects.reads.extend(declared.read_scopes.iter().cloned());
+    effects.writes.extend(declared.write_scopes.iter().cloned());
+    effects.network |= declared.network.unwrap_or(false);
+    effects.credentials |= declared.credentials.unwrap_or(false);
+    effects.process_control |= declared.process_control.unwrap_or(false);
+}
+
+/// Unions candidate effects while retaining known facts from incomplete
+/// candidates and marking command-wide narrowing unknown when required.
+fn aggregate_candidate_effects(
+    candidates: &[CandidateEvaluation],
+    completeness: EffectCompleteness,
+) -> EffectiveCommandEffects {
+    let mut aggregate = EffectiveCommandEffects::empty();
+    for candidate in candidates {
+        aggregate
+            .reads
+            .extend(candidate.effects.reads.iter().cloned());
+        aggregate
+            .writes
+            .extend(candidate.effects.writes.iter().cloned());
+        aggregate
+            .creates
+            .extend(candidate.effects.creates.iter().cloned());
+        aggregate
+            .deletes
+            .extend(candidate.effects.deletes.iter().cloned());
+        aggregate
+            .touches
+            .extend(candidate.effects.touches.iter().cloned());
+        aggregate.network |= candidate.effects.network;
+        aggregate.credentials |= candidate.effects.credentials;
+        aggregate.process_control |= candidate.effects.process_control;
+        aggregate.destructive |= candidate.effects.destructive;
+        aggregate.privilege_change |= candidate.effects.privilege_change;
+    }
+    aggregate.unknown = completeness == EffectCompleteness::Unknown;
+    normalize_effect_paths(&mut aggregate);
+    aggregate
+}
+
+/// Sorts and deduplicates path-like effect collections for deterministic
+/// evaluation and audit output.
+fn normalize_effect_paths(effects: &mut EffectiveCommandEffects) {
+    for paths in [
+        &mut effects.reads,
+        &mut effects.writes,
+        &mut effects.creates,
+        &mut effects.deletes,
+        &mut effects.touches,
+    ] {
+        paths.sort();
+        paths.dedup();
     }
 }
 

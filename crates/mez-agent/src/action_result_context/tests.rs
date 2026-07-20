@@ -242,6 +242,7 @@ fn action_result_context_truncates_large_result_body_at_256k() {
             "b".repeat(300 * 1024)
         ))],
         structured_content_json: None,
+        permission_evaluation: None,
         is_error: false,
         error: None,
     };
@@ -282,6 +283,7 @@ fn shell_action_result_context_preserves_raw_recorded_output_preview() {
             })
             .to_string(),
         ),
+        permission_evaluation: None,
         is_error: false,
         error: None,
     };

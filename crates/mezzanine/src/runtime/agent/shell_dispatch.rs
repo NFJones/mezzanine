@@ -831,12 +831,16 @@ impl RuntimeSessionService {
                     continue;
                 }
             }
+            let permission_evaluation = execution.action_results[index]
+                .permission_evaluation
+                .clone();
             if let Err(error) = self.dispatch_shell_action_to_pane(
                 turn,
                 action,
                 command,
                 plan.stateful,
                 plan.timeout_ms,
+                permission_evaluation.as_deref(),
             ) {
                 execution.action_results[index] = self.shell_action_runtime_error_result(
                     turn,
@@ -913,6 +917,11 @@ impl RuntimeSessionService {
             .find(|action| action.id == action_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("shell transaction does not match an action"))?;
+        let permission_evaluation = execution
+            .action_results
+            .iter()
+            .find(|result| result.action_id == action_id)
+            .and_then(|result| result.permission_evaluation.clone());
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(false);
         };
@@ -958,6 +967,7 @@ impl RuntimeSessionService {
                         &read_plan.command,
                         read_plan.stateful,
                         read_plan.timeout_ms,
+                        permission_evaluation.as_deref(),
                     )?;
                     return Ok(true);
                 }
@@ -996,6 +1006,7 @@ impl RuntimeSessionService {
             &write_plan.command,
             write_plan.stateful,
             write_plan.timeout_ms,
+            permission_evaluation.as_deref(),
         )?;
         Ok(true)
     }
@@ -1064,7 +1075,7 @@ impl RuntimeSessionService {
                 error.message()
             ),
         );
-        let _ = self.append_agent_shell_command_audit(turn, action, command, "failed");
+        let _ = self.append_agent_shell_command_audit(turn, action, command, None, "failed");
         Ok(result)
     }
 }

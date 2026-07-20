@@ -52,10 +52,11 @@ pub use rules::{
 };
 pub use types::{
     ApprovalDecision, ApprovalGrant, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
-    BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope, CommandRuleStore,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeclaredCommandEffects, EffectCompleteness,
-    EffectiveCommandEffects, PathResolutionStatus, PathScopes, PermissionAuthorityChange,
-    PermissionPolicy, ResolvedPathEvidence, ResolvedPathKind, RuleMatch, SessionApprovalStore,
+    BlockedApprovalRequest, BlockedApprovalState, CandidateEvaluation, CommandRule,
+    CommandRuleScope, CommandRuleStore, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+    DeclaredCommandEffects, EffectCompleteness, EffectiveCommandEffects, PathResolutionStatus,
+    PathScopes, PermissionAuthorityChange, PermissionEvaluation, PermissionPolicy,
+    ResolvedPathEvidence, ResolvedPathKind, RuleMatch, SessionApprovalStore,
 };
 
 use classification::{

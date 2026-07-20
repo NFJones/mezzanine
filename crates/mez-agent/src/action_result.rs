@@ -8,7 +8,7 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::AgentTurnState;
+use crate::{AgentTurnState, PermissionEvaluation};
 
 /// Stable identity needed from a product turn record when constructing results.
 pub trait AgentTurnResultIdentity {
@@ -107,6 +107,11 @@ pub struct ActionResult {
     pub content: Vec<ActionContentBlock>,
     /// Optional structured result details encoded as JSON.
     pub structured_content_json: Option<String>,
+    /// Permission evaluation computed from the original policy command.
+    ///
+    /// This typed internal metadata is retained across approval and dispatch
+    /// so sandbox compilation does not need to rematch command text.
+    pub permission_evaluation: Option<Box<PermissionEvaluation>>,
     /// Whether this result represents an execution error.
     pub is_error: bool,
     /// Structured error details for unsuccessful results.
@@ -121,6 +126,15 @@ impl ActionResult {
     /// immutable conversation chronology.
     pub fn is_terminal(&self) -> bool {
         !matches!(self.status, ActionStatus::Running | ActionStatus::Blocked)
+    }
+
+    /// Attaches the permission evaluation computed while planning this action.
+    pub fn with_permission_evaluation(
+        mut self,
+        permission_evaluation: Option<PermissionEvaluation>,
+    ) -> Self {
+        self.permission_evaluation = permission_evaluation.map(Box::new);
+        self
     }
 
     /// Constructs a nonterminal result for an action still executing.
@@ -171,6 +185,7 @@ impl ActionResult {
             status: ActionStatus::Blocked,
             content: action_text_content_blocks(content),
             structured_content_json: Some(structured_content_json),
+            permission_evaluation: None,
             is_error: false,
             error: None,
         }
@@ -204,6 +219,7 @@ impl ActionResult {
             status,
             content: Vec::new(),
             structured_content_json: None,
+            permission_evaluation: None,
             is_error: true,
             error: Some(ActionError {
                 code: code.into(),
@@ -291,6 +307,7 @@ impl ActionResult {
             status,
             content: action_text_content_blocks(content),
             structured_content_json,
+            permission_evaluation: None,
             is_error: false,
             error: None,
         }

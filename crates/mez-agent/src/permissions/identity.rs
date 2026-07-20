@@ -66,8 +66,14 @@ pub enum RuleDecision {
 /// canonical permission policy to the approval and path-scope state active for
 /// one planning request.
 pub trait PermissionPlanning: Send + Sync {
+    /// Returns one structured authorization and resource-effect evaluation for
+    /// the original shell-shaped policy command.
+    fn evaluate_command_structured(&self, command: &str) -> super::PermissionEvaluation;
+
     /// Returns the effective decision for one shell-shaped policy command.
-    fn evaluate_command(&self, command: &str) -> RuleDecision;
+    fn evaluate_command(&self, command: &str) -> RuleDecision {
+        self.evaluate_command_structured(command).decision
+    }
 
     /// Returns the active approval policy used for prompt-gate behavior.
     fn approval_policy(&self) -> ApprovalPolicy;

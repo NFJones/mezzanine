@@ -510,6 +510,7 @@ mod tests {
                 status: ActionStatus::Failed,
                 content: vec![mez_agent::ActionContentBlock::text("shell command failed")],
                 structured_content_json: None,
+                permission_evaluation: None,
                 is_error: true,
                 error: Some(mez_agent::ActionError {
                     code: "shell_failed".to_string(),

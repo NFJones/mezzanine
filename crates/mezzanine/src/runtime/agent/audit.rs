@@ -11,6 +11,7 @@ use super::{
     exact_command_sha256, runtime_mezzanine_error_code, runtime_permission_preset_name,
     runtime_provider_audit_error_message,
 };
+use mez_agent::permissions::{EffectCompleteness, PermissionEvaluation};
 
 impl RuntimeSessionService {
     /// Runs the append agent shell command audit operation for this subsystem.
@@ -23,6 +24,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
         command: &str,
+        permission_evaluation: Option<&PermissionEvaluation>,
         outcome: &str,
     ) -> Result<()> {
         let Some(audit_log) = self.persistence.audit_log_mut() else {
@@ -45,6 +47,39 @@ impl RuntimeSessionService {
             "command_sha256",
             exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, command),
         );
+        if let Some(evaluation) = permission_evaluation {
+            record = record
+                .with_metadata(
+                    "matched_rule_ids",
+                    serde_json::to_string(&evaluation.matched_rule_ids)
+                        .unwrap_or_else(|_| "[]".to_string()),
+                )
+                .with_metadata(
+                    "effect_completeness",
+                    match evaluation.completeness {
+                        EffectCompleteness::Unknown => "unknown",
+                        EffectCompleteness::Complete => "complete",
+                    },
+                )
+                .with_metadata("effect_unknown", evaluation.effects.unknown.to_string())
+                .with_metadata("effect_network", evaluation.effects.network.to_string())
+                .with_metadata(
+                    "effect_credentials",
+                    evaluation.effects.credentials.to_string(),
+                )
+                .with_metadata(
+                    "effect_process_control",
+                    evaluation.effects.process_control.to_string(),
+                )
+                .with_metadata(
+                    "effect_read_count",
+                    evaluation.effects.reads.len().to_string(),
+                )
+                .with_metadata(
+                    "effect_write_count",
+                    evaluation.effects.writes.len().to_string(),
+                );
+        }
         record.policy_mode =
             runtime_permission_preset_name(self.integration.permission_policy().preset).to_string();
         record.approval_state = "not_required_or_preapproved".to_string();

@@ -565,6 +565,7 @@ mod tests {
             status,
             content: vec![ActionContentBlock::text(format!("{action_id} settled"))],
             structured_content_json: None,
+            permission_evaluation: None,
             is_error: status == ActionStatus::Failed,
             error: (status == ActionStatus::Failed).then(|| ActionError {
                 code: "test_failure".to_string(),

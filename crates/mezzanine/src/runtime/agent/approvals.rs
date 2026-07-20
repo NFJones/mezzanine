@@ -366,6 +366,9 @@ impl RuntimeSessionService {
         if execution.action_results[result_index].status != ActionStatus::Blocked {
             return Ok(None);
         }
+        let retained_permission_evaluation = execution.action_results[result_index]
+            .permission_evaluation
+            .clone();
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
@@ -438,7 +441,11 @@ impl RuntimeSessionService {
                         ));
                     }
                 }
-                execution.action_results[result_index] = ActionResult::running(
+                let matched_rule_ids = retained_permission_evaluation
+                    .as_ref()
+                    .map(|evaluation| evaluation.matched_rule_ids.as_slice())
+                    .unwrap_or_default();
+                let mut resumed_result = ActionResult::running(
                     &turn,
                     &action,
                     vec!["approved local action accepted for local dispatch".to_string()],
@@ -453,10 +460,12 @@ impl RuntimeSessionService {
                             "action_id": action.id.as_str(),
                             "command": runtime_agent_context_command(&action, command)
                         }),
-                        &[],
+                        matched_rule_ids,
                         serde_json::json!({"state":"pending_dispatch"}),
                     )),
                 );
+                resumed_result.permission_evaluation = retained_permission_evaluation.clone();
+                execution.action_results[result_index] = resumed_result;
                 execution.terminal_state = AgentTurnState::Running;
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,

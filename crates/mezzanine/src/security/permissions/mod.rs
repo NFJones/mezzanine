@@ -5,7 +5,7 @@
 //! approval and path-scope state for the agent turn planner.
 
 use mez_agent::permissions::{
-    ApprovalPolicy, PathScopes, PermissionPlanning, PermissionPolicy, RuleDecision,
+    ApprovalPolicy, PathScopes, PermissionEvaluation, PermissionPlanning, PermissionPolicy,
     SessionApprovalStore,
 };
 
@@ -32,12 +32,13 @@ impl<'a> ProductPermissionPlanning<'a> {
 }
 
 impl PermissionPlanning for ProductPermissionPlanning<'_> {
-    fn evaluate_command(&self, command: &str) -> RuleDecision {
-        self.policy.evaluate_shell_command_with_approvals_scoped(
-            command,
-            self.approvals,
-            self.path_scopes,
-        )
+    fn evaluate_command_structured(&self, command: &str) -> PermissionEvaluation {
+        self.policy
+            .evaluate_shell_command_structured_with_approvals_scoped(
+                command,
+                self.approvals,
+                self.path_scopes,
+            )
     }
 
     fn approval_policy(&self) -> ApprovalPolicy {

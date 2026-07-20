@@ -219,6 +219,45 @@ pub struct DeclaredCommandEffects {
     pub process_control: Option<bool>,
 }
 
+/// Structured permission result for one shell AST candidate.
+///
+/// The candidate keeps the original command fragment, the authorization
+/// decision reached for that fragment, stable configured rule identities, and
+/// the resource effects computed during the same policy evaluation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateEvaluation {
+    /// Original shell candidate extracted from the policy command.
+    pub command: String,
+    /// Authorization decision before command-wide approval-policy adjustment.
+    pub decision: RuleDecision,
+    /// Stable identities of configured rules that participated in matching.
+    pub matched_rule_ids: Vec<String>,
+    /// Merged classified and declared resource effects for this candidate.
+    pub effects: EffectiveCommandEffects,
+    /// Whether filesystem effects are complete enough to narrow authority.
+    pub completeness: EffectCompleteness,
+}
+
+/// One command-wide permission evaluation shared by authorization and sandbox
+/// compilation.
+///
+/// Callers must retain this value rather than rematching the command later.
+/// Approvals and bypass may change `decision`, but must not mutate candidates,
+/// matched rule identities, effects, or completeness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionEvaluation {
+    /// Effective command-wide authorization decision.
+    pub decision: RuleDecision,
+    /// Ordered shell candidates extracted from the original policy command.
+    pub candidates: Vec<CandidateEvaluation>,
+    /// Sorted, deduplicated stable rule identities across all candidates.
+    pub matched_rule_ids: Vec<String>,
+    /// Union of known resource effects across all candidates.
+    pub effects: EffectiveCommandEffects,
+    /// Complete only when every candidate has complete filesystem effects.
+    pub completeness: EffectCompleteness,
+}
+
 /// Carries Command Rule state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
