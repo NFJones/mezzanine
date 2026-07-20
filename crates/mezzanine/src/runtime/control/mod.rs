@@ -355,46 +355,19 @@ impl RuntimeSessionService {
             .collect()
     }
 
-    /// Builds an explicit model-facing notice for compacted conversation memory.
-    ///
-    /// # Parameters
-    /// - `records`: Memory records selected for automatic context injection.
-    fn runtime_agent_compaction_notice_context_block(
-        records: &[MemoryRecord],
-    ) -> Option<ContextBlock> {
-        if !records
-            .iter()
-            .any(|record| record.id.starts_with("compact-"))
-        {
-            return None;
-        }
-        Some(ContextBlock {
-            source: ContextSourceKind::Memory,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "conversation compaction notice".to_string(),
-            content: "Conversation compaction occurred before this turn. Older durable transcript entries were summarized into compact memory, and only the retained recent raw tail remains exact. Treat the summary as lossy; use targeted shell, search, or capture actions if older exact details are needed."
-                .to_string(),
-        })
-    }
-
     /// Builds one frozen historical epoch shared by initial prompt restoration
     /// and active-turn compaction refresh.
     ///
-    /// The epoch order is invariant: the compaction notice and older compact
-    /// memory precede the retained newer raw transcript. Task-local messages,
-    /// prelude, prompt, steering, and same-turn execution events are appended by
-    /// their owning producers after this epoch.
+    /// The epoch order is invariant: older compact memory precedes the retained
+    /// newer raw transcript. Task-local messages, prelude, prompt, steering, and
+    /// same-turn execution events are appended by their owning producers after
+    /// this epoch.
     fn runtime_agent_history_epoch_context_blocks(
         &self,
         pane_id: &str,
     ) -> Result<Vec<ContextBlock>> {
         let context_memory_records = self.model_context_memory_records_for_pane(pane_id);
         let mut blocks = Vec::new();
-        if let Some(block) =
-            Self::runtime_agent_compaction_notice_context_block(&context_memory_records)
-        {
-            blocks.push(block);
-        }
         blocks.extend(memory_context_blocks(
             &context_memory_records
                 .iter()

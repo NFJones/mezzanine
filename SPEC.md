@@ -3741,10 +3741,14 @@ tail MUST preserve author roles and exact visible assistant/user text so terse
 follow-up prompts can resolve recent references such as numbered list items.
 Older closed groups outside the raw tail SHOULD be represented by compact
 memory rather than replayed verbatim.
-When compact memory is injected into later model context, Mezzanine MUST also
-inject an explicit compaction notice explaining that older durable transcript
-entries were summarized and that only the retained recent raw tail remains
-exact.
+Provider-limit and manual compaction MUST expose at most one model-visible
+compaction block. Later compaction MUST recursively replace prior local or
+compatible legacy compaction blocks with one bounded rolling summary while
+preserving exact barriers, retained raw chronology, and frozen consumed-event
+boundaries. The compact-memory block itself MUST explain that older durable
+transcript entries were summarized, that the summary is lossy, and that only
+the retained recent raw tail remains exact; a separate compaction notice MUST
+NOT be injected.
 
 Transcript replay MUST omit durable-storage metadata that is not useful for the
 next model decision, including transcript reference handles, per-entry sequence

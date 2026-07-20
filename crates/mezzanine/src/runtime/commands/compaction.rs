@@ -777,6 +777,8 @@ pub(super) fn runtime_model_compact_memory_content(
 ) -> String {
     [
         format!("Model-generated compacted conversation summary for {conversation_id}."),
+        "Older durable transcript entries were summarized into this compact memory, and only the retained recent raw tail remains exact. Treat this summary as lossy; use targeted shell, search, or capture actions if older exact details are needed."
+            .to_string(),
         format!("Pane: {pane_id}."),
         format!("Transcript entries before compaction: {transcript_entries}."),
         format!("Durable entries supplied to model: {summarized_entries}."),

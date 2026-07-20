@@ -10,7 +10,7 @@
 use crate::{
     AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextRetention,
     ContextSemanticKind, ContextSourceKind, ModelContextCompactionReport,
-    model_context_block_header,
+    context_block_is_compaction_summary, model_context_block_header,
 };
 use std::ops::Range;
 
@@ -24,7 +24,8 @@ pub const DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT: usize = 10;
 /// Validated replacement plan produced before typed chronology is mutated.
 struct ModelContextCompactionPlan {
     blocks: Vec<ContextBlock>,
-    replacements: Vec<(Range<usize>, ContextBlock)>,
+    replacement_ranges: Vec<Range<usize>>,
+    replacement_summary: Option<ContextBlock>,
     report: ModelContextCompactionReport,
 }
 
@@ -33,19 +34,11 @@ impl ModelContextCompactionPlan {
     fn unchanged(blocks: &[ContextBlock], report: ModelContextCompactionReport) -> Self {
         Self {
             blocks: blocks.to_vec(),
-            replacements: Vec::new(),
+            replacement_ranges: Vec::new(),
+            replacement_summary: None,
             report,
         }
     }
-}
-
-/// Mutable state accumulated while contiguous compactable runs are planned.
-struct ModelContextCompactionRun {
-    prepared: Vec<ContextBlock>,
-    pending: Vec<ContextBlock>,
-    pending_ranges: Vec<Range<usize>>,
-    replacements: Vec<(Range<usize>, ContextBlock)>,
-    report: ModelContextCompactionReport,
 }
 
 /// Compacts provider-bound context with the default retained-tail percentage.
@@ -92,7 +85,8 @@ pub fn compact_model_context_for_budget_at_consumed_sequence(
     context.validate_durable()?;
     let ModelContextCompactionPlan {
         blocks,
-        replacements,
+        replacement_ranges,
+        replacement_summary,
         report,
     } = compact_model_context_blocks(
         &context,
@@ -101,11 +95,11 @@ pub fn compact_model_context_for_budget_at_consumed_sequence(
         retained_tail_percent,
         consumed_sequence_high_water,
     )?;
-    if replacements.is_empty() {
+    let Some(replacement_summary) = replacement_summary else {
         return Ok((context, report));
-    }
+    };
     let mut compacted = context;
-    compacted.compact_execution_ranges(replacements)?;
+    compacted.compact_execution_ranges_into_summary(replacement_ranges, replacement_summary)?;
     if compacted.blocks() != blocks {
         return Err(AgentContextError::new(
             "typed compaction projection differs from the validated compaction plan",
@@ -198,35 +192,71 @@ fn compact_model_context_blocks(
                 .cloned()
         })
         .collect::<Vec<_>>();
-    let mut run = ModelContextCompactionRun {
-        prepared: Vec::with_capacity(blocks.len().saturating_add(execution_groups.len())),
-        pending: Vec::new(),
-        pending_ranges: Vec::new(),
-        replacements: Vec::new(),
-        report,
-    };
-    run.prepared.extend(stable_prefix);
-    for (group_index, group) in execution_groups.iter().enumerate() {
-        let group_blocks = &immutable_chronology[group.clone()];
-        let protected = group_blocks
+    let replacement_ranges = eligible_groups
+        .iter()
+        .copied()
+        .filter(|group_index| !retained_groups.contains(group_index))
+        .map(|group_index| execution_groups[group_index].clone())
+        .collect::<Vec<_>>();
+    if replacement_ranges.is_empty() {
+        return Ok(ModelContextCompactionPlan::unchanged(blocks, report));
+    }
+    let compacted_blocks = replacement_ranges
+        .iter()
+        .flat_map(|range| immutable_chronology[range.clone()].iter().cloned())
+        .collect::<Vec<_>>();
+    if compacted_blocks.len() == 1
+        && compacted_blocks
+            .first()
+            .is_some_and(context_block_is_compaction_summary)
+    {
+        return Ok(ModelContextCompactionPlan::unchanged(blocks, report));
+    }
+    let retained_chronology = immutable_chronology
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !replacement_ranges.iter().any(|range| range.contains(index)))
+        .map(|(_, block)| block.clone())
+        .collect::<Vec<_>>();
+    let fixed_words = model_context_total_words(&stable_prefix)
+        .saturating_add(model_context_total_words(&retained_chronology));
+    let summary_budget_words = context_budget_words.saturating_sub(fixed_words);
+    let (summary, omitted_blocks, omitted_original_words) = bulk_compacted_model_context_block(
+        &compacted_blocks,
+        &retained_tail,
+        tail_budget,
+        retained_tail_percent,
+        summary_budget_words,
+    );
+    let insertion_index = replacement_ranges
+        .first()
+        .expect("replacement ranges are non-empty")
+        .start;
+    let mut prepared = Vec::with_capacity(
+        stable_prefix
+            .len()
+            .saturating_add(retained_chronology.len())
+            .saturating_add(1),
+    );
+    prepared.extend(stable_prefix);
+    for (index, block) in immutable_chronology.iter().enumerate() {
+        if index == insertion_index {
+            prepared.push(summary.clone());
+        }
+        if replacement_ranges
             .iter()
-            .any(model_context_block_is_protected_barrier);
-        if eligible_groups.contains(&group_index)
-            && !protected
-            && !retained_groups.contains(&group_index)
+            .any(|range| range.contains(&index))
         {
-            run.pending.extend(group_blocks.iter().cloned());
-            run.pending_ranges.push(group.clone());
             continue;
         }
-        flush_compacted_context_run(&mut run, &retained_tail, tail_budget, retained_tail_percent);
-        run.prepared.extend(group_blocks.iter().cloned());
+        prepared.push(block.clone());
     }
-    flush_compacted_context_run(&mut run, &retained_tail, tail_budget, retained_tail_percent);
-    if run.report.compacted_blocks == 0 {
-        return Ok(ModelContextCompactionPlan::unchanged(blocks, run.report));
-    }
-    let compacted_words = model_context_total_words(&run.prepared);
+    let report = ModelContextCompactionReport {
+        compacted_blocks: compacted_blocks.len(),
+        omitted_blocks,
+        omitted_original_words,
+    };
+    let compacted_words = model_context_total_words(&prepared);
     if compacted_words > context_budget_words {
         return Err(AgentContextError::new(format!(
             "unrecoverable model context overflow: minimum barrier-preserving compacted context requires {compacted_words} words but provider budget is {context_budget_words}"
@@ -234,9 +264,10 @@ fn compact_model_context_blocks(
     }
 
     Ok(ModelContextCompactionPlan {
-        blocks: run.prepared,
-        replacements: run.replacements,
-        report: run.report,
+        blocks: prepared,
+        replacement_ranges,
+        replacement_summary: Some(summary),
+        report,
     })
 }
 
@@ -269,42 +300,6 @@ fn model_context_group_is_closed_and_consumed(
         .any(|event| event.execution_group_id() == Some(group_id))
 }
 
-/// Emits one compacted summary at the original position of its replaced run.
-fn flush_compacted_context_run(
-    run: &mut ModelContextCompactionRun,
-    retained_tail: &[ContextBlock],
-    tail_budget_words: usize,
-    retained_tail_percent: usize,
-) {
-    if run.pending.is_empty() {
-        return;
-    }
-    run.report.compacted_blocks = run
-        .report
-        .compacted_blocks
-        .saturating_add(run.pending.len());
-    let summary = bulk_compacted_model_context_block(
-        &run.pending,
-        retained_tail,
-        tail_budget_words,
-        retained_tail_percent,
-    );
-    let replacement_range = run
-        .pending_ranges
-        .first()
-        .expect("pending compacted blocks require a source range")
-        .start
-        ..run
-            .pending_ranges
-            .last()
-            .expect("pending compacted blocks require a source range")
-            .end;
-    run.prepared.push(summary.clone());
-    run.replacements.push((replacement_range, summary));
-    run.pending.clear();
-    run.pending_ranges.clear();
-}
-
 /// Groups typed chronology at indivisible provider-execution boundaries.
 ///
 /// Explicit execution-group identity is the sole ownership signal. Exact task,
@@ -333,14 +328,7 @@ fn model_context_execution_group_ranges(context: &AgentContext) -> Vec<Range<usi
 
 /// Returns whether a block is an exact, non-crossable compaction barrier.
 fn model_context_block_is_protected_barrier(block: &ContextBlock) -> bool {
-    block.retention() == ContextRetention::Exact || model_context_block_is_compaction_summary(block)
-}
-
-/// Returns whether a block is an immutable local compaction summary epoch.
-fn model_context_block_is_compaction_summary(block: &ContextBlock) -> bool {
-    block.source == ContextSourceKind::Memory
-        && block.label == "context compaction summary"
-        && block.content.starts_with(MODEL_CONTEXT_COMPACTED_PREFIX)
+    block.retention() == ContextRetention::Exact
 }
 
 /// Returns the provider-request word cost of one block.
@@ -388,6 +376,12 @@ fn model_context_retained_group_indexes(
         let group = &groups[group_index];
         if blocks[group.clone()]
             .iter()
+            .any(context_block_is_compaction_summary)
+        {
+            continue;
+        }
+        if blocks[group.clone()]
+            .iter()
             .any(|block| block.content.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES)
         {
             continue;
@@ -409,12 +403,13 @@ fn bulk_compacted_model_context_block(
     retained_tail: &[ContextBlock],
     tail_budget_words: usize,
     retained_tail_percent: usize,
-) -> ContextBlock {
+    summary_budget_words: usize,
+) -> (ContextBlock, usize, usize) {
     let compacted_original_words = model_context_total_words(compacted_blocks);
     let retained_tail_words = model_context_total_words(retained_tail);
     let mut lines = vec![
         MODEL_CONTEXT_COMPACTED_PREFIX.to_string(),
-        "Local context was compacted in bulk before provider request assembly.".to_string(),
+        "Local context was recursively compacted before provider request assembly.".to_string(),
         format!("compacted_blocks={}", compacted_blocks.len()),
         format!("compacted_original_words={compacted_original_words}"),
         format!("retained_tail_blocks={}", retained_tail.len()),
@@ -426,27 +421,59 @@ fn bulk_compacted_model_context_block(
         ),
         "Semantic recovery records:".to_string(),
     ];
-    for (index, block) in compacted_blocks.iter().enumerate() {
-        lines.push(format!(
-            "{}. source={} label={} categories={} summary={:?} original_words={}",
-            index.saturating_add(1),
-            model_context_source_kind_name(block.source),
-            model_context_single_line(&block.label),
-            model_context_semantic_categories(block),
-            model_context_semantic_excerpt(&block.content),
-            model_context_block_words(block)
-        ));
-    }
-    lines.push(
+    let recovery_lines = compacted_blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            format!(
+                "{}. source={} label={} categories={} summary={:?} original_words={}",
+                index.saturating_add(1),
+                model_context_source_kind_name(block.source),
+                model_context_single_line(&block.label),
+                model_context_semantic_categories(block),
+                model_context_semantic_excerpt(&block.content),
+                model_context_block_words(block)
+            )
+        })
+        .collect::<Vec<_>>();
+    let footer =
         "Every replaced source record is indexed above. These records preserve decision-relevant semantics, not exact source bytes. Recover exact details from transcript, action, memory, or artifact storage with targeted read/search/capture actions before relying on an excerpted detail."
-            .to_string(),
-    );
-    ContextBlock {
-        source: ContextSourceKind::Memory,
-        placement: crate::ContextPlacement::ConversationAppend,
-        label: "context compaction summary".to_string(),
-        content: lines.join("\n"),
+            .to_string();
+    let fixed_words = lines
+        .iter()
+        .map(|line| model_context_text_word_count(line))
+        .fold(
+            model_context_text_word_count(&footer),
+            usize::saturating_add,
+        );
+    let mut selected = Vec::new();
+    let mut selected_words = fixed_words;
+    let mut omitted_blocks = 0usize;
+    let mut omitted_original_words = 0usize;
+    for (block, line) in compacted_blocks.iter().zip(&recovery_lines).rev() {
+        let line_words = model_context_text_word_count(line);
+        if selected_words.saturating_add(line_words) <= summary_budget_words {
+            selected.push(line.clone());
+            selected_words = selected_words.saturating_add(line_words);
+        } else {
+            omitted_blocks = omitted_blocks.saturating_add(1);
+            omitted_original_words =
+                omitted_original_words.saturating_add(model_context_block_words(block));
+        }
     }
+    selected.reverse();
+    lines.extend(selected);
+    lines.push(footer);
+    (
+        ContextBlock {
+            source: ContextSourceKind::Memory,
+            placement: crate::ContextPlacement::ConversationAppend,
+            label: "context compaction summary".to_string(),
+            content: lines.join("\n"),
+        },
+        omitted_blocks,
+        omitted_original_words,
+    )
 }
 
 /// Classifies decision-relevant semantics retained by one compacted record.
@@ -489,7 +516,7 @@ fn model_context_semantic_categories(block: &ContextBlock) -> String {
 fn model_context_semantic_excerpt(content: &str) -> String {
     const MAX_EXCERPT_CHARS: usize = 120;
     const MAX_EXCERPT_LINES: usize = 6;
-    const IMPORTANT_TERMS: [&str; 19] = [
+    const IMPORTANT_TERMS: [&str; 20] = [
         "decision",
         "error",
         "failed",
@@ -509,6 +536,7 @@ fn model_context_semantic_excerpt(content: &str) -> String {
         "unresolved",
         "remaining",
         "pending",
+        "summary=",
     ];
     let normalized_lines = content
         .lines()
@@ -854,13 +882,14 @@ mod tests {
         assert!(memory_block.content.contains("retained_tail_percent=25"));
     }
 
-    /// Verifies later recovery creates a new immutable summary epoch without
-    /// rewriting the exact bytes of an earlier compaction boundary.
+    /// Verifies later recovery recursively replaces an earlier summary with
+    /// one deterministic bounded rolling summary.
     ///
     /// Successively smaller provider-limit budgets may reduce the raw tail,
-    /// but stable summary bytes must remain reusable across those retries.
+    /// but older and newer recovery markers must remain represented without
+    /// accumulating multiple model-visible summary epochs.
     #[test]
-    fn repeated_context_compaction_preserves_immutable_summary_epochs() {
+    fn repeated_context_compaction_preserves_one_rolling_summary() {
         let blocks = (0..24)
             .map(|index| ContextBlock {
                 source: ContextSourceKind::Transcript,
@@ -880,9 +909,10 @@ mod tests {
         let first_epoch = first
             .blocks()
             .iter()
-            .find(|block| model_context_block_is_compaction_summary(block))
+            .find(|block| context_block_is_compaction_summary(block))
             .expect("first compaction epoch should exist")
             .clone();
+        assert!(first_epoch.content.contains("entry-0"));
         for index in 24..32 {
             first
                 .insert_typed_block(
@@ -916,15 +946,28 @@ mod tests {
             second_report.omitted_original_words,
             repeated_report.omitted_original_words
         );
-        assert!(second.blocks().contains(&first_epoch));
         assert_eq!(
             second
                 .blocks()
                 .iter()
-                .filter(|block| model_context_block_is_compaction_summary(block))
+                .filter(|block| context_block_is_compaction_summary(block))
                 .count(),
-            2
+            1
         );
+        let rolling_summary = second
+            .blocks()
+            .iter()
+            .find(|block| context_block_is_compaction_summary(block))
+            .expect("second compaction should retain one rolling summary");
+        assert_ne!(rolling_summary, &first_epoch);
+        assert!(rolling_summary.content.contains("entry-0"));
+        assert!(
+            second
+                .blocks()
+                .iter()
+                .any(|block| block.content.contains("entry-31"))
+        );
+        assert!(model_context_total_words(second.blocks()) <= 1_200);
     }
 
     /// Verifies compaction never tears assistant/native-tool/result groups,
@@ -1011,7 +1054,7 @@ mod tests {
         let summaries = compacted
             .blocks()
             .iter()
-            .filter(|block| model_context_block_is_compaction_summary(block))
+            .filter(|block| context_block_is_compaction_summary(block))
             .collect::<Vec<_>>();
         assert_eq!(summaries.len(), 1);
         assert!(!summaries[0].content.contains("volatile-secret-state"));
@@ -1060,9 +1103,8 @@ mod tests {
         assert!(appended_diagnostics.immutable_append_only);
     }
 
-    /// Verifies user prompts and mid-turn steering are exact, non-crossable
-    /// barriers and each summarized execution range stays at its own original
-    /// chronological position.
+    /// Verifies user prompts and mid-turn steering remain exact, ordered
+    /// barriers when execution ranges on both sides roll into one summary.
     #[test]
     fn context_compaction_preserves_prompt_and_steering_barriers_in_place() {
         let prompt = ContextBlock::user_event("user prompt", "implement the chronology change");
@@ -1106,13 +1148,16 @@ mod tests {
 
         assert_eq!(report.compacted_blocks, 4);
         assert_eq!(first.blocks()[0], prompt);
-        assert!(model_context_block_is_compaction_summary(
-            &first.blocks()[1]
-        ));
+        assert!(context_block_is_compaction_summary(&first.blocks()[1]));
         assert_eq!(first.blocks()[2], steering);
-        assert!(model_context_block_is_compaction_summary(
-            &first.blocks()[3]
-        ));
+        assert_eq!(
+            first
+                .blocks()
+                .iter()
+                .filter(|block| context_block_is_compaction_summary(block))
+                .count(),
+            1
+        );
         assert_eq!(
             first
                 .chronology()
@@ -1122,8 +1167,7 @@ mod tests {
             vec![
                 original_sequences[0],
                 original_sequences[1],
-                original_sequences[3],
-                original_sequences[4]
+                original_sequences[3]
             ]
         );
 

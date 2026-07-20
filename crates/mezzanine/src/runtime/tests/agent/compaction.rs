@@ -970,7 +970,8 @@ context_window_tokens = 128000
         "{stored_context}"
     );
     assert!(
-        stored_context.contains("Conversation compaction occurred before this turn"),
+        stored_context
+            .contains("Older durable transcript entries were summarized into this compact memory"),
         "{stored_context}"
     );
     assert!(
@@ -1304,16 +1305,16 @@ context_window_tokens = 5000
     );
     assert!(prompt.contains(r#""state":"running""#), "{prompt}");
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    let compaction_notice = context
+    let compact_memory = context
         .blocks()
         .iter()
-        .find(|block| block.label == "conversation compaction notice")
-        .expect("compaction notice should be model-visible after /compact");
+        .find(|block| block.label.contains("compact-as-tail"))
+        .expect("compact memory should be model-visible after /compact");
     assert!(
-        compaction_notice
+        compact_memory
             .content
             .contains("Older durable transcript entries were summarized"),
-        "{compaction_notice:?}"
+        "{compact_memory:?}"
     );
     let transcript_context = context
         .blocks()

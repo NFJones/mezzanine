@@ -578,14 +578,7 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
         .filter(|block| block.source == ContextSourceKind::Memory)
         .collect::<Vec<_>>();
 
-    assert_eq!(memory_blocks.len(), 2, "{memory_blocks:?}");
-    assert!(
-        memory_blocks
-            .iter()
-            .any(|block| block.label == "conversation compaction notice"
-                && block.content.contains("Conversation compaction occurred")),
-        "{memory_blocks:?}"
-    );
+    assert_eq!(memory_blocks.len(), 1, "{memory_blocks:?}");
     assert!(
         memory_blocks
             .iter()

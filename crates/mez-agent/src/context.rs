@@ -776,6 +776,16 @@ impl ContextBlock {
     }
 }
 
+/// Returns whether one chronological memory block is a local or legacy
+/// conversation-compaction block that should participate in rolling summary
+/// replacement.
+pub fn context_block_is_compaction_summary(block: &ContextBlock) -> bool {
+    block.source == ContextSourceKind::Memory
+        && (block.label == "context compaction summary"
+            || block.label == "conversation compaction notice"
+            || block.label.starts_with("memory compact-"))
+}
+
 /// Typed request metadata that never becomes a model-visible context block.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelContextMetadata {
@@ -1441,6 +1451,82 @@ impl AgentContext {
         Ok(())
     }
 
+    /// Replaces multiple closed chronology ranges with one rolling summary.
+    ///
+    /// Selected ranges must be ordered and non-overlapping. They are removed
+    /// newest-first, then one recursively compactable summary is inserted at
+    /// the earliest selected sequence. Exact barriers between selected ranges
+    /// remain in place and retain their original event identities.
+    pub fn compact_execution_ranges_into_summary(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+        summary: ContextBlock,
+    ) -> AgentContextResult<()> {
+        let mut candidate = self.clone();
+        candidate.compact_execution_ranges_into_summary_candidate(ranges, summary)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Applies one atomic multi-range rolling-summary replacement.
+    fn compact_execution_ranges_into_summary_candidate(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+        summary: ContextBlock,
+    ) -> AgentContextResult<()> {
+        if summary.placement != ContextPlacement::ConversationAppend
+            || summary.semantic_kind() != ContextSemanticKind::ReferenceEvent
+            || summary.retention() != ContextRetention::Summarizable
+        {
+            return Err(AgentContextError::new(
+                "compaction replacement must be a summarizable chronological reference event",
+            ));
+        }
+        let mut previous_end = 0usize;
+        for (index, range) in ranges.iter().enumerate() {
+            if range.is_empty()
+                || range.end > self.chronology.len()
+                || (index > 0 && range.start < previous_end)
+            {
+                return Err(AgentContextError::new(
+                    "compaction ranges must be non-empty, in bounds, ordered, and non-overlapping",
+                ));
+            }
+            if self.chronology[range.clone()].iter().any(|event| {
+                event.retention == ContextRetention::Exact
+                    || (!event.recoverable_for_compaction
+                        && !context_block_is_compaction_summary(event.block()))
+            }) {
+                return Err(AgentContextError::new(
+                    "compaction cannot replace exact or unrecoverable chronological events",
+                ));
+            }
+            previous_end = range.end;
+        }
+        let first = ranges
+            .first()
+            .ok_or_else(|| AgentContextError::new("compaction requires at least one range"))?;
+        let insertion_index = first.start;
+        let sequence = self.chronology[insertion_index].sequence;
+        for range in ranges.into_iter().rev() {
+            self.chronology.drain(range);
+        }
+        self.chronology.insert(
+            insertion_index,
+            ConversationEvent {
+                block: summary,
+                semantic_kind: ContextSemanticKind::ReferenceEvent,
+                retention: ContextRetention::Summarizable,
+                sequence,
+                execution_group_id: None,
+                provider_owner: None,
+                recoverable_for_compaction: true,
+            },
+        );
+        self.rebuild_projections();
+        self.validate_durable()
+    }
+
     /// Applies validated compaction replacements to an isolated candidate.
     fn compact_execution_ranges_candidate(
         &mut self,
@@ -1484,7 +1570,7 @@ impl AgentContext {
                 sequence,
                 execution_group_id: None,
                 provider_owner: None,
-                recoverable_for_compaction: false,
+                recoverable_for_compaction: true,
             };
             self.chronology.splice(range, [summary_event]);
         }
@@ -1952,19 +2038,15 @@ fn compatibility_execution_group_ranges(blocks: &[&ContextBlock]) -> Vec<Range<u
     let mut has_assistant = false;
     let mut has_native_tool = false;
     for (index, block) in blocks.iter().enumerate() {
-        let protected = block.retention() == ContextRetention::Exact
-            || (block.source == ContextSourceKind::Memory
-                && block.label == "context compaction summary");
+        let protected = block.retention() == ContextRetention::Exact;
         let attaches_to_previous = match block.source {
             ContextSourceKind::TranscriptTool => has_assistant,
             ContextSourceKind::ActionResult => has_assistant || has_native_tool,
             _ => false,
         };
-        let current_group_protected = blocks[start..index].iter().any(|candidate| {
-            candidate.retention() == ContextRetention::Exact
-                || (candidate.source == ContextSourceKind::Memory
-                    && candidate.label == "context compaction summary")
-        });
+        let current_group_protected = blocks[start..index]
+            .iter()
+            .any(|candidate| candidate.retention() == ContextRetention::Exact);
         if index > start && (protected || current_group_protected || !attaches_to_previous) {
             groups.push(start..index);
             start = index;

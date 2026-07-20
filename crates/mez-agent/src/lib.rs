@@ -225,9 +225,9 @@ pub use context::{
     LiveStateBlock, ModelContextCompactionReport, ModelContextMetadata, ModelMessage,
     ModelMessageRole, ModelRequest, PreparedModelContext, ProviderContinuityOwner,
     StableContextBlock, StableContextSlotId, StableContextSourceFingerprint, TrustDomain,
-    context_placement_insertion_index, insert_context_block_by_placement,
-    model_context_block_header, validate_context_placement_order, validate_context_required,
-    validate_context_semantics,
+    context_block_is_compaction_summary, context_placement_insertion_index,
+    insert_context_block_by_placement, model_context_block_header,
+    validate_context_placement_order, validate_context_required, validate_context_semantics,
 };
 pub use context_appenders::{
     append_mcp_context, append_mcp_context_for_provider, append_memory_context,
