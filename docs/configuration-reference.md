@@ -740,6 +740,16 @@ Effects are accepted only on `allow` rules and may narrow but never grant author
 Bubblewrap activation requires explicit usable scopes. Schema v20 migration selects
 `policy-only` and does not infer scopes or effects.
 
+On Linux, Mezzanine validates the configured executable inside the target pane
+environment before launching a sandboxed workload. The probe requires usable
+user, mount, PID, IPC, UTS, cgroup, and network namespaces plus the fixed
+read-only runtime projection. Missing executables and unsupported namespace
+facilities fail closed; Mezzanine never retries the workload under
+`policy-only`. The Linux adversarial test suite reports an explicit unsupported-
+host skip when this production profile cannot run, while a profile that probes
+successfully is expected to pass the real filesystem, environment, IPC, and
+network confinement tests.
+
 ### `subagents.<name>`
 
 | Field | Type | Default declaration | Description |

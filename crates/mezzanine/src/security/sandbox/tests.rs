@@ -1,5 +1,8 @@
 //! Pure regression coverage for Bubblewrap policy compilation.
 
+#[cfg(target_os = "linux")]
+mod real_bubblewrap;
+
 use std::collections::BTreeMap;
 
 use mez_agent::permissions::{
