@@ -9,7 +9,7 @@ impl RuntimeSessionService {
     /// Reports whether host process metadata can determine if the pane primary
     /// shell is the foreground process group for its PTY.
     pub(crate) fn pane_foreground_primary_shell_state(&self, pane_id: &str) -> Option<bool> {
-        let primary_pid = self.process.pane_processes.primary_pid(pane_id)?;
+        let primary_pid = self.primary_pid_for_live_pane_process(pane_id)?;
         let foreground_group = self
             .process
             .pane_processes

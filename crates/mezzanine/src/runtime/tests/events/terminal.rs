@@ -515,6 +515,42 @@ fn runtime_alternate_screen_exit_recovers_interactive_blocked_readiness() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies adapter-owned panes recover from alternate-screen exit when cached
+/// foreground metadata identifies their detached primary shell.
+///
+/// Async process supervision removes a live process from `PaneProcessManager`
+/// while retaining its primary PID for runtime ownership. The readiness
+/// predicate must use that retained PID so alternate-screen exit can move an
+/// otherwise usable adapter-owned shell to prompt-candidate recovery.
+#[test]
+fn runtime_alternate_screen_exit_recovers_adapter_owned_pane_readiness() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let mut process = service.take_running_pane_process_for_adapter("%1").unwrap();
+
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+    service
+        .apply_pane_output_bytes("%1", b"\x1b[?1049hfullscreen".to_vec())
+        .unwrap();
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::InteractiveBlocked
+    );
+
+    service
+        .apply_pane_output_bytes("%1", b"\x1b[?1049l$ ".to_vec())
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies a pre-dispatch pane-readiness failure stops the current shell batch
 /// after the first failed action.
 ///
