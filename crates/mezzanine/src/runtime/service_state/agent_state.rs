@@ -204,6 +204,23 @@ pub(crate) struct RunningShellTransactionRef {
     pub(crate) observed_output_truncated: bool,
 }
 
+/// Cache identity for pane-shell path authority resolution.
+///
+/// Environment and configuration generations are part of the identity so a
+/// working-directory, remote-environment, or permission change cannot reuse
+/// stale canonical path evidence.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RuntimePathResolutionCacheKey {
+    /// Pane whose shell environment performs the resolution.
+    pub(crate) pane_id: String,
+    /// Stable hash of the shell-observed pane environment.
+    pub(crate) environment_signature: String,
+    /// Configuration generation that supplied the requested authority.
+    pub(crate) config_generation: u64,
+    /// Exact bounded set of paths resolved by the pane shell.
+    pub(crate) request: mez_agent::shell::PanePathResolutionRequest,
+}
+
 /// Tracks a shell-backed `apply_patch` action across batched read phases.
 ///
 /// Large patch read snapshots can exceed a pane PTY capture budget when every
@@ -251,6 +268,11 @@ pub(crate) enum RunningShellTransactionKind {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Bootstrap,
+    /// Internal read-only canonical path-resolution transaction.
+    PathResolution {
+        /// Cache identity captured before the transaction was dispatched.
+        cache_key: RuntimePathResolutionCacheKey,
+    },
 }
 
 /// Timer-visible kind for a live shell transaction.
@@ -262,6 +284,8 @@ pub enum RuntimeShellTransactionTimerKind {
     ReadinessProbe,
     /// Pane bootstrap timeout.
     Bootstrap,
+    /// Pane-shell canonical path-resolution timeout.
+    PathResolution,
     /// Focused-shell hook marker timeout.
     FocusedShellHook,
 }

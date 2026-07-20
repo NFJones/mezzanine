@@ -27,6 +27,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeTimerKind::ShellTransaction
             | RuntimeTimerKind::ReadinessProbe
             | RuntimeTimerKind::Bootstrap
+            | RuntimeTimerKind::PathResolution
             | RuntimeTimerKind::FocusedShellHook => {
                 if scheduled {
                     self.timers.shell_transactions.insert(key.clone());

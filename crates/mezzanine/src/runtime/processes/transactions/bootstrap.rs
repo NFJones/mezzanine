@@ -108,6 +108,12 @@ impl RuntimeSessionService {
             if let Some(sig) = signature.clone() {
                 bootstrap_parsed = true;
                 self.process
+                    .pane_path_scopes
+                    .retain(|key, _| key.pane_id != pane_id);
+                self.process
+                    .pane_path_scope_failures
+                    .retain(|key, _| key.pane_id != pane_id);
+                self.process
                     .pane_environment_signatures
                     .insert(pane_id.to_string(), sig.clone());
                 if let Some(inv) = inventory.clone() {

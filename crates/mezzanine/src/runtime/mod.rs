@@ -493,8 +493,8 @@ use service_state::{
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
     RuntimeAgentPreShellHookCompletion, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
     RuntimeHttpMcpTransportState, RuntimeMcpRetryReport, RuntimeMcpTransportSet,
-    RuntimeModelProfileOverrideScope, RuntimeShellTransactionActionFailure,
-    RuntimeSubagentPlacement,
+    RuntimeModelProfileOverrideScope, RuntimePathResolutionCacheKey,
+    RuntimeShellTransactionActionFailure, RuntimeSubagentPlacement,
 };
 #[cfg(test)]
 use sockets::effective_uid;

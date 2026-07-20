@@ -405,7 +405,8 @@ impl RuntimeSessionService {
                     has_agent_action = true;
                 }
                 RunningShellTransactionKind::ReadinessProbe
-                | RunningShellTransactionKind::Bootstrap => {
+                | RunningShellTransactionKind::Bootstrap
+                | RunningShellTransactionKind::PathResolution { .. } => {
                     return PaneOutputRenderMode::HiddenLiveAgentShell;
                 }
             }

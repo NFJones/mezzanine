@@ -159,6 +159,7 @@ pub(super) fn runtime_running_shell_transaction_kind_name(
         RunningShellTransactionKind::AgentAction { .. } => "agent_action",
         RunningShellTransactionKind::ReadinessProbe => "readiness_probe",
         RunningShellTransactionKind::Bootstrap => "bootstrap",
+        RunningShellTransactionKind::PathResolution { .. } => "path_resolution",
     }
 }
 
@@ -246,6 +247,7 @@ mod expiry;
 mod hooks;
 mod observation;
 mod output;
+mod path_resolution;
 mod readiness;
 mod recovery;
 mod timers;
@@ -267,5 +269,8 @@ fn runtime_shell_transaction_timer_kind(
             RuntimeShellTransactionTimerKind::ReadinessProbe
         }
         RunningShellTransactionKind::Bootstrap => RuntimeShellTransactionTimerKind::Bootstrap,
+        RunningShellTransactionKind::PathResolution { .. } => {
+            RuntimeShellTransactionTimerKind::PathResolution
+        }
     }
 }

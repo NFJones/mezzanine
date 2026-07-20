@@ -391,8 +391,18 @@ fn turn_runner_blocks_shell_actions_with_canonical_scope_escape() {
     );
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
-    let scopes = PathScopes::shell_resolved("/repo", vec!["/repo".to_string()], Vec::new())
-        .with_canonical_path("link/secret.txt", "/outside/secret.txt");
+    let scopes = PathScopes::try_shell_resolved(
+        "/repo",
+        vec!["/repo".to_string()],
+        Vec::new(),
+        [(
+            "link/secret.txt".to_string(),
+            "/outside/secret.txt".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+    )
+    .unwrap();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
         provider: &provider,

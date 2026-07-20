@@ -695,6 +695,27 @@ pub enum PathResolutionStatus {
     Unresolved,
 }
 
+/// Describes how one canonical path was observed by the pane-shell resolver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedPathKind {
+    /// The complete requested path existed when it was canonicalized.
+    Existing,
+    /// The requested path did not exist, so its nearest existing parent was
+    /// canonicalized and the remaining path components were preserved.
+    CreateTarget,
+}
+
+/// Trusted canonical evidence for one path requested from the pane shell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPathEvidence {
+    /// Canonical absolute path corresponding to the requested path.
+    pub canonical_path: String,
+    /// Whether the complete target existed during resolution.
+    pub kind: ResolvedPathKind,
+    /// Canonical nearest existing parent observed during resolution.
+    pub nearest_existing_parent: String,
+}
+
 /// Carries Path Scopes state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -707,27 +728,96 @@ pub struct PathScopes {
     pub read_scopes: Vec<String>,
     /// Canonical write scopes active for the agent or subagent.
     pub write_scopes: Vec<String>,
-    /// Canonical pane-shell paths keyed by requested path or normalized path.
-    pub canonical_paths: BTreeMap<String, String>,
+    /// Canonical pane-shell evidence keyed by requested path or normalized path.
+    pub path_evidence: BTreeMap<String, ResolvedPathEvidence>,
     /// Whether this scope set came from trusted shell-mediated resolution.
     pub resolution_status: PathResolutionStatus,
 }
 
 impl PathScopes {
-    /// Builds a scope set whose current directory, scopes, and path mappings are
-    /// trusted shell-observed values.
-    pub fn shell_resolved(
+    /// Builds validated path authority from pane-shell canonicalization output.
+    ///
+    /// The current directory, scopes, and canonical mapping values must be
+    /// absolute canonical paths. Lexical `.` and `..` components are rejected
+    /// so callers cannot label unresolved path text as trusted authority.
+    pub fn try_shell_resolved(
         current_directory: impl Into<String>,
         read_scopes: Vec<String>,
         write_scopes: Vec<String>,
-    ) -> Self {
-        Self {
-            current_directory: current_directory.into(),
+        canonical_paths: BTreeMap<String, String>,
+    ) -> Result<Self> {
+        let path_evidence = canonical_paths
+            .into_iter()
+            .map(|(requested, canonical_path)| {
+                let evidence = ResolvedPathEvidence {
+                    nearest_existing_parent: canonical_path.clone(),
+                    canonical_path,
+                    kind: ResolvedPathKind::Existing,
+                };
+                (requested, evidence)
+            })
+            .collect();
+        Self::try_shell_resolved_with_evidence(
+            current_directory,
             read_scopes,
             write_scopes,
-            canonical_paths: BTreeMap::new(),
-            resolution_status: PathResolutionStatus::ShellResolved,
+            path_evidence,
+        )
+    }
+
+    /// Builds validated path authority from detailed pane-shell evidence.
+    pub fn try_shell_resolved_with_evidence(
+        current_directory: impl Into<String>,
+        read_scopes: Vec<String>,
+        write_scopes: Vec<String>,
+        path_evidence: BTreeMap<String, ResolvedPathEvidence>,
+    ) -> Result<Self> {
+        let current_directory = current_directory.into();
+        validate_canonical_authority_path(&current_directory, "current directory")?;
+        for scope in read_scopes.iter().chain(&write_scopes) {
+            validate_canonical_authority_path(scope, "path scope")?;
         }
+        for (requested, evidence) in &path_evidence {
+            if requested.is_empty() || requested.contains('\0') {
+                return Err(MezError::invalid_args(
+                    "requested path mappings must be non-empty and contain no NUL bytes",
+                ));
+            }
+            validate_canonical_authority_path(&evidence.canonical_path, "canonical path mapping")?;
+            validate_canonical_authority_path(
+                &evidence.nearest_existing_parent,
+                "nearest existing parent",
+            )?;
+            if !std::path::Path::new(&evidence.canonical_path)
+                .starts_with(&evidence.nearest_existing_parent)
+            {
+                return Err(MezError::invalid_args(
+                    "canonical path mapping must stay below its nearest existing parent",
+                ));
+            }
+            if evidence.kind == ResolvedPathKind::Existing
+                && evidence.canonical_path != evidence.nearest_existing_parent
+            {
+                return Err(MezError::invalid_args(
+                    "existing path evidence must identify the target as its existing parent",
+                ));
+            }
+        }
+
+        let write_scopes = normalize_authority_paths(write_scopes);
+        let read_scopes = normalize_authority_paths(
+            read_scopes
+                .into_iter()
+                .chain(write_scopes.iter().cloned())
+                .collect(),
+        );
+        Ok(Self {
+            current_directory,
+            read_scopes,
+            write_scopes,
+            path_evidence,
+            resolution_status: PathResolutionStatus::ShellResolved,
+        })
     }
 
     /// Builds a scope set that must fail closed for scoped security checks.
@@ -740,21 +830,90 @@ impl PathScopes {
             current_directory: current_directory.into(),
             read_scopes,
             write_scopes,
-            canonical_paths: BTreeMap::new(),
+            path_evidence: BTreeMap::new(),
             resolution_status: PathResolutionStatus::Unresolved,
         }
     }
 
-    /// Adds a shell-canonical path for one requested command path.
-    pub fn with_canonical_path(
-        mut self,
-        requested_path: impl Into<String>,
-        canonical_path: impl Into<String>,
-    ) -> Self {
-        self.canonical_paths
-            .insert(requested_path.into(), canonical_path.into());
-        self
+    /// Intersects this maximum authority with requested child authority.
+    ///
+    /// The result can only preserve or narrow access. Both operands must be
+    /// trusted pane-shell results; unresolved operands fail closed.
+    pub fn intersection(&self, requested: &Self) -> Result<Self> {
+        if self.resolution_status != PathResolutionStatus::ShellResolved
+            || requested.resolution_status != PathResolutionStatus::ShellResolved
+        {
+            return Err(MezError::conflict(
+                "path authority intersection requires shell-resolved operands",
+            ));
+        }
+
+        let read_scopes = intersect_authority_paths(&self.read_scopes, &requested.read_scopes);
+        let write_scopes = intersect_authority_paths(&self.write_scopes, &requested.write_scopes);
+        let mut path_evidence = self.path_evidence.clone();
+        path_evidence.extend(requested.path_evidence.clone());
+        Self::try_shell_resolved_with_evidence(
+            requested.current_directory.clone(),
+            read_scopes,
+            write_scopes,
+            path_evidence,
+        )
     }
+}
+
+/// Validates one path that is claimed to be canonical pane-shell evidence.
+fn validate_canonical_authority_path(path: &str, label: &str) -> Result<()> {
+    let parsed = std::path::Path::new(path);
+    if path.is_empty() || path.contains('\0') || !parsed.is_absolute() {
+        return Err(MezError::invalid_args(format!(
+            "{label} must be a non-empty absolute canonical path"
+        )));
+    }
+    if parsed.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir
+                | std::path::Component::ParentDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err(MezError::invalid_args(format!(
+            "{label} must not contain lexical traversal components"
+        )));
+    }
+    Ok(())
+}
+
+/// Sorts, deduplicates, and removes paths already covered by a parent path.
+fn normalize_authority_paths(mut paths: Vec<String>) -> Vec<String> {
+    paths.sort();
+    paths.dedup();
+    let mut normalized: Vec<String> = Vec::new();
+    for path in paths {
+        if normalized
+            .iter()
+            .any(|parent| std::path::Path::new(&path).starts_with(parent))
+        {
+            continue;
+        }
+        normalized.push(path);
+    }
+    normalized
+}
+
+/// Computes the canonical overlap between maximum and requested path sets.
+fn intersect_authority_paths(maximum: &[String], requested: &[String]) -> Vec<String> {
+    let mut intersections = Vec::new();
+    for requested_path in requested {
+        for maximum_path in maximum {
+            if std::path::Path::new(requested_path).starts_with(maximum_path) {
+                intersections.push(requested_path.clone());
+            } else if std::path::Path::new(maximum_path).starts_with(requested_path) {
+                intersections.push(maximum_path.clone());
+            }
+        }
+    }
+    normalize_authority_paths(intersections)
 }
 
 /// Carries Effective Command Effects state for this subsystem.

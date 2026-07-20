@@ -83,6 +83,15 @@ pub(crate) struct RuntimeProcessComponent {
     pane_readiness_overrides: mez_agent::PaneReadinessOverrideStore,
     /// Bootstrap-derived environment signatures keyed by pane id.
     pane_environment_signatures: std::collections::BTreeMap<String, EnvironmentSignature>,
+    /// Canonical path authority keyed by pane environment, config generation,
+    /// and the exact bounded resolution request.
+    pane_path_scopes: std::collections::BTreeMap<
+        crate::runtime::RuntimePathResolutionCacheKey,
+        mez_agent::permissions::PathScopes,
+    >,
+    /// Fail-closed resolver outcomes keyed by the same exact authority identity.
+    pane_path_scope_failures:
+        std::collections::BTreeMap<crate::runtime::RuntimePathResolutionCacheKey, String>,
     /// Panes with an in-flight bootstrap transaction.
     pane_bootstrap_pending: BTreeSet<String>,
     /// Modeled terminal screen state keyed by pane id.
@@ -482,6 +491,17 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 impl RuntimeSessionService {
+    /// Installs one pane environment signature for path-resolution tests.
+    pub(crate) fn set_pane_environment_signature_for_tests(
+        &mut self,
+        pane_id: impl Into<String>,
+        signature: EnvironmentSignature,
+    ) {
+        self.process
+            .pane_environment_signatures
+            .insert(pane_id.into(), signature);
+    }
+
     /// Returns live shell transactions for integration-test observation.
     pub(crate) fn running_shell_transactions_for_tests(
         &self,
@@ -931,7 +951,8 @@ impl RuntimeSessionService {
                     format!(" action={action_id}")
                 }
                 RunningShellTransactionKind::ReadinessProbe
-                | RunningShellTransactionKind::Bootstrap => String::new(),
+                | RunningShellTransactionKind::Bootstrap
+                | RunningShellTransactionKind::PathResolution { .. } => String::new(),
             };
             self.append_agent_trace_turn_event(
                 &pane_id,
@@ -1523,6 +1544,12 @@ impl RuntimeSessionService {
             .pane_readiness_overrides
             .revoke(pane_id, ReadinessOverrideRevocation::PaneClosed);
         self.process.pane_environment_signatures.remove(pane_id);
+        self.process
+            .pane_path_scopes
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
         self.process.pane_bootstrap_pending.remove(pane_id);
         self.clear_pane_agent_instruction_files(pane_id);
         self.process.pane_closing.remove(pane_id);

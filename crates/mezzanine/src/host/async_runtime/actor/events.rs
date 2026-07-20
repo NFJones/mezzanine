@@ -252,6 +252,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeTimerKind::ShellTransaction
             | RuntimeTimerKind::ReadinessProbe
             | RuntimeTimerKind::Bootstrap
+            | RuntimeTimerKind::PathResolution
             | RuntimeTimerKind::FocusedShellHook => {
                 let mut transition = self
                     .service

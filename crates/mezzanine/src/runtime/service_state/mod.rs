@@ -26,8 +26,9 @@ pub(crate) use agent_state::{
     RuntimeAgentPreShellHookCompletion, RuntimeApplyPatchBatchState, RuntimeDisplayOverlay,
     RuntimeHookPipelineDecision, RuntimeModelProfileOverrideScope,
     RuntimeModelProfileOverrideStore, RuntimePaneAgentStatusSelector,
-    RuntimeRecordBrowserOverlayFrame, RuntimeRecordBrowserOverlaySource,
-    RuntimeRecordBrowserOverlayState, RuntimeShellTransactionActionFailure, RuntimeSubagentLineage,
+    RuntimePathResolutionCacheKey, RuntimeRecordBrowserOverlayFrame,
+    RuntimeRecordBrowserOverlaySource, RuntimeRecordBrowserOverlayState,
+    RuntimeShellTransactionActionFailure, RuntimeSubagentLineage,
 };
 pub use agent_state::{
     RuntimeShellTransactionTimerKind, RuntimeShellTransactionTimerRef, SubagentWaitPolicy,

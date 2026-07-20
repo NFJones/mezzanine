@@ -83,6 +83,9 @@ impl RuntimeSessionService {
                             RuntimeTimerKind::ReadinessProbe
                         }
                         RuntimeShellTransactionTimerKind::Bootstrap => RuntimeTimerKind::Bootstrap,
+                        RuntimeShellTransactionTimerKind::PathResolution => {
+                            RuntimeTimerKind::PathResolution
+                        }
                         RuntimeShellTransactionTimerKind::FocusedShellHook => {
                             RuntimeTimerKind::FocusedShellHook
                         }

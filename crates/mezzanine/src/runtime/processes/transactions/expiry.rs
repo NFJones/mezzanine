@@ -64,6 +64,14 @@ impl RuntimeSessionService {
                         elapsed_ms,
                     )?;
                 }
+                RunningShellTransactionKind::PathResolution { .. } => {
+                    self.expire_path_resolution_transaction(
+                        &marker,
+                        transaction,
+                        timeout_ms,
+                        elapsed_ms,
+                    )?;
+                }
             }
         }
         Ok(expired_count)

@@ -154,6 +154,18 @@ impl RuntimeSessionService {
                 transaction_ref.observed_output_truncated,
             );
         }
+        if let RunningShellTransactionKind::PathResolution { cache_key } =
+            transaction_ref.kind.clone()
+        {
+            return self.observe_path_resolution_transaction_end(
+                marker,
+                pane_id,
+                exit_code,
+                cache_key,
+                &transaction_ref.observed_output_preview,
+                transaction_ref.observed_output_truncated,
+            );
+        }
         let RunningShellTransactionKind::AgentAction { ref action_id } = transaction_ref.kind
         else {
             return Err(MezError::invalid_state(

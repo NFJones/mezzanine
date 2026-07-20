@@ -27,7 +27,11 @@ fn shell_resolved_scopes(
     write_scopes: &[&str],
     canonical_paths: &[(&str, &str)],
 ) -> PathScopes {
-    let mut scopes = PathScopes::shell_resolved(
+    let canonical_paths = canonical_paths
+        .iter()
+        .map(|(requested, canonical)| ((*requested).to_string(), (*canonical).to_string()))
+        .collect();
+    PathScopes::try_shell_resolved(
         current_directory,
         read_scopes
             .iter()
@@ -37,11 +41,72 @@ fn shell_resolved_scopes(
             .iter()
             .map(|scope| (*scope).to_string())
             .collect(),
+        canonical_paths,
+    )
+    .unwrap()
+}
+
+/// Verifies trusted scope construction rejects lexical or relative authority.
+/// A caller must not be able to label unchecked path text as shell-resolved and
+/// later use it for security-sensitive containment or mount compilation.
+#[test]
+fn shell_resolved_scopes_require_canonical_absolute_authority() {
+    let relative_cwd = PathScopes::try_shell_resolved(
+        "repo",
+        vec!["/repo".to_string()],
+        Vec::new(),
+        Default::default(),
+    )
+    .unwrap_err();
+    assert_eq!(relative_cwd.kind(), PermissionErrorKind::InvalidArgs);
+
+    let lexical_scope = PathScopes::try_shell_resolved(
+        "/repo",
+        vec!["/repo/../outside".to_string()],
+        Vec::new(),
+        Default::default(),
+    )
+    .unwrap_err();
+    assert_eq!(lexical_scope.kind(), PermissionErrorKind::InvalidArgs);
+}
+
+/// Verifies normalized authority is deterministic, write access implies read
+/// access, and child authority is the canonical intersection with its parent.
+#[test]
+fn shell_resolved_scopes_normalize_and_intersect_authority() {
+    let parent = PathScopes::try_shell_resolved(
+        "/repo",
+        vec!["/repo".to_string(), "/repo/src".to_string()],
+        vec!["/repo/target".to_string()],
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(parent.read_scopes, vec!["/repo".to_string()]);
+    assert_eq!(parent.write_scopes, vec!["/repo/target".to_string()]);
+
+    let requested = PathScopes::try_shell_resolved(
+        "/repo",
+        vec!["/repo/src".to_string(), "/outside".to_string()],
+        vec![
+            "/repo/target/generated".to_string(),
+            "/outside/write".to_string(),
+        ],
+        Default::default(),
+    )
+    .unwrap();
+    let effective = parent.intersection(&requested).unwrap();
+
+    assert_eq!(
+        effective.read_scopes,
+        vec![
+            "/repo/src".to_string(),
+            "/repo/target/generated".to_string(),
+        ]
     );
-    for (requested, canonical) in canonical_paths {
-        scopes = scopes.with_canonical_path(*requested, *canonical);
-    }
-    scopes
+    assert_eq!(
+        effective.write_scopes,
+        vec!["/repo/target/generated".to_string()]
+    );
 }
 
 /// Verifies read only policy allows safe exact command.

@@ -10,6 +10,7 @@ use std::path::Path;
 
 mod bootstrap;
 mod environment;
+mod path_resolution;
 mod transaction;
 
 pub use bootstrap::{
@@ -18,6 +19,10 @@ pub use bootstrap::{
     readiness_probe_command_for_classification, tool_discovery_script,
 };
 pub use environment::{EnvironmentSignature, ToolDiscoveryCache, ToolInventory, ToolProbe};
+pub use path_resolution::{
+    PanePathResolutionRequest, PanePathResolutionResult, pane_path_resolution_command,
+    parse_pane_path_resolution_output,
+};
 pub use transaction::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, MarkerToken,
     SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES,
@@ -228,6 +233,7 @@ mod tests {
         .expect("the test environment signature should be valid")
     }
 
+    mod path_resolution;
     mod shell_bootstrap;
     mod shell_transport;
     mod tool_discovery;

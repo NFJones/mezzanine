@@ -61,8 +61,7 @@ pub(super) fn path_in_scopes(path: &str, context: &PathScopes, scopes: &[String]
     };
     scopes
         .iter()
-        .map(|scope| normalize_path(&context.current_directory, scope))
-        .any(|scope| path_has_prefix(&normalized, &scope))
+        .any(|scope| path_has_prefix(&normalized, scope))
 }
 
 /// Runs the resolved read path operation for this subsystem.
@@ -92,15 +91,15 @@ pub(super) fn shell_resolved_path(path: &str, scopes: &PathScopes) -> Option<Str
     }
     let normalized = normalize_path(&scopes.current_directory, path);
     scopes
-        .canonical_paths
+        .path_evidence
         .get(path)
-        .or_else(|| scopes.canonical_paths.get(&normalized))
-        .cloned()
+        .or_else(|| scopes.path_evidence.get(&normalized))
+        .map(|evidence| evidence.canonical_path.clone())
         .or_else(|| {
             scopes
-                .canonical_paths
+                .path_evidence
                 .values()
-                .any(|canonical| canonical == &normalized)
+                .any(|evidence| evidence.canonical_path == normalized)
                 .then_some(normalized)
         })
 }
@@ -144,8 +143,5 @@ pub(super) fn normalize_path(current_directory: &str, path: &str) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn path_has_prefix(path: &str, prefix: &str) -> bool {
-    path == prefix
-        || path
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with('/'))
+    Path::new(path).starts_with(prefix)
 }

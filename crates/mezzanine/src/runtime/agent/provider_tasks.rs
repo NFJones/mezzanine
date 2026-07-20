@@ -421,6 +421,28 @@ impl RuntimeSessionService {
             return Ok(None);
         }
 
+        let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
+        let resolved_subagent_path_scopes = if let Some(scope) = subagent_scope
+            .as_ref()
+            .filter(|scope| !scope.read_scopes.is_empty() || !scope.write_scopes.is_empty())
+        {
+            let request = mez_agent::shell::PanePathResolutionRequest::new(
+                scope.read_scopes.clone(),
+                scope.write_scopes.clone(),
+                Vec::new(),
+            )
+            .map_err(|error| MezError::invalid_args(error.message()))?;
+            match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
+                Some(scopes) => Some(scopes),
+                None => {
+                    let _ = self.dispatch_path_resolution_to_pane(&turn.pane_id, request)?;
+                    return Ok(None);
+                }
+            }
+        } else {
+            None
+        };
+
         let model_profile = self
             .agent
             .agent_turn_model_profiles
@@ -614,9 +636,8 @@ impl RuntimeSessionService {
                 model_profile.model
             ),
         )?;
-        let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
         let path_scopes = if subagent_scope.is_some() {
-            None
+            resolved_subagent_path_scopes
         } else {
             self.path_scopes_for_pane(&turn.pane_id)
         };

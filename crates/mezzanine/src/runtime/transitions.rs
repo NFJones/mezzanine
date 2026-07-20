@@ -391,6 +391,8 @@ pub enum RuntimeTimerKind {
     ReadinessProbe,
     /// Agent bootstrap timeout.
     Bootstrap,
+    /// Pane-shell canonical path-resolution timeout.
+    PathResolution,
     /// Focused-shell hook timeout.
     FocusedShellHook,
     /// Attached terminal resize debounce.

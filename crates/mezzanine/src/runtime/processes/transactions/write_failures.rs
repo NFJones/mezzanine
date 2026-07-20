@@ -120,6 +120,10 @@ impl RuntimeSessionService {
                 )?;
                 Ok(1)
             }
+            RunningShellTransactionKind::PathResolution { .. } => {
+                self.fail_path_resolution_transaction(marker, &transaction, &message)?;
+                Ok(1)
+            }
         }
     }
 
@@ -162,6 +166,9 @@ impl RuntimeSessionService {
                 }
                 RunningShellTransactionKind::Bootstrap => {
                     self.fail_bootstrap_for_pane_write_failure(&marker, transaction, error)?;
+                }
+                RunningShellTransactionKind::PathResolution { .. } => {
+                    self.fail_path_resolution_for_pane_write_failure(&marker, transaction, error)?;
                 }
             }
         }

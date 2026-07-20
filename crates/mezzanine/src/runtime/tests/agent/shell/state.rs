@@ -2,6 +2,137 @@
 
 use super::*;
 
+/// Builds one concrete pane environment identity for path-resolution tests.
+fn path_resolution_environment(working_directory: &Path) -> mez_agent::EnvironmentSignature {
+    mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "test-host",
+        "test-user",
+        "/bin/sh",
+        mez_agent::ShellClassification::PosixSh,
+        None,
+        Some("/usr/bin:/bin".to_string()),
+        working_directory.to_string_lossy(),
+        None,
+        false,
+        None,
+        Vec::new(),
+    )
+    .unwrap()
+}
+
+/// Verifies resolved authority is cached only for the exact pane environment,
+/// configuration generation, and bounded request that produced it.
+#[test]
+fn runtime_path_resolution_cache_invalidates_on_config_generation() {
+    let root = temp_root("runtime-path-resolution-cache");
+    fs::create_dir_all(root.join("target")).unwrap();
+    let mut service = test_runtime_service();
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        vec!["target/generated".to_string()],
+        Vec::new(),
+    )
+    .unwrap();
+    let command = mez_agent::shell::pane_path_resolution_command(
+        &request,
+        mez_agent::ShellClassification::PosixSh,
+    )
+    .unwrap();
+    let output = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let cache_key = service.path_resolution_cache_key("%1", &request).unwrap();
+
+    service
+        .observe_path_resolution_transaction_end(
+            "path-resolution-marker",
+            "%1",
+            0,
+            cache_key,
+            &String::from_utf8(output.stdout).unwrap(),
+            false,
+        )
+        .unwrap();
+    let scopes = service
+        .path_scopes_for_pane_request("%1", &request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(scopes.current_directory, root.to_string_lossy());
+    assert_eq!(
+        scopes.write_scopes,
+        vec![root.join("target/generated").to_string_lossy()]
+    );
+
+    service.session.advance_config_generation();
+    assert!(
+        service
+            .path_scopes_for_pane_request("%1", &request)
+            .unwrap()
+            .is_none()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a terminal resolver failure is retained for the exact cache key so
+/// provider polling fails closed instead of repeatedly launching the resolver.
+#[test]
+fn runtime_path_resolution_failure_is_terminal_for_exact_identity() {
+    let root = temp_root("runtime-path-resolution-failure");
+    fs::create_dir_all(&root).unwrap();
+    let mut service = test_runtime_service();
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    let cache_key = service.path_resolution_cache_key("%1", &request).unwrap();
+    let transaction = RunningShellTransactionRef {
+        turn_id: "path-resolution-turn".to_string(),
+        kind: RunningShellTransactionKind::PathResolution {
+            cache_key: cache_key.clone(),
+        },
+        pane_id: "%1".to_string(),
+        command: "path resolution".to_string(),
+        started_at_unix_ms: 0,
+        timeout_ms: Some(10_000),
+        pending_input_payload: None,
+        observed_output_bytes: 0,
+        observed_output_preview: String::new(),
+        observed_output_truncated: false,
+    };
+
+    service
+        .fail_path_resolution_transaction(
+            "path-resolution-marker",
+            &transaction,
+            "resolver protocol failed",
+        )
+        .unwrap();
+    let error = service
+        .path_scopes_for_pane_request("%1", &request)
+        .unwrap_err();
+    assert!(error.message().contains("resolver protocol failed"));
+
+    service.session.advance_config_generation();
+    assert!(
+        service
+            .path_scopes_for_pane_request("%1", &request)
+            .unwrap()
+            .is_none()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies runtime control agent shell state persists in service.
 ///
 /// This regression scenario documents the behavior being protected so a

@@ -7532,6 +7532,20 @@ path resolution is needed for scope comparison, Mezzanine MUST perform the
 resolution through read-only shell commands inside the pane environment, such
 as `pwd -P` and `python3` or `python` path canonicalization when available.
 
+Resolved path authority MUST contain canonical absolute paths observed in the
+pane environment. Write scopes MUST imply read authority. Duplicate and
+parent-covered scopes MUST be normalized deterministically, and child or
+subagent authority MUST be the canonical intersection with parent authority;
+it MUST NOT broaden that authority.
+
+For a non-existent create target, Mezzanine MUST canonicalize the nearest
+existing parent and preserve the remaining unambiguous path components. NUL
+bytes, unexpanded home syntax, lexical traversal ambiguity, symlink escape,
+missing resolver output, and partially validated results MUST fail closed.
+Resolver results MAY be cached only for the exact pane environment signature,
+configuration generation, and bounded path request. A working-directory,
+environment, or relevant configuration change MUST invalidate stale results.
+
 A shell action MAY run without fresh approval only when all of the following
 are true:
 
