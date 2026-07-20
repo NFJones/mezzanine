@@ -65,10 +65,12 @@ pub(super) use model::{
     runtime_validate_latency_preference,
 };
 pub(super) use permissions::{
-    runtime_approval_decision_name_to_kind, runtime_blocked_approval_request,
-    runtime_config_permission_preset, runtime_message_recipient,
-    runtime_permission_policy_from_config,
+    ConfiguredPermissions, runtime_approval_decision_name_to_kind,
+    runtime_blocked_approval_request, runtime_config_permission_preset,
+    runtime_configured_permissions_from_config, runtime_message_recipient,
 };
+#[cfg(test)]
+pub(super) use permissions::{NetworkPolicy, SandboxConfig};
 pub(crate) use providers::runtime_default_models_for_provider;
 pub(super) use providers::{
     runtime_preset_registry_from_config, runtime_provider_registry_from_config,

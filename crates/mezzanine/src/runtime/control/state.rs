@@ -221,13 +221,18 @@ impl RuntimeSessionService {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let configured = self.configured_permissions();
         format!(
-            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"trusted_project":{},"trusted_directories":{},"read_scopes":[],"write_scopes":[],"command_rule_generation":{}}}"#,
+            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"sandbox":"{}","network_policy":"{}","trusted_project":{},"trusted_directories":{},"read_scopes":{},"write_scopes":{},"command_rule_generation":{}}}"#,
             runtime_permission_preset_name(self.permission_policy().preset),
             runtime_approval_policy_name(self.permission_policy().approval_policy),
             self.permission_policy().approval_bypass(),
+            configured.sandbox.as_str(),
+            configured.resources.network_policy.as_str(),
             trusted_project,
             runtime_string_array_json(&trusted_directories),
+            runtime_string_array_json(&configured.resources.read_scopes),
+            runtime_string_array_json(&configured.resources.write_scopes),
             self.permission_policy().rules().len()
         )
     }

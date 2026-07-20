@@ -53,9 +53,9 @@ pub use rules::{
 pub use types::{
     ApprovalDecision, ApprovalGrant, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
     BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope, CommandRuleStore,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, EffectiveCommandEffects, PathResolutionStatus,
-    PathScopes, PermissionAuthorityChange, PermissionPolicy, ResolvedPathEvidence,
-    ResolvedPathKind, RuleMatch, SessionApprovalStore,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeclaredCommandEffects, EffectCompleteness,
+    EffectiveCommandEffects, PathResolutionStatus, PathScopes, PermissionAuthorityChange,
+    PermissionPolicy, ResolvedPathEvidence, ResolvedPathKind, RuleMatch, SessionApprovalStore,
 };
 
 use classification::{

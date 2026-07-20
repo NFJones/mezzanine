@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use crate::config::ConfigLayer;
 use crate::host::async_runtime::AsyncRuntimeActorMetrics;
 use crate::integrations::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
+use crate::runtime::config::ConfiguredPermissions;
 use crate::security::auth::AuthStore;
 use crate::security::project::ProjectTrustStore;
 use mez_agent::ApprovalPolicy;
@@ -124,9 +125,14 @@ impl RuntimeIntegrationComponent {
         self.security.permission_policy_mut()
     }
 
-    /// Replaces the effective session permission policy.
-    pub(crate) fn replace_permission_policy(&mut self, policy: PermissionPolicy) {
-        self.security.replace_permission_policy(policy);
+    /// Returns authorization, maximum resource authority, and sandbox config.
+    pub(crate) fn configured_permissions(&self) -> &ConfiguredPermissions {
+        self.security.configured_permissions()
+    }
+
+    /// Atomically replaces configured permission and confinement state.
+    pub(crate) fn replace_configured_permissions(&mut self, permissions: ConfiguredPermissions) {
+        self.security.replace_configured_permissions(permissions);
     }
 
     /// Returns the explicit live approval-bypass override.

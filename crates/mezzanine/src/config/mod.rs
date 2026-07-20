@@ -83,8 +83,9 @@ pub use validation::{persist_config_mutation_async, validate_config_file_async};
 pub(crate) use extract::contains_secret_material;
 use extract::{
     clean_key_segment, clean_value, extract_config_values, extract_json_paths, extract_toml_paths,
-    extract_yaml_paths, line_indent, validate_command_rule_examples, validate_known_schema_path,
-    validate_mcp_server_path, validate_permission_value, validate_permissions_path,
+    extract_yaml_paths, line_indent, validate_command_rule_effects, validate_command_rule_examples,
+    validate_known_schema_path, validate_mcp_server_path, validate_permission_value,
+    validate_permissions_path,
 };
 use migration::parse_config_schema_version;
 use mutation::{
@@ -100,11 +101,12 @@ use parsers::{
 use paths::write_private_config_file_async;
 use paths::{format_diagnostics, write_private_config_file};
 use schema::{
-    AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS,
-    HISTORY_KEYS, HOOK_KEYS, INSTRUCTION_KEYS, ISSUE_KEYS, KEY_BINDING_KEYS, LAYOUT_KEYS,
-    MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS,
-    PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, SESSION_KEYS,
-    SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
+    AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BUBBLEWRAP_PERMISSION_KEYS,
+    COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS, HISTORY_KEYS, HOOK_KEYS,
+    INSTRUCTION_KEYS, ISSUE_KEYS, KEY_BINDING_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS,
+    MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS,
+    PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS,
+    SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
 };
 
 /// Exposes the tests module boundary.

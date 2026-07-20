@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 20
+version = 21
 
 [terminal]
 profile = "xterm-compatible"
@@ -460,6 +460,7 @@ allowed_reasoning_efforts = ["high"]
 
 [permissions]
 approval_policy = "ask"
+sandbox = "policy-only"
 trusted_directories = []
 trusted_projects = []
 command_rules = []

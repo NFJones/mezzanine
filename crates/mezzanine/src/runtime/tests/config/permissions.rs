@@ -1,6 +1,71 @@
 //! Runtime tests for config permissions behavior.
 
 use super::*;
+use crate::runtime::config::{
+    NetworkPolicy, SandboxConfig, runtime_configured_permissions_from_config,
+};
+use mez_agent::permissions::EffectCompleteness;
+
+/// Verifies schema v21 materializes bounded Bubblewrap authority and retains
+/// stable rule identities plus declared effects for later policy compilation.
+#[test]
+fn runtime_materializes_typed_sandbox_permissions() {
+    let root = serde_json::json!({
+        "permissions": {
+            "sandbox": "bubblewrap",
+            "read_scopes": ["."],
+            "write_scopes": ["target"],
+            "network_policy": "deny",
+            "bubblewrap": {
+                "executable": "/usr/bin/bwrap",
+                "unavailable": "fail",
+                "network": "isolated",
+                "environment": "minimal"
+            },
+            "command_rules": [{
+                "id": "cargo-test",
+                "pattern": ["cargo", "test"],
+                "decision": "allow",
+                "effects": {
+                    "completeness": "complete",
+                    "read_scopes": ["."],
+                    "write_scopes": ["target"],
+                    "network": false,
+                    "credentials": false,
+                    "process_control": false
+                }
+            }]
+        }
+    });
+
+    let configured = runtime_configured_permissions_from_config(&root).unwrap();
+
+    assert_eq!(configured.resources.read_scopes, vec!["."]);
+    assert_eq!(configured.resources.write_scopes, vec!["target"]);
+    assert_eq!(configured.resources.network_policy, NetworkPolicy::Deny);
+    assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
+    let rule = configured.authorization.rules().last().unwrap();
+    assert_eq!(rule.id.as_deref(), Some("cargo-test"));
+    assert_eq!(
+        rule.declared_effects.as_ref().unwrap().completeness,
+        EffectCompleteness::Complete
+    );
+}
+
+/// Verifies Bubblewrap activation fails closed when maximum filesystem
+/// authority is absent instead of inferring access from cwd or command rules.
+#[test]
+fn runtime_rejects_bubblewrap_without_explicit_scopes() {
+    let root = serde_json::json!({"permissions": {"sandbox": "bubblewrap"}});
+
+    let error = runtime_configured_permissions_from_config(&root).unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("requires explicit read_scopes or write_scopes")
+    );
+}
 
 /// Verifies ensure private socket directory rejects group permissions.
 ///
@@ -459,7 +524,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 20\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 21\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     let trust_path = root.join("trust.tsv");
@@ -645,7 +710,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 20\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 21\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);

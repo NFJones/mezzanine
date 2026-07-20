@@ -15,15 +15,14 @@ use super::{
     runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,
     runtime_agent_personality_profiles_from_config, runtime_agent_routing_from_config,
     runtime_audit_config_present, runtime_audit_log_from_config,
-    runtime_default_agent_personality_from_config, runtime_default_models_for_provider,
-    runtime_effective_config_value, runtime_history_limit_from_config,
-    runtime_history_rotate_lines_from_config, runtime_hook_definitions_from_config,
-    runtime_host_clipboard_from_config, runtime_max_concurrent_agents_from_config,
-    runtime_max_root_subagents_from_config, runtime_max_subagent_depth_from_config,
-    runtime_max_subagent_panes_per_window_from_config,
+    runtime_configured_permissions_from_config, runtime_default_agent_personality_from_config,
+    runtime_default_models_for_provider, runtime_effective_config_value,
+    runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
+    runtime_hook_definitions_from_config, runtime_host_clipboard_from_config,
+    runtime_max_concurrent_agents_from_config, runtime_max_root_subagents_from_config,
+    runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
-    runtime_permission_policy_from_config, runtime_preset_registry_from_config,
-    runtime_provider_auth_refresh_leeway_seconds_from_config,
+    runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
     runtime_provider_registry_from_config, runtime_saved_agent_session_limit_from_config,
     runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
     runtime_terminal_emoji_width_from_config,
@@ -331,15 +330,17 @@ impl RuntimeSessionService {
         self.set_agent_auto_sizing(runtime_agent_auto_sizing_from_config(&structured)?);
         self.configure_agent_scheduler_limit(max_concurrent_agents)?;
         self.start_ready_agent_turns()?;
-        let mut permission_policy = runtime_permission_policy_from_config(&structured)?;
+        let mut configured_permissions = runtime_configured_permissions_from_config(&structured)?;
         if let Some(approval_policy) = self.integration.live_approval_policy_override() {
-            permission_policy.approval_policy = approval_policy;
+            configured_permissions.authorization.approval_policy = approval_policy;
         }
         if let Some(active) = self.integration.live_approval_bypass_override() {
-            permission_policy.set_approval_bypass(active);
+            configured_permissions
+                .authorization
+                .set_approval_bypass(active);
         }
         self.integration
-            .replace_permission_policy(permission_policy);
+            .replace_configured_permissions(configured_permissions);
         let preserved_model_profiles = self.preserved_model_override_profiles();
         let mut provider_registry = runtime_provider_registry_from_config(&structured)?;
         for (name, profile) in preserved_model_profiles {

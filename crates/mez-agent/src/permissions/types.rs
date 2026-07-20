@@ -188,12 +188,45 @@ pub enum ArgumentPolicy {
     },
 }
 
+/// States whether a command rule declares every sandbox-relevant effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffectCompleteness {
+    /// Omitted effects remain unknown and must not narrow maximum authority.
+    Unknown,
+    /// Every supported effect is declared explicitly.
+    Complete,
+}
+
+/// Backend-neutral resource requirements declared by one command rule.
+///
+/// These values describe requirements only. They may narrow a separately
+/// configured maximum authority, but they never grant filesystem, network,
+/// credential, or process-control authority.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeclaredCommandEffects {
+    /// Whether omitted effects may be interpreted as absent.
+    pub completeness: EffectCompleteness,
+    /// Paths the matching command requires for read access.
+    pub read_scopes: Vec<String>,
+    /// Paths the matching command requires for write access.
+    pub write_scopes: Vec<String>,
+    /// Whether the command requires network access, when known.
+    pub network: Option<bool>,
+    /// Whether the command requires credential access, when known.
+    pub credentials: Option<bool>,
+    /// Whether the command requires host process control, when known.
+    pub process_control: Option<bool>,
+}
+
 /// Carries Command Rule state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandRule {
+    /// Optional stable configured identity for this command rule.
+    pub id: Option<String>,
     /// Stores the pattern value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -224,6 +257,8 @@ pub struct CommandRule {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub justification: Option<String>,
+    /// Optional backend-neutral resource requirements for this rule.
+    pub declared_effects: Option<DeclaredCommandEffects>,
 }
 
 impl CommandRule {
@@ -244,12 +279,14 @@ impl CommandRule {
             ));
         }
         Ok(Self {
+            id: None,
             pattern,
             decision,
             rule_match,
             argument_policy: ArgumentPolicy::None,
             scope: CommandRuleScope::Managed,
             justification: None,
+            declared_effects: None,
         })
     }
 
@@ -284,6 +321,7 @@ impl CommandRule {
         validate_sha256_hex(&digest_hex)?;
         validate_shell_classification(&shell_classification)?;
         Ok(Self {
+            id: None,
             pattern: vec![digest_hex.clone()],
             decision,
             rule_match: RuleMatch::ExactSha256 {
@@ -293,6 +331,7 @@ impl CommandRule {
             argument_policy: ArgumentPolicy::None,
             scope: CommandRuleScope::Managed,
             justification: None,
+            declared_effects: None,
         })
     }
 
@@ -324,6 +363,50 @@ impl CommandRule {
     pub fn with_justification(mut self, justification: impl Into<String>) -> Self {
         self.justification = Some(justification.into());
         self
+    }
+
+    /// Attaches one stable configured identity to this rule.
+    pub fn with_id(mut self, id: impl Into<String>) -> Result<Self> {
+        let id = id.into();
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        {
+            return Err(MezError::invalid_args(
+                "command rule id must be 1-128 ASCII characters [A-Za-z0-9_.-]",
+            ));
+        }
+        self.id = Some(id);
+        Ok(self)
+    }
+
+    /// Attaches validated resource requirements to an allow rule.
+    pub fn with_declared_effects(mut self, effects: DeclaredCommandEffects) -> Result<Self> {
+        if self.decision != RuleDecision::Allow {
+            return Err(MezError::invalid_args(
+                "declared command effects are accepted only on allow rules",
+            ));
+        }
+        for path in effects.read_scopes.iter().chain(&effects.write_scopes) {
+            if path.is_empty() || path.contains('\0') {
+                return Err(MezError::invalid_args(
+                    "declared command effect scopes must be non-empty and contain no NUL bytes",
+                ));
+            }
+        }
+        if effects.completeness == EffectCompleteness::Complete
+            && (effects.network.is_none()
+                || effects.credentials.is_none()
+                || effects.process_control.is_none())
+        {
+            return Err(MezError::invalid_args(
+                "complete declared command effects require network, credentials, and process_control",
+            ));
+        }
+        self.declared_effects = Some(effects);
+        Ok(self)
     }
 
     /// Runs the matches operation for this subsystem.

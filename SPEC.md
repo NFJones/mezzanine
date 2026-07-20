@@ -2761,10 +2761,19 @@ agent prompt completion, and MAY continue to accept ad hoc response-style text
 for pane-local style preferences. A selected profile's `system_prompt` or
 `instructions` MUST be treated as provider system context.
 
-The `permissions` table MUST support `approval_policy`, `trusted_directories`,
-`trusted_projects`, `command_rules`, `session_command_rules`,
-`global_command_rules`, `network_policy`, `destructive_action_policy`, and
-`bypass_mode`.
+The `permissions` table MUST support `approval_policy`, `sandbox`,
+`read_scopes`, `write_scopes`, `trusted_directories`, `trusted_projects`,
+`command_rules`, `session_command_rules`, `global_command_rules`,
+`network_policy`, `destructive_action_policy`, `bypass_mode`, and the typed
+`bubblewrap` table. `sandbox` MUST default to `policy-only`; `bubblewrap` MUST
+be opt-in and fail closed. Configured scopes define maximum resource authority,
+MUST be resolved in the pane environment, and MUST NOT be inferred from command
+patterns, approvals, presets, or trusted directories. Rule `effects` MAY declare
+complete or unknown read, write, network, credential, and process-control
+requirements; they MAY only narrow maximum authority. Raw Bubblewrap arguments,
+arbitrary binds, host networking, and inherited environment allowlists MUST NOT
+be configurable. The schema v20 to v21 migration MUST preserve policy-only
+behavior and MUST NOT invent scopes, rule identities, or effects.
 
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`
 with a minimal `[permissions]` table and `approval_policy = "ask"` when a

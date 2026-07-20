@@ -13,9 +13,9 @@ use super::{
     Path, Result, contains_secret_material, extract_config_values, extract_json_paths,
     extract_toml_paths, extract_yaml_paths, format_diagnostics, fs, mutate_json_text,
     mutate_toml_text, mutate_yaml_text, parse_config_schema_version, parse_mutation_path,
-    reject_container_target, reject_unsupported_mutation_path, validate_command_rule_examples,
-    validate_known_schema_path, validate_mcp_server_path, validate_permission_value,
-    validate_permissions_path, write_private_config_file,
+    reject_container_target, reject_unsupported_mutation_path, validate_command_rule_effects,
+    validate_command_rule_examples, validate_known_schema_path, validate_mcp_server_path,
+    validate_permission_value, validate_permissions_path, write_private_config_file,
 };
 use mez_mux::theme::{parse_hex_color, valid_color_alias_name};
 
@@ -427,6 +427,7 @@ pub fn validate_config_text(
         }
     }
     diagnostics.extend(validate_command_rule_examples(format, text));
+    diagnostics.extend(validate_command_rule_effects(format, text));
 
     diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
     diagnostics.dedup();

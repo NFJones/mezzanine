@@ -5,12 +5,13 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BTreeMap, COMMAND_RULE_KEYS,
-    CONTROL_KEYS, ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS, HOOK_KEYS,
-    INSTRUCTION_KEYS, ISSUE_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS, LAYOUT_KEYS,
-    MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS,
-    PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, SESSION_KEYS,
-    SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
+    AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BTreeMap,
+    BUBBLEWRAP_PERMISSION_KEYS, COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS,
+    ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS, HOOK_KEYS, INSTRUCTION_KEYS,
+    ISSUE_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS,
+    MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS,
+    PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, SESSION_KEYS, SHELL_KEYS,
+    SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
     exact_command_sha256, normalize_exact_command_text, parse_config_json_value_best_effort,
 };
 use mez_mux::theme::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
@@ -760,6 +761,20 @@ pub(super) fn validate_permissions_path(path: &str) -> Option<String> {
         if !COMMAND_RULE_KEYS.contains(&rule_key) {
             return Some("unknown command rule configuration key".to_string());
         }
+        if rule_key == "effects" {
+            if segments.len() <= 3 {
+                return None;
+            }
+            if !COMMAND_RULE_EFFECT_KEYS.contains(&segments[3]) {
+                return Some("unknown command rule effect configuration key".to_string());
+            }
+            if segments.len() > 4 {
+                return Some(
+                    "command rule effect setting must not contain nested keys".to_string(),
+                );
+            }
+            return None;
+        }
         if matches!(
             rule_key,
             "argument_policy" | "executable_policy" | "examples"
@@ -768,6 +783,16 @@ pub(super) fn validate_permissions_path(path: &str) -> Option<String> {
         }
         if segments.len() > 3 {
             return Some("scalar command rule setting must not contain nested keys".to_string());
+        }
+    } else if key == "bubblewrap" {
+        if segments.len() <= 2 {
+            return None;
+        }
+        if !BUBBLEWRAP_PERMISSION_KEYS.contains(&segments[2]) {
+            return Some("unknown Bubblewrap configuration key".to_string());
+        }
+        if segments.len() > 3 {
+            return Some("Bubblewrap setting must not contain nested keys".to_string());
         }
     } else if segments.len() > 2 {
         return Some("scalar permissions setting must not contain nested keys".to_string());
@@ -781,6 +806,30 @@ pub(super) fn validate_permissions_path(path: &str) -> Option<String> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn validate_permission_value(path: &str, value: &str) -> Option<String> {
+    if path == "permissions.sandbox" && !matches!(value, "policy-only" | "bubblewrap") {
+        return Some("unsupported sandbox backend; use policy-only or bubblewrap".to_string());
+    }
+    if path == "permissions.network_policy" && !matches!(value, "deny" | "prompt" | "allow") {
+        return Some("unsupported network policy; use deny, prompt, or allow".to_string());
+    }
+    if path == "permissions.bubblewrap.executable"
+        && (!value.starts_with('/') || value.bytes().any(|byte| byte.is_ascii_control()))
+    {
+        return Some("Bubblewrap executable must be an absolute printable path".to_string());
+    }
+    if path == "permissions.bubblewrap.unavailable" && value != "fail" {
+        return Some("Bubblewrap unavailable policy must be fail".to_string());
+    }
+    if path == "permissions.bubblewrap.network" && value != "isolated" {
+        return Some("Bubblewrap network mode must be isolated".to_string());
+    }
+    if path == "permissions.bubblewrap.environment" && value != "minimal" {
+        return Some("Bubblewrap environment policy must be minimal".to_string());
+    }
+    if command_rule_field(path, "effects.completeness") && !matches!(value, "unknown" | "complete")
+    {
+        return Some("command rule effect completeness must be unknown or complete".to_string());
+    }
     if command_rule_field(path, "decision")
         && !matches!(value, "allow" | "prompt" | "forbid" | "deny")
     {
@@ -918,6 +967,82 @@ pub(super) fn validate_command_rule_examples(
             diagnostics
         })
         .collect()
+}
+
+/// Validates the cross-field invariants for declared command effects.
+///
+/// Effects describe resource requirements for later sandbox narrowing. They
+/// are therefore accepted only on allow rules, and a complete declaration must
+/// state every boolean requirement explicitly rather than treating omission as
+/// denial.
+pub(super) fn validate_command_rule_effects(
+    format: ConfigFormat,
+    text: &str,
+) -> Vec<ConfigDiagnostic> {
+    let Some(root) = config_text_to_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(permissions) = root
+        .get("permissions")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    for bucket in [
+        "command_rules",
+        "session_command_rules",
+        "global_command_rules",
+    ] {
+        let Some(rules) = permissions
+            .get(bucket)
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for rule in rules {
+            let Some(rule) = rule.as_object() else {
+                continue;
+            };
+            let Some(effects) = rule.get("effects") else {
+                continue;
+            };
+            let path = format!("permissions.{bucket}.effects");
+            let Some(effects) = effects.as_object() else {
+                diagnostics.push(ConfigDiagnostic {
+                    path,
+                    message: "command rule effects must be a table or object".to_string(),
+                });
+                continue;
+            };
+            if rule.get("decision").and_then(serde_json::Value::as_str) != Some("allow") {
+                diagnostics.push(ConfigDiagnostic {
+                    path: path.clone(),
+                    message: "command rule effects are accepted only on allow rules".to_string(),
+                });
+            }
+            if effects
+                .get("completeness")
+                .and_then(serde_json::Value::as_str)
+                == Some("complete")
+            {
+                let missing = ["network", "credentials", "process_control"]
+                    .into_iter()
+                    .filter(|key| !effects.get(*key).is_some_and(serde_json::Value::is_boolean))
+                    .collect::<Vec<_>>();
+                if !missing.is_empty() {
+                    diagnostics.push(ConfigDiagnostic {
+                        path,
+                        message: format!(
+                            "complete command rule effects require explicit boolean fields: {}",
+                            missing.join(", ")
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    diagnostics
 }
 
 /// Runs the command rule example specs operation for this subsystem.

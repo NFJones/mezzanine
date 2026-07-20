@@ -50,6 +50,22 @@ fn dispatches_read_only_session_methods() {
         response_json["result"]["session"]["permission_summary"]["command_rule_generation"],
         builtin_rules().len()
     );
+    assert_eq!(
+        response_json["result"]["session"]["permission_summary"]["sandbox"],
+        "policy-only"
+    );
+    assert_eq!(
+        response_json["result"]["session"]["permission_summary"]["network_policy"],
+        "prompt"
+    );
+    assert_eq!(
+        response_json["result"]["session"]["permission_summary"]["read_scopes"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        response_json["result"]["session"]["permission_summary"]["write_scopes"],
+        serde_json::json!([])
+    );
 
     let panes = dispatch_control_request(
         r#"{"jsonrpc":"2.0","id":2,"method":"pane/list","params":{}}"#,

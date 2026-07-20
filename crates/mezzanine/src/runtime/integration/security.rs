@@ -4,10 +4,12 @@ use mez_agent::ApprovalPolicy;
 use mez_agent::memory::SessionMemoryStore;
 use mez_agent::permissions::{BlockedApprovalQueue, PermissionPolicy, SessionApprovalStore};
 
+use crate::runtime::config::ConfiguredPermissions;
+
 /// Owns authority-bearing state that must change as one serialized session.
 #[derive(Debug, Default)]
 pub(super) struct RuntimeSecurityState {
-    permission_policy: PermissionPolicy,
+    configured_permissions: ConfiguredPermissions,
     live_approval_bypass_override: Option<bool>,
     live_approval_policy_override: Option<ApprovalPolicy>,
     blocked_approvals: BlockedApprovalQueue,
@@ -17,15 +19,19 @@ pub(super) struct RuntimeSecurityState {
 
 impl RuntimeSecurityState {
     pub(super) fn permission_policy(&self) -> &PermissionPolicy {
-        &self.permission_policy
+        &self.configured_permissions.authorization
     }
 
     pub(super) fn permission_policy_mut(&mut self) -> &mut PermissionPolicy {
-        &mut self.permission_policy
+        &mut self.configured_permissions.authorization
     }
 
-    pub(super) fn replace_permission_policy(&mut self, policy: PermissionPolicy) {
-        self.permission_policy = policy;
+    pub(super) fn configured_permissions(&self) -> &ConfiguredPermissions {
+        &self.configured_permissions
+    }
+
+    pub(super) fn replace_configured_permissions(&mut self, permissions: ConfiguredPermissions) {
+        self.configured_permissions = permissions;
     }
 
     pub(super) fn live_approval_bypass_override(&self) -> Option<bool> {

@@ -696,7 +696,14 @@ Provider options under a model profile:
 | --- | --- | --- | --- |
 | `permissions.approval_policy` | string | `"ask"` | Default approval policy: `ask`, `auto-allow`, or `full-access`. |
 | `permissions.preset` | string | omitted | Optional preset, such as `read-only` or `auto`. |
-| `permissions.trusted_directories` | string array | `[]` | Trusted directory roots. |
+| `permissions.sandbox` | string | `"policy-only"` | Additive confinement backend: `policy-only` or `bubblewrap`. |
+| `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. |
+| `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. |
+| `permissions.bubblewrap.executable` | string | `"/usr/bin/bwrap"` | Absolute Bubblewrap path resolved and probed in the pane environment. |
+| `permissions.bubblewrap.unavailable` | string | `"fail"` | Fail closed when Bubblewrap is unavailable; unsandboxed fallback is not supported. |
+| `permissions.bubblewrap.network` | string | `"isolated"` | Private network namespace policy. |
+| `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
+| `permissions.trusted_directories` | string array | `[]` | Trusted directory roots; never converted into mounts. |
 | `permissions.trusted_projects` | string array | `[]` | Trusted project roots. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
 | `permissions.session_command_rules` | array | `[]` | Session-scoped command rule entries. |
@@ -709,6 +716,7 @@ Command rule fields for each entry in a command rule array:
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
+| `id` | string | omitted | Stable configured rule identity. |
 | `pattern` | string | required per rule | Command prefix, exact command, or rule pattern. |
 | `decision` | string | required per rule | Rule decision: allow, prompt, or forbid. |
 | `scope` | string | inferred or explicit | Rule scope such as built-in, session, project, user, or managed. |
@@ -721,6 +729,16 @@ Command rule fields for each entry in a command rule array:
 | `examples` | string array | omitted | Example commands covered by the rule. |
 | `match_examples` | string array | omitted | Commands expected to match. |
 | `not_match_examples` | string array | omitted | Commands expected not to match. |
+| `effects.completeness` | string | `"unknown"` | `unknown` retains maximum scopes; `complete` permits per-command narrowing. |
+| `effects.read_scopes` | string array | `[]` | Required read paths, bounded by configured maximum authority. |
+| `effects.write_scopes` | string array | `[]` | Required write paths, bounded by configured maximum authority. |
+| `effects.network` | boolean | required when complete | Whether network access is required. |
+| `effects.credentials` | boolean | required when complete | Whether credential access is required; it does not expose host credentials. |
+| `effects.process_control` | boolean | required when complete | Whether host process control is required; initially unsupported by Bubblewrap mode. |
+
+Effects are accepted only on `allow` rules and may narrow but never grant authority.
+Bubblewrap activation requires explicit usable scopes. Schema v20 migration selects
+`policy-only` and does not infer scopes or effects.
 
 ### `subagents.<name>`
 

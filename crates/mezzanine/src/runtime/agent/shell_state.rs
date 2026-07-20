@@ -178,14 +178,26 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Builds the best-available `PathScopes` for a pane from the last bootstrap
-    /// environment signature.
+    /// Builds the best-available `PathScopes` for a pane.
     ///
-    /// The current directory comes from the pane-shell-observed working directory
-    /// recorded during bootstrap. Canonical path evidence is not yet resolved
-    /// through the pane shell, so the resolution status is `Unresolved`, which
-    /// fails closed on scoped path decisions.
+    /// Configured primary authority is returned only after the exact request was
+    /// resolved in the pane environment. Configurations without primary scopes
+    /// retain an explicit unresolved state rather than inferring authority from
+    /// the working directory.
     pub(crate) fn path_scopes_for_pane(&self, pane_id: &str) -> Option<PathScopes> {
+        let resources = &self.configured_permissions().resources;
+        if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
+            let request = mez_agent::shell::PanePathResolutionRequest::new(
+                resources.read_scopes.clone(),
+                resources.write_scopes.clone(),
+                Vec::new(),
+            )
+            .ok()?;
+            return self
+                .path_scopes_for_pane_request(pane_id, &request)
+                .ok()
+                .flatten();
+        }
         let signature = self.pane_environment_signature(pane_id)?;
         Some(PathScopes::unresolved(
             signature.working_directory.clone(),

@@ -134,7 +134,7 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 20"));
+    assert!(plan.text.contains("version = 21"));
     assert!(plan.text.contains("emoji_width = \"wide\""));
     assert!(plan.text.contains("agent_wrap_column_cap = 120"));
     assert!(!plan.text.contains("detach_behavior"));
@@ -214,7 +214,7 @@ approval = "legacy-fast-approval"
     assert_eq!(plan.from_version, 13);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert_eq!(values.get("version"), Some(&"20".to_string()));
+    assert_eq!(values.get("version"), Some(&"21".to_string()));
     assert_eq!(
         values.get("auth.provider_refresh_leeway_seconds"),
         Some(&"3600".to_string())
@@ -333,7 +333,7 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"20".to_string()));
+    assert_eq!(values.get("version"), Some(&"21".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -408,7 +408,7 @@ context_window_tokens = 524288
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"20".to_string()));
+    assert_eq!(values.get("version"), Some(&"21".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -456,7 +456,7 @@ fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"20".to_string()));
+    assert_eq!(values.get("version"), Some(&"21".to_string()));
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -487,7 +487,7 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
-    assert_eq!(missing_values.get("version"), Some(&"20".to_string()));
+    assert_eq!(missing_values.get("version"), Some(&"21".to_string()));
     assert_eq!(
         missing_values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -499,7 +499,7 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
-    assert_eq!(explicit_values.get("version"), Some(&"20".to_string()));
+    assert_eq!(explicit_values.get("version"), Some(&"21".to_string()));
     assert_eq!(
         explicit_values.get("terminal.emoji_width"),
         Some(&"narrow".to_string())
@@ -526,7 +526,7 @@ fn migrates_agent_wrap_column_cap_default_to_current_schema() {
     )
     .unwrap();
     let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
-    assert_eq!(missing_values.get("version"), Some(&"20".to_string()));
+    assert_eq!(missing_values.get("version"), Some(&"21".to_string()));
     assert_eq!(
         missing_values.get("terminal.agent_wrap_column_cap"),
         Some(&"120".to_string())
@@ -538,7 +538,7 @@ fn migrates_agent_wrap_column_cap_default_to_current_schema() {
     )
     .unwrap();
     let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
-    assert_eq!(explicit_values.get("version"), Some(&"20".to_string()));
+    assert_eq!(explicit_values.get("version"), Some(&"21".to_string()));
     assert_eq!(
         explicit_values.get("terminal.agent_wrap_column_cap"),
         Some(&"96".to_string())
@@ -570,12 +570,39 @@ fn migrates_schema_19_implementation_pressure_setting_to_schema_20() {
         let values = extract_config_values(format, &plan.text);
 
         assert_eq!(plan.from_version, 19);
-        assert_eq!(plan.to_version, 20);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         assert!(plan.changed);
-        assert_eq!(values.get("version"), Some(&"20".to_string()));
+        assert_eq!(values.get("version"), Some(&"21".to_string()));
         assert_eq!(values.get("agents.loop_limit"), Some(&"9".to_string()));
         assert!(!values.contains_key("agents.implementation_pressure_after_shell_actions"));
     }
+}
+
+/// Verifies schema v20 migration preserves authorization while selecting the
+/// policy-only backend and never inventing filesystem authority or effects.
+#[test]
+fn migrates_schema_20_permissions_without_inferred_authority() {
+    let plan = migrate_config_text(
+        ConfigFormat::Toml,
+        "version = 20\n[permissions]\napproval_policy = \"full-access\"\n[[permissions.command_rules]]\npattern = [\"cargo\", \"test\"]\ndecision = \"allow\"\n",
+    )
+    .unwrap();
+    let values = extract_config_values(ConfigFormat::Toml, &plan.text);
+
+    assert_eq!(plan.from_version, 20);
+    assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+    assert_eq!(values.get("version"), Some(&"21".to_string()));
+    assert_eq!(
+        values.get("permissions.sandbox"),
+        Some(&"policy-only".to_string())
+    );
+    assert_eq!(
+        values.get("permissions.approval_policy"),
+        Some(&"full-access".to_string())
+    );
+    assert!(!values.contains_key("permissions.read_scopes"));
+    assert!(!values.contains_key("permissions.write_scopes"));
+    assert!(!plan.text.contains("effects"));
 }
 
 /// Verifies that config validation refuses documents written for a newer

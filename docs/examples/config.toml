@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 20
+version = 21
 
 [terminal]
 profile = "xterm-compatible"
@@ -448,6 +448,7 @@ allowed_reasoning_efforts = ["high"]
 
 [permissions]
 approval_policy = "ask"
+sandbox = "policy-only"
 trusted_directories = []
 trusted_projects = []
 command_rules = []

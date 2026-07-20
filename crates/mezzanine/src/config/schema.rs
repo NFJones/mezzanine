@@ -318,6 +318,10 @@ pub(super) const MCP_SERVER_KEYS: &[&str] = &[
 pub(super) const PERMISSION_KEYS: &[&str] = &[
     "approval_policy",
     "preset",
+    "sandbox",
+    "read_scopes",
+    "write_scopes",
+    "bubblewrap",
     "trusted_directories",
     "trusted_projects",
     "command_rules",
@@ -333,6 +337,7 @@ pub(super) const PERMISSION_KEYS: &[&str] = &[
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const COMMAND_RULE_KEYS: &[&str] = &[
+    "id",
     "pattern",
     "decision",
     "scope",
@@ -345,6 +350,21 @@ pub(super) const COMMAND_RULE_KEYS: &[&str] = &[
     "examples",
     "match_examples",
     "not_match_examples",
+    "effects",
+];
+
+/// Defines the typed Bubblewrap configuration keys accepted by schema v21.
+pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] =
+    &["executable", "unavailable", "network", "environment"];
+
+/// Defines backend-neutral command-effect keys accepted by schema v21.
+pub(super) const COMMAND_RULE_EFFECT_KEYS: &[&str] = &[
+    "completeness",
+    "read_scopes",
+    "write_scopes",
+    "network",
+    "credentials",
+    "process_control",
 ];
 
 /// Defines the SESSION KEYS const used by this subsystem.

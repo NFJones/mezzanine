@@ -421,6 +421,27 @@ impl RuntimeSessionService {
             return Ok(None);
         }
 
+        let primary_resources = self.configured_permissions().resources.clone();
+        let resolved_primary_path_scopes = if !primary_resources.read_scopes.is_empty()
+            || !primary_resources.write_scopes.is_empty()
+        {
+            let request = mez_agent::shell::PanePathResolutionRequest::new(
+                primary_resources.read_scopes,
+                primary_resources.write_scopes,
+                Vec::new(),
+            )
+            .map_err(|error| MezError::invalid_args(error.message()))?;
+            match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
+                Some(scopes) => Some(scopes),
+                None => {
+                    let _ = self.dispatch_path_resolution_to_pane(&turn.pane_id, request)?;
+                    return Ok(None);
+                }
+            }
+        } else {
+            None
+        };
+
         let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
         let resolved_subagent_path_scopes = if let Some(scope) = subagent_scope
             .as_ref()
@@ -433,7 +454,13 @@ impl RuntimeSessionService {
             )
             .map_err(|error| MezError::invalid_args(error.message()))?;
             match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
-                Some(scopes) => Some(scopes),
+                Some(scopes) => Some(if let Some(primary) = &resolved_primary_path_scopes {
+                    primary
+                        .intersection(&scopes)
+                        .map_err(|error| MezError::invalid_state(error.message()))?
+                } else {
+                    scopes
+                }),
                 None => {
                     let _ = self.dispatch_path_resolution_to_pane(&turn.pane_id, request)?;
                     return Ok(None);
@@ -639,7 +666,7 @@ impl RuntimeSessionService {
         let path_scopes = if subagent_scope.is_some() {
             resolved_subagent_path_scopes
         } else {
-            self.path_scopes_for_pane(&turn.pane_id)
+            resolved_primary_path_scopes.or_else(|| self.path_scopes_for_pane(&turn.pane_id))
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
         self.agent.pending_agent_provider_tasks.remove(turn_id);

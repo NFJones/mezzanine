@@ -11,8 +11,8 @@ use serde_json::Value;
 use mez_agent::messaging::Recipient;
 use mez_agent::permissions::{
     ApprovalDecision, ApprovalPolicy, BlockedApprovalRequest, CommandRule, CommandRuleScope,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, PermissionPolicy, PermissionPreset, RuleDecision,
-    RuleMatch,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeclaredCommandEffects, EffectCompleteness,
+    PermissionPolicy, PermissionPreset, RuleDecision, RuleMatch,
 };
 use mez_agent::{ActionResult, AgentTurnRecord, SubagentScopeDeclaration};
 use mez_core::ids::{AgentId, PaneId, WindowId};
@@ -23,6 +23,123 @@ use super::{
     runtime_cooperation_mode_name, runtime_json_bool, runtime_json_object, runtime_json_string,
     runtime_json_string_array,
 };
+
+/// Complete configured permission state before pane-environment path resolution.
+#[derive(Debug, Clone)]
+pub(crate) struct ConfiguredPermissions {
+    /// Existing AST/prefix authorization policy.
+    pub(crate) authorization: PermissionPolicy,
+    /// Maximum resource authority configured for the primary agent.
+    pub(crate) resources: ResourceAuthorityConfig,
+    /// Optional additive confinement backend.
+    pub(crate) sandbox: SandboxConfig,
+}
+
+impl Default for ConfiguredPermissions {
+    fn default() -> Self {
+        Self {
+            authorization: PermissionPolicy::default(),
+            resources: ResourceAuthorityConfig::default(),
+            sandbox: SandboxConfig::PolicyOnly,
+        }
+    }
+}
+
+/// Configured maximum filesystem and network authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResourceAuthorityConfig {
+    /// Paths that may be projected read-only into a sandbox.
+    pub(crate) read_scopes: Vec<String>,
+    /// Paths that may be projected read-write into a sandbox.
+    pub(crate) write_scopes: Vec<String>,
+    /// Authorization policy for commands requiring network access.
+    pub(crate) network_policy: NetworkPolicy,
+}
+
+impl Default for ResourceAuthorityConfig {
+    fn default() -> Self {
+        Self {
+            read_scopes: Vec::new(),
+            write_scopes: Vec::new(),
+            network_policy: NetworkPolicy::Prompt,
+        }
+    }
+}
+
+/// Configured network authorization policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetworkPolicy {
+    /// Network-requiring commands are denied.
+    Deny,
+    /// Network-requiring commands require ordinary approval.
+    Prompt,
+    /// Network-requiring commands are authorized, subject to backend support.
+    Allow,
+}
+
+impl NetworkPolicy {
+    /// Returns the stable configuration spelling for status and audit output.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::Prompt => "prompt",
+            Self::Allow => "allow",
+        }
+    }
+}
+
+/// Selected additive confinement backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SandboxConfig {
+    /// Preserve existing policy-only execution behavior.
+    PolicyOnly,
+    /// Compile authorized commands into Bubblewrap launch plans.
+    Bubblewrap(BubblewrapConfig),
+}
+
+impl SandboxConfig {
+    /// Returns the stable backend name without exposing backend arguments.
+    pub(crate) const fn as_str(&self) -> &'static str {
+        match self {
+            Self::PolicyOnly => "policy-only",
+            Self::Bubblewrap(_) => "bubblewrap",
+        }
+    }
+}
+
+/// Typed fail-closed Bubblewrap configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BubblewrapConfig {
+    /// Absolute executable path resolved and probed in the pane environment.
+    pub(crate) executable: String,
+    /// Missing or nonfunctional Bubblewrap behavior.
+    pub(crate) unavailable: SandboxUnavailablePolicy,
+    /// Network namespace policy.
+    pub(crate) network: BubblewrapNetworkMode,
+    /// Environment reconstruction policy.
+    pub(crate) environment: SandboxEnvironmentPolicy,
+}
+
+/// Behavior when the configured sandbox backend is unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SandboxUnavailablePolicy {
+    /// Fail before launching the workload; never retry unsandboxed.
+    Fail,
+}
+
+/// Bubblewrap network namespace mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BubblewrapNetworkMode {
+    /// Use an isolated private network namespace.
+    Isolated,
+}
+
+/// Sandbox environment projection policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SandboxEnvironmentPolicy {
+    /// Clear inherited variables and rebuild a fixed non-secret environment.
+    Minimal,
+}
 
 /// Runs the runtime approval decision name to kind operation for this subsystem.
 ///
@@ -194,15 +311,22 @@ pub(super) fn runtime_blocked_approval_summary(
     }
 }
 
-/// Runs the runtime permission policy from config operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn runtime_permission_policy_from_config(root: &Value) -> Result<PermissionPolicy> {
+/// Materializes authorization, maximum resource authority, and the optional
+/// sandbox backend from one effective configuration tree.
+pub(crate) fn runtime_configured_permissions_from_config(
+    root: &Value,
+) -> Result<ConfiguredPermissions> {
     let mut policy = PermissionPolicy::default();
     let Some(permissions) = runtime_json_object(root, "permissions") else {
-        return Ok(policy);
+        return Ok(ConfiguredPermissions {
+            authorization: policy,
+            resources: ResourceAuthorityConfig {
+                read_scopes: Vec::new(),
+                write_scopes: Vec::new(),
+                network_policy: NetworkPolicy::Prompt,
+            },
+            sandbox: SandboxConfig::PolicyOnly,
+        });
     };
     if let Some(preset) = runtime_json_string(permissions.get("preset")) {
         policy.preset = runtime_config_permission_preset(preset)?;
@@ -249,7 +373,104 @@ pub(crate) fn runtime_permission_policy_from_config(root: &Value) -> Result<Perm
             policy.trusted_directories.push(project.to_string());
         }
     }
-    Ok(policy)
+
+    let read_scopes =
+        runtime_json_string_array(permissions.get("read_scopes"))?.unwrap_or_default();
+    let write_scopes =
+        runtime_json_string_array(permissions.get("write_scopes"))?.unwrap_or_default();
+    validate_configured_scopes(&read_scopes, "permissions.read_scopes")?;
+    validate_configured_scopes(&write_scopes, "permissions.write_scopes")?;
+    let network_policy =
+        match runtime_json_string(permissions.get("network_policy")).unwrap_or("prompt") {
+            "deny" => NetworkPolicy::Deny,
+            "prompt" => NetworkPolicy::Prompt,
+            "allow" => NetworkPolicy::Allow,
+            _ => return Err(MezError::config("unsupported permissions.network_policy")),
+        };
+    let sandbox = match runtime_json_string(permissions.get("sandbox")).unwrap_or("policy-only") {
+        "policy-only" => SandboxConfig::PolicyOnly,
+        "bubblewrap" => {
+            if read_scopes.is_empty() && write_scopes.is_empty() {
+                return Err(MezError::config(
+                    "permissions.sandbox = bubblewrap requires explicit read_scopes or write_scopes",
+                ));
+            }
+            let bubblewrap = permissions.get("bubblewrap").and_then(Value::as_object);
+            let executable = bubblewrap
+                .and_then(|config| runtime_json_string(config.get("executable")))
+                .unwrap_or("/usr/bin/bwrap")
+                .to_string();
+            if !executable.starts_with('/')
+                || executable.bytes().any(|byte| byte.is_ascii_control())
+            {
+                return Err(MezError::config(
+                    "permissions.bubblewrap.executable must be an absolute printable path",
+                ));
+            }
+            let unavailable = match bubblewrap
+                .and_then(|config| runtime_json_string(config.get("unavailable")))
+                .unwrap_or("fail")
+            {
+                "fail" => SandboxUnavailablePolicy::Fail,
+                _ => {
+                    return Err(MezError::config(
+                        "permissions.bubblewrap.unavailable must be fail",
+                    ));
+                }
+            };
+            let network = match bubblewrap
+                .and_then(|config| runtime_json_string(config.get("network")))
+                .unwrap_or("isolated")
+            {
+                "isolated" => BubblewrapNetworkMode::Isolated,
+                _ => {
+                    return Err(MezError::config(
+                        "permissions.bubblewrap.network must be isolated",
+                    ));
+                }
+            };
+            let environment = match bubblewrap
+                .and_then(|config| runtime_json_string(config.get("environment")))
+                .unwrap_or("minimal")
+            {
+                "minimal" => SandboxEnvironmentPolicy::Minimal,
+                _ => {
+                    return Err(MezError::config(
+                        "permissions.bubblewrap.environment must be minimal",
+                    ));
+                }
+            };
+            SandboxConfig::Bubblewrap(BubblewrapConfig {
+                executable,
+                unavailable,
+                network,
+                environment,
+            })
+        }
+        _ => return Err(MezError::config("unsupported permissions.sandbox backend")),
+    };
+
+    Ok(ConfiguredPermissions {
+        authorization: policy,
+        resources: ResourceAuthorityConfig {
+            read_scopes,
+            write_scopes,
+            network_policy,
+        },
+        sandbox,
+    })
+}
+
+fn validate_configured_scopes(scopes: &[String], field: &str) -> Result<()> {
+    if scopes
+        .iter()
+        .any(|scope| scope.is_empty() || scope.contains('\0') || scope.starts_with('~'))
+    {
+        return Err(MezError::config(format!(
+            "{field} must contain non-empty, unexpanded paths without NUL bytes"
+        )));
+    }
+    Ok(())
 }
 
 /// Runs the runtime provider registry from config operation for this subsystem.
@@ -309,6 +530,38 @@ pub(super) fn runtime_command_rule_from_config(
     .with_scope(scope);
     if let Some(justification) = runtime_json_string(object.get("justification")) {
         rule = rule.with_justification(justification);
+    }
+    if let Some(id) = runtime_json_string(object.get("id")) {
+        rule = rule
+            .with_id(id)
+            .map_err(|error| MezError::config(error.message()))?;
+    }
+    if let Some(effects) = object.get("effects") {
+        let effects = effects
+            .as_object()
+            .ok_or_else(|| MezError::config("permission command rule effects must be an object"))?;
+        let completeness =
+            match runtime_json_string(effects.get("completeness")).unwrap_or("unknown") {
+                "unknown" => EffectCompleteness::Unknown,
+                "complete" => EffectCompleteness::Complete,
+                _ => {
+                    return Err(MezError::config(
+                        "unsupported command rule effect completeness",
+                    ));
+                }
+            };
+        rule = rule
+            .with_declared_effects(DeclaredCommandEffects {
+                completeness,
+                read_scopes: runtime_json_string_array(effects.get("read_scopes"))?
+                    .unwrap_or_default(),
+                write_scopes: runtime_json_string_array(effects.get("write_scopes"))?
+                    .unwrap_or_default(),
+                network: runtime_json_bool(effects.get("network")),
+                credentials: runtime_json_bool(effects.get("credentials")),
+                process_control: runtime_json_bool(effects.get("process_control")),
+            })
+            .map_err(|error| MezError::config(error.message()))?;
     }
     Ok(rule)
 }

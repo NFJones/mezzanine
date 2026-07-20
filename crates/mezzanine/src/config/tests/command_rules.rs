@@ -18,6 +18,96 @@ fn validates_command_rule_schema_in_toml_array_tables() {
     assert!(validation.valid, "{:?}", validation.diagnostics);
 }
 
+/// Verifies schema v21 accepts typed Bubblewrap authority and complete rule
+/// effects without exposing raw backend arguments or inferring authority from
+/// the command pattern.
+#[test]
+fn validates_bubblewrap_authority_and_complete_rule_effects() {
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        r#"version = 21
+[permissions]
+sandbox = "bubblewrap"
+read_scopes = ["."]
+write_scopes = ["target"]
+network_policy = "deny"
+
+[permissions.bubblewrap]
+executable = "/usr/bin/bwrap"
+unavailable = "fail"
+network = "isolated"
+environment = "minimal"
+
+[[permissions.command_rules]]
+id = "cargo-test"
+pattern = ["cargo", "test"]
+decision = "allow"
+scope = "user"
+match = "prefix"
+
+[permissions.command_rules.effects]
+completeness = "complete"
+read_scopes = ["."]
+write_scopes = ["target"]
+network = false
+credentials = false
+process_control = false
+"#,
+        ConfigScope::Primary,
+    );
+
+    assert!(validation.valid, "{:?}", validation.diagnostics);
+}
+
+/// Verifies complete effects are an explicit allow-rule contract: every
+/// boolean requirement must be present, and prompt/forbid rules cannot attach
+/// effects that later sandbox compilation might mistake for granted authority.
+#[test]
+fn rejects_incomplete_or_non_allow_rule_effects() {
+    let incomplete = validate_config_text(
+        ConfigFormat::Toml,
+        r#"version = 21
+[[permissions.command_rules]]
+id = "cargo-test"
+pattern = ["cargo", "test"]
+decision = "allow"
+
+[permissions.command_rules.effects]
+completeness = "complete"
+read_scopes = ["."]
+write_scopes = ["target"]
+network = false
+"#,
+        ConfigScope::Primary,
+    );
+    assert!(!incomplete.valid);
+    assert!(incomplete.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "permissions.command_rules.effects"
+            && diagnostic.message.contains("credentials")
+            && diagnostic.message.contains("process_control")
+    }));
+
+    let prompted = validate_config_text(
+        ConfigFormat::Toml,
+        r#"version = 21
+[[permissions.command_rules]]
+id = "network-command"
+pattern = ["curl"]
+decision = "prompt"
+
+[permissions.command_rules.effects]
+completeness = "unknown"
+network = true
+"#,
+        ConfigScope::Primary,
+    );
+    assert!(!prompted.valid);
+    assert!(prompted.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "permissions.command_rules.effects"
+            && diagnostic.message.contains("allow rules")
+    }));
+}
+
 /// Verifies command rule match examples must match rule.
 ///
 /// This regression scenario documents the behavior being protected so a

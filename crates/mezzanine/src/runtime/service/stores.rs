@@ -130,6 +130,11 @@ impl RuntimeSessionService {
         self.integration.permission_policy()
     }
 
+    /// Returns the complete configured authorization and confinement state.
+    pub(crate) fn configured_permissions(&self) -> &crate::runtime::config::ConfiguredPermissions {
+        self.integration.configured_permissions()
+    }
+
     /// Runs the permission policy mut operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

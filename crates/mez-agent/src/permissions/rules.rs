@@ -358,6 +358,11 @@ pub(super) fn encode_rule_record(rule: &CommandRule) -> String {
         argument_policy,
         rule.pattern.join("\u{1f}"),
         rule.justification.clone().unwrap_or_default(),
+        rule.id.clone().unwrap_or_default(),
+        rule.declared_effects
+            .as_ref()
+            .and_then(|effects| serde_json::to_string(effects).ok())
+            .unwrap_or_default(),
     ]
     .into_iter()
     .map(|field| escape_record_field(&field))
@@ -372,7 +377,7 @@ pub(super) fn encode_rule_record(rule: &CommandRule) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn decode_rule_record(line: &str) -> Result<CommandRule> {
     let fields = split_record_fields(line);
-    if fields.len() != 6 {
+    if !matches!(fields.len(), 6 | 8) {
         return Err(MezError::invalid_args(
             "command rule record has invalid field count",
         ));
@@ -387,6 +392,17 @@ pub(super) fn decode_rule_record(line: &str) -> Result<CommandRule> {
         .with_scope(scope);
     if !fields[5].is_empty() {
         rule = rule.with_justification(fields[5].clone());
+    }
+    if fields.len() == 8 {
+        if !fields[6].is_empty() {
+            rule = rule.with_id(fields[6].clone())?;
+        }
+        if !fields[7].is_empty() {
+            let effects = serde_json::from_str(&fields[7]).map_err(|_| {
+                MezError::invalid_args("command rule record has invalid declared effects")
+            })?;
+            rule = rule.with_declared_effects(effects)?;
+        }
     }
     Ok(rule)
 }

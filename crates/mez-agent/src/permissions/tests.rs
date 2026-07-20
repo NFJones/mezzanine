@@ -10,10 +10,11 @@ use super::rules::sha256_hex;
 use super::{
     ApprovalDecision, ApprovalPolicy, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
     BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope, CommandRuleStore,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, PathScopes, PermissionAuthorityChange,
-    PermissionErrorKind, PermissionPolicy, PermissionPreset, RuleDecision, RuleMatch,
-    SessionApprovalStore, classify_shell_command, compare_approval_policy_authority,
-    compare_permission_preset_authority, normalize_exact_command_text,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeclaredCommandEffects, EffectCompleteness, PathScopes,
+    PermissionAuthorityChange, PermissionErrorKind, PermissionPolicy, PermissionPreset,
+    RuleDecision, RuleMatch, SessionApprovalStore, classify_shell_command,
+    compare_approval_policy_authority, compare_permission_preset_authority,
+    normalize_exact_command_text,
 };
 
 /// Runs the shell resolved scopes operation for this subsystem.
@@ -510,7 +511,18 @@ fn command_rule_store_round_trips_scoped_rules() {
                 .with_argument_policy(ArgumentPolicy::ReadPaths {
                     allowed_options: vec!["--short".to_string()],
                 })
-                .with_justification("status inspection"),
+                .with_justification("status inspection")
+                .with_id("git-status")
+                .unwrap()
+                .with_declared_effects(DeclaredCommandEffects {
+                    completeness: EffectCompleteness::Complete,
+                    read_scopes: vec![".".to_string()],
+                    write_scopes: Vec::new(),
+                    network: Some(false),
+                    credentials: Some(false),
+                    process_control: Some(false),
+                })
+                .unwrap(),
         )
         .unwrap();
 

@@ -25,9 +25,7 @@ pub(crate) fn runtime_permissions_command(
 ) -> Result<String> {
     let args = runtime_positional_args(invocation);
     if args.is_empty() || matches!(args.as_slice(), ["status"] | ["show"]) {
-        return Ok(runtime_permission_policy_display(
-            service.permission_policy(),
-        ));
+        return Ok(runtime_permission_policy_display(service));
     }
 
     let body = match args.as_slice() {
@@ -186,13 +184,19 @@ pub(crate) fn runtime_approval_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(crate) fn runtime_permission_policy_display(policy: &PermissionPolicy) -> String {
+pub(crate) fn runtime_permission_policy_display(service: &RuntimeSessionService) -> String {
+    let policy = service.permission_policy();
+    let configured = service.configured_permissions();
     format!(
-        "preset={} approval_policy={} bypass={} rules={} source=runtime-policy",
+        "preset={} approval_policy={} bypass={} rules={} sandbox={} network_policy={} read_scopes={} write_scopes={} source=runtime-policy",
         runtime_permission_preset_name(policy.preset),
         runtime_approval_policy_name(policy.approval_policy),
         policy.approval_bypass(),
-        policy.rules().len()
+        policy.rules().len(),
+        configured.sandbox.as_str(),
+        configured.resources.network_policy.as_str(),
+        configured.resources.read_scopes.len(),
+        configured.resources.write_scopes.len()
     )
 }
 
