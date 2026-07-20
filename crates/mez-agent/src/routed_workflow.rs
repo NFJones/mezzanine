@@ -22,10 +22,10 @@ pub const ROUTED_HANDOFF_MAX_BYTES: usize = 16 * 1024;
 pub const ROUTED_HANDOFF_REPAIR_LIMIT: u8 = 1;
 
 /// Response-only prompt used to collect a structured routed-worker handoff.
-pub const ROUTED_HANDOFF_PROMPT: &str = r#"Return all context needed for the main model to present your completed result safely. Emit one final MAAP say action whose text is exactly one JSON object matching this schema: {"version":1,"result_summary":"...","decisions":["..."],"evidence":["..."],"changes":["..."],"validation":["..."],"assumptions":["..."],"unresolved_risks":["..."],"follow_up_context":["..."]}. Do not perform more work or call tools."#;
+pub const ROUTED_HANDOFF_PROMPT: &str = r#"Return all context needed for the main model to present your completed result safely. Return exactly one JSON object matching this schema: {"version":1,"result_summary":"...","decisions":["..."],"evidence":["..."],"changes":["..."],"validation":["..."],"assumptions":["..."],"unresolved_risks":["..."],"follow_up_context":["..."]}. Do not perform more work or call tools."#;
 
 /// Response-only prompt used for the single bounded handoff repair attempt.
-pub const ROUTED_HANDOFF_REPAIR_PROMPT: &str = r#"Your previous handoff was invalid. Emit one final MAAP say action whose text is exactly one valid JSON object with version 1 and string-array fields decisions, evidence, changes, validation, assumptions, unresolved_risks, and follow_up_context, plus string result_summary. Do not use Markdown fences or call tools."#;
+pub const ROUTED_HANDOFF_REPAIR_PROMPT: &str = r#"Your previous handoff was invalid. Return exactly one valid JSON object with version 1 and string-array fields decisions, evidence, changes, validation, assumptions, unresolved_risks, and follow_up_context, plus string result_summary. Do not use Markdown fences or call tools."#;
 
 /// Lifecycle phase for one runtime-managed routed worker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +320,9 @@ pub fn plan_routed_workflow_transition(
 /// Failed, interrupted, malformed, or result-free turns retain the shared
 /// subagent formatter so bounded action and provider diagnostics remain useful.
 pub fn routed_child_output_for_execution(execution: &AgentTurnExecution) -> String {
+    if execution.request.interaction_kind.is_routed_handoff() {
+        return execution.response.raw_text.trim().to_string();
+    }
     if execution.terminal_state == AgentTurnState::Completed
         && let Some(batch) = execution.response.action_batch.as_ref()
     {

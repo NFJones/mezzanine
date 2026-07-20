@@ -271,6 +271,13 @@ pub fn runtime_validate_provider_completion_execution(
     execution: &mut AgentTurnExecution,
 ) -> OutcomeResult<()> {
     let Some(batch) = execution.response.action_batch.as_ref() else {
+        if execution.request.interaction_kind.expects_structured_json()
+            && execution.terminal_state == AgentTurnState::Completed
+            && execution.final_turn
+            && execution.action_results.is_empty()
+        {
+            return Ok(());
+        }
         if runtime_execution_is_missing_batch_terminal_failure(execution) {
             return Ok(());
         }

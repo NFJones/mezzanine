@@ -178,7 +178,8 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
             environment.provider_id(),
             &response.provider,
             response_request.interaction_kind == ModelInteractionKind::MaapRepair,
-            response.action_batch.is_some(),
+            response.action_batch.is_some()
+                || response_request.interaction_kind.expects_structured_json(),
             response.usage,
             response.latest_request_usage,
             &response.quota_usage,
@@ -211,6 +212,21 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
             }
             project_ledger_result(ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed))?;
             return Err(error);
+        }
+
+        if response_request.interaction_kind.expects_structured_json() {
+            response.usage = negotiation.cumulative_response_usage();
+            response.quota_usage = negotiation.latest_quota_usage().to_vec();
+            project_ledger_result(ledger.finish_turn(&turn.turn_id, AgentTurnState::Completed))?;
+            return Ok(AgentTurnExecution {
+                request: negotiation.durable_request().clone(),
+                response,
+                latest_response_usage: negotiation.latest_response_usage(),
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                action_results: Vec::new(),
+                final_turn: true,
+                terminal_state: AgentTurnState::Completed,
+            });
         }
 
         let Some(batch) = &response.action_batch else {
@@ -642,6 +658,62 @@ mod tests {
 
         assert_eq!(execution.terminal_state, AgentTurnState::Completed);
         assert_eq!(execution.action_results[0].action_id, "say-1");
+        assert_eq!(environment.requests.borrow().len(), 1);
+    }
+
+    /// Verifies a routed handoff accepts provider-native structured JSON without
+    /// requiring a second MAAP envelope whose text would need another JSON parse.
+    #[test]
+    fn routed_handoff_completes_from_structured_json_without_a_maap_batch() {
+        let turn = AgentTurnRecord {
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            pane_id: "pane-1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Queued,
+            cooperation_mode: None,
+            initial_capability: None,
+        };
+        let handoff = r#"{"version":1,"result_summary":"done","decisions":[],"evidence":[],"changes":[],"validation":[],"assumptions":[],"unresolved_risks":[],"follow_up_context":[]}"#;
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([ModelResponse {
+                provider: "test".to_string(),
+                model: "test-model".to_string(),
+                raw_text: handoff.to_string(),
+                usage: ModelTokenUsage::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: None,
+                provider_transcript_events: Vec::new(),
+            }])),
+            requests: RefCell::new(Vec::new()),
+        };
+        let context = AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            label: "request".to_string(),
+            content: "summarize the result".to_string(),
+        }])
+        .expect("test context should be valid");
+        let mut ledger = AgentTurnLedger::new(false);
+
+        let execution = run_ready(run_agent_turn_async(
+            &environment,
+            &mut ledger,
+            turn,
+            &context,
+            Some(AllowedActionSet::say_only()),
+            Some(ModelInteractionKind::RoutedHandoff),
+        ))
+        .expect("structured routed handoff should complete");
+
+        assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+        assert!(execution.response.action_batch.is_none());
+        assert_eq!(execution.response.raw_text, handoff);
         assert_eq!(environment.requests.borrow().len(), 1);
     }
 }

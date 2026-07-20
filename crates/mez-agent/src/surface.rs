@@ -39,10 +39,10 @@ pub enum ModelInteractionKind {
     /// The model is retrying after provider output exhaustion and must return
     /// one minimal complete action batch or final answer.
     OutputLimitRetry,
-    /// A routed worker is returning the structured handoff requested by its
-    /// controller task context.
+    /// A routed worker is returning the structured JSON handoff requested by
+    /// its controller task context.
     RoutedHandoff,
-    /// A routed worker is correcting a rejected structured handoff.
+    /// A routed worker is correcting a rejected structured JSON handoff.
     RoutedHandoffRepair,
     /// The parent model is presenting completed routed-worker evidence to the
     /// original user.
@@ -82,8 +82,6 @@ impl ModelInteractionKind {
                 | ModelInteractionKind::CapabilityContinuation
                 | ModelInteractionKind::MaapRepair
                 | ModelInteractionKind::OutputLimitRetry
-                | ModelInteractionKind::RoutedHandoff
-                | ModelInteractionKind::RoutedHandoffRepair
                 | ModelInteractionKind::RoutedPresentation
                 | ModelInteractionKind::RoutedFailureExplanation
                 | ModelInteractionKind::FailureSummary
@@ -94,8 +92,16 @@ impl ModelInteractionKind {
     pub fn expects_structured_json(self) -> bool {
         matches!(
             self,
-            ModelInteractionKind::AutoSizing | ModelInteractionKind::MacroJudge
+            ModelInteractionKind::AutoSizing
+                | ModelInteractionKind::MacroJudge
+                | ModelInteractionKind::RoutedHandoff
+                | ModelInteractionKind::RoutedHandoffRepair
         )
+    }
+
+    /// Reports whether this interaction returns a routed-worker handoff.
+    pub fn is_routed_handoff(self) -> bool {
+        matches!(self, Self::RoutedHandoff | Self::RoutedHandoffRepair)
     }
 
     /// Returns the stable mode-specific system instruction for exceptional
@@ -112,10 +118,10 @@ impl ModelInteractionKind {
                 "The previous response hit the provider output limit. Return one minimal complete MAAP batch when work remains or one short final answer when it does not. Omit progress prose, plans, evidence recaps, command logs, and explanations from this retry.",
             ),
             ModelInteractionKind::RoutedHandoff => Some(
-                "Complete the routed handoff task from controller-origin context. Return only the requested structured handoff through the currently allowed response action; do not continue implementation or address the end user.",
+                "Complete the routed handoff task from controller-origin context. Return only the requested structured JSON handoff; do not continue implementation or address the end user.",
             ),
             ModelInteractionKind::RoutedHandoffRepair => Some(
-                "Correct the routed handoff using the appended invalid-output and validation evidence. Return only the requested corrected structured handoff through the currently allowed response action.",
+                "Correct the routed handoff using the appended invalid-output and validation evidence. Return only the requested corrected structured JSON handoff.",
             ),
             ModelInteractionKind::RoutedPresentation => Some(
                 "Answer the original user from the appended routed-worker result and handoff evidence. Preserve the worker's facts, do not redo its work, and do not discuss internal routing unless it is necessary to explain the result.",

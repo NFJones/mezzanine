@@ -12,7 +12,8 @@ use crate::{
     OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages, ProviderRequestAssemblyResult,
     openai_auto_sizing_response_format, openai_macro_judge_response_format,
     openai_prompt_cache_diagnostics, openai_prompt_cache_key as provider_prompt_cache_key,
-    openai_render_messages, openai_stable_projection_material, validate_provider_request_required,
+    openai_render_messages, openai_routed_handoff_response_format,
+    openai_stable_projection_material, validate_provider_request_required,
 };
 
 /// Renders request messages and captures canonical stable-prefix material.
@@ -40,6 +41,9 @@ pub(super) fn openai_response_format(request: &ModelRequest) -> Option<serde_jso
     match request.interaction_kind {
         ModelInteractionKind::AutoSizing => Some(openai_auto_sizing_response_format()),
         ModelInteractionKind::MacroJudge => Some(openai_macro_judge_response_format()),
+        ModelInteractionKind::RoutedHandoff | ModelInteractionKind::RoutedHandoffRepair => {
+            Some(openai_routed_handoff_response_format())
+        }
         _ => None,
     }
 }

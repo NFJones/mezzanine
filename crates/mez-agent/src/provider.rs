@@ -584,6 +584,42 @@ pub fn openai_macro_judge_response_format() -> serde_json::Value {
     })
 }
 
+/// Builds the OpenAI structured-output schema for routed-worker handoffs.
+pub fn openai_routed_handoff_response_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "json_schema",
+        "name": "mezzanine_routed_worker_handoff",
+        "description": "Bounded context from a routed worker for parent-model presentation.",
+        "strict": true,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "result_summary": { "type": "string" },
+                "decisions": { "type": "array", "items": { "type": "string" } },
+                "evidence": { "type": "array", "items": { "type": "string" } },
+                "changes": { "type": "array", "items": { "type": "string" } },
+                "validation": { "type": "array", "items": { "type": "string" } },
+                "assumptions": { "type": "array", "items": { "type": "string" } },
+                "unresolved_risks": { "type": "array", "items": { "type": "string" } },
+                "follow_up_context": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": [
+                "version",
+                "result_summary",
+                "decisions",
+                "evidence",
+                "changes",
+                "validation",
+                "assumptions",
+                "unresolved_risks",
+                "follow_up_context"
+            ],
+            "additionalProperties": false
+        }
+    })
+}
+
 /// Result type returned while decoding one provider response.
 pub type ProviderResponseResult<T> = Result<T, ProviderResponseError>;
 
@@ -1125,7 +1161,8 @@ mod request_assembly_tests {
         openai_historical_action_result_entry_text, openai_historical_user_prompt_entry_text,
         openai_macro_judge_response_format, openai_models_endpoint_for_responses_endpoint,
         openai_prompt_cache_key, openai_request_options, openai_responses_endpoint_for_base_url,
-        openai_service_tier_for_latency_preference, validate_provider_request_required,
+        openai_routed_handoff_response_format, openai_service_tier_for_latency_preference,
+        validate_provider_request_required,
     };
 
     /// Provider adapters share one stable MAAP action-batch tool name so
@@ -1219,6 +1256,7 @@ mod request_assembly_tests {
     fn openai_internal_response_formats_preserve_strict_contracts() {
         let auto_sizing = openai_auto_sizing_response_format();
         let macro_judge = openai_macro_judge_response_format();
+        let routed_handoff = openai_routed_handoff_response_format();
 
         assert_eq!(auto_sizing["name"], "mezzanine_auto_sizing_decision");
         assert_eq!(auto_sizing["strict"], true);
@@ -1237,6 +1275,22 @@ mod request_assembly_tests {
                 "rationale",
                 "adapted_prompt",
                 "user_message"
+            ])
+        );
+        assert_eq!(routed_handoff["name"], "mezzanine_routed_worker_handoff");
+        assert_eq!(routed_handoff["strict"], true);
+        assert_eq!(
+            routed_handoff["schema"]["required"],
+            serde_json::json!([
+                "version",
+                "result_summary",
+                "decisions",
+                "evidence",
+                "changes",
+                "validation",
+                "assumptions",
+                "unresolved_risks",
+                "follow_up_context"
             ])
         );
     }

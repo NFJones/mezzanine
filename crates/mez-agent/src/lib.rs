@@ -392,9 +392,10 @@ pub use provider::{
     openai_macro_judge_response_format, openai_models_endpoint_for_responses_endpoint,
     openai_prompt_cache_diagnostics, openai_prompt_cache_key, openai_render_messages,
     openai_request_options, openai_responses_endpoint_for_base_url,
-    openai_service_tier_for_latency_preference, openai_stable_projection_material,
-    parse_openai_models_http_body, parse_openai_models_http_body_with,
-    provider_catalog_reasoning_levels, resolve_provider_api, validate_provider_request_required,
+    openai_routed_handoff_response_format, openai_service_tier_for_latency_preference,
+    openai_stable_projection_material, parse_openai_models_http_body,
+    parse_openai_models_http_body_with, provider_catalog_reasoning_levels, resolve_provider_api,
+    validate_provider_request_required,
 };
 pub use provider_diagnostics::{
     ProviderMalformedOutputError, provider_error_detail, provider_failure_event_json,
