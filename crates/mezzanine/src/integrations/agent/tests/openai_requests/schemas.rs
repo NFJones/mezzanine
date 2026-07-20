@@ -432,7 +432,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         "{description}"
     );
     assert!(
-        description.contains("1-6 exact current old/context lines"),
+        description.contains("5-10 exact current old/context lines"),
         "{description}"
     );
     assert!(
