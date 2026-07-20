@@ -124,6 +124,17 @@ impl RuntimeSessionService {
                 self.fail_path_resolution_transaction(marker, &transaction, &message)?;
                 Ok(1)
             }
+            RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
+                self.fail_bubblewrap_capability_probe_transaction(
+                    marker,
+                    transaction,
+                    "bubblewrap_probe_protocol_violation",
+                    &message,
+                    true,
+                    false,
+                )?;
+                Ok(1)
+            }
         }
     }
 
@@ -169,6 +180,16 @@ impl RuntimeSessionService {
                 }
                 RunningShellTransactionKind::PathResolution { .. } => {
                     self.fail_path_resolution_for_pane_write_failure(&marker, transaction, error)?;
+                }
+                RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
+                    self.fail_bubblewrap_capability_probe_transaction(
+                        &marker,
+                        transaction,
+                        "bubblewrap_probe_write_failed",
+                        &format!("pane input write failed while sending Bubblewrap capability probe: {error}"),
+                        true,
+                        false,
+                    )?;
                 }
             }
         }

@@ -31,6 +31,10 @@ use crate::runtime::{
 pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v1";
 
 const SANDBOX_COMMAND_PATH: &str = "/run/mez/command";
+/// Sentinel replaced by the pane transaction's materialized command-file
+/// argument immediately before rendering the typed child launch.
+pub(crate) const BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER: &str =
+    "/run/mez/host-command-placeholder";
 const SANDBOX_HOME: &str = "/home/mez";
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
 
@@ -383,12 +387,30 @@ pub(crate) fn parse_bubblewrap_capability_probe(
         ));
     }
     Ok(BubblewrapCapability {
-        cache_key: BubblewrapCapabilityCacheKey {
-            pane_environment_signature: pane_environment_signature.to_string(),
-            executable: plan.executable.clone(),
-            runtime_profile_version: BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
-            probe_sha256: plan.probe_sha256.clone(),
-        },
+        cache_key: bubblewrap_capability_cache_key(pane_environment_signature, plan)?,
+    })
+}
+
+/// Builds the exact cache identity for a deterministic capability probe.
+pub(crate) fn bubblewrap_capability_cache_key(
+    pane_environment_signature: &str,
+    plan: &BubblewrapCapabilityProbePlan,
+) -> Result<BubblewrapCapabilityCacheKey, SandboxCompileError> {
+    if pane_environment_signature.is_empty()
+        || pane_environment_signature
+            .bytes()
+            .any(|byte| byte.is_ascii_control())
+    {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            "Bubblewrap capability caching requires a printable pane environment signature",
+        ));
+    }
+    Ok(BubblewrapCapabilityCacheKey {
+        pane_environment_signature: pane_environment_signature.to_string(),
+        executable: plan.executable.clone(),
+        runtime_profile_version: BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
+        probe_sha256: plan.probe_sha256.clone(),
     })
 }
 

@@ -72,6 +72,14 @@ impl RuntimeSessionService {
                         elapsed_ms,
                     )?;
                 }
+                RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
+                    self.expire_bubblewrap_capability_probe_transaction(
+                        &marker,
+                        transaction,
+                        timeout_ms,
+                        elapsed_ms,
+                    )?;
+                }
             }
         }
         Ok(expired_count)

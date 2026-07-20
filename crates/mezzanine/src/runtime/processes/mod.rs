@@ -92,6 +92,15 @@ pub(crate) struct RuntimeProcessComponent {
     /// Fail-closed resolver outcomes keyed by the same exact authority identity.
     pane_path_scope_failures:
         std::collections::BTreeMap<crate::runtime::RuntimePathResolutionCacheKey, String>,
+    /// Successful Bubblewrap probes keyed by exact pane-environment and
+    /// runtime-profile identity.
+    pane_bubblewrap_capabilities: std::collections::BTreeMap<
+        crate::security::sandbox::BubblewrapCapabilityCacheKey,
+        crate::security::sandbox::BubblewrapCapability,
+    >,
+    /// Fail-closed probe outcomes keyed by the same exact capability identity.
+    pane_bubblewrap_capability_failures:
+        std::collections::BTreeMap<crate::security::sandbox::BubblewrapCapabilityCacheKey, String>,
     /// Panes with an in-flight bootstrap transaction.
     pane_bootstrap_pending: BTreeSet<String>,
     /// Modeled terminal screen state keyed by pane id.
@@ -952,7 +961,8 @@ impl RuntimeSessionService {
                 }
                 RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
-                | RunningShellTransactionKind::PathResolution { .. } => String::new(),
+                | RunningShellTransactionKind::PathResolution { .. }
+                | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => String::new(),
             };
             self.append_agent_trace_turn_event(
                 &pane_id,

@@ -210,12 +210,76 @@ pub struct ShellTransaction {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub command: String,
+    /// Optional typed process launch that receives the materialized command
+    /// file as one argv element instead of executing it directly in a child
+    /// shell.
+    pub child_launch: Option<ShellChildLaunch>,
     /// Stores the output transport used by isolated child command execution.
     ///
     /// Stateful commands always remain raw because they intentionally execute
     /// in the active pane shell. Isolated action commands can encode output so
     /// terminal-control bytes stay inert until runtime result processing.
     pub output_transport: ShellTransactionOutputTransport,
+}
+
+/// One argument in a typed isolated-child process launch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellChildArgument {
+    /// A literal argv element rendered with shell-specific quoting.
+    Literal(String),
+    /// The temporary command file materialized by the transaction wrapper.
+    MaterializedCommandFile,
+}
+
+/// Typed executable and argv for an isolated child process.
+///
+/// The contract deliberately excludes raw shell fragments. Renderers quote
+/// every literal and substitute the wrapper-owned command-file variable only
+/// for the dedicated argument variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellChildLaunch {
+    /// Absolute executable path resolved in the pane environment.
+    pub executable: String,
+    /// Ordered argv elements excluding argv[0].
+    pub arguments: Vec<ShellChildArgument>,
+}
+
+impl ShellChildLaunch {
+    /// Validates one typed child launch before shell rendering.
+    pub fn new(
+        executable: impl Into<String>,
+        arguments: Vec<ShellChildArgument>,
+    ) -> AgentShellValidationResult<Self> {
+        let executable = executable.into();
+        if !Path::new(&executable).is_absolute()
+            || executable.bytes().any(|byte| byte.is_ascii_control())
+        {
+            return Err(AgentShellValidationError::invalid_args(
+                "typed child executable must be an absolute printable path",
+            ));
+        }
+        if arguments.iter().any(|argument| {
+            matches!(argument, ShellChildArgument::Literal(value) if value.contains('\0') || value.bytes().any(|byte| byte.is_ascii_control()))
+        }) {
+            return Err(AgentShellValidationError::invalid_args(
+                "typed child arguments must not contain NUL or control bytes",
+            ));
+        }
+        if arguments
+            .iter()
+            .filter(|argument| matches!(argument, ShellChildArgument::MaterializedCommandFile))
+            .count()
+            > 1
+        {
+            return Err(AgentShellValidationError::invalid_args(
+                "typed child launch accepts at most one materialized command-file argument",
+            ));
+        }
+        Ok(Self {
+            executable,
+            arguments,
+        })
+    }
 }
 
 /// Rendered shell input for one non-stateful shell transaction.
@@ -544,6 +608,28 @@ fn fish_child_command_line(
     format!("{prefix} {noninteractive_env} {shell_invocation} </dev/null{redirect}")
 }
 
+/// Renders one typed child launch as POSIX shell words.
+fn posix_typed_child_launch_words(launch: &ShellChildLaunch) -> String {
+    std::iter::once(shell_quote(&launch.executable))
+        .chain(launch.arguments.iter().map(|argument| match argument {
+            ShellChildArgument::Literal(value) => shell_quote(value),
+            ShellChildArgument::MaterializedCommandFile => "\"$MEZ_COMMAND_FILE\"".to_string(),
+        }))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Renders one typed child launch as Fish shell words.
+fn fish_typed_child_launch_words(launch: &ShellChildLaunch) -> String {
+    std::iter::once(fish_quote(&launch.executable))
+        .chain(launch.arguments.iter().map(|argument| match argument {
+            ShellChildArgument::Literal(value) => fish_quote(value),
+            ShellChildArgument::MaterializedCommandFile => "\"$MEZ_COMMAND_FILE\"".to_string(),
+        }))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl ShellTransaction {
     /// Runs the new operation for this subsystem.
     ///
@@ -566,8 +652,15 @@ impl ShellTransaction {
             pane_id: pane_id.into(),
             shell_path: shell_path.to_string_lossy().into_owned(),
             command: command.into(),
+            child_launch: None,
             output_transport: ShellTransactionOutputTransport::Raw,
         })
+    }
+
+    /// Selects a validated typed child process launch for this transaction.
+    pub fn with_child_launch(mut self, child_launch: ShellChildLaunch) -> Self {
+        self.child_launch = Some(child_launch);
+        self
     }
 
     /// Selects the output transport for isolated shell rendering.
@@ -608,14 +701,24 @@ impl ShellTransaction {
             self.marker.as_str(),
             "command printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$MEZ_MARKER_TOKEN\" \"$MEZ_TURN\" \"$MEZ_AGENT\" \"$MEZ_PANE\"",
         );
-        let shell_invocation = posix_shell_script_invocation_words(
-            &self.shell_path,
-            classification,
-            "\"$MEZ_COMMAND_FILE\"",
+        let shell_invocation = self.child_launch.as_ref().map_or_else(
+            || {
+                posix_shell_script_invocation_words(
+                    &self.shell_path,
+                    classification,
+                    "\"$MEZ_COMMAND_FILE\"",
+                )
+            },
+            posix_typed_child_launch_words,
         );
+        let child_env = if self.child_launch.is_some() {
+            String::new()
+        } else {
+            posix_noninteractive_agent_env_command_words()
+        };
         let child_invocation = posix_child_command_invocation_lines(
             self.output_transport,
-            &posix_noninteractive_agent_env_command_words(),
+            &child_env,
             &shell_invocation,
         );
         let wrapper = format!(
@@ -747,14 +850,24 @@ unset -f {function_name} 2>/dev/null || :\n\
             self.marker.as_str(),
             "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE",
         );
-        let shell_invocation = fish_shell_script_invocation_words(
-            &self.shell_path,
-            ShellClassification::Fish,
-            "\"$MEZ_COMMAND_FILE\"",
+        let shell_invocation = self.child_launch.as_ref().map_or_else(
+            || {
+                fish_shell_script_invocation_words(
+                    &self.shell_path,
+                    ShellClassification::Fish,
+                    "\"$MEZ_COMMAND_FILE\"",
+                )
+            },
+            fish_typed_child_launch_words,
         );
+        let child_env = if self.child_launch.is_some() {
+            String::new()
+        } else {
+            fish_noninteractive_agent_env_words()
+        };
         let child_invocation = fish_child_command_invocation_lines(
             self.output_transport,
-            &fish_noninteractive_agent_env_words(),
+            &child_env,
             &shell_invocation,
         );
         let wrapper = format!(

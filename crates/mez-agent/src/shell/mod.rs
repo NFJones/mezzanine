@@ -26,10 +26,11 @@ pub use path_resolution::{
 pub use transaction::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, MarkerToken,
     SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES,
-    ShellClassification, ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport,
-    agent_subshell_enter_command, fish_quote, posix_shell_history_suppression_finish,
-    posix_shell_history_suppression_start, shell_command_contains_unquoted_heredoc,
-    shell_command_invokes_semantic_action, validate_agent_authored_shell_command,
+    ShellChildArgument, ShellChildLaunch, ShellClassification, ShellTransaction,
+    ShellTransactionInput, ShellTransactionOutputTransport, agent_subshell_enter_command,
+    fish_quote, posix_shell_history_suppression_finish, posix_shell_history_suppression_start,
+    shell_command_contains_unquoted_heredoc, shell_command_invokes_semantic_action,
+    validate_agent_authored_shell_command,
 };
 
 /// Categorizes deterministic shell-source validation failures.

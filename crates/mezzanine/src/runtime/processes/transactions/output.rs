@@ -25,7 +25,10 @@ impl RuntimeSessionService {
                     }
                     RunningShellTransactionKind::ReadinessProbe
                     | RunningShellTransactionKind::Bootstrap
-                    | RunningShellTransactionKind::PathResolution { .. } => bytes.to_vec(),
+                    | RunningShellTransactionKind::PathResolution { .. }
+                    | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
+                        bytes.to_vec()
+                    }
                 };
                 if let RunningShellTransactionKind::AgentAction { action_id } = &transaction.kind
                     && apply_patch_transaction_phase(&transaction.command)

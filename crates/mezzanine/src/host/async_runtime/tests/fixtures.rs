@@ -853,50 +853,6 @@ pub(super) async fn wait_for_rendered_text(
     )))
 }
 
-/// Waits until one agent shell transaction timer has been both scheduled and
-/// cancelled, proving the matching runtime transaction settled.
-pub(super) async fn wait_for_shell_transaction_timer_settlement(
-    handle: &super::AsyncRuntimeSessionHandle,
-    label: &str,
-) -> Result<()> {
-    let mut scheduled_key = None;
-    let mut cancelled_keys = Vec::new();
-    for _ in 0..3000 {
-        let timer_effects = handle.drain_timer_side_effects(16).await?;
-        for effect in timer_effects {
-            match effect {
-                RuntimeSideEffect::ScheduleTimer { key, .. }
-                    if key.kind == RuntimeTimerKind::ShellTransaction
-                        && scheduled_key.is_none() =>
-                {
-                    if cancelled_keys.iter().any(|cancelled| cancelled == &key) {
-                        return Ok(());
-                    }
-                    scheduled_key = Some(key);
-                }
-                RuntimeSideEffect::CancelTimer { key }
-                    if key.kind == RuntimeTimerKind::ShellTransaction =>
-                {
-                    if scheduled_key.is_none() {
-                        return Ok(());
-                    }
-                    if scheduled_key
-                        .as_ref()
-                        .is_some_and(|scheduled| scheduled == &key)
-                    {
-                        return Ok(());
-                    }
-                    cancelled_keys.push(key);
-                }
-                _ => {}
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    Err(MezError::invalid_state(format!(
-        "{label} shell transaction timer should settle before the test continues"
-    )))
-}
 /// Reads one HTTP request from the local provider concurrency fixture.
 ///
 /// The helper waits for the full body described by `Content-Length` so the

@@ -166,6 +166,16 @@ impl RuntimeSessionService {
                 transaction_ref.observed_output_truncated,
             );
         }
+        if matches!(
+            transaction_ref.kind,
+            RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+        ) {
+            return self.observe_bubblewrap_capability_probe_transaction_end(
+                marker,
+                transaction_ref,
+                exit_code,
+            );
+        }
         let RunningShellTransactionKind::AgentAction { ref action_id } = transaction_ref.kind
         else {
             return Err(MezError::invalid_state(

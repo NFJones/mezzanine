@@ -83,6 +83,12 @@ where
             return Ok(report);
         }
         if should_stop(report.polls, state) {
+            drain_completed_pane_process_workers_after_yields(
+                &mut workers,
+                &mut active_panes,
+                &mut report,
+            )
+            .await?;
             abort_pane_process_workers(&mut workers).await;
             return Ok(report);
         }

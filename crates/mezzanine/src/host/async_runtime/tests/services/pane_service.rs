@@ -833,9 +833,6 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             first_seen.contains("AGENT_ASYNC_FIRST_COMMAND"),
             "{first_seen}"
         );
-        wait_for_shell_transaction_timer_settlement(&client_handle, "first")
-            .await
-            .unwrap();
 
         let mut next_task = None;
         for _ in 0..200 {
@@ -967,9 +964,6 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             .unwrap();
         assert_eq!(second_provider_report.accepted, 1);
         assert_eq!(second_provider_report.applied, 1);
-        wait_for_shell_transaction_timer_settlement(&client_handle, "second")
-            .await
-            .unwrap();
         let alive_seen = wait_for_rendered_text(
             &client_handle,
             ClientViewRole::Primary,

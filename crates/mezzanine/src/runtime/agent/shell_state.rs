@@ -14,7 +14,23 @@ use super::{
     runtime_agent_terminal_preview, runtime_execution_ready_for_provider_continuation,
     runtime_marker_for_action, runtime_pane_readiness_state_name,
 };
+use crate::runtime::SandboxConfig;
 use mez_agent::permissions::PermissionEvaluation;
+use mez_agent::{ShellChildArgument, ShellChildLaunch};
+
+/// Per-action inputs required to render and track one pane shell transaction.
+pub(super) struct ShellActionDispatch<'a> {
+    /// Original command retained for execution, preview, and audit identity.
+    pub(super) command: &'a str,
+    /// Whether the command intentionally mutates the persistent pane shell.
+    pub(super) stateful: bool,
+    /// Whether the command requires interactive terminal behavior.
+    pub(super) interactive: bool,
+    /// Optional action-specific execution timeout.
+    pub(super) timeout_ms: Option<u64>,
+    /// Structured authorization result retained for sandbox compilation.
+    pub(super) permission_evaluation: Option<&'a PermissionEvaluation>,
+}
 
 impl RuntimeSessionService {
     /// Runs the dispatch shell action to pane operation for this subsystem.
@@ -22,28 +38,94 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(crate) fn dispatch_shell_action_to_pane(
+    pub(super) fn dispatch_shell_action_to_pane(
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
-        command: &str,
-        stateful: bool,
-        timeout_ms: Option<u64>,
-        permission_evaluation: Option<&PermissionEvaluation>,
+        dispatch: ShellActionDispatch<'_>,
     ) -> Result<()> {
+        let ShellActionDispatch {
+            command,
+            stateful,
+            interactive,
+            timeout_ms,
+            permission_evaluation,
+        } = dispatch;
         self.require_pane_ready_for_agent_command(&turn.pane_id)?;
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
         let marker = runtime_marker_for_action(turn, &action.id)?;
         let marker_id = marker.as_str().to_string();
-        let transaction = ShellTransaction::new(
+        let mut transaction = ShellTransaction::new(
             marker,
             &turn.turn_id,
             &turn.agent_id,
             &turn.pane_id,
             self.session.shell.path(),
             command,
-        )?
-        .with_output_transport(if stateful {
+        )?;
+        if let SandboxConfig::Bubblewrap(config) = self.configured_permissions().sandbox.clone() {
+            let evaluation = permission_evaluation.ok_or_else(|| {
+                MezError::invalid_state(
+                    "Bubblewrap dispatch requires the retained structured permission evaluation",
+                )
+            })?;
+            let signature = self
+                .pane_environment_signature(&turn.pane_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "pane environment is unavailable for Bubblewrap dispatch",
+                    )
+                })?;
+            let probe_plan = crate::security::sandbox::bubblewrap_capability_probe_plan(
+                &config,
+                &signature.shell_path,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            let cache_key = crate::security::sandbox::bubblewrap_capability_cache_key(
+                &signature.stable_hash(),
+                &probe_plan,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            let capability = self.bubblewrap_capability(&cache_key).ok_or_else(|| {
+                MezError::invalid_state(
+                    "Bubblewrap capability is unavailable for the active pane environment",
+                )
+            })?;
+            let maximum_authority = self.bubblewrap_path_scopes_for_turn(turn)?;
+            let launch_plan = crate::security::sandbox::compile_bubblewrap_launch_plan(
+                crate::security::sandbox::BubblewrapCompileRequest {
+                    config: &config,
+                    capability,
+                    pane_environment_signature: &cache_key.pane_environment_signature,
+                    network_policy: self.configured_permissions().resources.network_policy,
+                    maximum_authority: &maximum_authority,
+                    permission_evaluation: evaluation,
+                    child_shell_path: &signature.shell_path,
+                    command_file_host_path:
+                        crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
+                    stateful,
+                    interactive,
+                },
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            let arguments = launch_plan
+                .arguments
+                .into_iter()
+                .map(|argument| {
+                    if argument
+                        == crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER
+                    {
+                        ShellChildArgument::MaterializedCommandFile
+                    } else {
+                        ShellChildArgument::Literal(argument)
+                    }
+                })
+                .collect();
+            let child_launch = ShellChildLaunch::new(launch_plan.executable, arguments)?;
+            transaction = transaction.with_child_launch(child_launch);
+        }
+        let transaction = transaction.with_output_transport(if stateful {
             ShellTransactionOutputTransport::Raw
         } else {
             ShellTransactionOutputTransport::Base64
@@ -169,6 +251,35 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(())
+    }
+
+    /// Returns the exact pane-resolved maximum authority for one turn.
+    fn bubblewrap_path_scopes_for_turn(&self, turn: &AgentTurnRecord) -> Result<PathScopes> {
+        let primary = self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
+            MezError::invalid_state("Bubblewrap dispatch requires resolved primary path authority")
+        })?;
+        let Some(scope) = self.subagent_scope_declaration_for_turn(turn) else {
+            return Ok(primary);
+        };
+        if scope.read_scopes.is_empty() && scope.write_scopes.is_empty() {
+            return Ok(primary);
+        }
+        let request = mez_agent::shell::PanePathResolutionRequest::new(
+            scope.read_scopes,
+            scope.write_scopes,
+            Vec::new(),
+        )
+        .map_err(|error| MezError::invalid_args(error.message()))?;
+        let child = self
+            .path_scopes_for_pane_request(&turn.pane_id, &request)?
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "Bubblewrap dispatch requires resolved subagent path authority",
+                )
+            })?;
+        primary
+            .intersection(&child)
+            .map_err(|error| MezError::invalid_state(error.message()))
     }
 
     /// Runs the require pane ready for agent command operation for this subsystem.

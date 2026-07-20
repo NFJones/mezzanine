@@ -273,6 +273,15 @@ pub(crate) enum RunningShellTransactionKind {
         /// Cache identity captured before the transaction was dispatched.
         cache_key: RuntimePathResolutionCacheKey,
     },
+    /// Internal Bubblewrap runtime-profile capability probe.
+    BubblewrapCapabilityProbe {
+        /// Pending action resumed or failed when the probe settles.
+        action_id: String,
+        /// Exact capability identity captured before pane dispatch.
+        cache_key: crate::security::sandbox::BubblewrapCapabilityCacheKey,
+        /// Exact deterministic probe plan whose output must be validated.
+        probe_plan: crate::security::sandbox::BubblewrapCapabilityProbePlan,
+    },
 }
 
 /// Timer-visible kind for a live shell transaction.
@@ -286,6 +295,8 @@ pub enum RuntimeShellTransactionTimerKind {
     Bootstrap,
     /// Pane-shell canonical path-resolution timeout.
     PathResolution,
+    /// Bubblewrap runtime-profile capability probe timeout.
+    BubblewrapCapabilityProbe,
     /// Focused-shell hook marker timeout.
     FocusedShellHook,
 }

@@ -86,6 +86,9 @@ impl RuntimeSessionService {
                         RuntimeShellTransactionTimerKind::PathResolution => {
                             RuntimeTimerKind::PathResolution
                         }
+                        RuntimeShellTransactionTimerKind::BubblewrapCapabilityProbe => {
+                            RuntimeTimerKind::ShellTransaction
+                        }
                         RuntimeShellTransactionTimerKind::FocusedShellHook => {
                             RuntimeTimerKind::FocusedShellHook
                         }

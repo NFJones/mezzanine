@@ -93,7 +93,7 @@ fn request<'a>(
         maximum_authority: authority,
         permission_evaluation: evaluation,
         child_shell_path: "/bin/sh",
-        command_file_host_path: "/tmp/mez-command",
+        command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
         stateful: false,
         interactive: false,
     }

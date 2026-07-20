@@ -245,8 +245,8 @@ mod commands_support;
 /// declaration makes the boundary available to the crate.
 mod config;
 pub(crate) use config::{
-    BubblewrapConfig, BubblewrapNetworkMode, NetworkPolicy, SandboxEnvironmentPolicy,
-    SandboxUnavailablePolicy,
+    BubblewrapConfig, BubblewrapNetworkMode, NetworkPolicy, SandboxConfig,
+    SandboxEnvironmentPolicy, SandboxUnavailablePolicy,
 };
 /// Exposes the control module boundary.
 ///

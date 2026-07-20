@@ -491,3 +491,93 @@ fn transaction_rejects_relative_shell_path() {
 
     assert_eq!(error.kind(), AgentShellValidationErrorKind::InvalidArgs);
 }
+
+#[test]
+/// Verifies typed child launches preserve argv boundaries for POSIX and Fish
+/// wrappers while substituting only the transaction-owned command file.
+fn typed_child_launch_quotes_arguments_without_shell_fragments() {
+    let launch = ShellChildLaunch::new(
+        "/usr/bin/sandbox helper",
+        vec![
+            ShellChildArgument::Literal("--label".to_string()),
+            ShellChildArgument::Literal("space ' quote $HOME $(false)".to_string()),
+            ShellChildArgument::MaterializedCommandFile,
+            ShellChildArgument::Literal("tail; false".to_string()),
+        ],
+    )
+    .unwrap();
+    let transaction = ShellTransaction::new(
+        marker(),
+        "t1",
+        "a1",
+        "p1",
+        Path::new("/bin/sh"),
+        "printf typed-launch",
+    )
+    .unwrap()
+    .with_child_launch(launch);
+
+    let posix = transaction
+        .render_for_classification_input(ShellClassification::PosixSh)
+        .wrapper;
+    assert!(
+        posix.contains("'/usr/bin/sandbox helper' '--label'"),
+        "{posix}"
+    );
+    assert!(
+        posix.contains("'space '\"'\"' quote $HOME $(false)' \"$MEZ_COMMAND_FILE\" 'tail; false'"),
+        "{posix}"
+    );
+    assert!(!posix.contains("TERM='dumb'"), "{posix}");
+
+    let fish = transaction
+        .render_for_classification_input(ShellClassification::Fish)
+        .wrapper;
+    assert!(
+        fish.contains("'/usr/bin/sandbox helper' '--label'"),
+        "{fish}"
+    );
+    assert!(
+        fish.contains("'space \\' quote $HOME $(false)' \"$MEZ_COMMAND_FILE\" 'tail; false'"),
+        "{fish}"
+    );
+    assert!(!fish.contains("TERM='dumb'"), "{fish}");
+}
+
+#[test]
+/// Verifies typed child launches reject control data and ambiguous command
+/// file substitution before shell source is rendered.
+fn typed_child_launch_rejects_invalid_argv_contracts() {
+    assert!(
+        ShellChildLaunch::new(
+            "/usr/bin/bwrap",
+            vec![ShellChildArgument::Literal("line\nfeed".to_string())]
+        )
+        .is_err()
+    );
+    assert!(
+        ShellChildLaunch::new(
+            "/usr/bin/bwrap",
+            vec![
+                ShellChildArgument::MaterializedCommandFile,
+                ShellChildArgument::MaterializedCommandFile,
+            ]
+        )
+        .is_err()
+    );
+    assert!(
+        ShellChildLaunch::new(
+            "relative-bwrap",
+            vec![ShellChildArgument::MaterializedCommandFile]
+        )
+        .is_err()
+    );
+
+    assert!(
+        ShellChildLaunch::new(
+            "/usr/bin/bwrap",
+            vec![ShellChildArgument::Literal("--version".to_string())]
+        )
+        .is_ok()
+    );
+}

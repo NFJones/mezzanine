@@ -834,13 +834,30 @@ impl RuntimeSessionService {
             let permission_evaluation = execution.action_results[index]
                 .permission_evaluation
                 .clone();
+            match self.ensure_bubblewrap_capability_for_action(turn, &action.id) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => {
+                    execution.action_results[index] = self.shell_action_runtime_error_result(
+                        turn,
+                        action,
+                        command,
+                        "bubblewrap_capability_probe",
+                        &error,
+                    )?;
+                    continue;
+                }
+            }
             if let Err(error) = self.dispatch_shell_action_to_pane(
                 turn,
                 action,
-                command,
-                plan.stateful,
-                plan.timeout_ms,
-                permission_evaluation.as_deref(),
+                super::shell_state::ShellActionDispatch {
+                    command,
+                    stateful: plan.stateful,
+                    interactive: plan.interactive,
+                    timeout_ms: plan.timeout_ms,
+                    permission_evaluation: permission_evaluation.as_deref(),
+                },
             ) {
                 execution.action_results[index] = self.shell_action_runtime_error_result(
                     turn,
@@ -964,10 +981,13 @@ impl RuntimeSessionService {
                     self.dispatch_shell_action_to_pane(
                         turn,
                         &action,
-                        &read_plan.command,
-                        read_plan.stateful,
-                        read_plan.timeout_ms,
-                        permission_evaluation.as_deref(),
+                        super::shell_state::ShellActionDispatch {
+                            command: &read_plan.command,
+                            stateful: read_plan.stateful,
+                            interactive: read_plan.interactive,
+                            timeout_ms: read_plan.timeout_ms,
+                            permission_evaluation: permission_evaluation.as_deref(),
+                        },
                     )?;
                     return Ok(true);
                 }
@@ -1003,10 +1023,13 @@ impl RuntimeSessionService {
         self.dispatch_shell_action_to_pane(
             turn,
             &action,
-            &write_plan.command,
-            write_plan.stateful,
-            write_plan.timeout_ms,
-            permission_evaluation.as_deref(),
+            super::shell_state::ShellActionDispatch {
+                command: &write_plan.command,
+                stateful: write_plan.stateful,
+                interactive: write_plan.interactive,
+                timeout_ms: write_plan.timeout_ms,
+                permission_evaluation: permission_evaluation.as_deref(),
+            },
         )?;
         Ok(true)
     }
