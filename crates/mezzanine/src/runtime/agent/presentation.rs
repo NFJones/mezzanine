@@ -431,7 +431,16 @@ impl RuntimeSessionService {
                 .unwrap_or_else(|| format!("{} action {}", result.action_type, result.action_id));
             let detail = runtime_agent_action_error_suffix(result);
             let mut message = format!("agent: {label} failed; {reason}{detail}");
-            if let Some(output) = runtime_unrecovered_action_failure_output(result) {
+            let show_failure_output =
+                !matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                    || self
+                        .agent_shell_store()
+                        .get(pane_id)
+                        .map(|session| session.log_level != mez_agent::AgentLogLevel::Normal)
+                        .unwrap_or(false);
+            if show_failure_output
+                && let Some(output) = runtime_unrecovered_action_failure_output(result)
+            {
                 let lines = runtime_unrecovered_failure_output_lines(action, &output);
                 if !lines.is_empty() {
                     message.push('\n');

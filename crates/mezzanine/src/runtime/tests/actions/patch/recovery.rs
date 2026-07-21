@@ -956,16 +956,14 @@ fn runtime_apply_patch_unsafe_path_recovery_preserves_diagnostic() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies unrecovered `apply_patch` failures render their captured terminal
-/// diagnostic when the turn is actually ending failed.
+/// Verifies unrecovered `apply_patch` failures keep normal logging concise and
+/// expose their captured terminal diagnostic only in diagnostic logging.
 ///
-/// While the model still has a recovery attempt, normal logging does not need
-/// to show the patch stderr/stdout. Once recovery is unavailable or exhausted,
-/// the user needs enough final context to understand why the patch action
-/// failed, so the renderer should surface the bounded terminal observation
-/// before the failed-turn footer.
+/// The normal failure summary identifies the failed action and recovery state
+/// without flooding the pane with patcher stderr/stdout. Verbose logging keeps
+/// the bounded terminal observation available for troubleshooting.
 #[test]
-fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
+fn runtime_unrecovered_apply_patch_failure_respects_log_level() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
@@ -1043,6 +1041,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
         final_turn: true,
         terminal_state: AgentTurnState::Failed,
     };
+    let diagnostic_execution = execution.clone();
     service
         .agent_turn_executions_mut()
         .insert("turn-1".to_string(), execution);
@@ -1064,7 +1063,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
         "{pane_text}"
     );
     assert!(
-        pane_text.contains("apply_patch: hunk did not match: src/lib.rs"),
+        !pane_text.contains("apply_patch: hunk did not match: src/lib.rs"),
         "{pane_text}"
     );
     assert!(
@@ -1076,6 +1075,27 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
         "{pane_text}"
     );
     assert!(pane_text.contains("Failed after"), "{pane_text}");
+
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Verbose)
+        .unwrap();
+    service
+        .present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
+            "%1",
+            &diagnostic_execution,
+            "diagnostic logging enabled",
+        )
+        .unwrap();
+    let verbose_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        verbose_text.contains("apply_patch: hunk did not match: src/lib.rs"),
+        "{verbose_text}"
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 
