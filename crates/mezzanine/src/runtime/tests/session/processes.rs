@@ -695,6 +695,50 @@ fn runtime_foreground_process_event_recovers_after_alternate_screen_exit() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies foreground-shell metadata cannot start hidden bootstrap work before
+/// a newly spawned pane has emitted concrete prompt evidence.
+///
+/// Pane workers can observe the primary shell before its initial prompt bytes
+/// arrive. Treating that metadata as prompt readiness starts hidden bootstrap
+/// filtering too early and can suppress the delayed prompt. The pane must stay
+/// unknown until an OSC 133 prompt-end event arrives, while the prompt bytes
+/// themselves remain visible.
+#[test]
+fn runtime_foreground_process_event_waits_for_initial_prompt_before_bootstrap() {
+    let mut service = test_runtime_service();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Unknown
+    );
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 0);
+    assert!(service.pane_bootstrap_is_pending_for_tests("%1"));
+
+    service
+        .apply_pane_output_bytes("%1", b"\x1b]133;B\x07$ ".to_vec())
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains('$'), "{pane_text}");
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies stale readiness recovery can use async foreground metadata when
 /// synchronous PTY foreground queries are temporarily unavailable.
 ///

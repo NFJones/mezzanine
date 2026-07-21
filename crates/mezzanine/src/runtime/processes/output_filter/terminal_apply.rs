@@ -177,7 +177,14 @@ impl RuntimeSessionService {
         self.process
             .pane_foreground_process_groups
             .insert(pane_id.clone(), process_group_id);
-        if self.pane_foreground_primary_shell_state(&pane_id) == Some(true) {
+        let awaiting_initial_prompt = self
+            .process
+            .pane_bootstrap_pending
+            .contains(pane_id.as_str())
+            && self.pane_readiness_state(&pane_id) == PaneReadinessState::Unknown;
+        if !awaiting_initial_prompt
+            && self.pane_foreground_primary_shell_state(&pane_id) == Some(true)
+        {
             let _ = self.observe_passive_shell_prompt_candidate(
                 pane_id.as_str(),
                 "foreground-process-event",
