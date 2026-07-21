@@ -208,6 +208,35 @@ pub(crate) struct RunningShellTransactionRef {
     pub(crate) observed_output_truncated: bool,
 }
 
+/// Retains one ambiguous Bubblewrap payload failure while a bounded internal
+/// model assessment determines whether an approval prompt is appropriate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeSandboxFailureAssessment {
+    /// Exact action whose sandboxed payload exited non-zero.
+    pub(crate) action_id: String,
+    /// Settled transaction marker retained for ordinary fallback settlement.
+    pub(crate) marker: String,
+    /// Original transaction evidence, including bounded command output.
+    pub(crate) transaction: RunningShellTransactionRef,
+    /// Bubblewrap-reported payload exit code.
+    pub(crate) exit_code: i32,
+    /// Dedicated structured provider request built from bounded evidence.
+    pub(crate) request: crate::runtime::ModelRequest,
+}
+
+/// Redacted lifecycle facts retained for one approved Bubblewrap fallback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeSandboxFallbackAudit {
+    /// Stable classification or pre-payload failure reason.
+    pub(crate) reason: String,
+    /// Trusted proof or bounded model rationale, hashed before audit output.
+    pub(crate) proof: String,
+    /// Whether the sandboxed payload may already have produced effects.
+    pub(crate) partial_effect_warning: bool,
+    /// Primary client that approved the exact retry, when decided.
+    pub(crate) approving_client_id: Option<String>,
+}
+
 /// Cache identity for pane-shell path authority resolution.
 ///
 /// Environment and configuration generations are part of the identity so a

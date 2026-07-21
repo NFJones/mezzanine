@@ -497,6 +497,7 @@ use service_state::{
     RuntimeAgentPreShellHookCompletion, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
     RuntimeHttpMcpTransportState, RuntimeMcpRetryReport, RuntimeMcpTransportSet,
     RuntimeModelProfileOverrideScope, RuntimePathResolutionCacheKey,
+    RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
     RuntimeShellTransactionActionFailure, RuntimeSubagentPlacement,
 };
 #[cfg(test)]

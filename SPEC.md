@@ -2780,13 +2780,22 @@ Mezzanine MUST additionally resolve `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
 and `.docker` descendants regardless of effect completeness. Existing protected
 descendants MUST be replaced by private tmpfs mounts emitted after host binds;
 absent descendants MUST remain unmounted. The multi-user `/home` root and direct
-credential-directory authority MUST fail closed. A failed, stale, truncated,
-or timed-out Bubblewrap capability probe MUST fail only the action waiting on
-that probe and MUST NOT permit policy-only or unsandboxed fallback. Failed
-probe results MUST NOT be cached; a later independent action MAY issue one
-fresh probe for the same identity after shell readiness recovers. Successful
-probe results MUST remain cached, and concurrent waiters MUST share one
-in-flight probe. Raw Bubblewrap arguments, arbitrary binds, host networking,
+credential-directory authority MUST fail closed. A failed, stale, truncated, or timed-out Bubblewrap capability probe MUST
+never trigger automatic unsandboxed execution. For a local action whose retained
+permission decision is `prompt`, a probe, setup, launch, or proven pre-payload
+failure MAY create one normal approval for an exact unsandboxed retry. Failed
+probe results MUST NOT be cached; a later independent action MAY issue one fresh
+probe for the same identity after shell readiness recovers. Successful probe
+results MUST remain cached, and concurrent waiters MUST share one in-flight
+probe. Bubblewrap lifecycle status MUST remain separate from command output. A
+validated `exit-code` event proves payload execution; clean closure without that
+event proves only that payload execution was not established. A non-zero payload
+exit MAY enter one bounded structured model assessment. Only a validated
+`sandbox_failure` assessment MAY create an approval, which MUST warn that partial
+effects may already exist. Command-failure, uncertain, malformed, timed-out, or
+failed assessments MUST settle the original command normally. Approval grants
+only the retained turn/action one unsandboxed retry and MUST never execute it
+automatically. Raw Bubblewrap arguments, arbitrary binds, host networking,
 and inherited environment allowlists MUST NOT be configurable. The schema v20
 to v21 migration MUST preserve policy-only behavior and MUST NOT invent scopes,
 rule identities, or effects.
@@ -8578,9 +8587,12 @@ Agent shell-command audit records MUST identify `sandbox_backend` as
 `policy-only` or `bubblewrap`. Bubblewrap records MUST also include the fixed
 runtime-profile version, maximum or narrowed authority source, read-only and
 read-write host-mount counts, protected-mask count, and deterministic launch-plan
-SHA-256. These records MUST NOT include mount paths, Bubblewrap argv, command
-content, or environment values; policy-only records MUST omit plan-specific
-fields.
+SHA-256. An approved unsandboxed fallback MUST be recorded as `policy-only` and
+MUST identify the Bubblewrap origin, fallback classification, partial-effect
+warning, approving client, exact retry result, and a digest rather than raw
+proof or model rationale. These records MUST NOT include mount paths, Bubblewrap
+argv, command content, environment values, or raw assessment evidence; ordinary
+policy-only records MUST omit Bubblewrap plan-specific fields.
 
 Audit records MUST redact secrets by default.
 

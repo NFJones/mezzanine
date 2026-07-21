@@ -122,6 +122,8 @@ pub mod readiness;
 pub mod response_progress;
 pub mod routed_workflow;
 pub mod routing;
+/// Provider-independent ambiguous Bubblewrap failure assessment.
+pub mod sandbox_assessment;
 /// Provider-independent agent scheduling policy and queue state.
 pub mod scheduler;
 /// Provider-neutral MAAP action-batch schema construction.
@@ -393,10 +395,10 @@ pub use provider::{
     openai_macro_judge_response_format, openai_models_endpoint_for_responses_endpoint,
     openai_prompt_cache_diagnostics, openai_prompt_cache_key, openai_render_messages,
     openai_request_options, openai_responses_endpoint_for_base_url,
-    openai_routed_handoff_response_format, openai_service_tier_for_latency_preference,
-    openai_stable_projection_material, parse_openai_models_http_body,
-    parse_openai_models_http_body_with, provider_catalog_reasoning_levels, resolve_provider_api,
-    validate_provider_request_required,
+    openai_routed_handoff_response_format, openai_sandbox_failure_assessment_response_format,
+    openai_service_tier_for_latency_preference, openai_stable_projection_material,
+    parse_openai_models_http_body, parse_openai_models_http_body_with,
+    provider_catalog_reasoning_levels, resolve_provider_api, validate_provider_request_required,
 };
 pub use provider_diagnostics::{
     ProviderMalformedOutputError, provider_error_detail, provider_failure_event_json,
@@ -418,6 +420,11 @@ pub use response_progress::ProviderResponseProgress;
 pub use routing::{
     ModelPreset, PresetRegistry, ProviderConfig, ProviderRegistry, ProviderRoutingError,
     ProviderRoutingResult,
+};
+pub use sandbox_assessment::{
+    SANDBOX_FAILURE_ASSESSMENT_OUTPUT_MAX_BYTES, SandboxFailureAssessment,
+    SandboxFailureAssessmentClass, SandboxFailureAssessmentError, SandboxFailureAssessmentEvidence,
+    sandbox_failure_assessment_from_text, sandbox_failure_assessment_request,
 };
 pub use scheduler::{
     AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ProviderRetryDispatchResult,

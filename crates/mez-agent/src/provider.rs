@@ -584,6 +584,38 @@ pub fn openai_macro_judge_response_format() -> serde_json::Value {
     })
 }
 
+/// Builds the OpenAI structured-output schema for ambiguous Bubblewrap
+/// payload-failure assessments.
+pub fn openai_sandbox_failure_assessment_response_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "json_schema",
+        "name": "mezzanine_sandbox_failure_assessment",
+        "description": "Internal Mezzanine assessment of an ambiguous Bubblewrap payload failure.",
+        "strict": true,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "class": {
+                    "type": "string",
+                    "enum": ["sandbox_failure", "command_failure", "uncertain"]
+                },
+                "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+                "rationale": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                "retry_requested": { "type": "boolean" }
+            },
+            "required": [
+                "version",
+                "class",
+                "confidence",
+                "rationale",
+                "retry_requested"
+            ],
+            "additionalProperties": false
+        }
+    })
+}
+
 /// Builds the OpenAI structured-output schema for routed-worker handoffs.
 pub fn openai_routed_handoff_response_format() -> serde_json::Value {
     serde_json::json!({

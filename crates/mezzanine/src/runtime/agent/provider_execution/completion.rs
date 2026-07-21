@@ -90,6 +90,33 @@ impl RuntimeSessionService {
             )?;
             return Ok(true);
         }
+        if execution.request.interaction_kind
+            == mez_agent::ModelInteractionKind::SandboxFailureAssessment
+        {
+            let provider_id = execution.response.provider.clone();
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                "provider_task completed reason=sandbox_failure_assessment_provider_event",
+            )?;
+            if let Err(error) =
+                self.apply_sandbox_failure_assessment_provider_response(&turn, &execution.response)
+            {
+                self.append_agent_trace_provider_error(
+                    &turn,
+                    &provider_id,
+                    &model_profile,
+                    &error,
+                )?;
+                let _ = self.settle_pending_sandbox_failure_assessment(
+                    turn_id,
+                    "assessment_application_error",
+                )?;
+            }
+            return Ok(true);
+        }
         if execution.request.interaction_kind == mez_agent::ModelInteractionKind::MacroJudge {
             let Some(step_index) = self.macro_judge_step_index_for_turn(turn_id) else {
                 let error = MezError::invalid_state(

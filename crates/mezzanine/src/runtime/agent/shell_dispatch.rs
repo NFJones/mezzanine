@@ -22,6 +22,7 @@ use super::{
     runtime_mezzanine_error_code, runtime_pane_readiness_state_name,
     runtime_pre_shell_hook_payload,
 };
+use crate::runtime::RuntimeSandboxFallbackAudit;
 
 impl RuntimeSessionService {
     /// Appends one transported read chunk to an active apply-patch batch.
@@ -87,6 +88,9 @@ impl RuntimeSessionService {
         turn_id: &str,
         execution: &AgentTurnExecution,
     ) -> bool {
+        if self.agent.sandbox_failure_assessments.contains_key(turn_id) {
+            return false;
+        }
         let batch = execution.response.action_batch.as_ref();
         execution.terminal_state == AgentTurnState::Running
             && execution.action_results.iter().any(|result| {
@@ -253,6 +257,10 @@ impl RuntimeSessionService {
         self.record_runtime_agent_patch_results_for_turn(&turn, &execution);
         let mut terminal_state = execution.terminal_state;
         let mut transcript_entries = 0usize;
+        if terminal_state == AgentTurnState::Blocked {
+            self.apply_permission_request_hooks_for_execution(&turn, &mut execution)?;
+            terminal_state = execution.terminal_state;
+        }
         if matches!(
             terminal_state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
@@ -280,6 +288,23 @@ impl RuntimeSessionService {
                     "pending_shell_dispatch_settled",
                 )?;
             }
+        } else if terminal_state == AgentTurnState::Blocked {
+            transcript_entries =
+                self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
+            self.queue_blocked_approvals_for_execution(&turn, &execution)?;
+            self.agent_turn_executions_mut()
+                .insert(turn_id.to_string(), execution.clone());
+            let _ = self.agent.agent_scheduler.block_running(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent_turn_ledger_mut()
+                .finish_turn(turn_id, AgentTurnState::Blocked)?;
+            self.append_agent_trace_turn_transition(
+                &turn,
+                turn.state,
+                AgentTurnState::Blocked,
+                "bubblewrap_preparation_fallback_approval",
+            )?;
+            self.start_ready_agent_turns()?;
         } else {
             self.agent_turn_executions_mut()
                 .insert(turn_id.to_string(), execution.clone());
@@ -872,7 +897,7 @@ impl RuntimeSessionService {
                     }
                 }
             }
-            if let Err(error) = self.dispatch_shell_action_to_pane(
+            let dispatch_outcome = self.dispatch_shell_action_to_pane(
                 turn,
                 action,
                 super::shell_state::ShellActionDispatch {
@@ -882,27 +907,41 @@ impl RuntimeSessionService {
                     timeout_ms: plan.timeout_ms,
                     permission_evaluation: permission_evaluation.as_deref(),
                 },
-            ) {
-                execution.action_results[index] = self.shell_action_runtime_error_result(
-                    turn,
-                    action,
-                    command,
-                    "shell_dispatch",
-                    &error,
-                )?;
-                continue;
+            );
+            match dispatch_outcome {
+                Ok(super::shell_state::ShellActionDispatchOutcome::Dispatched) => {
+                    self.record_shell_dispatch_history(&turn.turn_id, command);
+                    dispatched = dispatched.saturating_add(1);
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!(
+                            "action {} dispatched shell_transaction dispatched_count={}",
+                            action.id, dispatched
+                        ),
+                    )?;
+                    break;
+                }
+                Ok(super::shell_state::ShellActionDispatchOutcome::SandboxFallbackEligible {
+                    marker,
+                    proof,
+                }) => {
+                    self.mark_sandbox_preparation_fallback_pending(
+                        turn, action, execution, index, &marker, &proof,
+                    )?;
+                    continue;
+                }
+                Err(error) => {
+                    execution.action_results[index] = self.shell_action_runtime_error_result(
+                        turn,
+                        action,
+                        command,
+                        "shell_dispatch",
+                        &error,
+                    )?;
+                    continue;
+                }
             }
-            self.record_shell_dispatch_history(&turn.turn_id, command);
-            dispatched = dispatched.saturating_add(1);
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                &format!(
-                    "action {} dispatched shell_transaction dispatched_count={}",
-                    action.id, dispatched
-                ),
-            )?;
-            break;
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
@@ -912,6 +951,95 @@ impl RuntimeSessionService {
             .runtime_metrics_mut()
             .record_shell_action_batch(dispatched);
         Ok(dispatched)
+    }
+
+    /// Marks one typed Bubblewrap preparation failure as approval-pending.
+    ///
+    /// The caller owns the in-flight execution, so this transition mutates
+    /// that execution in place and records only the exact fallback identity.
+    /// Ordinary provider or stored-dispatch settlement then persists the
+    /// blocked execution and queues the approval through the shared path.
+    fn mark_sandbox_preparation_fallback_pending(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        execution: &mut AgentTurnExecution,
+        result_index: usize,
+        marker: &str,
+        proof: &str,
+    ) -> Result<()> {
+        let plan = local_action_plan(action)?.ok_or_else(|| {
+            MezError::invalid_state("sandbox preparation fallback action is not shell-backed")
+        })?;
+        let evaluation = execution.action_results[result_index]
+            .permission_evaluation
+            .clone()
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "sandbox preparation fallback requires a permission evaluation",
+                )
+            })?;
+        if evaluation.decision != mez_agent::permissions::RuleDecision::Prompt {
+            return Err(MezError::invalid_state(
+                "sandbox preparation fallback requires an originally prompted action",
+            ));
+        }
+        let mut blocked = ActionResult::blocked(
+            turn,
+            action,
+            vec![
+                "Bubblewrap could not represent the approved policy requirements before payload execution"
+                    .to_string(),
+                "approval is required for one exact unsandboxed retry".to_string(),
+            ],
+            mez_agent::shell_action_structured_content_json(
+                action,
+                &plan,
+                Some("pane_shell"),
+                true,
+                serde_json::json!({
+                    "state": "pending",
+                    "kind": action.action_type(),
+                    "action_id": action.id.as_str(),
+                    "command": plan.policy_command,
+                    "sandbox_fallback": {
+                        "backend": "bubblewrap",
+                        "reason": "preparation_failure",
+                        "proof": proof,
+                        "payload_exec_proven": false,
+                        "partial_effect_warning": false
+                    }
+                }),
+                &evaluation.matched_rule_ids,
+                serde_json::json!({
+                    "source": "runtime",
+                    "marker": marker,
+                    "boundary_state": "preparation_failure",
+                    "payload_exec_proven": false,
+                    "partial_effect_warning": false
+                }),
+            ),
+        );
+        blocked.permission_evaluation = Some(evaluation);
+        execution.action_results[result_index] = blocked;
+        self.agent.sandbox_fallback_audits.insert(
+            (turn.turn_id.clone(), action.id.clone()),
+            RuntimeSandboxFallbackAudit {
+                reason: "preparation_failure".to_string(),
+                proof: proof.to_string(),
+                partial_effect_warning: false,
+                approving_client_id: None,
+            },
+        );
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "action {} blocked reason=bubblewrap_preparation_failure marker={marker}",
+                action.id
+            ),
+        )?;
+        Ok(())
     }
 
     /// Dispatches the verified write phase for a completed `apply_patch`
@@ -1076,6 +1204,7 @@ impl RuntimeSessionService {
         stage: &str,
         error: &MezError,
     ) -> Result<ActionResult> {
+        self.append_sandbox_fallback_result_audit(&turn.turn_id, &action.id, "failed")?;
         self.clear_sandbox_bypass_for_action(&turn.turn_id, &action.id);
         let error_kind = runtime_mezzanine_error_code(error.kind());
         let error_message = format!("{stage}: {}", error.message());

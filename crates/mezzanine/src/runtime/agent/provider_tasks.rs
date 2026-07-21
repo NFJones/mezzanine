@@ -495,39 +495,45 @@ impl RuntimeSessionService {
         let macro_judge_request = macro_judge_step_index
             .map(|step_index| self.macro_judge_request_for_turn(&turn, &model_profile, step_index))
             .transpose()?;
+        let sandbox_failure_assessment_request =
+            self.sandbox_failure_assessment_request_for_turn(turn_id);
 
         self.agent
             .agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
-        let (context, available_mcp_tools) = if macro_judge_step_index.is_some() {
-            let durable = self
-                .agent_turn_contexts()
-                .get(turn_id)
-                .cloned()
-                .ok_or_else(|| {
-                    MezError::invalid_state("runtime agent turn context is unavailable")
-                })?;
-            (
-                mez_agent::PreparedModelContext::from_durable(durable)?,
-                Vec::new(),
-            )
-        } else {
-            self.refresh_agent_turn_project_guidance_context(&turn)?;
-            let durable = self
-                .agent_turn_contexts()
-                .get(turn_id)
-                .cloned()
-                .ok_or_else(|| {
-                    MezError::invalid_state("runtime agent turn context is unavailable")
-                })?;
-            let mcp_summary = self.mcp_registry().prompt_summary();
-            self.prepare_agent_turn_model_context(&turn, durable, &mcp_summary, &model_profile)?
-        };
+        let (context, available_mcp_tools) =
+            if macro_judge_step_index.is_some() || sandbox_failure_assessment_request.is_some() {
+                let durable = self
+                    .agent_turn_contexts()
+                    .get(turn_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("runtime agent turn context is unavailable")
+                    })?;
+                (
+                    mez_agent::PreparedModelContext::from_durable(durable)?,
+                    Vec::new(),
+                )
+            } else {
+                self.refresh_agent_turn_project_guidance_context(&turn)?;
+                let durable = self
+                    .agent_turn_contexts()
+                    .get(turn_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("runtime agent turn context is unavailable")
+                    })?;
+                let mcp_summary = self.mcp_registry().prompt_summary();
+                self.prepare_agent_turn_model_context(&turn, durable, &mcp_summary, &model_profile)?
+            };
         let provider_context = context.to_agent_context();
         let respond_only = self.routed_presentation_turn(turn_id);
         let (allowed_actions, interaction_kind) =
             self.agent_provider_request_control_for_turn(&turn);
-        let auto_sizing = if macro_judge_step_index.is_some() || respond_only {
+        let auto_sizing = if macro_judge_step_index.is_some()
+            || sandbox_failure_assessment_request.is_some()
+            || respond_only
+        {
             None
         } else {
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
@@ -686,6 +692,7 @@ impl RuntimeSessionService {
             interaction_kind,
             model_profile,
             macro_judge_request,
+            sandbox_failure_assessment_request,
             auto_sizing,
             auto_sizing_provider,
             provider,
@@ -712,6 +719,9 @@ impl RuntimeSessionService {
         turn_id: &str,
         error: &MezError,
     ) -> Result<()> {
+        if self.settle_pending_sandbox_failure_assessment(turn_id, "provider_failure")? {
+            return Ok(());
+        }
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()

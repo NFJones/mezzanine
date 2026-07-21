@@ -188,6 +188,113 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Builds shell-dispatch and retry-result audit records for one approved
+/// Bubblewrap fallback classification.
+fn sandbox_fallback_audit_records(
+    reason: &str,
+    proof: &str,
+    partial_effect_warning: bool,
+) -> (Vec<serde_json::Value>, String) {
+    let root = temp_root(&format!("runtime-sandbox-fallback-audit-{reason}"));
+    let audit_path = root.join("audit.jsonl");
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    assert!(
+        service
+            .offer_sandbox_fallback_approval(
+                "sandbox-audit-marker",
+                &turn_id,
+                &action_id,
+                reason,
+                proof,
+                partial_effect_warning,
+            )
+            .unwrap()
+    );
+    service.grant_sandbox_bypass_after_approval(&turn_id, &action_id);
+    assert!(service.activate_sandbox_bypass_after_approval(&turn_id, &action_id));
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    let action = execution
+        .response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions
+        .first()
+        .unwrap()
+        .clone();
+    let evaluation = execution.action_results[0]
+        .permission_evaluation
+        .clone()
+        .unwrap();
+
+    service
+        .append_agent_shell_command_audit(&turn, &action, "env", Some(&evaluation), None, "sent")
+        .unwrap();
+    service
+        .append_sandbox_fallback_result_audit(&turn_id, &action_id, "succeeded")
+        .unwrap();
+
+    let serialized = fs::read_to_string(&audit_path).unwrap();
+    let records = serialized
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    fs::remove_dir_all(root).unwrap();
+    (records, serialized)
+}
+
+/// Verifies audit records distinguish proven and model-assessed fallbacks,
+/// retain retry outcomes, and hash rather than disclose fallback proof text.
+#[test]
+fn runtime_sandbox_fallback_audit_distinguishes_classification_and_result() {
+    let proven_proof = "trusted status closed without an exit-code event";
+    let (proven, proven_serialized) =
+        sandbox_fallback_audit_records("pre_payload_failure", proven_proof, false);
+    let model_proof = "model confidence=0.930: minimal environment removed a variable";
+    let (model, model_serialized) =
+        sandbox_fallback_audit_records("model_assessed_sandbox_failure", model_proof, true);
+
+    for (records, reason, partial_effect_warning) in [
+        (&proven, "pre_payload_failure", "false"),
+        (&model, "model_assessed_sandbox_failure", "true"),
+    ] {
+        let dispatch = records
+            .iter()
+            .find(|record| record["action"] == "send_to_pane")
+            .expect("fallback dispatch audit should be present");
+        let result = records
+            .iter()
+            .find(|record| record["action"] == "sandbox_fallback_result")
+            .expect("fallback result audit should be present");
+        assert_eq!(dispatch["metadata"]["sandbox_backend"], "policy-only");
+        assert_eq!(dispatch["metadata"]["sandbox_fallback_reason"], reason);
+        assert_eq!(
+            dispatch["metadata"]["sandbox_fallback_partial_effect_warning"],
+            partial_effect_warning
+        );
+        assert_eq!(dispatch["approval_state"], "approved_exact_sandbox_bypass");
+        assert_eq!(result["outcome"], "succeeded");
+        assert_eq!(result["metadata"]["sandbox_fallback_reason"], reason);
+    }
+    assert!(!proven_serialized.contains(proven_proof));
+    assert!(!model_serialized.contains(model_proof));
+    assert!(!proven_serialized.contains("\"env\""));
+    assert!(!model_serialized.contains("\"env\""));
+}
+
 /// Configures Bubblewrap with one project root as maximum read/write authority.
 fn configure_path_resolution_bubblewrap(service: &mut RuntimeSessionService) {
     let configured =
@@ -323,6 +430,43 @@ fn sandbox_fallback_execution_service() -> (RuntimeSessionService, String, Strin
     (service, turn.turn_id, action_id)
 }
 
+/// Primes one sandbox-first action through a successful capability probe so
+/// workload preparation can exercise typed compiler failures without running
+/// a real Bubblewrap process.
+fn settle_bubblewrap_probe_for_preparation_test(
+    service: &mut RuntimeSessionService,
+    turn_id: &str,
+    action_id: &str,
+    root: &Path,
+) {
+    configure_path_resolution_bubblewrap(service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(root));
+    cache_path_resolution_maximum(service, root);
+    mark_test_pane_ready(service, "%1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, action_id)
+            .unwrap()
+    );
+    let (marker, mut transaction) = take_bubblewrap_probe_transaction(service);
+    let RunningShellTransactionKind::BubblewrapCapabilityProbe { probe_plan, .. } =
+        &transaction.kind
+    else {
+        unreachable!();
+    };
+    transaction.observed_output_preview = probe_plan.expected_stdout.to_string();
+    service
+        .observe_bubblewrap_capability_probe_transaction_end(&marker, transaction, 0)
+        .unwrap();
+}
+
 /// Verifies trusted evidence that Bubblewrap closed without an exit-code event
 /// creates one normal approval for an exact unsandboxed retry while retaining
 /// the original prompt evaluation.
@@ -364,6 +508,89 @@ fn runtime_bubblewrap_pre_payload_failure_offers_exact_fallback_approval() {
     );
 }
 
+/// Verifies an unsupported Bubblewrap workload requirement is preserved as a
+/// typed preparation failure and offers one exact approval without launching.
+#[test]
+fn runtime_bubblewrap_unsupported_preparation_offers_exact_fallback_approval() {
+    let root = temp_root("runtime-bubblewrap-preparation-fallback");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    let execution = service
+        .agent_turn_executions_mut()
+        .get_mut(&turn_id)
+        .unwrap();
+    let action = execution
+        .response
+        .action_batch
+        .as_mut()
+        .unwrap()
+        .actions
+        .first_mut()
+        .unwrap();
+    let mez_agent::AgentActionPayload::ShellCommand { interactive, .. } = &mut action.payload
+    else {
+        unreachable!();
+    };
+    *interactive = true;
+
+    settle_bubblewrap_probe_for_preparation_test(&mut service, &turn_id, &action_id, &root);
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Blocked);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Blocked);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(structured.contains(r#""reason":"preparation_failure""#));
+    assert!(structured.contains("unsupported_requirement"));
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    let approval_id = service
+        .blocked_agent_approval_ids_by_turn()
+        .get(&turn_id)
+        .unwrap()
+        .first()
+        .unwrap()
+        .clone();
+    assert!(service.blocked_approval_grants_sandbox_bypass_for_tests(&approval_id));
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a policy-denied network requirement remains terminal and cannot
+/// be converted into an approval-gated unsandboxed retry.
+#[test]
+fn runtime_bubblewrap_hard_preparation_failure_does_not_offer_fallback() {
+    let root = temp_root("runtime-bubblewrap-hard-preparation-failure");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    let evaluation = service
+        .agent_turn_executions_mut()
+        .get_mut(&turn_id)
+        .unwrap()
+        .action_results[0]
+        .permission_evaluation
+        .as_mut()
+        .unwrap();
+    evaluation.effects.network = true;
+    evaluation.candidates[0].effects.network = true;
+
+    settle_bubblewrap_probe_for_preparation_test(&mut service, &turn_id, &action_id, &root);
+
+    assert!(service.blocked_approvals().pending().is_empty());
+    assert!(service.agent_turn_executions().get(&turn_id).is_none());
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies an approved sandbox bypass is scoped to one exact turn/action,
 /// remains active across internal phases, and cannot survive settlement.
 #[test]
@@ -378,6 +605,251 @@ fn runtime_sandbox_fallback_bypass_is_exact_and_cleared_on_settlement() {
 
     service.clear_sandbox_bypass_for_action("turn-1", "action-1");
     assert!(!service.activate_sandbox_bypass_after_approval("turn-1", "action-1"));
+}
+
+/// Builds one settled Bubblewrap payload transaction for assessment tests.
+fn sandbox_failure_transaction(turn_id: &str, action_id: &str) -> RunningShellTransactionRef {
+    RunningShellTransactionRef {
+        turn_id: turn_id.to_string(),
+        kind: RunningShellTransactionKind::AgentAction {
+            action_id: action_id.to_string(),
+        },
+        pane_id: "%1".to_string(),
+        command: "env".to_string(),
+        started_at_unix_ms: 0,
+        timeout_ms: None,
+        pending_input_payload: None,
+        observed_output_bytes: 18,
+        observed_output_preview: "permission denied\n".to_string(),
+        observed_output_truncated: false,
+    }
+}
+
+/// Verifies a valid model-attributed sandbox failure creates one approval and
+/// warns that the already-executed payload may have produced partial effects.
+#[test]
+fn runtime_sandbox_failure_assessment_offers_warned_fallback_approval() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    assert!(
+        service
+            .queue_sandbox_failure_assessment(
+                &turn,
+                &action_id,
+                "sandbox-assessment-marker",
+                sandbox_failure_transaction(&turn_id, &action_id),
+                1,
+            )
+            .unwrap()
+    );
+    let request = service
+        .sandbox_failure_assessment_request_for_tests(&turn_id)
+        .unwrap();
+    assert_eq!(
+        request.interaction_kind,
+        mez_agent::ModelInteractionKind::SandboxFailureAssessment
+    );
+    assert!(request.messages.iter().all(|message| {
+        !message.content.contains("show the environment")
+            && !message.content.contains("sandbox-fallback-shell")
+    }));
+    let response = mez_agent::ModelResponse {
+        provider: "runtime-batch".to_string(),
+        model: "test".to_string(),
+        raw_text: r#"{"version":1,"class":"sandbox_failure","confidence":0.93,"rationale":"the fixed minimal environment likely removed a required variable","retry_requested":true}"#.to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: None,
+        provider_transcript_events: Vec::new(),
+    };
+
+    service
+        .apply_sandbox_failure_assessment_provider_response(&turn, &response)
+        .unwrap();
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Blocked);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(structured.contains(r#""reason":"model_assessed_sandbox_failure""#));
+    assert!(structured.contains(r#""partial_effect_warning":true"#));
+    assert_eq!(
+        service
+            .blocked_agent_approval_ids_by_turn()
+            .get(&turn_id)
+            .map(Vec::len),
+        Some(1)
+    );
+}
+
+/// Verifies command-failure or uncertain assessments never create authority
+/// and instead settle the original non-zero shell result normally.
+#[test]
+fn runtime_command_failure_assessment_does_not_offer_unsandboxed_retry() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn_id)
+        .cloned()
+        .unwrap();
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    service
+        .queue_sandbox_failure_assessment(
+            &turn,
+            &action_id,
+            "sandbox-command-failure-marker",
+            sandbox_failure_transaction(&turn_id, &action_id),
+            1,
+        )
+        .unwrap();
+    let response = mez_agent::ModelResponse {
+        provider: "runtime-batch".to_string(),
+        model: "test".to_string(),
+        raw_text: r#"{"version":1,"class":"command_failure","confidence":0.88,"rationale":"the command reported its own invalid input","retry_requested":false}"#.to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: None,
+        provider_transcript_events: Vec::new(),
+    };
+
+    service
+        .apply_sandbox_failure_assessment_provider_response(&turn, &response)
+        .unwrap();
+
+    assert!(service.blocked_approvals().pending().is_empty());
+    assert!(
+        !service
+            .blocked_agent_approval_ids_by_turn()
+            .contains_key(&turn_id)
+    );
+    assert_eq!(
+        service
+            .agent_turn_executions()
+            .get(&turn_id)
+            .unwrap()
+            .action_results[0]
+            .status,
+        ActionStatus::Succeeded
+    );
+}
+
+/// Verifies malformed assessment output cannot create retry authority and
+/// settles the original command result through the ordinary shell path.
+#[test]
+fn runtime_malformed_sandbox_assessment_does_not_offer_unsandboxed_retry() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn_id)
+        .cloned()
+        .unwrap();
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    service
+        .queue_sandbox_failure_assessment(
+            &turn,
+            &action_id,
+            "sandbox-malformed-assessment-marker",
+            sandbox_failure_transaction(&turn_id, &action_id),
+            1,
+        )
+        .unwrap();
+    let response = mez_agent::ModelResponse {
+        provider: "runtime-batch".to_string(),
+        model: "test".to_string(),
+        raw_text: "not valid assessment json".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: None,
+        provider_transcript_events: Vec::new(),
+    };
+
+    service
+        .apply_sandbox_failure_assessment_provider_response(&turn, &response)
+        .unwrap();
+
+    assert!(service.blocked_approvals().pending().is_empty());
+    assert!(
+        !service
+            .blocked_agent_approval_ids_by_turn()
+            .contains_key(&turn_id)
+    );
+    assert!(
+        service
+            .sandbox_failure_assessment_request_for_tests(&turn_id)
+            .is_none()
+    );
+}
+
+/// Verifies provider failure or timeout during assessment cannot create retry
+/// authority and instead settles the retained command result normally.
+#[test]
+fn runtime_failed_sandbox_assessment_does_not_offer_unsandboxed_retry() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn_id)
+        .cloned()
+        .unwrap();
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    service
+        .queue_sandbox_failure_assessment(
+            &turn,
+            &action_id,
+            "sandbox-provider-failure-marker",
+            sandbox_failure_transaction(&turn_id, &action_id),
+            1,
+        )
+        .unwrap();
+
+    assert!(
+        service
+            .settle_pending_sandbox_failure_assessment(&turn_id, "provider_timeout")
+            .unwrap()
+    );
+
+    assert!(service.blocked_approvals().pending().is_empty());
+    assert!(
+        !service
+            .blocked_agent_approval_ids_by_turn()
+            .contains_key(&turn_id)
+    );
+    assert!(
+        service
+            .sandbox_failure_assessment_request_for_tests(&turn_id)
+            .is_none()
+    );
 }
 
 /// Removes and returns the sole in-flight Bubblewrap capability probe.

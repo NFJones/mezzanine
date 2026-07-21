@@ -502,6 +502,7 @@ async fn execute_runtime_agent_provider_dispatch(
         interaction_kind,
         model_profile,
         macro_judge_request,
+        sandbox_failure_assessment_request,
         auto_sizing,
         auto_sizing_provider,
         provider,
@@ -518,7 +519,7 @@ async fn execute_runtime_agent_provider_dispatch(
     } = dispatch;
     let context = context.into_agent_context();
     let routing_token_usage_by_model = std::collections::BTreeMap::new();
-    if let Some(request) = macro_judge_request {
+    if let Some(request) = sandbox_failure_assessment_request.or(macro_judge_request) {
         let response = match provider {
             RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
                 provider.send_request_async(&request).await?

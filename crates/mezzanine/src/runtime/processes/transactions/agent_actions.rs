@@ -16,6 +16,42 @@ use mez_agent::semantic_patch_planning::{
 };
 
 impl RuntimeSessionService {
+    /// Re-enters ordinary shell settlement after an internal sandbox-failure
+    /// assessment declines or cannot safely request an approval.
+    pub(crate) fn settle_sandbox_failure_assessment_as_command_failure(
+        &mut self,
+        pending: crate::runtime::RuntimeSandboxFailureAssessment,
+        reason: &str,
+    ) -> Result<()> {
+        let turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == pending.transaction.turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("sandbox assessment turn is unavailable"))?;
+        self.append_agent_trace_turn_event(
+            &pending.transaction.pane_id,
+            &pending.transaction.turn_id,
+            &format!(
+                "sandbox_failure_assessment settled action={} reason={} retry_requested=false",
+                pending.action_id, reason
+            ),
+        )?;
+        self.process
+            .running_shell_transactions
+            .insert(pending.marker.clone(), pending.transaction.clone());
+        let _ = self.observe_agent_shell_transaction_end(
+            &pending.transaction.pane_id,
+            &pending.marker,
+            &pending.transaction.turn_id,
+            &turn.agent_id,
+            &pending.transaction.pane_id,
+            pending.exit_code,
+        )?;
+        Ok(())
+    }
+
     /// Sends any deferred transaction payload after the shell wrapper receiver
     /// has started.
     pub(crate) fn observe_agent_shell_transaction_start(
@@ -298,7 +334,19 @@ impl RuntimeSessionService {
                         },
                     );
                 }
-                Ok(_) => {}
+                Ok(_) => {
+                    if exit_code != 0
+                        && self.queue_sandbox_failure_assessment(
+                            &turn,
+                            action_id,
+                            marker,
+                            transaction_ref.clone(),
+                            exit_code,
+                        )?
+                    {
+                        return Ok(1);
+                    }
+                }
             }
         }
         if self.dispatch_apply_patch_followup_if_needed(
@@ -309,6 +357,15 @@ impl RuntimeSessionService {
         )? {
             return Ok(1);
         }
+        self.append_sandbox_fallback_result_audit(
+            turn_id,
+            action_id,
+            if exit_code == 0 {
+                "succeeded"
+            } else {
+                "failed"
+            },
+        )?;
         self.clear_sandbox_bypass_for_action(turn_id, action_id);
 
         let (

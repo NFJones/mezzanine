@@ -28,8 +28,9 @@ use super::{
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberTask,
     RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
     RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
-    RuntimeProviderConfig, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    RuntimeSideEffect, RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
+    RuntimeProviderConfig, RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
+    RuntimeSessionService, RuntimeShellTransactionActionFailure, RuntimeSideEffect,
+    RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
     ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
     SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
     TranscriptRole, assemble_model_request, compact_model_context_for_budget_at_consumed_sequence,
@@ -110,6 +111,7 @@ mod provider_events;
 mod provider_execution;
 mod provider_tasks;
 mod routed_workflow;
+mod sandbox_assessment;
 mod scheduler_state;
 mod shell_dispatch;
 mod shell_state;
@@ -217,6 +219,12 @@ pub(crate) struct RuntimeAgentComponent {
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Provider turns claimed by workers but not yet settled.
     claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
+    /// Ambiguous Bubblewrap failures awaiting one bounded internal model
+    /// assessment, keyed by the owning turn.
+    sandbox_failure_assessments: BTreeMap<String, RuntimeSandboxFailureAssessment>,
+    /// Redacted classification and approval facts retained across one exact
+    /// approved unsandboxed fallback retry.
+    sandbox_fallback_audits: BTreeMap<(String, String), RuntimeSandboxFallbackAudit>,
     /// Panes currently running model-backed context compaction.
     agent_compacting_panes: BTreeMap<String, u64>,
     /// Model-backed compaction tasks waiting for provider dispatch.
@@ -676,6 +684,13 @@ impl RuntimeSessionService {
         }
         self.agent.active_sandbox_bypasses.insert(identity);
         true
+    }
+
+    /// Reports whether one exact approved bypass is active during dispatch.
+    pub(crate) fn sandbox_bypass_active_for_action(&self, turn_id: &str, action_id: &str) -> bool {
+        self.agent
+            .active_sandbox_bypasses
+            .contains(&(turn_id.to_string(), action_id.to_string()))
     }
 
     /// Clears any pending or active bypass for one settled action.
@@ -1383,6 +1398,10 @@ impl RuntimeSessionService {
         self.clear_agent_failure_feedback_attempts_for_turn(turn_id);
         self.clear_agent_execution_group_ownership_for_turn(turn_id);
         self.clear_agent_issue_query_freshness_for_turn(turn_id);
+        self.agent.sandbox_failure_assessments.remove(turn_id);
+        self.agent
+            .sandbox_fallback_audits
+            .retain(|(owner_turn_id, _), _| owner_turn_id != turn_id);
         self.agent
             .sandbox_bypass_after_approval
             .retain(|(owner_turn_id, _)| owner_turn_id != turn_id);
@@ -1404,6 +1423,8 @@ impl RuntimeSessionService {
         self.agent.agent_turn_failure_feedback_attempts.clear();
         self.agent.agent_turn_output_limit_recovery_attempts.clear();
         self.agent.agent_turn_interaction_kinds.clear();
+        self.agent.sandbox_failure_assessments.clear();
+        self.agent.sandbox_fallback_audits.clear();
         self.agent.agent_execution_groups_by_turn.clear();
         self.agent.agent_provider_tool_calls_by_turn.clear();
         self.agent.agent_turn_issue_query_freshness.clear();

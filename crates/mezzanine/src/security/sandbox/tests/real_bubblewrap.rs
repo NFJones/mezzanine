@@ -184,7 +184,10 @@ fn execute_plan(plan: BubblewrapLaunchPlan, command: &str) -> Output {
             }
         })
         .collect();
-    let launch = ShellChildLaunch::new(plan.executable, arguments).unwrap();
+    let launch = ShellChildLaunch::new(plan.executable, arguments)
+        .unwrap()
+        .with_status_fd(BUBBLEWRAP_STATUS_FD)
+        .unwrap();
     let transaction = ShellTransaction::new(
         MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap(),
         "real-bubblewrap-turn",

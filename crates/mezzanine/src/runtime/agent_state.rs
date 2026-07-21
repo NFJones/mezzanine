@@ -137,6 +137,9 @@ pub struct RuntimeAgentProviderDispatch {
     /// Structured macro judge request awaiting model feedback instead of an
     /// ordinary MAAP action batch.
     pub macro_judge_request: Option<ModelRequest>,
+    /// Structured Bubblewrap failure assessment request awaiting model
+    /// attribution instead of an ordinary MAAP action batch.
+    pub sandbox_failure_assessment_request: Option<ModelRequest>,
     /// Optional automatic sizing context for the worker's first provider step.
     pub auto_sizing: Option<RuntimeAutoSizingDispatch>,
     /// Optional router provider for auto-sizing when different from the main

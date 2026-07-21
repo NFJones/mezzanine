@@ -36,6 +36,10 @@ pub enum ModelInteractionKind {
     /// constrained JSON decision that the runtime validates and executes; it is
     /// not a MAAP action batch and is not replayed as conversation content.
     MacroJudge,
+    /// The model is classifying an ambiguous Bubblewrap payload failure from
+    /// bounded runtime evidence. The response is structured JSON and cannot
+    /// grant execution authority.
+    SandboxFailureAssessment,
     /// The model is retrying after provider output exhaustion and must return
     /// one minimal complete action batch or final answer.
     OutputLimitRetry,
@@ -64,6 +68,7 @@ impl ModelInteractionKind {
             ModelInteractionKind::MaapRepair => "maap_repair",
             ModelInteractionKind::AutoSizing => "auto_sizing",
             ModelInteractionKind::MacroJudge => "macro_judge",
+            ModelInteractionKind::SandboxFailureAssessment => "sandbox_failure_assessment",
             ModelInteractionKind::OutputLimitRetry => "output_limit_retry",
             ModelInteractionKind::RoutedHandoff => "routed_handoff",
             ModelInteractionKind::RoutedHandoffRepair => "routed_handoff_repair",
@@ -94,6 +99,7 @@ impl ModelInteractionKind {
             self,
             ModelInteractionKind::AutoSizing
                 | ModelInteractionKind::MacroJudge
+                | ModelInteractionKind::SandboxFailureAssessment
                 | ModelInteractionKind::RoutedHandoff
                 | ModelInteractionKind::RoutedHandoffRepair
         )
@@ -135,7 +141,8 @@ impl ModelInteractionKind {
             ModelInteractionKind::CapabilityDecision
             | ModelInteractionKind::ActionExecution
             | ModelInteractionKind::AutoSizing
-            | ModelInteractionKind::MacroJudge => None,
+            | ModelInteractionKind::MacroJudge
+            | ModelInteractionKind::SandboxFailureAssessment => None,
         }
     }
 
@@ -150,6 +157,7 @@ impl ModelInteractionKind {
             | ModelInteractionKind::MaapRepair
             | ModelInteractionKind::AutoSizing
             | ModelInteractionKind::MacroJudge
+            | ModelInteractionKind::SandboxFailureAssessment
             | ModelInteractionKind::OutputLimitRetry
             | ModelInteractionKind::RoutedHandoff
             | ModelInteractionKind::RoutedHandoffRepair

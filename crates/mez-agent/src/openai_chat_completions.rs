@@ -6,10 +6,10 @@
 //! remain in the root provider adapter.
 
 use crate::{
-    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, ModelInteractionKind,
-    ModelMessageRole, ModelRequest, ModelTokenUsage, ProviderErrorKind,
-    ProviderMalformedOutputError, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
-    ProviderResponseError, maap_action_batch_schema, openai_maap_current_action_batch_description,
+    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, ModelMessageRole,
+    ModelRequest, ModelTokenUsage, ProviderErrorKind, ProviderMalformedOutputError,
+    ProviderRequestAssemblyError, ProviderRequestAssemblyResult, ProviderResponseError,
+    maap_action_batch_schema, openai_maap_current_action_batch_description,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
     provider_malformed_output_error,
 };
@@ -296,7 +296,7 @@ pub fn openai_chat_completions_request_body(
         };
         body[field] = serde_json::json!(max_output_tokens);
     }
-    if request.interaction_kind == ModelInteractionKind::AutoSizing {
+    if request.interaction_kind.expects_structured_json() {
         openai_chat_apply_response_format(&mut body, request, options, false);
     } else if !request.allowed_actions.actions.is_empty() {
         match openai_chat_maap_request_mode(options) {
@@ -546,7 +546,7 @@ pub fn parse_openai_chat_completions_response_body(
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
         .unwrap_or_default();
-    let action_batch = if request.interaction_kind == ModelInteractionKind::AutoSizing {
+    let action_batch = if request.interaction_kind.expects_structured_json() {
         None
     } else {
         match parse_openai_chat_completions_maap_action_batch(message, &raw_text, request) {
@@ -761,7 +761,7 @@ fn openai_chat_completions_usage(root: &serde_json::Value) -> ModelTokenUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AllowedActionSet, ContextSourceKind, ModelMessage};
+    use crate::{AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage};
 
     /// Verifies OpenAI-compatible Chat Completions can preserve the canonical
     /// developer role on modern APIs while retaining the default system-role

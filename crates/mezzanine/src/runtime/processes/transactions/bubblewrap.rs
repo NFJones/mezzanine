@@ -301,6 +301,14 @@ impl RuntimeSessionService {
                 if degraded { "degraded" } else { "ready" }
             ),
         )?;
+        if self.offer_sandbox_pre_payload_fallback_approval(
+            marker,
+            &transaction.turn_id,
+            &action_id,
+            code,
+        )? {
+            return Ok(());
+        }
         let terminal_observation = serde_json::json!({
             "source": "pty",
             "stream": "pty_combined",

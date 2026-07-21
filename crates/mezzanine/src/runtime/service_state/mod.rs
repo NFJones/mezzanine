@@ -28,6 +28,7 @@ pub(crate) use agent_state::{
     RuntimeModelProfileOverrideStore, RuntimePaneAgentStatusSelector,
     RuntimePathResolutionCacheKey, RuntimeRecordBrowserOverlayFrame,
     RuntimeRecordBrowserOverlaySource, RuntimeRecordBrowserOverlayState,
+    RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
     RuntimeShellTransactionActionFailure, RuntimeSubagentLineage,
 };
 pub use agent_state::{

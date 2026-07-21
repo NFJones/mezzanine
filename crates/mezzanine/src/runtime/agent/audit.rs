@@ -29,7 +29,18 @@ impl RuntimeSessionService {
         sandbox_summary: Option<&SandboxAuditSummary>,
         outcome: &str,
     ) -> Result<()> {
-        let sandbox_backend = self.configured_permissions().sandbox.as_str().to_string();
+        let fallback_audit = self
+            .agent
+            .sandbox_fallback_audits
+            .get(&(turn.turn_id.clone(), action.id.clone()))
+            .cloned();
+        let fallback_bypass = fallback_audit.is_some()
+            && self.sandbox_bypass_active_for_action(&turn.turn_id, &action.id);
+        let sandbox_backend = if fallback_bypass {
+            "policy-only".to_string()
+        } else {
+            self.configured_permissions().sandbox.as_str().to_string()
+        };
         let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
@@ -105,9 +116,76 @@ impl RuntimeSessionService {
                     evaluation.effects.writes.len().to_string(),
                 );
         }
+        if let Some(fallback) = fallback_audit {
+            record = record
+                .with_metadata("sandbox_fallback", "approved_exact_retry")
+                .with_metadata("sandbox_fallback_origin_backend", "bubblewrap")
+                .with_metadata("sandbox_fallback_reason", fallback.reason)
+                .with_metadata(
+                    "sandbox_fallback_proof_sha256",
+                    exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, &fallback.proof),
+                )
+                .with_metadata(
+                    "sandbox_fallback_partial_effect_warning",
+                    fallback.partial_effect_warning.to_string(),
+                );
+            if let Some(client_id) = fallback.approving_client_id {
+                record = record.with_metadata("sandbox_fallback_approving_client", client_id);
+            }
+            record.approval_state = "approved_exact_sandbox_bypass".to_string();
+        } else {
+            record.approval_state = "not_required_or_preapproved".to_string();
+        }
         record.policy_mode =
             runtime_permission_preset_name(self.integration.permission_policy().preset).to_string();
-        record.approval_state = "not_required_or_preapproved".to_string();
+        record.outcome = outcome.to_string();
+        let _ = audit_log.append(record.sanitized())?;
+        Ok(())
+    }
+
+    /// Appends and consumes redacted outcome metadata for one approved
+    /// unsandboxed Bubblewrap fallback retry.
+    pub(crate) fn append_sandbox_fallback_result_audit(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+        outcome: &str,
+    ) -> Result<()> {
+        let Some(fallback) = self
+            .agent
+            .sandbox_fallback_audits
+            .remove(&(turn_id.to_string(), action_id.to_string()))
+        else {
+            return Ok(());
+        };
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
+            return Ok(());
+        };
+        let mut record = AuditRecord::new(
+            self.session.id.to_string(),
+            AuditActor {
+                kind: "agent".to_string(),
+                id: turn_id.to_string(),
+            },
+            "shell_command",
+            "sandbox_fallback_result",
+        )
+        .with_metadata("turn_id", turn_id.to_string())
+        .with_metadata("action_id", action_id.to_string())
+        .with_metadata("sandbox_fallback_origin_backend", "bubblewrap")
+        .with_metadata("sandbox_fallback_reason", fallback.reason)
+        .with_metadata(
+            "sandbox_fallback_proof_sha256",
+            exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, &fallback.proof),
+        )
+        .with_metadata(
+            "sandbox_fallback_partial_effect_warning",
+            fallback.partial_effect_warning.to_string(),
+        );
+        if let Some(client_id) = fallback.approving_client_id {
+            record = record.with_metadata("sandbox_fallback_approving_client", client_id);
+        }
+        record.approval_state = "approved_exact_sandbox_bypass".to_string();
         record.outcome = outcome.to_string();
         let _ = audit_log.append(record.sanitized())?;
         Ok(())

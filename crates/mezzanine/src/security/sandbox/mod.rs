@@ -286,6 +286,33 @@ pub(crate) enum SandboxCompileErrorKind {
     CapabilityProbeFailed,
 }
 
+impl SandboxCompileErrorKind {
+    /// Returns whether this preparation failure may offer an exact
+    /// user-approved unsandboxed retry for an originally prompted action.
+    pub(crate) const fn approval_fallback_eligible(self) -> bool {
+        matches!(
+            self,
+            Self::MediatedNetworkUnavailable | Self::UnsupportedRequirement
+        )
+    }
+
+    /// Returns the stable diagnostic spelling used by fallback evidence.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unauthorized => "unauthorized",
+            Self::UnresolvedAuthority => "unresolved_authority",
+            Self::UnresolvedEffectPath => "unresolved_effect_path",
+            Self::EffectOutsideAuthority => "effect_outside_authority",
+            Self::ForbiddenHostPath => "forbidden_host_path",
+            Self::NetworkDenied => "network_denied",
+            Self::MediatedNetworkUnavailable => "mediated_network_unavailable",
+            Self::UnsupportedRequirement => "unsupported_requirement",
+            Self::InvalidInput => "invalid_input",
+            Self::CapabilityProbeFailed => "capability_probe_failed",
+        }
+    }
+}
+
 /// Fail-closed Bubblewrap policy-compilation error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SandboxCompileError {

@@ -67,6 +67,20 @@ pub(super) struct ShellActionDispatch<'a> {
     pub(super) permission_evaluation: Option<&'a PermissionEvaluation>,
 }
 
+/// Result of preparing and dispatching one shell-backed action.
+pub(super) enum ShellActionDispatchOutcome {
+    /// The pane accepted a concrete shell transaction.
+    Dispatched,
+    /// Bubblewrap could not represent an otherwise prompt-eligible action, so
+    /// the caller may offer one exact approval-gated unsandboxed retry.
+    SandboxFallbackEligible {
+        /// Fresh transaction identity retained for audit and approval facts.
+        marker: String,
+        /// Typed, redacted preparation evidence.
+        proof: String,
+    },
+}
+
 impl RuntimeSessionService {
     /// Runs the dispatch shell action to pane operation for this subsystem.
     ///
@@ -78,7 +92,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
         dispatch: ShellActionDispatch<'_>,
-    ) -> Result<()> {
+    ) -> Result<ShellActionDispatchOutcome> {
         let ShellActionDispatch {
             command,
             stateful,
@@ -133,7 +147,7 @@ impl RuntimeSessionService {
                 )
             })?;
             let maximum_authority = self.bubblewrap_path_scopes_for_turn(turn, evaluation)?;
-            let launch_plan = crate::security::sandbox::compile_bubblewrap_launch_plan(
+            let launch_plan = match crate::security::sandbox::compile_bubblewrap_launch_plan(
                 crate::security::sandbox::BubblewrapCompileRequest {
                     config: &config,
                     capability,
@@ -147,8 +161,19 @@ impl RuntimeSessionService {
                     stateful,
                     interactive,
                 },
-            )
-            .map_err(|error| MezError::invalid_state(error.message()))?;
+            ) {
+                Ok(launch_plan) => launch_plan,
+                Err(error)
+                    if evaluation.decision == mez_agent::permissions::RuleDecision::Prompt
+                        && error.kind().approval_fallback_eligible() =>
+                {
+                    return Ok(ShellActionDispatchOutcome::SandboxFallbackEligible {
+                        marker: marker_id,
+                        proof: format!("{}: {}", error.kind().as_str(), error.message()),
+                    });
+                }
+                Err(error) => return Err(MezError::invalid_state(error.message())),
+            };
             sandbox_audit_summary = Some(launch_plan.audit_summary.clone());
             let arguments = launch_plan
                 .arguments
@@ -317,7 +342,7 @@ impl RuntimeSessionService {
                 runtime_agent_terminal_preview(command)
             ),
         )?;
-        Ok(())
+        Ok(ShellActionDispatchOutcome::Dispatched)
     }
 
     /// Ensures complete filesystem effects have exact pane-shell path evidence

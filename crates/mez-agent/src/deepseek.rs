@@ -163,7 +163,7 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
     {
         body["max_tokens"] = serde_json::json!(max_output_tokens);
     }
-    if request.interaction_kind == ModelInteractionKind::AutoSizing {
+    if request.interaction_kind.expects_structured_json() {
         body["response_format"] = serde_json::json!({"type": "json_object"});
     }
     if let Some(temperature) = request
@@ -261,7 +261,7 @@ fn deepseek_provider_transcript_event_message(
 /// batch. The provider's internal `AutoToolThinking`→`ForcedToolNonThinking`
 /// fallback still catches prose responses that decline the tool call.
 pub fn deepseek_maap_request_strategy(request: &ModelRequest) -> DeepSeekMaapRequestStrategy {
-    if request.interaction_kind == ModelInteractionKind::AutoSizing
+    if request.interaction_kind.expects_structured_json()
         || request.allowed_actions.actions.is_empty()
     {
         return DeepSeekMaapRequestStrategy::NoTool;
@@ -307,7 +307,7 @@ pub fn deepseek_should_retry_with_forced_maap(
     has_action_batch: bool,
 ) -> bool {
     strategy == DeepSeekMaapRequestStrategy::AutoToolThinking
-        && request.interaction_kind != ModelInteractionKind::AutoSizing
+        && !request.interaction_kind.expects_structured_json()
         && !request.allowed_actions.actions.is_empty()
         && !has_action_batch
 }

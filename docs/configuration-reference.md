@@ -700,7 +700,7 @@ Provider options under a model profile:
 | `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. |
 | `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. |
 | `permissions.bubblewrap.executable` | string | `"/usr/bin/bwrap"` | Absolute Bubblewrap path resolved and probed in the pane environment. |
-| `permissions.bubblewrap.unavailable` | string | `"fail"` | Fail closed when Bubblewrap is unavailable; unsandboxed fallback is not supported. |
+| `permissions.bubblewrap.unavailable` | string | `"fail"` | Never runs unsandboxed automatically. A prompt-classified action may offer one exact approval-gated fallback after Bubblewrap failure. |
 | `permissions.bubblewrap.network` | string | `"isolated"` | Private network namespace policy. |
 | `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
 | `permissions.trusted_directories` | string array | `[]` | Trusted directory roots; never converted into mounts. |
@@ -754,14 +754,23 @@ On Linux, Mezzanine validates the configured executable inside the target pane
 environment before launching a sandboxed workload. The probe requires usable
 user, mount, PID, IPC, UTS, cgroup, and network namespaces plus the fixed
 read-only runtime projection. Missing executables and unsupported namespace
-facilities fail closed; Mezzanine never retries the workload under
-`policy-only`. A failed or timed-out probe settles only its waiting action and
-is not cached. After shell readiness recovers, a later independent action may
-probe the same identity again. Successful capabilities remain cached, and
-concurrent waiters share one in-flight probe. The Linux adversarial test suite
-reports an explicit unsupported-host skip when this production profile cannot
-run, while a profile that probes successfully is expected to pass the real
-filesystem, environment, IPC, and network confinement tests.
+facilities never trigger an automatic unsandboxed retry. For a local action
+whose original policy decision was `prompt`, a probe/setup/pre-exec failure may
+instead create one normal approval for an exact unsandboxed retry. A failed or
+timed-out probe is not cached; after shell readiness recovers, a later
+independent action may probe the same identity again. Successful capabilities
+remain cached, and concurrent waiters share one in-flight probe.
+
+Bubblewrap lifecycle status is captured separately from command output. A
+validated `exit-code` event proves payload execution; clean status closure
+without that event is pre-payload failure evidence. For a non-zero payload exit,
+Mezzanine may run one bounded structured model assessment using redacted policy,
+effect, restriction, status, and output evidence. Only an explicit
+`sandbox_failure` assessment may create an approval, and that approval warns
+that partial effects may already exist. Command-failure, uncertain, malformed,
+timed-out, or failed assessments settle the original command normally. Approval
+never causes automatic execution: it grants only the retained turn/action one
+unsandboxed retry, and the grant is consumed exactly once.
 
 ### `subagents.<name>`
 

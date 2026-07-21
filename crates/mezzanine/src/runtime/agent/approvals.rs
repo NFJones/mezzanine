@@ -15,6 +15,7 @@ use super::{
     runtime_agent_turn_state_name, runtime_blocked_approval_request,
     runtime_execution_ready_for_provider_continuation, runtime_permission_request_hook_payload,
 };
+use crate::runtime::RuntimeSandboxFallbackAudit;
 
 impl RuntimeSessionService {
     /// Runs the apply permission request hooks for execution operation for this subsystem.
@@ -108,7 +109,11 @@ impl RuntimeSessionService {
                     turn_id: turn.turn_id.clone(),
                     action_id: result.action_id.clone(),
                     sandbox_bypass_after_approval: sandbox_bypass_action_id
-                        == Some(result.action_id.as_str()),
+                        == Some(result.action_id.as_str())
+                        || self
+                            .agent
+                            .sandbox_fallback_audits
+                            .contains_key(&(turn.turn_id.clone(), result.action_id.clone())),
                 },
             );
             if let Some(approval) = self.blocked_approvals().get(&approval_id).cloned() {
@@ -134,18 +139,39 @@ impl RuntimeSessionService {
         action_id: &str,
         proof: &str,
     ) -> Result<bool> {
-        let turn = self
+        self.offer_sandbox_fallback_approval(
+            marker,
+            turn_id,
+            action_id,
+            "pre_payload_failure",
+            proof,
+            false,
+        )
+    }
+
+    /// Converts one trusted or model-assessed Bubblewrap failure into an
+    /// approval for an exact, one-shot unsandboxed retry.
+    pub(crate) fn offer_sandbox_fallback_approval(
+        &mut self,
+        marker: &str,
+        turn_id: &str,
+        action_id: &str,
+        reason: &str,
+        proof: &str,
+        partial_effect_warning: bool,
+    ) -> Result<bool> {
+        let Some(turn) = self
             .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
-            .ok_or_else(|| MezError::invalid_state("sandbox fallback turn is unavailable"))?;
-        let mut execution = self
-            .agent_turn_executions()
-            .get(turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("sandbox fallback execution is unavailable"))?;
+        else {
+            return Ok(false);
+        };
+        let Some(mut execution) = self.agent_turn_executions().get(turn_id).cloned() else {
+            return Ok(false);
+        };
         let batch = execution.response.action_batch.as_ref().ok_or_else(|| {
             MezError::invalid_state("sandbox fallback execution has no action batch")
         })?;
@@ -179,7 +205,11 @@ impl RuntimeSessionService {
             &turn,
             &action,
             vec![
-                "Bubblewrap failed before payload execution was proven".to_string(),
+                if partial_effect_warning {
+                    "Bubblewrap may have caused the command failure after payload execution; partial effects may already exist".to_string()
+                } else {
+                    "Bubblewrap failed before payload execution was proven".to_string()
+                },
                 "approval is required for one exact unsandboxed retry".to_string(),
             ],
             mez_agent::shell_action_structured_content_json(
@@ -194,19 +224,19 @@ impl RuntimeSessionService {
                     "command": plan.policy_command,
                     "sandbox_fallback": {
                         "backend": "bubblewrap",
-                        "reason": "pre_payload_failure",
+                        "reason": reason,
                         "proof": proof,
-                        "payload_exec_proven": false,
-                        "partial_effect_warning": false
+                        "payload_exec_proven": partial_effect_warning,
+                        "partial_effect_warning": partial_effect_warning
                     }
                 }),
                 &evaluation.matched_rule_ids,
                 serde_json::json!({
                     "source": "runtime",
                     "marker": marker,
-                    "boundary_state": "bubblewrap-pre-payload-failure",
-                    "payload_exec_proven": false,
-                    "partial_effect_warning": false
+                    "boundary_state": reason,
+                    "payload_exec_proven": partial_effect_warning,
+                    "partial_effect_warning": partial_effect_warning
                 }),
             ),
         );
@@ -221,6 +251,16 @@ impl RuntimeSessionService {
                 "sandbox fallback approval did not block the agent turn",
             ));
         }
+
+        self.agent.sandbox_fallback_audits.insert(
+            (turn_id.to_string(), action_id.to_string()),
+            RuntimeSandboxFallbackAudit {
+                reason: reason.to_string(),
+                proof: proof.to_string(),
+                partial_effect_warning,
+                approving_client_id: None,
+            },
+        );
 
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         let transcript_entries =
@@ -245,10 +285,12 @@ impl RuntimeSessionService {
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"blocked","sandbox_fallback":"pre_payload_failure","marker":"{}","transcript_entries":{}}}"#,
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"blocked","sandbox_fallback":"{}","marker":"{}","partial_effect_warning":{},"transcript_entries":{}}}"#,
                 json_escape(&turn.pane_id),
                 json_escape(turn_id),
+                json_escape(reason),
                 json_escape(marker),
+                partial_effect_warning,
                 transcript_entries
             ),
         )?;
@@ -514,6 +556,13 @@ impl RuntimeSessionService {
             .permission_evaluation
             .clone();
         if approval_ref.sandbox_bypass_after_approval {
+            if let Some(audit) = self
+                .agent
+                .sandbox_fallback_audits
+                .get_mut(&(turn.turn_id.clone(), action.id.clone()))
+            {
+                audit.approving_client_id = Some(caller_client_id.to_string());
+            }
             self.grant_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
         }
         self.append_agent_trace_turn_event(
