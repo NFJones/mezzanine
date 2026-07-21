@@ -913,6 +913,20 @@ impl RuntimeSessionService {
         let Some(header) = agent_action_execution_display_header(action) else {
             return Ok(false);
         };
+        self.append_agent_action_execution_header_to_terminal_buffer(pane_id, action, &header)?;
+        Ok(true)
+    }
+
+    /// Appends one action execution row using a runtime-selected header.
+    ///
+    /// Multi-transaction actions use this entry point when the active
+    /// transaction has a more precise display target than the model action.
+    pub(crate) fn append_agent_action_execution_header_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        action: &AgentAction,
+        header: &str,
+    ) -> Result<()> {
         let thinking_lines = agent_action_model_thinking_lines(action);
         if !thinking_lines.is_empty() && self.agent_thinking_enabled(pane_id) {
             let columns = self.agent_terminal_presentation_columns(pane_id)?;
@@ -923,14 +937,14 @@ impl RuntimeSessionService {
             )?;
         }
         let rendered_line =
-            agent_action_execution_rendered_line(&header, &self.presentation.settings.ui_theme);
+            agent_action_execution_rendered_line(header, &self.presentation.settings.ui_theme);
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::Status,
             &[rendered_line],
             &[],
         )?;
-        Ok(true)
+        Ok(())
     }
 
     /// Appends a bounded, human-readable action result preview to the pane.
@@ -944,11 +958,11 @@ impl RuntimeSessionService {
         result: &ActionResult,
         text: &str,
     ) -> Result<()> {
-        if result.is_error {
-            return Ok(());
-        }
         if agent_action_result_uses_diff_preview(action) {
             return self.append_agent_diff_text_to_terminal_buffer(pane_id, text);
+        }
+        if result.is_error {
+            return Ok(());
         }
         let Some(header) = agent_action_result_display_header(action) else {
             return Ok(());

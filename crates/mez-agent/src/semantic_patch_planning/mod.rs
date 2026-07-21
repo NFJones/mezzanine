@@ -10,6 +10,7 @@ use crate::semantic_patch::{
     validate_apply_patch_payload,
 };
 use crate::{LocalActionKind, LocalActionPlan, shell_quote};
+use base64::Engine;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod matcher;
@@ -52,13 +53,71 @@ const APPLY_PATCH_FILE_END_MARKER: &str = "__MEZ_APPLY_PATCH_FILE_END__";
 const APPLY_PATCH_CONTENT_BEGIN_MARKER: &str = "__MEZ_APPLY_PATCH_CONTENT_BEGIN__";
 /// Marker that ends base64 file content in an `apply_patch` snapshot stream.
 const APPLY_PATCH_CONTENT_END_MARKER: &str = "__MEZ_APPLY_PATCH_CONTENT_END__";
+/// Prefix for one machine-readable per-file write outcome.
+pub const APPLY_PATCH_RESULT_MARKER: &str = "__MEZ_APPLY_PATCH_RESULT__";
+
+/// One confirmed per-file outcome emitted by an `apply_patch` write phase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApplyPatchFileOutcome {
+    /// The target was written and its unified diff was emitted.
+    Applied { path: String },
+    /// The target was not written and includes a bounded diagnostic.
+    Failed { path: String, diagnostic: String },
+}
+
+/// Parses machine-readable per-file outcomes from one write-phase observation.
+///
+/// Lines without the runtime-owned marker are ignored. A malformed marked line
+/// fails closed so callers can retain their generic completion behavior.
+pub fn parse_apply_patch_file_outcomes(output: &str) -> Result<Vec<ApplyPatchFileOutcome>> {
+    let mut outcomes = Vec::new();
+    for line in output.replace("\r\n", "\n").replace('\r', "\n").lines() {
+        let Some(record) = line.strip_prefix(APPLY_PATCH_RESULT_MARKER) else {
+            continue;
+        };
+        let fields = record.split_whitespace().collect::<Vec<_>>();
+        let decode = |encoded: &str, field: &str| -> Result<String> {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| {
+                    SemanticPatchPlanningError::invalid_args(format!(
+                        "apply_patch: malformed per-file result {field}"
+                    ))
+                })?;
+            String::from_utf8(bytes).map_err(|_| {
+                SemanticPatchPlanningError::invalid_args(format!(
+                    "apply_patch: per-file result {field} is not UTF-8"
+                ))
+            })
+        };
+        match fields.as_slice() {
+            ["APPLIED", path] => {
+                outcomes.push(ApplyPatchFileOutcome::Applied {
+                    path: decode(path, "path")?,
+                });
+            }
+            ["FAILED", path, diagnostic] => {
+                outcomes.push(ApplyPatchFileOutcome::Failed {
+                    path: decode(path, "path")?,
+                    diagnostic: decode(diagnostic, "diagnostic")?,
+                });
+            }
+            _ => {
+                return Err(SemanticPatchPlanningError::invalid_args(
+                    "apply_patch: malformed per-file result record",
+                ));
+            }
+        }
+    }
+    Ok(outcomes)
+}
 
 /// Planned per-file patch outcomes after matching hunks against snapshots.
 struct ApplyPatchPlan {
     /// Verified file changes that can be applied independently.
     changes: Vec<ApplyPatchFileChange>,
     /// File-specific diagnostics for patch operations that could not be planned.
-    errors: Vec<String>,
+    errors: Vec<(String, String)>,
 }
 
 /// Returns the shell transaction phase represented by a generated apply-patch
@@ -118,29 +177,29 @@ fn apply_patch_planned_failure(plan: &ApplyPatchPlan) -> SemanticPatchPlanningEr
             .join(", ");
         lines.push(format!("apply_patch: applied path(s): {paths}"));
     }
-    lines.extend(plan.errors.iter().cloned());
+    lines.extend(plan.errors.iter().map(|(_, message)| message.clone()));
     SemanticPatchPlanningError::invalid_args(lines.join("\n"))
 }
 
 fn apply_patch_planned_failure_shell_lines(plan: &ApplyPatchPlan) -> String {
-    let mut lines = Vec::new();
-    if !plan.changes.is_empty() {
-        let paths = plan
-            .changes
-            .iter()
-            .map(|change| change.path.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("apply_patch: applied path(s): {paths}"));
-    }
-    lines.extend(plan.errors.iter().cloned());
     let mut command = String::new();
-    for line in lines {
+    for (path, line) in &plan.errors {
         command.push_str("printf '%s\\n' ");
-        command.push_str(&shell_quote(&line));
+        command.push_str(&shell_quote(line));
         command.push_str(" >&2\n");
+        command.push_str("printf '%s %s %s %s\\n' ");
+        command.push_str(&shell_quote(APPLY_PATCH_RESULT_MARKER));
+        command.push_str(" FAILED ");
+        command.push_str(&shell_quote(
+            &base64::engine::general_purpose::STANDARD.encode(path.as_bytes()),
+        ));
+        command.push(' ');
+        command.push_str(&shell_quote(
+            &base64::engine::general_purpose::STANDARD.encode(line.as_bytes()),
+        ));
+        command.push('\n');
     }
-    command.push_str("exit 1\n");
+    command.push_str("MEZ_APPLY_FAILED=1\n");
     command
 }
 
@@ -228,6 +287,7 @@ fn mez_apply_patch_write_plan(plan: ApplyPatchPlan) -> Result<LocalActionPlan> {
     if !plan.errors.is_empty() {
         command.push_str(&apply_patch_planned_failure_shell_lines(&plan));
     }
+    command.push_str("if [ \"${MEZ_APPLY_FAILED:-0}\" = 1 ]; then exit 1; fi\n");
     Ok(LocalActionPlan {
         kind: LocalActionKind::ApplyPatch,
         summary: "I’ll apply a patch.".to_string(),
@@ -260,7 +320,12 @@ fn apply_mez_patch_to_snapshots(
     let mut errors = Vec::new();
     for operation in &patch.operations {
         if let Err(error) = apply_mez_patch_operation_to_current(operation, &mut current) {
-            errors.push(error.message().to_string());
+            let path = match operation {
+                MezPatchOperation::Add { path, .. }
+                | MezPatchOperation::Delete { path }
+                | MezPatchOperation::Update { path, .. } => path.clone(),
+            };
+            errors.push((path, error.message().to_string()));
         }
     }
     let mut changes = Vec::new();

@@ -11,6 +11,9 @@ use super::{
     runtime_running_shell_transaction_kind_name, shell_action_failure_diagnostic,
     shell_command_result_content,
 };
+use mez_agent::semantic_patch_planning::{
+    APPLY_PATCH_RESULT_MARKER, ApplyPatchFileOutcome, parse_apply_patch_file_outcomes,
+};
 
 impl RuntimeSessionService {
     /// Sends any deferred transaction payload after the shell wrapper receiver
@@ -223,6 +226,7 @@ impl RuntimeSessionService {
             observed_results,
             observed_action,
             display_output_after_completion,
+            apply_patch_file_outcomes,
         ) = {
             let execution = self
                 .agent_turn_executions_mut()
@@ -271,6 +275,31 @@ impl RuntimeSessionService {
             } else {
                 raw_output_preview.clone()
             };
+            let is_apply_patch_write =
+                matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                    && apply_patch_transaction_phase(&transaction_ref.command)
+                        == Some(ApplyPatchTransactionPhase::Write);
+            let apply_patch_file_outcomes = if is_apply_patch_write
+                && !transaction_ref.observed_output_truncated
+                && !transport_diagnostics.output_truncated()
+                && !transport_diagnostics.transport_incomplete()
+            {
+                parse_apply_patch_file_outcomes(&transaction_ref.observed_output_preview)
+                    .ok()
+                    .filter(|outcomes| !outcomes.is_empty())
+            } else {
+                None
+            };
+            if apply_patch_file_outcomes.is_some() {
+                transaction_ref.observed_output_preview = transaction_ref
+                    .observed_output_preview
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
+                    .lines()
+                    .filter(|line| !line.starts_with(APPLY_PATCH_RESULT_MARKER))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
             transaction_ref.observed_output_bytes = transaction_ref.observed_output_preview.len();
             if exit_code == 0 {
                 let processed_output = postprocess_shell_action_success_output(
@@ -435,6 +464,7 @@ impl RuntimeSessionService {
                 observed_results,
                 action,
                 local_plan.display_output_after_completion,
+                apply_patch_file_outcomes,
             )
         };
         self.integration
@@ -448,14 +478,17 @@ impl RuntimeSessionService {
         if exit_code == 0 {
             self.record_shell_dispatch_success(turn_id, &transaction_ref.command);
         }
-        if exit_code == 0
-            && matches!(
-                observed_action.payload,
-                AgentActionPayload::ApplyPatch { .. }
-            )
-            && apply_patch_transaction_phase(&transaction_ref.command)
-                == Some(ApplyPatchTransactionPhase::Write)
-        {
+        let confirmed_partial_apply = apply_patch_file_outcomes.as_ref().is_some_and(|outcomes| {
+            outcomes
+                .iter()
+                .any(|outcome| matches!(outcome, ApplyPatchFileOutcome::Applied { .. }))
+        });
+        let is_apply_patch_write = matches!(
+            observed_action.payload,
+            AgentActionPayload::ApplyPatch { .. }
+        ) && apply_patch_transaction_phase(&transaction_ref.command)
+            == Some(ApplyPatchTransactionPhase::Write);
+        if is_apply_patch_write && (exit_code == 0 || confirmed_partial_apply) {
             self.record_agent_modified_files_from_diff(
                 pane_id,
                 &transaction_ref.observed_output_preview,
@@ -471,7 +504,7 @@ impl RuntimeSessionService {
         if let Some(execution) = self.agent_turn_executions().get(turn_id).cloned() {
             self.record_runtime_agent_patch_results_for_turn(&turn, &execution);
         }
-        if exit_code == 0
+        if (exit_code == 0 || confirmed_partial_apply)
             && display_output_after_completion
             && (self.agent_debug_enabled(pane_id)
                 || self.agent_action_result_renders_in_normal_mode(&observed_action))
@@ -484,6 +517,19 @@ impl RuntimeSessionService {
                 &observed_result,
                 &transaction_ref.observed_output_preview,
             )?;
+        }
+        if let Some(outcomes) = &apply_patch_file_outcomes {
+            for outcome in outcomes {
+                if let ApplyPatchFileOutcome::Failed { path, diagnostic } = outcome {
+                    let diagnostic = diagnostic.trim();
+                    let message = if diagnostic.is_empty() {
+                        format!("agent: apply patch failed: {path}")
+                    } else {
+                        format!("agent: apply patch failed: {path}: {diagnostic}")
+                    };
+                    self.append_agent_error_text_to_terminal_buffer(pane_id, &message)?;
+                }
+            }
         }
 
         self.run_configured_completed_hooks(HookEvent::PostShellCommand, &post_shell_hook_payload)?;

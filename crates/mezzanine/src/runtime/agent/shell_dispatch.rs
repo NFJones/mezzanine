@@ -59,6 +59,7 @@ impl RuntimeSessionService {
                 key.clone(),
                 RuntimeApplyPatchBatchState {
                     remaining_paths: apply_patch_touched_paths(patch)?,
+                    current_path: None,
                     current_read_transport: Vec::new(),
                     read_outputs: Vec::new(),
                 },
@@ -69,7 +70,8 @@ impl RuntimeSessionService {
         {
             let path = state.remaining_paths.remove(0);
             let mut paths = BTreeSet::new();
-            paths.insert(path);
+            paths.insert(path.clone());
+            state.current_path = Some(path);
             *plan = apply_patch_read_plan_for_paths(&paths);
         }
         Ok(())
@@ -981,10 +983,12 @@ impl RuntimeSessionService {
             } else {
                 state.read_outputs.push(decoded_output.output);
                 state.current_read_transport.clear();
+                state.current_path = None;
                 if !state.remaining_paths.is_empty() {
                     let path = state.remaining_paths.remove(0);
                     let mut paths = BTreeSet::new();
-                    paths.insert(path);
+                    paths.insert(path.clone());
+                    state.current_path = Some(path);
                     let read_plan = apply_patch_read_plan_for_paths(&paths);
                     self.agent.apply_patch_batch_states.insert(state_key, state);
                     self.append_agent_trace_turn_event(

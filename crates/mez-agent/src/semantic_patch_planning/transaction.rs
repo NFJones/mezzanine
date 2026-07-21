@@ -8,8 +8,8 @@
 use super::{
     APPLY_PATCH_CONTENT_BEGIN_MARKER, APPLY_PATCH_CONTENT_END_MARKER,
     APPLY_PATCH_FILE_BEGIN_MARKER, APPLY_PATCH_FILE_END_MARKER, APPLY_PATCH_READ_BEGIN_MARKER,
-    APPLY_PATCH_READ_END_MARKER, APPLY_PATCH_READ_PHASE_MARKER, ApplyPatchFileChange,
-    ApplyPatchOriginalState,
+    APPLY_PATCH_READ_END_MARKER, APPLY_PATCH_READ_PHASE_MARKER, APPLY_PATCH_RESULT_MARKER,
+    ApplyPatchFileChange, ApplyPatchOriginalState,
 };
 use crate::shell_quote;
 use base64::Engine;
@@ -151,9 +151,9 @@ pub(super) fn apply_patch_write_command_prelude() -> String {
         "mez_apply_patch_resolve_checked() {",
         "MEZ_APPLY_PATH=$1",
         "MEZ_APPLY_EXPECTED_RESOLVED=$2",
-        "MEZ_APPLY_RESOLVED=$(realpath -m -- \"$MEZ_APPLY_PATH\" 2>/dev/null) || { printf '%s\\n' \"apply_patch: failed to resolve path: $MEZ_APPLY_PATH\" >&2; exit 1; }",
-        "case \"$MEZ_APPLY_RESOLVED\" in \"$MEZ_APPLY_CWD\"|\"$MEZ_APPLY_CWD_PREFIX\"/*) ;; *) printf '%s\\n' \"apply_patch: resolved path is outside current working directory: $MEZ_APPLY_PATH\" >&2; exit 1;; esac",
-        "if [ \"$MEZ_APPLY_RESOLVED\" != \"$MEZ_APPLY_EXPECTED_RESOLVED\" ]; then printf '%s\\n' \"apply_patch: resolved path changed before apply: $MEZ_APPLY_PATH\" >&2; exit 1; fi",
+        "MEZ_APPLY_RESOLVED=$(realpath -m -- \"$MEZ_APPLY_PATH\" 2>/dev/null) || { printf '%s\\n' \"apply_patch: failed to resolve path: $MEZ_APPLY_PATH\" >&2; return 1; }",
+        "case \"$MEZ_APPLY_RESOLVED\" in \"$MEZ_APPLY_CWD\"|\"$MEZ_APPLY_CWD_PREFIX\"/*) ;; *) printf '%s\\n' \"apply_patch: resolved path is outside current working directory: $MEZ_APPLY_PATH\" >&2; return 1;; esac",
+        "if [ \"$MEZ_APPLY_RESOLVED\" != \"$MEZ_APPLY_EXPECTED_RESOLVED\" ]; then printf '%s\\n' \"apply_patch: resolved path changed before apply: $MEZ_APPLY_PATH\" >&2; return 1; fi",
         "}",
         "",
     ]
@@ -167,34 +167,40 @@ pub(super) fn apply_patch_write_change_command(
     let expected_var = format!("MEZ_APPLY_EXPECTED_{index}");
     let new_var = format!("MEZ_APPLY_NEW_{index}");
     let original_is_regular = matches!(&change.original, ApplyPatchOriginalState::Regular(_));
-    let mut lines = vec![format!(
-        "mez_apply_patch_resolve_checked {} {}",
-        shell_quote(&change.path),
-        shell_quote(&change.resolved_path)
-    )];
+    let function_name = format!("mez_apply_patch_change_{index}");
+    let error_var = format!("MEZ_APPLY_ERROR_{index}");
+    let output_var = format!("MEZ_APPLY_OUTPUT_{index}");
+    let mut lines = vec![
+        format!("{function_name}() {{"),
+        format!(
+            "mez_apply_patch_resolve_checked {} {}",
+            shell_quote(&change.path),
+            shell_quote(&change.resolved_path)
+        ),
+    ];
     match &change.original {
         ApplyPatchOriginalState::Regular(bytes) => {
-            lines.push(format!("{expected_var}=$(mktemp) || exit 1"));
+            lines.push(format!("{expected_var}=$(mktemp) || return 1"));
             lines.extend(write_content_lines(
                 &String::from_utf8_lossy(bytes),
                 &format!("\"${expected_var}\""),
                 false,
             ));
             lines.push(format!(
-                "if [ ! -f \"$MEZ_APPLY_RESOLVED\" ]; then printf '%s\\n' {} >&2; rm -f -- \"${expected_var}\"; exit 1; fi",
+                "if [ ! -f \"$MEZ_APPLY_RESOLVED\" ]; then printf '%s\\n' {} >&2; rm -f -- \"${expected_var}\"; return 1; fi",
                 shell_quote(&format!(
                     "apply_patch: refusing to patch non-regular file: {}",
                     change.path
                 ))
             ));
             lines.push(format!(
-                "if ! cmp -s -- \"${expected_var}\" \"$MEZ_APPLY_RESOLVED\"; then printf '%s\\n' {} >&2; rm -f -- \"${expected_var}\"; exit 1; fi",
+                "if ! cmp -s -- \"${expected_var}\" \"$MEZ_APPLY_RESOLVED\"; then printf '%s\\n' {} >&2; rm -f -- \"${expected_var}\"; return 1; fi",
                 shell_quote(&format!("apply_patch: file changed before apply: {}", change.path))
             ));
         }
         ApplyPatchOriginalState::Missing => {
             lines.push(format!(
-                "if [ -e {} ] || [ -L {} ] || [ -e \"$MEZ_APPLY_RESOLVED\" ] || [ -L \"$MEZ_APPLY_RESOLVED\" ]; then printf '%s\\n' {} >&2; exit 1; fi",
+                "if [ -e {} ] || [ -L {} ] || [ -e \"$MEZ_APPLY_RESOLVED\" ] || [ -L \"$MEZ_APPLY_RESOLVED\" ]; then printf '%s\\n' {} >&2; return 1; fi",
                 shell_quote(&change.path),
                 shell_quote(&change.path),
                 shell_quote(&format!("apply_patch: refusing to add existing path: {}", change.path))
@@ -202,7 +208,7 @@ pub(super) fn apply_patch_write_change_command(
         }
     }
     if let Some(bytes) = &change.final_bytes {
-        lines.push(format!("{new_var}=$(mktemp) || exit 1"));
+        lines.push(format!("{new_var}=$(mktemp) || return 1"));
         lines.extend(write_content_lines(
             &String::from_utf8_lossy(bytes),
             &format!("\"${new_var}\""),
@@ -225,8 +231,10 @@ pub(super) fn apply_patch_write_change_command(
             &old_path,
             &format!("\"${new_var}\""),
         ));
-        lines.push("mkdir -p -- \"$(dirname -- \"$MEZ_APPLY_RESOLVED\")\"".to_string());
-        lines.push(format!("mv -f -- \"${new_var}\" \"$MEZ_APPLY_RESOLVED\""));
+        lines.push("mkdir -p -- \"$(dirname -- \"$MEZ_APPLY_RESOLVED\")\" || return 1".to_string());
+        lines.push(format!(
+            "mv -f -- \"${new_var}\" \"$MEZ_APPLY_RESOLVED\" || return 1"
+        ));
     } else {
         lines.extend(unified_diff_lines(
             "apply patch",
@@ -235,10 +243,22 @@ pub(super) fn apply_patch_write_change_command(
             &format!("\"${expected_var}\""),
             &shell_quote("/dev/null"),
         ));
-        lines.push("rm -f -- \"$MEZ_APPLY_RESOLVED\"".to_string());
+        lines.push("rm -f -- \"$MEZ_APPLY_RESOLVED\" || return 1".to_string());
     }
     if original_is_regular {
         lines.push(format!("rm -f -- \"${expected_var}\""));
     }
+    lines.push("}".to_string());
+    lines.push(format!("{error_var}=$(mktemp) || exit 1"));
+    lines.push(format!("{output_var}=$(mktemp) || exit 1"));
+    lines.push(format!(
+        "if {function_name} >\"${output_var}\" 2>\"${error_var}\"; then cat \"${output_var}\"; printf '%s %s %s\\n' {} APPLIED {}; else MEZ_APPLY_FAILED=1; cat \"${error_var}\" >&2; printf '%s %s %s %s\\n' {} FAILED {} \"$(base64 <\"${error_var}\" | tr -d '\\n')\"; fi",
+        shell_quote(APPLY_PATCH_RESULT_MARKER),
+        shell_quote(&base64::engine::general_purpose::STANDARD.encode(change.path.as_bytes())),
+        shell_quote(APPLY_PATCH_RESULT_MARKER),
+        shell_quote(&base64::engine::general_purpose::STANDARD.encode(change.path.as_bytes())),
+    ));
+    lines.push(format!("rm -f -- \"${error_var}\" \"${output_var}\""));
+    lines.push(format!("unset -f {function_name} 2>/dev/null || :"));
     lines.join("\n") + "\n"
 }

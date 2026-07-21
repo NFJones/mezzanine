@@ -4353,7 +4353,7 @@ zero-byte write progress as a bounded failure, and MUST leave enough
 interleaving opportunity for PTY output reads and lifecycle events between
 large-input chunks. A failed chunk MUST NOT cause previously accepted bytes to
 be sent again.
-The `apply_patch` semantic action MUST preserve completed per-file mutations when a later file operation in the same patch fails, and the resulting action diagnostic MUST identify the applied path(s) and the failed path or operation so the model can retry only the remaining file work instead of treating the whole patch as rolled back.
+The `apply_patch` semantic action MUST emit one execution row naming the active path for each per-file read transaction and MUST suppress its internal write-phase start row. It MUST preserve completed per-file mutations when a later file operation in the same patch fails, retain and display confirmed diffs for applied paths, update modified-file tracking for those paths, and identify each failed path or operation so the model can retry only the remaining file work instead of treating the whole patch as rolled back. Machine-readable per-file outcome records MUST be filtered from user-visible diff output; malformed, missing, or truncated records MUST retain generic fail-closed diagnostics.
 The `apply_patch` semantic action MUST synthesize an explicit short timeout
 instead of inheriting the general shell-command default, so malformed or
 blocked patch application fails quickly enough for the model to repair the

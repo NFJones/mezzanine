@@ -108,3 +108,70 @@ fn semantic_apply_patch_command_writes_zero_byte_content() {
 
     std::fs::remove_dir_all(temp).unwrap();
 }
+
+#[test]
+/// Verifies a late precondition failure preserves earlier mutations and emits
+/// one machine-readable outcome for every attempted target.
+///
+/// Multi-file writes are intentionally serial rather than transactional. If a
+/// later target changes after the read phase, the command must retain the
+/// earlier confirmed diff, attribute the failed target, and exit nonzero only
+/// after recording both outcomes.
+fn semantic_apply_patch_command_reports_partial_late_failure_per_file() {
+    let temp = test_temp_dir("semantic-patch-partial-late-failure");
+    std::fs::write(temp.join("one.txt"), "old one\n").unwrap();
+    std::fs::write(temp.join("two.txt"), "old two\n").unwrap();
+    let patch = "*** Begin Patch\n*** Update File: one.txt\n@@\n-old one\n+new one\n*** Update File: two.txt\n@@\n-old two\n+new two\n*** End Patch";
+    let read_plan = apply_patch_plan(patch, None).unwrap();
+    let read_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&read_plan.command)
+        .current_dir(&temp)
+        .output()
+        .unwrap();
+    assert!(read_output.status.success());
+    let write_plan = apply_patch_write_plan_from_read_output(
+        patch,
+        &String::from_utf8_lossy(&read_output.stdout),
+    )
+    .unwrap();
+    std::fs::write(temp.join("two.txt"), "changed concurrently\n").unwrap();
+
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&write_plan.command)
+        .current_dir(&temp)
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let outcomes = parse_apply_patch_file_outcomes(&combined).unwrap();
+
+    assert!(!output.status.success(), "{combined}");
+    assert_eq!(
+        std::fs::read_to_string(temp.join("one.txt")).unwrap(),
+        "new one\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join("two.txt")).unwrap(),
+        "changed concurrently\n"
+    );
+    assert!(combined.contains("diff -- apply patch"), "{combined}");
+    assert_eq!(
+        outcomes,
+        vec![
+            ApplyPatchFileOutcome::Applied {
+                path: "one.txt".to_string(),
+            },
+            ApplyPatchFileOutcome::Failed {
+                path: "two.txt".to_string(),
+                diagnostic: "apply_patch: file changed before apply: two.txt\n".to_string(),
+            },
+        ]
+    );
+
+    std::fs::remove_dir_all(temp).unwrap();
+}

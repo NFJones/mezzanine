@@ -193,8 +193,29 @@ impl RuntimeSessionService {
             matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
                 && apply_patch_transaction_phase(command)
                     == Some(ApplyPatchTransactionPhase::Write);
+        let apply_patch_read_path =
+            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                && apply_patch_transaction_phase(command) == Some(ApplyPatchTransactionPhase::Read)
+            {
+                self.agent
+                    .apply_patch_batch_states
+                    .get(&Self::apply_patch_batch_state_key(
+                        &turn.turn_id,
+                        &action.id,
+                    ))
+                    .and_then(|state| state.current_path.clone())
+            } else {
+                None
+            };
         let emitted_action_log = if is_internal_apply_patch_write_phase {
             false
+        } else if let Some(path) = apply_patch_read_path {
+            self.append_agent_action_execution_header_to_terminal_buffer(
+                &turn.pane_id,
+                action,
+                &format!("apply patch: {path}"),
+            )?;
+            true
         } else {
             self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
         };

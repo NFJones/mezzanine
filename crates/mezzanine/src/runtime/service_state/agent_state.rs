@@ -231,6 +231,8 @@ pub(crate) struct RuntimePathResolutionCacheKey {
 pub(crate) struct RuntimeApplyPatchBatchState {
     /// Paths that still need read-phase snapshots.
     pub(crate) remaining_paths: Vec<String>,
+    /// Path owned by the currently running one-file read transaction.
+    pub(crate) current_path: Option<String>,
     /// Full transport bytes captured for the currently running read-phase batch.
     ///
     /// Pane previews stay size-bounded for display, but write-phase planning
