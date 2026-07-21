@@ -669,7 +669,9 @@ impl RuntimeSessionService {
                 &transaction_ref.observed_output_preview,
             )?;
         }
-        if let Some(outcomes) = &apply_patch_file_outcomes {
+        if self.agent_verbose_enabled(pane_id)
+            && let Some(outcomes) = &apply_patch_file_outcomes
+        {
             for outcome in outcomes {
                 if let ApplyPatchFileOutcome::Failed { path, diagnostic } = outcome {
                     let diagnostic = diagnostic.trim();

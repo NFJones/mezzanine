@@ -640,7 +640,8 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
     transaction.command = "# __MEZ_APPLY_PATCH_WRITE_PHASE__".to_string();
     transaction.observed_output_preview =
         "apply_patch: hunk did not match: tests/standard_config_consumer_test.rs\n\
-         apply_patch: exact hunk context was not found in the current file"
+         apply_patch: exact hunk context was not found in the current file\n\
+         __MEZ_APPLY_PATCH_RESULT__FAILED dGVzdHMvc3RhbmRhcmRfY29uZmlnX2NvbnN1bWVyX3Rlc3QucnM= REVUQUlMUw=="
             .to_string();
     transaction.observed_output_bytes = transaction.observed_output_preview.len();
 
@@ -672,6 +673,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
     );
     assert!(pane_text.contains("(patch hunk mismatch)"), "{pane_text}");
     assert!(!pane_text.contains("recovery unavailable"), "{pane_text}");
+    assert!(!pane_text.contains("DETAILS"), "{pane_text}");
     let copy_response = service
         .execute_agent_shell_command(&primary, "/copy-patches buffer failed-patches")
         .unwrap();
