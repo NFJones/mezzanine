@@ -7,15 +7,9 @@
 //! and snapshot seeding rules together.
 
 use super::{
-    EventKind, HookEvent, MezError, PaneDescriptor, PaneProcessStart, PaneReadinessState, Path,
-    PathBuf, Result, RuntimeSessionService, SessionSnapshotPayload, TerminalScreen,
-    TerminalStyledLine, json_escape,
+    EventKind, HookEvent, MezError, PaneDescriptor, PaneProcessStart, Path, PathBuf, Result,
+    RuntimeSessionService, SessionSnapshotPayload, TerminalScreen, TerminalStyledLine, json_escape,
 };
-
-/// Maximum time spent waiting for freshly restored shells to print their first
-/// prompt bytes during a synchronous layout load.
-const RESTORED_PANE_INITIAL_OUTPUT_WAIT: std::time::Duration =
-    std::time::Duration::from_millis(150);
 
 /// Returns the user's home directory when it is available and usable as a
 /// pane process start directory.
@@ -100,7 +94,6 @@ impl RuntimeSessionService {
                     .pane_screens
                     .insert(started.pane_id.clone(), screen);
             }
-            self.set_pane_readiness(&started.pane_id, PaneReadinessState::PromptCandidate);
             self.session.set_pane_live_state(&started.pane_id, true)?;
             self.append_lifecycle_event(
                 EventKind::PaneChanged,
@@ -113,78 +106,7 @@ impl RuntimeSessionService {
             )?;
             starts.push(started);
         }
-        self.drain_restored_pane_initial_output(&starts)?;
         Ok(starts)
-    }
-
-    /// Waits briefly for newly restored panes to emit their first visible bytes.
-    ///
-    /// A `load-layout` command immediately redraws the attached client after it
-    /// restarts pane shells. Without a bounded drain here, that redraw can race
-    /// the shell's first prompt repaint and leave panes apparently blank until
-    /// the user's next keypress causes another output poll.
-    fn drain_restored_pane_initial_output(&mut self, starts: &[PaneProcessStart]) -> Result<()> {
-        if starts.is_empty() {
-            return Ok(());
-        }
-        let mut pending = starts
-            .iter()
-            .filter_map(|start| {
-                self.process
-                    .pane_processes
-                    .output_activity_sequence(start.pane_id.as_str())
-                    .map(|sequence| (start.pane_id.clone(), sequence))
-            })
-            .collect::<Vec<_>>();
-        if pending.is_empty() {
-            return Ok(());
-        }
-        self.poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?;
-        pending.retain(|(pane_id, sequence)| {
-            matches!(
-                self.process.pane_processes.output_activity_sequence(pane_id.as_str()),
-                Some(current) if current <= *sequence
-            )
-        });
-        if pending.is_empty() {
-            return Ok(());
-        }
-        let deadline = std::time::Instant::now() + RESTORED_PANE_INITIAL_OUTPUT_WAIT;
-        let wait_slice = std::time::Duration::from_millis(10);
-        while !pending.is_empty() {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            let mut index = 0usize;
-            let slice = remaining.min(wait_slice);
-            while index < pending.len() {
-                let pane_id = pending[index].0.clone();
-                let sequence = pending[index].1;
-                if self
-                    .process
-                    .pane_processes
-                    .wait_for_output_activity_after(pane_id.as_str(), sequence, slice)
-                    .unwrap_or(false)
-                {
-                    self.poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?;
-                    pending.retain(|(pending_pane_id, pending_sequence)| {
-                        matches!(
-                            self.process.pane_processes
-                                .output_activity_sequence(pending_pane_id.as_str()),
-                            Some(current) if current <= *pending_sequence
-                        )
-                    });
-                } else {
-                    index = index.saturating_add(1);
-                }
-                if std::time::Instant::now() >= deadline {
-                    break;
-                }
-            }
-        }
-        self.poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?;
-        Ok(())
     }
 
     /// Starts one restored pane while treating its snapshot working directory

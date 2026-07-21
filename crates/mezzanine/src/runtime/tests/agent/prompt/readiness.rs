@@ -2,14 +2,13 @@
 
 use super::*;
 
-/// Verifies layout-loaded panes drain their first prompt output before redraw.
+/// Verifies restored panes wait for event-driven prompt readiness.
 ///
-/// `:load-layout` synchronously recreates panes and then asks the attached
-/// client for a full redraw. The restored shell prompt must already be in the
-/// pane screen at that point, otherwise users see blank panes until the next
-/// keypress happens to poll shell output.
+/// Restarting the process must not infer a completed prompt from process
+/// creation or arbitrary initial PTY activity. The actor-owned output path
+/// supplies the prompt bytes and OSC boundary before bootstrap can run.
 #[test]
-fn runtime_service_restarts_restored_panes_drain_initial_prompt_output() {
+fn runtime_service_restarts_restored_panes_without_assuming_prompt_readiness() {
     let original = test_session();
     let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
     let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
@@ -18,15 +17,9 @@ fn runtime_service_restarts_restored_panes_drain_initial_prompt_output() {
         restore_input,
     )
     .unwrap();
-    let pane_id = restored
-        .active_window()
-        .unwrap()
-        .active_pane()
-        .id
-        .to_string();
     let mut service = RuntimeSessionService::with_event_log(
         restored,
-        PathBuf::from("/tmp/mez-1000/restored-prompt-drain.sock"),
+        PathBuf::from("/tmp/mez-1000/restored-prompt-readiness.sock"),
         100,
         10,
         1024,
@@ -34,78 +27,16 @@ fn runtime_service_restarts_restored_panes_drain_initial_prompt_output() {
     .unwrap();
 
     let starts = service
-        .restart_restored_pane_processes(Some("printf 'restored-ps1$ '; sleep 30"))
+        .restart_restored_pane_processes(Some("sleep 30"))
         .unwrap();
-    let visible = service
-        .pane_screen(&pane_id)
-        .unwrap()
-        .visible_lines()
-        .join("\n");
 
     assert_eq!(starts.len(), 1);
-    assert!(visible.contains("restored-ps1$"), "{visible:?}");
-    service.terminate_all_pane_processes().unwrap();
-}
-
-/// Verifies layout-loaded prompt draining waits for each restored pane.
-///
-/// A split `load-layout` restore can receive prompt bytes from one restarted
-/// pane before another. The initial drain must keep waiting on the slower
-/// restored pane instead of treating any tracked PTY output as sufficient for
-/// the immediate redraw.
-#[test]
-fn runtime_service_restarts_restored_panes_drain_initial_prompt_output_for_each_restored_pane() {
-    let root = temp_root("runtime-restored-prompt-drain-multi");
-    let fast_cwd = root.join("fast");
-    let slow_cwd = root.join("slow");
-    std::fs::create_dir_all(&fast_cwd).unwrap();
-    std::fs::create_dir_all(&slow_cwd).unwrap();
-    std::fs::write(slow_cwd.join(".slow-pane"), b"slow").unwrap();
-
-    let mut original = test_session();
-    let primary = original.attach_primary("primary", true).unwrap();
-    original
-        .split_active_pane(&primary, SplitDirection::Vertical)
-        .unwrap();
-    let mut payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
-    payload.windows[0].panes[0].current_working_directory =
-        Some(fast_cwd.to_string_lossy().into_owned());
-    payload.windows[0].panes[1].current_working_directory =
-        Some(slow_cwd.to_string_lossy().into_owned());
-    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
-    let restored = Session::from_restore_input(
-        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        restore_input,
-    )
-    .unwrap();
-    let pane_ids = restored
-        .windows()
-        .iter()
-        .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
-        .collect::<Vec<_>>();
-    let mut service = RuntimeSessionService::with_event_log(
-        restored,
-        PathBuf::from("/tmp/mez-1000/restored-prompt-drain-multi.sock"),
-        100,
-        10,
-        1024,
-    )
-    .unwrap();
-
-    let command = "sh -c 'if [ -f .slow-pane ]; then sleep 0.05; fi; printf '\''restored-ps1$ '\''; sleep 30'";
-    let starts = service
-        .restart_restored_pane_processes(Some(command))
-        .unwrap();
-
-    assert_eq!(starts.len(), pane_ids.len());
-    for pane_id in &pane_ids {
-        let visible = service
-            .pane_screen(pane_id)
-            .unwrap()
-            .visible_lines()
-            .join("\n");
-        assert!(visible.contains("restored-ps1$"), "{pane_id}: {visible:?}");
-    }
+    assert_eq!(
+        service.pane_readiness_state(&starts[0].pane_id),
+        PaneReadinessState::Unknown
+    );
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 0);
+    assert!(service.pane_bootstrap_is_pending_for_tests(&starts[0].pane_id));
     service.terminate_all_pane_processes().unwrap();
 }
 

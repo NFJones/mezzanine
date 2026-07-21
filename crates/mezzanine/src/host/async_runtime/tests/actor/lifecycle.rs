@@ -910,16 +910,46 @@ async fn async_actor_handles_control_requests_with_snapshot_repository() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Builds an actor fixture whose pane process was recreated from a layout.
+///
+/// Restored pane processes must use the same event-driven readiness path as
+/// newly created panes, so tests retain the restarted process identity and an
+/// attached primary client for render-invalidation assertions.
+fn restored_pane_prompt_actor_fixture() -> (RuntimeSessionService, ClientId, String, u32) {
+    let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
+    let original = Session::new_default(shell.clone(), Size::new(80, 24).unwrap());
+    let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
+    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
+    let restored = Session::from_restore_input(shell, restore_input).unwrap();
+    let mut service = RuntimeSessionService::new(
+        restored,
+        PathBuf::from("/tmp/mez-async-restored-prompt.sock"),
+        1,
+    )
+    .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let start = service
+        .restart_restored_pane_processes(Some("cat >/dev/null"))
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("restored fixture should restart one pane");
+    assert_eq!(
+        service.pane_readiness_state(&start.pane_id),
+        mez_agent::PaneReadinessState::Unknown
+    );
+    (service, primary, start.pane_id, start.primary_pid)
+}
+
 /// Verifies that bootstrap waits for a completed prompt when OSC 133 prompt
 /// markers and visible prompt bytes arrive in separate pane-output events.
 /// Prompt start must not activate hidden bootstrap rendering before the PS1 is
 /// retained; prompt end should then dispatch bootstrap without a later tick.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
-    let mut service = test_service();
-    service
-        .start_initial_pane_process(Some("cat >/dev/null"))
-        .unwrap();
+    let (service, primary, restored_pane_id, primary_pid) = restored_pane_prompt_actor_fixture();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
@@ -931,6 +961,25 @@ async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
             .unwrap();
         assert_eq!(processes.len(), 1);
         let (pane_id, mut process) = processes.pop().unwrap();
+        assert_eq!(pane_id, restored_pane_id);
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Pane(PaneEvent::ForegroundProcess {
+            pane_id: pane_id.clone(),
+            process_name: "sh".to_string(),
+            process_group_id: primary_pid,
+            current_working_directory: None,
+        }));
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert!(
+            handle
+                .drain_pane_io_side_effects(pane_id.as_str(), 8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "foreground metadata must not dispatch bootstrap before prompt evidence"
+        );
+
         let mut batch = RuntimeEventBatch::new();
         batch.push(RuntimeEvent::Pane(PaneEvent::Output {
             pane_id: pane_id.clone(),
@@ -962,6 +1011,13 @@ async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
         let report = handle.submit_runtime_events(batch).await.unwrap();
         assert_eq!(report.accepted, 1);
         assert_eq!(report.applied, 1);
+        assert_eq!(
+            handle.drain_render_side_effects(8).await.unwrap(),
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::PaneOutput,
+            }]
+        );
         assert!(
             handle
                 .drain_pane_io_side_effects(pane_id.as_str(), 8)
@@ -1026,6 +1082,135 @@ async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
     assert!(
         visible_content.contains("split-prompt>"),
         "PS1 emitted between prompt start and end must remain visible: {visible_content:?}"
+    );
+    assert!(exit.service.terminate_all_pane_processes().is_ok());
+}
+
+/// Verifies a restored prompt and its OSC 133 end marker can share one chunk.
+///
+/// The visible bytes must invalidate the client before bootstrap filtering is
+/// active, while the same event may subsequently authorize bootstrap dispatch.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_preserves_same_batch_restored_prompt_before_bootstrap() {
+    let (service, primary, restored_pane_id, _primary_pid) = restored_pane_prompt_actor_fixture();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut processes = handle
+            .take_running_pane_processes_for_adapter(8)
+            .await
+            .unwrap();
+        let (pane_id, mut process) = processes.pop().unwrap();
+        assert_eq!(pane_id, restored_pane_id);
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: pane_id.clone(),
+            bytes: b"same-batch> \x1b]133;B\x1b\\".to_vec(),
+        }));
+
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 1);
+        assert_eq!(
+            handle.drain_render_side_effects(8).await.unwrap(),
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary,
+                reason: RenderInvalidationReason::PaneOutput,
+            }]
+        );
+        assert_eq!(
+            handle
+                .drain_pane_io_side_effects(pane_id.as_str(), 8)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "prompt end should dispatch bootstrap after retaining prompt bytes"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        let _ = process.terminate(Duration::from_millis(10));
+        pane_id
+    };
+
+    let (pane_id, mut exit) = tokio::join!(client, actor.run());
+    let visible_content = exit
+        .service
+        .pane_screen(pane_id.as_str())
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        visible_content.contains("same-batch>"),
+        "{visible_content:?}"
+    );
+    assert!(exit.service.terminate_all_pane_processes().is_ok());
+}
+
+/// Verifies delayed output from an unintegrated restored shell still renders.
+///
+/// Ordinary PTY output must independently invalidate the attached client
+/// without foreground metadata, prompt markers, input, or synchronous waits.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_renders_delayed_unintegrated_restored_output() {
+    let (service, primary, restored_pane_id, _primary_pid) = restored_pane_prompt_actor_fixture();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut processes = handle
+            .take_running_pane_processes_for_adapter(8)
+            .await
+            .unwrap();
+        let (pane_id, mut process) = processes.pop().unwrap();
+        assert_eq!(pane_id, restored_pane_id);
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: pane_id.clone(),
+            bytes: b"delayed-unintegrated-output\n".to_vec(),
+        }));
+
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 1);
+        assert_eq!(
+            handle.drain_render_side_effects(8).await.unwrap(),
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary,
+                reason: RenderInvalidationReason::PaneOutput,
+            }]
+        );
+        assert!(
+            handle
+                .drain_pane_io_side_effects(pane_id.as_str(), 8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "ordinary output must not authorize bootstrap"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        let _ = process.terminate(Duration::from_millis(10));
+        pane_id
+    };
+
+    let (pane_id, mut exit) = tokio::join!(client, actor.run());
+    let visible_content = exit
+        .service
+        .pane_screen(pane_id.as_str())
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        visible_content.contains("delayed-unintegrated-output"),
+        "{visible_content:?}"
     );
     assert!(exit.service.terminate_all_pane_processes().is_ok());
 }

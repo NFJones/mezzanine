@@ -460,7 +460,7 @@ fn runtime_service_restarts_restored_panes_with_fresh_primary_pids() {
     assert_ne!(starts[0].primary_pid, starts[1].primary_pid);
     assert_eq!(service.pane_processes().len(), 2);
     assert!(starts.iter().all(|start| {
-        service.pane_readiness_state(&start.pane_id) == PaneReadinessState::PromptCandidate
+        service.pane_readiness_state(&start.pane_id) == PaneReadinessState::Unknown
     }));
     assert!(
         service
