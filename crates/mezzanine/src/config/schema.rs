@@ -517,6 +517,7 @@ pub(super) const AGENT_KEYS: &[&str] = &[
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const AGENT_AUTO_SIZING_KEYS: &[&str] = &[
+    "root_routing_policy",
     "router_model_profile",
     "small_model_profile",
     "medium_model_profile",

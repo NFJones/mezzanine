@@ -761,3 +761,26 @@ fn rejects_host_terminal_identity_in_default_profile() {
         diagnostic.path == "terminal.term" && diagnostic.message.contains("host terminal")
     }));
 }
+
+/// Verifies that the root auto-sizing routing policy accepts stable policy
+/// names and rejects values that cannot select a defined execution path.
+#[test]
+fn validates_root_auto_sizing_routing_policy() {
+    let valid = validate_config_text(
+        ConfigFormat::Toml,
+        "[agents.auto_sizing]\nroot_routing_policy = \"in-place\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(valid.valid, "{:?}", valid.diagnostics);
+
+    let invalid = validate_config_text(
+        ConfigFormat::Toml,
+        "[agents.auto_sizing]\nroot_routing_policy = \"unknown\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(!invalid.valid);
+    assert!(invalid.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "agents.auto_sizing.root_routing_policy"
+            && diagnostic.message == "unsupported root routing policy; use subagent or in-place"
+    }));
+}

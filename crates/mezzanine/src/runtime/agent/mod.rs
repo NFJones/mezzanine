@@ -163,6 +163,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_auto_sizing: RuntimeAutoSizingConfig,
     /// Pane-local auto-sizing policy overrides.
     agent_auto_sizing_overrides: BTreeMap<String, RuntimeAutoSizingConfig>,
+    /// Configured application policy for root-turn routing decisions.
+    agent_root_routing_policy: AutoSizingRoutingPolicy,
     /// Maximum iterations accepted by one loop controller.
     agent_loop_limit: usize,
     /// Active loop controller state keyed by stable logical loop id.
@@ -1410,7 +1412,7 @@ impl RuntimeSessionService {
         if self.subagent_lineage(&turn.agent_id).is_some() {
             AutoSizingRoutingPolicy::InPlace
         } else {
-            AutoSizingRoutingPolicy::Subagent
+            self.agent.agent_root_routing_policy
         }
     }
 
@@ -1691,6 +1693,11 @@ impl RuntimeSessionService {
     /// Replaces the configured default auto-sizing policy.
     pub(crate) fn set_agent_auto_sizing(&mut self, config: RuntimeAutoSizingConfig) {
         self.agent.agent_auto_sizing = config;
+    }
+
+    /// Replaces the configured root-turn routing application policy.
+    pub(crate) fn set_agent_root_routing_policy(&mut self, policy: AutoSizingRoutingPolicy) {
+        self.agent.agent_root_routing_policy = policy;
     }
 
     /// Replaces the router model profile in the default auto-sizing policy.

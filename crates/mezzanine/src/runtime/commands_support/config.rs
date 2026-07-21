@@ -466,7 +466,9 @@ pub(crate) fn runtime_apply_persisted_config_mutation_batch(
 }
 
 /// Finds or creates the primary config file used for persisted command changes.
-fn runtime_primary_config_path(service: &RuntimeSessionService) -> Result<Option<PathBuf>> {
+pub(crate) fn runtime_primary_config_path(
+    service: &RuntimeSessionService,
+) -> Result<Option<PathBuf>> {
     if let Some(path) = service
         .integration
         .config_layers()

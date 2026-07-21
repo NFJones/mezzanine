@@ -403,6 +403,13 @@ pub fn validate_config_text(
                 message: "unsupported auto sizing fallback policy; use use-default-profile"
                     .to_string(),
             });
+        } else if path == "agents.auto_sizing.root_routing_policy"
+            && !matches!(value.as_str(), "subagent" | "in-place")
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "unsupported root routing policy; use subagent or in-place".to_string(),
+            });
         } else if path.ends_with(".context_window_tokens")
             || path.ends_with(".context_limit_tokens")
             || path.ends_with(".max_output_tokens")

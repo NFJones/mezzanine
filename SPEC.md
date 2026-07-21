@@ -2436,7 +2436,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 20 is the current configuration schema version for this
+schema version 22 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -5663,9 +5663,11 @@ The baseline command capabilities are:
   accept a provider model name with an optional reasoning level to select that
   model for the active scope.
 - `/routing`: Inspect or change automatic turn model sizing. It MUST
-  accept `on`, `off`, `toggle`, and `status`. The command MUST update the
-  pane-local agent preference and MUST checkpoint that preference with other
-  pane-scoped agent shell preferences.
+  accept `on`, `off`, `toggle`, and `status`. It MUST also accept
+  `policy <subagent|in-place>` to persist `agents.auto_sizing.root_routing_policy`
+  and apply it immediately to root turns; subagent turns MUST remain in-place.
+  The command MUST update the pane-local agent preference and MUST checkpoint
+  that preference with other pane-scoped agent shell preferences.
 - `/personality`: Configure response style when supported.
 - `/stop`: Stop background jobs owned by the agent. User-initiated stops MUST
   settle the affected turn as interrupted/cancelled rather than failed.

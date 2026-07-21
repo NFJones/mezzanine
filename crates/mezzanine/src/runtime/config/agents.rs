@@ -16,6 +16,7 @@ use super::{
     runtime_config_permission_preset, runtime_cooperation_mode, runtime_json_bool,
     runtime_json_object, runtime_json_string, runtime_json_string_array, runtime_json_string_map,
 };
+use mez_agent::AutoSizingRoutingPolicy;
 
 /// Parses the maximum number of concurrently scheduled agent turns.
 pub(crate) fn runtime_max_concurrent_agents_from_config(root: &Value) -> Result<usize> {
@@ -185,6 +186,26 @@ pub(crate) fn runtime_agent_auto_sizing_from_config(
         }
     }
     Ok(config)
+}
+
+/// Parses the root-turn application policy for completed auto-sizing decisions.
+pub(crate) fn runtime_agent_root_routing_policy_from_config(
+    root: &Value,
+) -> Result<AutoSizingRoutingPolicy> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(AutoSizingRoutingPolicy::default());
+    };
+    let Some(auto_sizing) = agents.get("auto_sizing").and_then(Value::as_object) else {
+        return Ok(AutoSizingRoutingPolicy::default());
+    };
+    let Some(policy) = runtime_json_string(auto_sizing.get("root_routing_policy")) else {
+        return Ok(AutoSizingRoutingPolicy::default());
+    };
+    AutoSizingRoutingPolicy::parse(policy).ok_or_else(|| {
+        MezError::config(format!(
+            "agents.auto_sizing.root_routing_policy `{policy}` is not supported"
+        ))
+    })
 }
 
 /// Parses one positive integer setting from the `[agents]` table.

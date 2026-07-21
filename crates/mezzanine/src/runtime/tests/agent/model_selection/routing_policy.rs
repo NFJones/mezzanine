@@ -333,6 +333,78 @@ fn runtime_agent_shell_routing_command_sets_pane_override() {
     assert_eq!(service.agent_routing_override("%1"), Some(false));
 }
 
+/// Verifies that `/routing policy` persists an explicit root-turn application
+/// policy, applies it immediately, rejects malformed values, and never changes
+/// the required in-place behavior for delegated subagent turns.
+#[test]
+fn runtime_agent_shell_routing_policy_persists_root_policy_and_preserves_subagents() {
+    let mut service = test_runtime_service();
+    let config_root = temp_root("runtime-agent-shell-routing-policy");
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let selected = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routing-policy","method":"agent/shell/command","params":{"idempotency_key":"routing-policy","input":"/routing policy in-place"}}"#,
+        &primary,
+    );
+    assert!(selected.contains(r#""kind":"mutated""#), "{selected}");
+    assert!(selected.contains("root_policy=in-place"), "{selected}");
+    assert!(
+        fs::read_to_string(config_root.join("config.toml"))
+            .unwrap()
+            .contains("root_routing_policy = \"in-place\"")
+    );
+
+    let root_turn = mez_agent::AgentTurnRecord {
+        turn_id: "root-routing-policy".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        initial_capability: None,
+        state: mez_agent::AgentTurnState::Running,
+    };
+    assert_eq!(
+        service.auto_sizing_routing_policy_for_turn(&root_turn),
+        mez_agent::AutoSizingRoutingPolicy::InPlace
+    );
+
+    service.set_subagent_lineage(
+        "agent-child",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%1".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 1,
+            display_name: "child".to_string(),
+        },
+    );
+    let child_turn = mez_agent::AgentTurnRecord {
+        agent_id: "agent-child".to_string(),
+        ..root_turn
+    };
+    assert_eq!(
+        service.auto_sizing_routing_policy_for_turn(&child_turn),
+        mez_agent::AutoSizingRoutingPolicy::InPlace
+    );
+
+    let rejected = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routing-policy-invalid","method":"agent/shell/command","params":{"idempotency_key":"routing-policy-invalid","input":"/routing policy invalid"}}"#,
+        &primary,
+    );
+    assert!(rejected.contains("invalid_params"), "{rejected}");
+    let _ = fs::remove_dir_all(config_root);
+}
+
 /// Verifies that routing runs an internal router request before
 /// the turn provider request, applies the selected model and reasoning effort,
 /// and keeps router prompt/response correspondence out of persisted model

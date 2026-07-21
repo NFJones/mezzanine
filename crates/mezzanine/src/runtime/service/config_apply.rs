@@ -13,8 +13,8 @@ use super::{
     runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,
-    runtime_agent_personality_profiles_from_config, runtime_agent_routing_from_config,
-    runtime_audit_config_present, runtime_audit_log_from_config,
+    runtime_agent_personality_profiles_from_config, runtime_agent_root_routing_policy_from_config,
+    runtime_agent_routing_from_config, runtime_audit_config_present, runtime_audit_log_from_config,
     runtime_configured_permissions_from_config, runtime_default_agent_personality_from_config,
     runtime_default_models_for_provider, runtime_effective_config_value,
     runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
@@ -328,6 +328,9 @@ impl RuntimeSessionService {
             runtime_provider_auth_refresh_leeway_seconds_from_config(&structured),
         );
         self.set_agent_auto_sizing(runtime_agent_auto_sizing_from_config(&structured)?);
+        self.set_agent_root_routing_policy(runtime_agent_root_routing_policy_from_config(
+            &structured,
+        )?);
         self.configure_agent_scheduler_limit(max_concurrent_agents)?;
         self.start_ready_agent_turns()?;
         let mut configured_permissions = runtime_configured_permissions_from_config(&structured)?;

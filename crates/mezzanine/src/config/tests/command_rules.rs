@@ -25,7 +25,7 @@ fn validates_command_rule_schema_in_toml_array_tables() {
 fn validates_bubblewrap_authority_and_complete_rule_effects() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        r#"version = 21
+        r#"version = 22
 [permissions]
 sandbox = "bubblewrap"
 read_scopes = ["."]
@@ -66,7 +66,7 @@ process_control = false
 fn rejects_incomplete_or_non_allow_rule_effects() {
     let incomplete = validate_config_text(
         ConfigFormat::Toml,
-        r#"version = 21
+        r#"version = 22
 [[permissions.command_rules]]
 id = "cargo-test"
 pattern = ["cargo", "test"]
@@ -89,7 +89,7 @@ network = false
 
     let prompted = validate_config_text(
         ConfigFormat::Toml,
-        r#"version = 21
+        r#"version = 22
 [[permissions.command_rules]]
 id = "network-command"
 pattern = ["curl"]

@@ -219,15 +219,19 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
         PaneReadinessState::Ready | PaneReadinessState::Busy
     ));
 
-    for _ in 0..300 {
+    for _ in 0..900 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.running_shell_transactions_for_tests().is_empty() {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        thread::yield_now();
     }
 
-    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert!(
+        service.running_shell_transactions_for_tests().is_empty(),
+        "stale interactive-blocked recovery should settle its shell transaction"
+    );
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

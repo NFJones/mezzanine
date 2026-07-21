@@ -156,7 +156,7 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
     fs::create_dir_all(&nested).unwrap();
     fs::create_dir_all(&skill_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(&overlay_path, "version = 21\n[history]\nlines = 11\n").unwrap();
+    fs::write(&overlay_path, "version = 22\n[history]\nlines = 11\n").unwrap();
     fs::write(
         skill_dir.join("SKILL.md"),
         "---\nname: review\ndescription: Project review workflow\n---\n\nReview this repository.\n",

@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 21
+version = 22
 
 [terminal]
 profile = "xterm-compatible"
@@ -185,6 +185,7 @@ subagent_wait_policy = "join"
 max_depth = 2
 
 [agents.auto_sizing]
+root_routing_policy = "subagent"
 router_model_profile = "auto-size-router"
 small_model_profile = "auto-size-small"
 medium_model_profile = "auto-size-medium"

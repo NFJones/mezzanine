@@ -244,12 +244,32 @@ impl AutoSizingExecution {
 }
 
 /// Runtime application policy for one completed automatic-routing decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum AutoSizingRoutingPolicy {
     /// Execute a root turn through a runtime-managed routed subagent.
+    #[default]
     Subagent,
     /// Apply the selected profile to the existing subagent turn.
     InPlace,
+}
+
+impl AutoSizingRoutingPolicy {
+    /// Returns the stable configuration and command name for this policy.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Subagent => "subagent",
+            Self::InPlace => "in-place",
+        }
+    }
+
+    /// Parses one stable configuration or command policy name.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "subagent" => Some(Self::Subagent),
+            "in-place" => Some(Self::InPlace),
+            _ => None,
+        }
+    }
 }
 
 /// Agent-domain payload transferred from the router to runtime application.

@@ -6,9 +6,12 @@
 //! not mix preference state with unrelated command families.
 
 use super::{
-    AgentShellCommandOutcome, AgentShellVisibility, MezError, Result, RuntimeSessionService,
-    json_escape, parse_slash_command, runtime_single_mode_arg, validate_agent_personality,
+    AgentShellCommandOutcome, AgentShellVisibility, ConfigMutation, ConfigMutationOperation,
+    ConfigMutationValue, MezError, Result, RuntimeSessionService, json_escape, parse_slash_command,
+    runtime_apply_persisted_config_mutation_batch, runtime_primary_config_path,
+    runtime_single_mode_arg, validate_agent_personality,
 };
+use mez_agent::AutoSizingRoutingPolicy;
 
 impl RuntimeSessionService {
     /// Executes `/routing` against pane-scoped auto-sizing state.
@@ -19,6 +22,10 @@ impl RuntimeSessionService {
     ) -> Result<AgentShellCommandOutcome> {
         let invocation = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("routing command must be a slash command"))?;
+        let arguments = invocation.args.split_ascii_whitespace().collect::<Vec<_>>();
+        if arguments.first() == Some(&"policy") {
+            return self.execute_agent_shell_root_routing_policy_command(pane_id, &arguments);
+        }
         let mode = runtime_single_mode_arg(&invocation.args, "routing", "toggle")?;
         let default_enabled = self.agent_default_routing();
         let enabled_before = self
@@ -56,6 +63,48 @@ impl RuntimeSessionService {
                 enabled,
                 default_enabled,
                 enabled != enabled_before
+            ),
+            visibility,
+        })
+    }
+
+    /// Persists the root-turn application policy selected through `/routing policy`.
+    fn execute_agent_shell_root_routing_policy_command(
+        &mut self,
+        pane_id: &str,
+        arguments: &[&str],
+    ) -> Result<AgentShellCommandOutcome> {
+        let ["policy", requested] = arguments else {
+            return Err(MezError::invalid_args(
+                "routing policy expects exactly one value: subagent or in-place",
+            ));
+        };
+        let policy = AutoSizingRoutingPolicy::parse(requested).ok_or_else(|| {
+            MezError::invalid_args("routing policy expects one of: subagent, in-place")
+        })?;
+        let path = runtime_primary_config_path(self)?.ok_or_else(|| {
+            MezError::invalid_state("routing policy requires a configured primary config path")
+        })?;
+        let report = runtime_apply_persisted_config_mutation_batch(
+            self,
+            path,
+            &[ConfigMutation {
+                path: "agents.auto_sizing.root_routing_policy".to_string(),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::String(
+                    policy.as_str().to_string(),
+                )),
+            }],
+            "agent/shell/routing-policy",
+        )?;
+        let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "routing".to_string(),
+            body: format!(
+                "pane={} root_policy={} changed={} persisted_path={} source=runtime-routing",
+                json_escape(pane_id),
+                policy.as_str(),
+                report.changed,
+                json_escape(&report.path.display().to_string())
             ),
             visibility,
         })

@@ -33,11 +33,11 @@ use super::{
     runtime_list_command_rules_display, runtime_mezzanine_error_code, runtime_model_command_args,
     runtime_model_override_scope_for_args, runtime_model_override_scope_name,
     runtime_model_profile_display, runtime_permission_preset_name, runtime_permissions_command,
-    runtime_remove_command_rule, runtime_string_array_json, runtime_user_prompt_hook_payload,
-    runtime_validate_latency_preference, runtime_write_agent_context_for_pane,
-    runtime_write_agent_copy_output_for_pane, runtime_write_agent_patches_for_pane,
-    runtime_write_agent_trace_log_for_pane, select_model_profile, session_state_name,
-    shell_command_from_argv, unix_seconds_to_rfc3339,
+    runtime_primary_config_path, runtime_remove_command_rule, runtime_string_array_json,
+    runtime_user_prompt_hook_payload, runtime_validate_latency_preference,
+    runtime_write_agent_context_for_pane, runtime_write_agent_copy_output_for_pane,
+    runtime_write_agent_patches_for_pane, runtime_write_agent_trace_log_for_pane,
+    select_model_profile, session_state_name, shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::integrations::agent::provider::{
     AsyncModelProvider, ReqwestProviderHttpTransport,
