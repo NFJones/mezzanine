@@ -25,6 +25,36 @@ fn terminal_screen_defers_autowrap_until_next_printable_cell() {
     assert_eq!(screen.visible_lines(), vec!["efgh", "ijk"]);
 }
 
+/// Verifies that cursor-neutral SGR styling does not cancel a deferred wrap.
+/// Pagers commonly reset or change rendition after filling the final column,
+/// before emitting the printable glyph that should begin the next row.
+#[test]
+fn terminal_screen_preserves_deferred_autowrap_across_sgr() {
+    let mut screen = TerminalScreen::new(Size::new(4, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"abcd\x1b[31me");
+
+    assert_eq!(screen.visible_lines(), vec!["abcd", "e"]);
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 1);
+}
+
+/// Verifies the pager-style reset, space, backspace, and styled-text sequence
+/// wraps before the temporary space instead of overwriting the final cell.
+#[test]
+fn terminal_screen_preserves_pager_wrap_sequence_across_sgr() {
+    let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"12345678901234567890\x1b[m \x08\x1b[31mABCDEFGHIJ");
+
+    assert_eq!(
+        screen.visible_lines(),
+        vec!["12345678901234567890", "ABCDEFGHIJ"]
+    );
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 10);
+}
+
 /// Verifies that after text wraps to the next line, cursor-back and
 /// erase-to-end-of-line operations clear the wrapped text and the cursor
 /// lands at the correct position. This simulates what readline does when

@@ -34,7 +34,6 @@ impl TerminalScreen {
     pub(super) fn feed_ground(&mut self, ch: char) {
         match ch {
             '\u{1b}' => {
-                self.wrap_pending = false;
                 self.parser_state = ParserState::Escape;
             }
             '\u{0007}' => self.bell_events = self.bell_events.saturating_add(1),
