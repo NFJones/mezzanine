@@ -163,6 +163,7 @@ pub(super) fn agent_rich_text_theme(ui_theme: &UiTheme) -> RichTextTheme {
         table_alternate_row: markdown_table_alternate_row_foreground(ui_theme),
         diff_addition: ui_theme.colors.agent_transcript_user.foreground,
         diff_deletion: ui_theme.colors.agent_transcript_error.foreground,
+        syntax: Some(super::diff::agent_syntax_theme_palette(ui_theme, None)),
     }
 }
 

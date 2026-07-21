@@ -8,7 +8,7 @@
 use super::{char_count as terminal_text_width, push_or_extend_style_span};
 use crate::copy::{COPY_SKIP_LINE, COPY_WRAP_CONTINUATION, encode_copy_source_line};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, terminal_emoji_width};
-use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -47,7 +47,35 @@ pub struct RichTextTheme {
     pub diff_addition: TerminalColor,
     /// Foreground used for removed lines in fenced diff blocks.
     pub diff_deletion: TerminalColor,
+    /// Optional palette used to highlight recognized fenced programming languages.
+    pub syntax: Option<super::SyntaxThemePalette>,
 }
+
+/// One complete fenced Markdown code block offered to a specialized renderer.
+///
+/// The request retains the literal fence information and body so product-owned
+/// presentation transforms can decide whether to replace only this block.
+#[derive(Debug, Clone, Copy)]
+pub struct FencedCodeBlock<'a> {
+    /// Complete source-authored fence info string.
+    pub info: &'a str,
+    /// Literal body without fence delimiters.
+    pub body: &'a str,
+}
+
+/// Outcome from a specialized fenced-code renderer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FencedCodeBlockOutcome {
+    /// Use the supplied presentation rows in place of the literal fence body.
+    Rendered(Vec<RichTextLine>),
+    /// Retain the literal body and bypass generic language highlighting.
+    PreserveLiteral,
+    /// Let the generic syntax renderer or literal fallback handle the fence.
+    NotHandled,
+}
+
+/// Callback contract for specialized fenced-code presentation renderers.
+pub type FencedCodeBlockRenderer = dyn for<'a> FnMut(FencedCodeBlock<'a>) -> FencedCodeBlockOutcome;
 
 /// Presentation-only rendering of one assistant output line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -648,7 +676,34 @@ pub fn render_markdown(
     theme: &RichTextTheme,
     table_display_width: Option<usize>,
 ) -> Vec<RichTextLine> {
-    let rendered_lines = MarkdownRenderer::render(markdown, theme, table_display_width);
+    render_markdown_internal(markdown, theme, table_display_width, None)
+}
+
+/// Renders Markdown while allowing a specialized fenced-block renderer to run
+/// before generic syntax highlighting and literal fallback.
+pub fn render_markdown_with_fenced_block_renderer(
+    markdown: &str,
+    theme: &RichTextTheme,
+    table_display_width: Option<usize>,
+    fenced_block_renderer: &mut FencedCodeBlockRenderer,
+) -> Vec<RichTextLine> {
+    render_markdown_internal(
+        markdown,
+        theme,
+        table_display_width,
+        Some(fenced_block_renderer),
+    )
+}
+
+/// Applies source-line copy metadata after rendering one Markdown document.
+fn render_markdown_internal(
+    markdown: &str,
+    theme: &RichTextTheme,
+    table_display_width: Option<usize>,
+    fenced_block_renderer: Option<&mut FencedCodeBlockRenderer>,
+) -> Vec<RichTextLine> {
+    let rendered_lines =
+        MarkdownRenderer::render(markdown, theme, table_display_width, fenced_block_renderer);
     let source_lines = markdown.lines().collect::<Vec<_>>();
     let nonblank_source_lines = source_lines
         .iter()
@@ -855,8 +910,7 @@ pub fn markdown_link_display_ranges<Action>(
 /// attempting HTML layout. It consumes the CommonMark event stream, applies
 /// available terminal styles for inline semantics, and emits readable plain
 /// text for block structures that have no direct terminal equivalent.
-#[derive(Debug)]
-pub struct MarkdownRenderer {
+pub struct MarkdownRenderer<'a> {
     lines: Vec<RichTextLine>,
     current: RichTextLine,
     table_display_width: Option<usize>,
@@ -876,15 +930,19 @@ pub struct MarkdownRenderer {
     table_alternate_row_foreground: TerminalColor,
     diff_addition_foreground: TerminalColor,
     diff_deletion_foreground: TerminalColor,
+    syntax_palette: Option<super::SyntaxThemePalette>,
+    code_block: Option<MarkdownCodeBlockState>,
+    fenced_block_renderer: Option<&'a mut FencedCodeBlockRenderer>,
     current_prefix_only: bool,
 }
 
-impl MarkdownRenderer {
+impl<'a> MarkdownRenderer<'a> {
     /// Renders markdown using CommonMark plus the common GitHub-style extensions.
     fn render(
         markdown: &str,
         theme: &RichTextTheme,
         table_display_width: Option<usize>,
+        fenced_block_renderer: Option<&'a mut FencedCodeBlockRenderer>,
     ) -> Vec<RichTextLine> {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
@@ -900,7 +958,7 @@ impl MarkdownRenderer {
         options.insert(Options::ENABLE_SUBSCRIPT);
         options.insert(Options::ENABLE_WIKILINKS);
 
-        let mut renderer = Self::new(theme, table_display_width);
+        let mut renderer = Self::new(theme, table_display_width, fenced_block_renderer);
         for event in Parser::new_ext(markdown, options) {
             renderer.handle_event(event);
         }
@@ -911,6 +969,10 @@ impl MarkdownRenderer {
 
     /// Handles one parser event, delegating table internals to table capture.
     fn handle_event(&mut self, event: Event<'_>) {
+        if self.code_block.is_some() {
+            self.handle_code_block_event(event);
+            return;
+        }
         if self.table.is_some() {
             self.handle_table_event(event);
             return;
@@ -961,13 +1023,16 @@ impl MarkdownRenderer {
                     self.append_text(&format!("[{kind:?}] "));
                 }
             }
-            Tag::CodeBlock(_kind) => {
+            Tag::CodeBlock(kind) => {
                 self.start_block();
-                let foreground = self.inline_code_foreground;
-                self.push_style(|style| {
-                    style.foreground = Some(foreground);
-                    style.background = None;
-                    style.inverse = false;
+                let (info, fenced) = match kind {
+                    CodeBlockKind::Fenced(info) => (info.into_string(), true),
+                    CodeBlockKind::Indented => (String::new(), false),
+                };
+                self.code_block = Some(MarkdownCodeBlockState {
+                    info,
+                    fenced,
+                    body: String::new(),
                 });
             }
             Tag::HtmlBlock => self.start_block(),
@@ -1046,10 +1111,7 @@ impl MarkdownRenderer {
                 self.finish_current_line();
                 self.quote_depth = self.quote_depth.saturating_sub(1);
             }
-            TagEnd::CodeBlock => {
-                self.pop_style();
-                self.finish_current_line();
-            }
+            TagEnd::CodeBlock => self.render_code_block(),
             TagEnd::HtmlBlock => self.finish_current_line(),
             TagEnd::List(_) => {
                 self.finish_current_line();
@@ -1133,6 +1195,114 @@ impl MarkdownRenderer {
         }
         if render_table && let Some(table) = self.table.take() {
             self.lines.extend(table.render_lines());
+        }
+    }
+
+    /// Captures one complete code block so fenced renderers can inspect it.
+    fn handle_code_block_event(&mut self, event: Event<'_>) {
+        match event {
+            Event::End(TagEnd::CodeBlock) => self.render_code_block(),
+            Event::Text(text) => {
+                if let Some(block) = self.code_block.as_mut() {
+                    block.body.push_str(text.as_ref());
+                }
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some(block) = self.code_block.as_mut() {
+                    block.body.push('\n');
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Renders a captured code block through specialized, generic, or literal paths.
+    fn render_code_block(&mut self) {
+        let Some(block) = self.code_block.take() else {
+            return;
+        };
+        if block.fenced {
+            if let Some(renderer) = self.fenced_block_renderer.as_mut() {
+                match renderer(FencedCodeBlock {
+                    info: block.info.as_str(),
+                    body: block.body.as_str(),
+                }) {
+                    FencedCodeBlockOutcome::Rendered(lines) => {
+                        self.lines.extend(lines);
+                        return;
+                    }
+                    FencedCodeBlockOutcome::PreserveLiteral => {
+                        self.append_fenced_literal_code_block(&block);
+                        return;
+                    }
+                    FencedCodeBlockOutcome::NotHandled => {}
+                }
+            }
+            if let Some(palette) = self.syntax_palette {
+                let theme = super::syntax_theme("markdown-fence", palette);
+                if let Some(mut highlighter) =
+                    super::syntax_highlighter_for_fence(&block.info, &theme)
+                {
+                    self.append_fenced_code_delimiter(block.info.as_str());
+                    for source_line in block.body.split_terminator('\n') {
+                        let mut line = self.literal_code_line(source_line);
+                        let display = line.display.clone();
+                        super::append_syntax_spans(&mut line, 0, &display, &mut highlighter);
+                        self.lines.push(line);
+                    }
+                    self.append_fenced_code_delimiter("");
+                    return;
+                }
+            }
+        }
+        if block.fenced {
+            self.append_fenced_literal_code_block(&block);
+        } else {
+            self.append_literal_code_block(block.body.as_str());
+        }
+    }
+
+    /// Emits a fenced block with literal source delimiters for raw-copy alignment.
+    fn append_fenced_literal_code_block(&mut self, block: &MarkdownCodeBlockState) {
+        self.append_fenced_code_delimiter(block.info.as_str());
+        self.append_literal_code_block(block.body.as_str());
+        self.append_fenced_code_delimiter("");
+    }
+
+    /// Emits one visible fenced-code delimiter with the neutral code foreground.
+    fn append_fenced_code_delimiter(&mut self, info: &str) {
+        self.lines
+            .push(self.literal_code_line(&format!("```{info}")));
+    }
+
+    /// Emits literal code rows with the existing neutral code foreground.
+    fn append_literal_code_block(&mut self, body: &str) {
+        for source_line in body.split_terminator('\n') {
+            self.lines.push(self.literal_code_line(source_line));
+        }
+    }
+
+    /// Builds one sanitized literal code row.
+    fn literal_code_line(&self, source_line: &str) -> RichTextLine {
+        let display = sanitized_terminal_line(source_line);
+        let width = terminal_text_width(display.as_str());
+        RichTextLine {
+            display,
+            style_spans: (width > 0)
+                .then_some(TerminalStyleSpan {
+                    start: 0,
+                    length: width,
+                    rendition: GraphicRendition {
+                        foreground: Some(self.inline_code_foreground),
+                        background: None,
+                        inverse: false,
+                        ..GraphicRendition::default()
+                    },
+                })
+                .into_iter()
+                .collect(),
+            copy_text: None,
+            kind: RichTextLineKind::Normal,
         }
     }
 
@@ -1398,9 +1568,13 @@ impl MarkdownRenderer {
     }
 }
 
-impl MarkdownRenderer {
+impl<'a> MarkdownRenderer<'a> {
     /// Builds an empty markdown renderer for one active UI theme.
-    fn new(theme: &RichTextTheme, table_display_width: Option<usize>) -> Self {
+    fn new(
+        theme: &RichTextTheme,
+        table_display_width: Option<usize>,
+        fenced_block_renderer: Option<&'a mut FencedCodeBlockRenderer>,
+    ) -> Self {
         Self {
             lines: Vec::new(),
             current: RichTextLine {
@@ -1426,9 +1600,20 @@ impl MarkdownRenderer {
             table_alternate_row_foreground: theme.table_alternate_row,
             diff_addition_foreground: theme.diff_addition,
             diff_deletion_foreground: theme.diff_deletion,
+            syntax_palette: theme.syntax,
+            code_block: None,
+            fenced_block_renderer,
             current_prefix_only: false,
         }
     }
+}
+
+/// Captured source needed to select a fenced-code presentation path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MarkdownCodeBlockState {
+    info: String,
+    fenced: bool,
+    body: String,
 }
 
 /// Tracks list numbering while rendering nested markdown lists.
@@ -1828,6 +2013,17 @@ mod tests {
             table_alternate_row: TerminalColor::Rgb(13, 14, 15),
             diff_addition: TerminalColor::Rgb(16, 17, 18),
             diff_deletion: TerminalColor::Rgb(19, 20, 21),
+            syntax: Some(crate::render::SyntaxThemePalette {
+                plain: TerminalColor::Rgb(20, 21, 22),
+                background: None,
+                comment: TerminalColor::Rgb(23, 24, 25),
+                string: TerminalColor::Rgb(26, 27, 28),
+                number: TerminalColor::Rgb(29, 30, 31),
+                keyword: TerminalColor::Rgb(32, 33, 34),
+                r#type: TerminalColor::Rgb(35, 36, 37),
+                function: TerminalColor::Rgb(38, 39, 40),
+                operator: TerminalColor::Rgb(41, 42, 43),
+            }),
         }
     }
 
@@ -1843,6 +2039,71 @@ mod tests {
                 .any(|line| line.kind == RichTextLineKind::MarkdownTableSeparator)
         );
         assert!(lines.iter().any(|line| line.copy_text.is_some()));
+    }
+
+    /// Verifies fenced Rust blocks use the active syntax palette without
+    /// adding a trailing presentation row for the closing fence newline.
+    #[test]
+    fn fenced_rust_blocks_use_theme_syntax_spans() {
+        let lines = render_markdown("```RUST title\nfn main() {}\n```", &theme(), None);
+
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(lines[0].display, "```RUST title");
+        assert_eq!(lines[1].display, "fn main() {}");
+        assert_eq!(lines[2].display, "```");
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.copy_text.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("```RUST title"), Some("fn main() {}"), Some("```")]
+        );
+        assert!(
+            lines[1].style_spans.iter().any(|span| {
+                matches!(
+                    span.rendition.foreground,
+                    Some(
+                        TerminalColor::Rgb(32, 33, 34)
+                            | TerminalColor::Rgb(35, 36, 37)
+                            | TerminalColor::Rgb(38, 39, 40)
+                            | TerminalColor::Rgb(41, 42, 43)
+                    )
+                )
+            }),
+            "{lines:?}"
+        );
+    }
+
+    /// Verifies specialized fenced renderers run before generic highlighting
+    /// and can preserve a literal body when their own presentation fails.
+    #[test]
+    fn specialized_fenced_renderer_precedes_generic_highlighting() {
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let observed_calls = std::rc::Rc::clone(&calls);
+        let mut renderer = move |block: FencedCodeBlock<'_>| {
+            observed_calls
+                .borrow_mut()
+                .push((block.info.to_string(), block.body.to_string()));
+            FencedCodeBlockOutcome::PreserveLiteral
+        };
+
+        let lines = render_markdown_with_fenced_block_renderer(
+            "```rust\nfn main() {}\n```",
+            &theme(),
+            None,
+            &mut renderer,
+        );
+
+        assert_eq!(
+            calls.borrow().as_slice(),
+            [("rust".to_string(), "fn main() {}\n".to_string())]
+        );
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(lines[1].display, "fn main() {}");
+        assert_eq!(
+            lines[1].style_spans[0].rendition.foreground,
+            Some(TerminalColor::Rgb(10, 11, 12))
+        );
     }
 
     /// Verifies width wrapping preserves the first source identity and marks

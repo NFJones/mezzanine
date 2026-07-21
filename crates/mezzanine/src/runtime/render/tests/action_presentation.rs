@@ -610,6 +610,29 @@ fn command_markdown_renders_modified_file_count_spans() {
     );
 }
 
+/// Verifies fenced command Markdown uses the active syntax palette rather than
+/// the neutral inline-code color, keeping code presentation theme-aware.
+#[test]
+fn command_markdown_highlights_fenced_rust_with_active_theme() {
+    let mut definition = mez_mux::theme::builtin_ui_theme_definition("deepforest").unwrap();
+    definition
+        .colors
+        .insert("syntax_function_fg".to_string(), "#010203".to_string());
+    let ui_theme = mez_mux::theme::resolve_ui_theme("fenced-syntax", definition).unwrap();
+    let lines = render_command_markdown_body_lines("```rust\nfn main() {}\n```", &ui_theme);
+    let line = lines
+        .iter()
+        .find(|line| line.display == "fn main() {}")
+        .unwrap();
+
+    assert!(
+        line.style_spans.iter().any(|span| {
+            span.rendition.foreground == Some(mez_terminal::TerminalColor::Rgb(1, 2, 3))
+        }),
+        "{line:?}"
+    );
+}
+
 /// Verifies apply-patch diff previews follow the active theme while keeping
 /// one render's resolved colors stable across the preview.
 ///

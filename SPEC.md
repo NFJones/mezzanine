@@ -4242,10 +4242,16 @@ SHOULD also support common GitHub-style extensions used by Mezzanine output,
 including tables, task-list markers, strikethrough, footnotes, and heading
 attributes. Inline code spans and markdown table alternation SHOULD use
 foreground-only neutral grey styling whose lightness is selected from the
-active theme surface for readability. Markdown table presentation SHOULD use
-Unicode box-drawing separators while preserving raw pipe-table markdown for copy
-operations. Every rendered markdown
-block SHOULD be visually framed above by one synthetic markdown thematic-break
+active theme surface for readability. Fenced code blocks with a recognized
+first info-string language token SHOULD use stateful syntax highlighting from
+the active theme's syntax color slots; aliases and token casing MAY be
+normalized. Unknown, unlabelled, and indented code blocks MUST remain literal,
+sanitized terminal text. Before generic fence highlighting, product callers MAY
+apply a specialized renderer that renders a replacement, preserves the literal
+fence, or declines handling; a declined fence continues to generic highlighting
+or literal fallback. Markdown table presentation SHOULD use Unicode box-drawing
+separators while preserving raw pipe-table markdown for copy operations. Every
+rendered markdown block SHOULD be visually framed above by one synthetic markdown thematic-break
 row: the copy representation of the frame row SHOULD be `***`, and the
 presentation SHOULD use Unicode box-drawing divider characters across the
 smaller of the pane content width or the configured `terminal.agent_wrap_column_cap` display-cell limit. Markdown presentation

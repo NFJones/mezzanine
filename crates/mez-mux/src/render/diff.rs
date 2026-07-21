@@ -384,6 +384,35 @@ pub fn syntax_highlighter_for_extension<'a>(
     Some(SyntaxHighlighter(HighlightLines::new(syntax, &theme.0)))
 }
 
+/// Resolves a non-plain syntax from the first token of a fenced-code info string.
+pub fn syntax_for_fence(info: &str) -> Option<&'static SyntaxReference> {
+    let token = info.split_whitespace().next()?.to_ascii_lowercase();
+    let token = match token.as_str() {
+        "rs" => "rust",
+        "js" => "javascript",
+        "ts" => "typescript",
+        "py" => "python",
+        "yml" => "yaml",
+        "shell" | "shellscript" => "sh",
+        "c++" => "cpp",
+        "c#" => "cs",
+        _ => token.as_str(),
+    };
+    DIFF_SYNTAX_SET
+        .find_syntax_by_token(token)
+        .or_else(|| DIFF_SYNTAX_SET.find_syntax_by_extension(token))
+        .filter(|syntax| syntax.name != "Plain Text")
+}
+
+/// Creates a stateful syntax highlighter for a fenced Markdown code block.
+pub fn syntax_highlighter_for_fence<'a>(
+    info: &str,
+    theme: &'a SyntaxTheme,
+) -> Option<SyntaxHighlighter<'a>> {
+    let syntax = syntax_for_fence(info)?;
+    Some(SyntaxHighlighter(HighlightLines::new(syntax, &theme.0)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

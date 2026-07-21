@@ -26,7 +26,8 @@ pub use diff::{
     DiffDisplayLine, DiffDisplaySection, SyntaxHighlighter, SyntaxTheme, SyntaxThemePalette,
     append_syntax_spans, clean_diff_label, diff_highlighter_for_path, diff_section_path,
     diff_syntax_for_path, format_diff_display_line, parse_diff_hunk_header, parse_diff_range_start,
-    parse_unified_diff_sections, syntax_highlighter_for_extension, syntax_theme,
+    parse_unified_diff_sections, syntax_highlighter_for_extension, syntax_highlighter_for_fence,
+    syntax_theme,
 };
 pub use overlay::{
     NormalizedOverlayCanvas, compose_bottom_overlay_lines, compose_modal_overlay_lines,
@@ -39,15 +40,17 @@ pub use prompt::{
     wrap_prompt_line_with_cursor_and_shadow, write_line_segment,
 };
 pub use rich_text::{
-    MARKDOWN_BLOCK_DIVIDER_GLYPH, MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
+    FencedCodeBlock, FencedCodeBlockOutcome, FencedCodeBlockRenderer, MARKDOWN_BLOCK_DIVIDER_GLYPH,
+    MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
     MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RichTextLine, RichTextLineKind, RichTextTheme,
     WrappedRichTextLine, frame_markdown_lines, insert_blank_lines_above_markdown_headings,
     markdown_blank_line, markdown_block_copy_lines, markdown_link_display_ranges,
     markdown_local_continuation_indent_width, markdown_rendered_line_copy_text,
     markdown_rendered_line_is_heading, markdown_rendered_line_is_table_row, prefix_rich_text_lines,
-    render_markdown, rendered_line_continuation_indent, rendered_line_is_numbered_diff_row,
-    style_spans_for_rich_text_segment, take_rich_text_display_segment,
-    wrap_rich_text_line_to_width, wrap_rich_text_line_to_width_with_source_ranges,
+    render_markdown, render_markdown_with_fenced_block_renderer, rendered_line_continuation_indent,
+    rendered_line_is_numbered_diff_row, style_spans_for_rich_text_segment,
+    take_rich_text_display_segment, wrap_rich_text_line_to_width,
+    wrap_rich_text_line_to_width_with_source_ranges,
     wrap_rich_text_line_to_width_with_source_ranges_hard, wrap_rich_text_lines_to_width,
 };
 pub use style::{

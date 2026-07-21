@@ -641,8 +641,14 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
                     !span.rendition.inverse
                         && !span.rendition.dim
                         && span.rendition.background.is_none()
-                        && span.rendition.foreground
-                            == Some(EXPECTED_MARKDOWN_INLINE_CODE_FOREGROUND)
+                        && matches!(
+                            span.rendition.foreground,
+                            Some(foreground)
+                                if foreground == service.ui_theme().colors.syntax_keyword.foreground
+                                    || foreground == service.ui_theme().colors.syntax_type.foreground
+                                    || foreground == service.ui_theme().colors.syntax_function.foreground
+                                    || foreground == service.ui_theme().colors.syntax_plain.foreground
+                        )
                 })),
         "{styled_lines:?}"
     );
