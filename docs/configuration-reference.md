@@ -741,7 +741,11 @@ For complete effects, Mezzanine resolves read, write, create, delete, and touch
 paths in one action-specific pane-shell request before probing or launching
 Bubblewrap. The action waits for exact evidence; resolver failure, timeout,
 truncation, or stale pane identity fails closed. Unknown effects retain bounded
-maximum authority without this extra resolution. Exact primary, subagent, and
+maximum authority. A deterministic `/home/<user>` scope also resolves `.ssh`,
+`.gnupg`, `.aws`, `.azure`, `.kube`, and `.docker` descendants. Existing
+protected directories are hidden by private tmpfs masks emitted after host
+binds; absent descendants are not mounted. The multi-user `/home` root and
+direct credential-directory scopes fail closed. Exact primary, subagent, and
 action requests are cached independently for the current pane environment and
 configuration generation. Bubblewrap activation requires explicit usable scopes.
 Schema v20 migration selects `policy-only` and does not infer scopes or effects.

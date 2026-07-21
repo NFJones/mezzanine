@@ -243,6 +243,63 @@ fn runtime_unknown_effects_skip_action_specific_path_resolution() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies broad deterministic user-home authority resolves every protected
+/// credential descendant even when command effects are otherwise unknown.
+#[test]
+fn runtime_user_home_authority_resolves_credential_mask_paths() {
+    let root = temp_root("runtime-user-home-path-resolution");
+    let home = root.join("home").join("alice");
+    fs::create_dir_all(&home).unwrap();
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&home));
+    cache_path_resolution_maximum(&mut service, &home);
+    mark_test_pane_ready(&mut service, "%1");
+
+    let mut effects = path_resolution_effects();
+    effects.unknown = true;
+    let evaluation =
+        path_resolution_evaluation(mez_agent::permissions::EffectCompleteness::Unknown, effects);
+
+    assert!(
+        !service
+            .ensure_bubblewrap_path_resolution_for_action(
+                &path_resolution_turn(),
+                "action-1",
+                Some(&evaluation),
+            )
+            .unwrap()
+    );
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find(|transaction| {
+            matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::PathResolution {
+                    action_id: Some(action_id),
+                    ..
+                } if action_id == "action-1"
+            )
+        })
+        .unwrap();
+    let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind else {
+        unreachable!();
+    };
+    let expected = [".aws", ".azure", ".docker", ".gnupg", ".kube", ".ssh"]
+        .map(|protected| home.join(protected).to_string_lossy().into_owned())
+        .to_vec();
+    assert_eq!(cache_key.request.additional_paths, expected);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies resolved authority is cached only for the exact pane environment,
 /// configuration generation, and bounded request that produced it.
 #[test]

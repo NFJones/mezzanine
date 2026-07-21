@@ -19,34 +19,35 @@ use mez_agent::permissions::{EffectCompleteness, PermissionEvaluation};
 use mez_agent::{ShellChildArgument, ShellChildLaunch};
 
 /// Builds the exact resolver request needed for complete per-action filesystem
-/// effects. Unknown effects retain maximum authority and require no extra
-/// resolver transaction.
+/// effects and protected descendants of deterministic user-home authority.
 fn bubblewrap_action_path_resolution_request(
     maximum: &PathScopes,
     evaluation: &PermissionEvaluation,
 ) -> Result<Option<mez_agent::shell::PanePathResolutionRequest>> {
-    if evaluation.completeness != EffectCompleteness::Complete {
-        return Ok(None);
+    let mut additional_paths =
+        crate::security::sandbox::bubblewrap_protected_path_resolution_candidates(maximum)
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+    if evaluation.completeness == EffectCompleteness::Complete {
+        additional_paths.extend(
+            evaluation
+                .effects
+                .reads
+                .iter()
+                .chain(&evaluation.effects.writes)
+                .chain(&evaluation.effects.creates)
+                .chain(&evaluation.effects.deletes)
+                .chain(&evaluation.effects.touches)
+                .cloned(),
+        );
     }
-    let additional_paths = evaluation
-        .effects
-        .reads
-        .iter()
-        .chain(&evaluation.effects.writes)
-        .chain(&evaluation.effects.creates)
-        .chain(&evaluation.effects.deletes)
-        .chain(&evaluation.effects.touches)
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
     if additional_paths.is_empty() {
         return Ok(None);
     }
     mez_agent::shell::PanePathResolutionRequest::new(
         maximum.read_scopes.clone(),
         maximum.write_scopes.clone(),
-        additional_paths,
+        additional_paths.into_iter().collect(),
     )
     .map(Some)
     .map_err(|error| MezError::invalid_args(error.message()))

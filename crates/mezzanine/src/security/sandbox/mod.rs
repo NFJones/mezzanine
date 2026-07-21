@@ -12,7 +12,7 @@
 //! all fail before a workload can start. Generated plans contain typed argv,
 //! never user-provided Bubblewrap arguments or wrapper shell fragments.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
@@ -37,6 +37,8 @@ pub(crate) const BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER: &str =
     "/run/mez/host-command-placeholder";
 const SANDBOX_HOME: &str = "/home/mez";
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
+const PROTECTED_CREDENTIAL_DIRECTORIES: [&str; 6] =
+    [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"];
 
 /// Inputs required to compile one authorized command into a launch plan.
 #[derive(Debug, Clone)]
@@ -102,6 +104,13 @@ pub(crate) struct SandboxMount {
     pub(crate) access: SandboxMountAccess,
 }
 
+/// One deterministic in-sandbox mask that hides a protected host subtree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SandboxProtectedMask {
+    /// Destination replaced by an empty private tmpfs after host binds.
+    pub(crate) destination: String,
+}
+
 /// Effective confinement policy after maximum-authority normalization and
 /// optional complete-effect narrowing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +119,8 @@ pub(crate) struct EffectiveSandboxPolicy {
     pub(crate) working_directory: String,
     /// Deterministically ordered filesystem mounts.
     pub(crate) mounts: Vec<SandboxMount>,
+    /// Protected descendants masked after all host-backed mounts.
+    pub(crate) protected_masks: Vec<SandboxProtectedMask>,
     /// Whether mounts use maximum or narrowed authority.
     pub(crate) authority_source: SandboxAuthoritySource,
     /// Effective isolated network mode.
@@ -129,6 +140,8 @@ pub(crate) struct SandboxAuditSummary {
     pub(crate) read_only_mount_count: usize,
     /// Number of writable command-authority mounts.
     pub(crate) read_write_mount_count: usize,
+    /// Number of protected host descendants replaced by private tmpfs mounts.
+    pub(crate) protected_mask_count: usize,
     /// Stable normalized launch-plan digest.
     pub(crate) plan_sha256: String,
 }
@@ -259,6 +272,7 @@ pub(crate) fn compile_bubblewrap_launch_plan(
         .iter()
         .filter(|mount| mount.access == SandboxMountAccess::ReadWrite)
         .count();
+    let protected_mask_count = policy.protected_masks.len();
     Ok(BubblewrapLaunchPlan {
         executable: request.config.executable.clone(),
         arguments,
@@ -269,6 +283,7 @@ pub(crate) fn compile_bubblewrap_launch_plan(
             authority_source: policy.authority_source,
             read_only_mount_count,
             read_write_mount_count,
+            protected_mask_count,
             plan_sha256,
         },
     })
@@ -521,9 +536,11 @@ fn effective_sandbox_policy(
                 SandboxAuthoritySource::Maximum,
             )
         };
+    let protected_masks = protected_masks_for_mounts(&mounts, request.maximum_authority)?;
     Ok(EffectiveSandboxPolicy {
         working_directory: request.maximum_authority.current_directory.clone(),
         mounts,
+        protected_masks,
         authority_source,
         network: request.config.network,
         environment: request.config.environment,
@@ -537,6 +554,12 @@ fn validate_maximum_authority(authority: &PathScopes) -> Result<(), SandboxCompi
             return Err(SandboxCompileError::new(
                 SandboxCompileErrorKind::ForbiddenHostPath,
                 "Bubblewrap authority must not expose host root",
+            ));
+        }
+        if path == "/home" {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "Bubblewrap authority must not expose the multi-user home root",
             ));
         }
         if path_overlaps(path, "/run/user") || path_overlaps(path, "/var/run") {
@@ -584,6 +607,66 @@ fn maximum_mounts(authority: &PathScopes) -> Vec<SandboxMount> {
         access: SandboxMountAccess::ReadWrite,
     }));
     normalize_mounts(mounts)
+}
+
+/// Returns protected credential descendants that must be resolved before a
+/// deterministic user-home authority can be projected into Bubblewrap.
+pub(crate) fn bubblewrap_protected_path_resolution_candidates(
+    authority: &PathScopes,
+) -> Vec<String> {
+    authority
+        .read_scopes
+        .iter()
+        .chain(&authority.write_scopes)
+        .filter(|path| path_is_deterministic_user_home(path))
+        .flat_map(|home| {
+            PROTECTED_CREDENTIAL_DIRECTORIES.map(|protected| {
+                Path::new(home)
+                    .join(protected)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Derives empty in-sandbox masks for credential directories directly beneath
+/// deterministic user-home mounts. Masks remain separate from host mount
+/// normalization so a parent bind cannot subsume them.
+fn protected_masks_for_mounts(
+    mounts: &[SandboxMount],
+    authority: &PathScopes,
+) -> Result<Vec<SandboxProtectedMask>, SandboxCompileError> {
+    let mut destinations = BTreeSet::new();
+    for mount in mounts {
+        if path_is_credential_directory(&mount.destination) {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "Bubblewrap command authority must not project credential directories",
+            ));
+        }
+        if !path_is_deterministic_user_home(&mount.destination) {
+            continue;
+        }
+        for protected in PROTECTED_CREDENTIAL_DIRECTORIES {
+            let destination = Path::new(&mount.destination)
+                .join(protected)
+                .to_string_lossy()
+                .into_owned();
+            match protected_path_evidence(authority, &destination)? {
+                ResolvedPathKind::Existing => {
+                    destinations.insert(destination);
+                }
+                ResolvedPathKind::CreateTarget => {}
+            }
+        }
+    }
+    Ok(destinations
+        .into_iter()
+        .map(|destination| SandboxProtectedMask { destination })
+        .collect())
 }
 
 fn narrowed_mounts(
@@ -808,6 +891,10 @@ fn bubblewrap_arguments(
         arguments.push(mount.source.clone());
         arguments.push(mount.destination.clone());
     }
+    for mask in &policy.protected_masks {
+        arguments.push("--tmpfs".to_string());
+        arguments.push(mask.destination.clone());
+    }
     arguments.extend(
         [
             "--chdir",
@@ -933,6 +1020,41 @@ fn path_depth(path: &str) -> usize {
 
 fn path_overlaps(left: &str, right: &str) -> bool {
     Path::new(left).starts_with(right) || Path::new(right).starts_with(left)
+}
+
+/// Reports whether one canonical mount root identifies a single user beneath
+/// a Linux-style home directory rather than an unbounded multi-user ancestor.
+fn path_is_deterministic_user_home(path: &str) -> bool {
+    let path = Path::new(path);
+    path.file_name().is_some()
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|parent| parent == "home")
+}
+
+/// Returns trusted pane-shell evidence for one protected descendant. Broad
+/// user-home projection fails closed when that evidence was not requested.
+fn protected_path_evidence(
+    authority: &PathScopes,
+    destination: &str,
+) -> Result<ResolvedPathKind, SandboxCompileError> {
+    authority
+        .path_evidence
+        .get(destination)
+        .or_else(|| {
+            authority
+                .path_evidence
+                .values()
+                .find(|evidence| evidence.canonical_path == destination)
+        })
+        .map(|evidence| evidence.kind)
+        .ok_or_else(|| {
+            SandboxCompileError::new(
+                SandboxCompileErrorKind::UnresolvedAuthority,
+                "Bubblewrap user-home authority requires pane-resolved credential-mask evidence",
+            )
+        })
 }
 
 fn path_is_credential_directory(path: &str) -> bool {

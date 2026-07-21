@@ -83,6 +83,24 @@ fn authority() -> PathScopes {
     .unwrap()
 }
 
+/// Builds pane-resolved authority rooted at one synthetic user home.
+fn home_authority(home: &str) -> PathScopes {
+    let mut evidence = BTreeMap::new();
+    for protected in [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"] {
+        let canonical = format!("{home}/{protected}");
+        evidence.insert(
+            canonical.clone(),
+            ResolvedPathEvidence {
+                canonical_path: canonical.clone(),
+                kind: ResolvedPathKind::Existing,
+                nearest_existing_parent: canonical,
+            },
+        );
+    }
+    PathScopes::try_shell_resolved_with_evidence(home, vec![home.to_string()], Vec::new(), evidence)
+        .unwrap()
+}
+
 fn request<'a>(
     config: &'a BubblewrapConfig,
     authority: &'a PathScopes,
@@ -150,6 +168,101 @@ fn unknown_effects_compile_to_bounded_maximum_authority() {
             .iter()
             .any(|argument| argument.starts_with("/run/user"))
     );
+}
+
+/// Broad deterministic user-home authority keeps ordinary files available but
+/// masks every direct credential directory after the parent host bind.
+#[test]
+fn user_home_authority_emits_credential_masks_after_host_mounts() {
+    let config = config();
+    let authority = home_authority("/home/alice");
+    let mut unknown = effects();
+    unknown.unknown = true;
+    let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
+
+    let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
+    assert_eq!(plan.audit_summary.protected_mask_count, 6);
+    let parent_mount = plan
+        .arguments
+        .windows(3)
+        .position(|args| args == ["--ro-bind", "/home/alice", "/home/alice"])
+        .unwrap();
+    for protected in [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"] {
+        let destination = format!("/home/alice/{protected}");
+        let mask = plan
+            .arguments
+            .windows(2)
+            .position(|args| args == ["--tmpfs", destination.as_str()])
+            .unwrap();
+        assert!(parent_mount < mask, "mask must follow its parent host bind");
+    }
+}
+
+/// Complete effects that narrow to a deterministic user home retain the same
+/// credential masks as maximum-authority compilation.
+#[test]
+fn narrowed_user_home_authority_retains_credential_masks() {
+    let config = config();
+    let authority = home_authority("/home/alice");
+    let mut complete = effects();
+    complete.reads.push(".".to_string());
+    let evaluation = evaluation(EffectCompleteness::Complete, complete);
+
+    let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
+
+    assert_eq!(
+        plan.audit_summary.authority_source,
+        SandboxAuthoritySource::Narrowed
+    );
+    assert!(
+        plan.arguments
+            .windows(2)
+            .any(|args| { args == ["--tmpfs", "/home/alice/.ssh"] })
+    );
+}
+
+/// Complete effects cannot bypass protected descendant masking by narrowing
+/// command authority directly to a credential directory.
+#[test]
+fn narrowed_credential_directory_authority_fails_closed() {
+    let config = config();
+    let authority = home_authority("/home/alice");
+    let mut complete = effects();
+    complete.reads.push(".ssh".to_string());
+    let evaluation = evaluation(EffectCompleteness::Complete, complete);
+
+    let error =
+        compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap_err();
+
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+}
+
+/// Multi-user home roots cannot be protected by deterministic direct-child
+/// masks and therefore fail closed before a launch plan is produced.
+#[test]
+fn multi_user_home_authority_fails_closed() {
+    let config = config();
+    let authority = home_authority("/home");
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+
+    let error =
+        compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap_err();
+
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+}
+
+/// Direct credential-directory authority remains forbidden even though broad
+/// deterministic parents are projected with protected descendant masks.
+#[test]
+fn direct_credential_directory_authority_fails_closed() {
+    let config = config();
+    let authority = home_authority("/home/alice/.ssh");
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+
+    let error =
+        compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap_err();
+
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
 }
 
 /// Complete effects narrow mounts to resolved paths and produce deterministic

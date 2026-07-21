@@ -55,7 +55,7 @@ impl RealBubblewrapFixture {
                 "mez-real-bubblewrap-{label}-{}-{nanos}-{unique}",
                 std::process::id()
             ));
-        let workspace = root.join("workspace");
+        let workspace = root.join("home").join("alice");
         let source = workspace.join("src");
         let target = workspace.join("target");
         let sibling = root.join("sibling");
@@ -69,6 +69,10 @@ impl RealBubblewrapFixture {
         }
         fs::write(source.join("visible.txt"), "visible\n").unwrap();
         fs::write(workspace.join("root-only.txt"), "root-only\n").unwrap();
+        for protected in [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"] {
+            fs::create_dir_all(workspace.join(protected)).unwrap();
+        }
+        fs::write(workspace.join(".ssh/id_test"), "credential-secret\n").unwrap();
         fs::write(sibling.join("secret.txt"), "sibling-secret\n").unwrap();
         fs::write(host_home.join("secret.txt"), "home-secret\n").unwrap();
         symlink(sibling.join("secret.txt"), workspace.join("escape-link")).unwrap();
@@ -93,6 +97,17 @@ impl RealBubblewrapFixture {
         ] {
             evidence.insert(
                 requested.to_string(),
+                ResolvedPathEvidence {
+                    canonical_path: canonical.to_string_lossy().into_owned(),
+                    kind: ResolvedPathKind::Existing,
+                    nearest_existing_parent: canonical.to_string_lossy().into_owned(),
+                },
+            );
+        }
+        for protected in [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"] {
+            let canonical = self.workspace.join(protected);
+            evidence.insert(
+                canonical.to_string_lossy().into_owned(),
                 ResolvedPathEvidence {
                     canonical_path: canonical.to_string_lossy().into_owned(),
                     kind: ResolvedPathKind::Existing,
@@ -284,6 +299,42 @@ fn real_bubblewrap_enforces_maximum_authority_and_isolation() {
         "visible\n"
     );
     assert!(!fixture.host_home.join("inside.txt").exists());
+}
+
+#[test]
+/// Proves a broad host-backed authority keeps ordinary direct children visible
+/// while replacing a credential descendant with an empty private tmpfs.
+fn real_bubblewrap_masks_credential_descendants_of_broad_authority() {
+    let config = config();
+    let Some(capability) = verified_capability(&config) else {
+        return;
+    };
+    let fixture = RealBubblewrapFixture::new("credential-mask");
+    let mut unknown = effects();
+    unknown.unknown = true;
+    let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
+    let plan = real_plan(&config, capability, &fixture.authority(), &evaluation);
+
+    assert_eq!(plan.audit_summary.protected_mask_count, 6);
+    let output = execute_plan(
+        plan,
+        "set -eu\n\
+         test \"$(cat root-only.txt)\" = root-only\n\
+         test ! -e .ssh/id_test\n\
+         test -d .ssh\n\
+         printf '%s\\n' REAL_BWRAP_CREDENTIAL_MASK_OK",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("REAL_BWRAP_CREDENTIAL_MASK_OK"),
+        "status={:?} stdout={stdout:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.workspace.join(".ssh/id_test")).unwrap(),
+        "credential-secret\n"
+    );
 }
 
 #[test]

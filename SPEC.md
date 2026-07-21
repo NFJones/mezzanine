@@ -2775,11 +2775,15 @@ compilation, complete read, write, create, delete, and touch paths MUST be
 resolved through the pane shell as one action-specific bounded request. The
 action MUST remain pending until exact evidence settles; resolver failure,
 timeout, truncation, or stale identity MUST fail it closed. Unknown effects MUST
-retain bounded maximum authority without an action-specific resolver. Raw
-Bubblewrap arguments, arbitrary binds, host networking, and inherited
-environment allowlists MUST NOT be configurable. The schema v20 to v21
-migration MUST preserve policy-only behavior and MUST NOT invent scopes, rule
-identities, or effects.
+retain bounded maximum authority. For deterministic `/home/<user>` authority,
+Mezzanine MUST additionally resolve `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
+and `.docker` descendants regardless of effect completeness. Existing protected
+descendants MUST be replaced by private tmpfs mounts emitted after host binds;
+absent descendants MUST remain unmounted. The multi-user `/home` root and direct
+credential-directory authority MUST fail closed. Raw Bubblewrap arguments,
+arbitrary binds, host networking, and inherited environment allowlists MUST NOT
+be configurable. The schema v20 to v21 migration MUST preserve policy-only
+behavior and MUST NOT invent scopes, rule identities, or effects.
 
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`
 with a minimal `[permissions]` table and `approval_policy = "ask"` when a
