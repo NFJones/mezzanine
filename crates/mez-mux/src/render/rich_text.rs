@@ -105,6 +105,8 @@ pub enum RichTextLineKind {
     MarkdownTableContinuation,
     /// Separator row generated from the markdown table delimiter line.
     MarkdownTableSeparator,
+    /// Presentation-only diagram row that must not be soft-wrapped.
+    MarkdownDiagram,
 }
 
 impl RichTextLineKind {
@@ -112,7 +114,10 @@ impl RichTextLineKind {
     fn is_markdown_table(self) -> bool {
         matches!(
             self,
-            Self::MarkdownTableRow | Self::MarkdownTableContinuation | Self::MarkdownTableSeparator
+            Self::MarkdownTableRow
+                | Self::MarkdownTableContinuation
+                | Self::MarkdownTableSeparator
+                | Self::MarkdownDiagram
         )
     }
 
@@ -632,6 +637,11 @@ pub fn markdown_block_copy_lines(
                     .clone()
                     .unwrap_or_else(|| markdown_rendered_line_copy_text(line, display_prefix));
             }
+            if line.kind == RichTextLineKind::MarkdownDiagram
+                && let Some(copy_text) = line.copy_text.as_deref()
+            {
+                return copy_text.to_string();
+            }
             if line
                 .copy_text
                 .as_deref()
@@ -837,7 +847,7 @@ pub fn prefix_rich_text_lines(
             }
             line.display = format!("{prefix}{}", line.display);
             if let Some(copy_text) = line.copy_text.take() {
-                if copy_text == COPY_SKIP_LINE {
+                if copy_text == COPY_SKIP_LINE || line.kind == RichTextLineKind::MarkdownDiagram {
                     line.copy_text = Some(copy_text);
                 } else {
                     line.copy_text = Some(format!("{prefix}{copy_text}"));

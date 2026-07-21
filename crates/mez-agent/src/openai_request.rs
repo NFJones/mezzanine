@@ -81,8 +81,8 @@ pub(crate) fn openai_responses_request_control_shape_with_stream(
     } else {
         body["tools"] = serde_json::json!(openai_maap_action_batch_tools(request));
         body["tool_choice"] = serde_json::json!({
-            "type": "function",
-            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+            "type": "function"
         });
     }
     Ok(body)

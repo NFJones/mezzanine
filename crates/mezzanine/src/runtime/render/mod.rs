@@ -636,8 +636,8 @@ use presentation::{
     agent_action_execution_display_header, agent_action_result_uses_diff_preview,
     agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
     readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
-    render_command_markdown_body_lines, rendered_line_rendition_at, wrap_agent_terminal_text,
-    wrapped_prefixed_agent_terminal_lines,
+    render_agent_markdown_body_lines, render_command_markdown_body_lines,
+    rendered_line_rendition_at, wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
 };
 use time::{runtime_human_system_uptime, runtime_local_datetime_seconds_string};
 

@@ -11,7 +11,8 @@ use super::{
     RichTextTheme, ShellClassification, TerminalColor, TerminalStyleSpan, TerminalStyledLine,
     UiTheme, UnicodeSegmentation, UnicodeWidthStr, agent_wrap_column_cap, append_syntax_spans,
     overlay_fixed_column_style_spans, overlay_text_cells, prefix_rich_text_lines, render_markdown,
-    runtime_mezzanine_error_code, terminal_grapheme_width, wrap_rich_text_lines_to_width,
+    render_markdown_with_fenced_block_renderer, runtime_mezzanine_error_code,
+    terminal_grapheme_width, wrap_rich_text_lines_to_width,
 };
 use crate::error::MezError;
 use mez_mux::render::{push_or_extend_style_span, terminal_color_luminance};
@@ -116,11 +117,20 @@ pub(crate) fn render_agent_markdown_body_lines(
         .saturating_sub(UnicodeWidthStr::width("mez> "))
         .saturating_sub(1)
         .max(1);
+    let mut mermaid_fence_count = 0;
+    let mut mermaid_renderer = move |fence: mez_mux::render::FencedCodeBlock<'_>| {
+        super::mermaid::render_agent_mermaid_fence(
+            fence,
+            table_body_display_width,
+            &mut mermaid_fence_count,
+        )
+    };
     prefix_rich_text_lines(
-        render_markdown(
+        render_markdown_with_fenced_block_renderer(
             trimmed,
             &agent_rich_text_theme(ui_theme),
             Some(table_body_display_width),
+            &mut mermaid_renderer,
         ),
         "mez> ",
         "     ",

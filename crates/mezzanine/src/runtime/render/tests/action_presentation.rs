@@ -633,6 +633,38 @@ fn command_markdown_highlights_fenced_rust_with_active_theme() {
     );
 }
 
+/// Verifies agent Markdown replaces a fitting Mermaid fence with unwrapped
+/// terminal-native diagram rows while command Markdown retains literal source.
+#[test]
+fn agent_markdown_renders_mermaid_without_changing_command_markdown() {
+    let ui_theme = mez_mux::theme::deepforest_ui_theme();
+    let markdown = "```mermaid\nflowchart LR\nA[Start] --> B[Done]\n```";
+
+    let agent_lines = render_agent_markdown_body_lines(markdown, &ui_theme, 80);
+    assert!(
+        agent_lines.iter().any(|line| {
+            line.kind == RichTextLineKind::MarkdownDiagram
+                && line.display.contains("Start")
+                && line.display.contains("Done")
+        }),
+        "{agent_lines:?}"
+    );
+    assert!(
+        agent_lines
+            .iter()
+            .all(|line| !line.display.contains("\u{1b}")),
+        "{agent_lines:?}"
+    );
+
+    let command_lines = render_command_markdown_body_lines(markdown, &ui_theme);
+    assert!(
+        command_lines
+            .iter()
+            .any(|line| line.display == "```mermaid"),
+        "{command_lines:?}"
+    );
+}
+
 /// Verifies apply-patch diff previews follow the active theme while keeping
 /// one render's resolved colors stable across the preview.
 ///

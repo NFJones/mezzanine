@@ -22,6 +22,7 @@ use mez_mux::render::{
 use mez_mux::render::{
     MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
     MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RichTextTheme, prefix_rich_text_lines, render_markdown,
+    render_markdown_with_fenced_block_renderer,
 };
 use mez_mux::render::{
     SyntaxHighlighter, SyntaxTheme, SyntaxThemePalette, syntax_highlighter_for_extension,
@@ -36,6 +37,7 @@ use unicode_width::UnicodeWidthStr;
 mod actions;
 mod buffer_apply;
 mod diff;
+mod mermaid;
 mod style;
 mod text;
 
@@ -56,6 +58,7 @@ pub(crate) use text::{
 };
 #[cfg(test)]
 pub(crate) use text::{
-    command_preview_terminal_rendered_lines, render_command_markdown_body_lines,
-    rendered_line_rendition_at, wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
+    command_preview_terminal_rendered_lines, render_agent_markdown_body_lines,
+    render_command_markdown_body_lines, rendered_line_rendition_at, wrap_agent_terminal_text,
+    wrapped_prefixed_agent_terminal_lines,
 };

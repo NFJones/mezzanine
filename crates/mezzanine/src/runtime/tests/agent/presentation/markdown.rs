@@ -328,6 +328,51 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
     assert!(!copied.contains('│'), "{copied}");
 }
 
+/// Verifies a presentation-only Mermaid diagram copies as its original fenced
+/// Markdown source rather than terminal box-drawing rows.
+#[test]
+fn runtime_agent_mermaid_diagram_copy_preserves_raw_fence() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(96, 16).unwrap(), 120)
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(96, 16).unwrap(), 120).unwrap(),
+    );
+    let markdown = "```mermaid\nflowchart LR\nA[Start] --> B[Done]\n```";
+
+    service
+        .append_agent_assistant_content_to_terminal_buffer(
+            "%1",
+            markdown,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+        )
+        .unwrap();
+
+    let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    let visible_lines = copy_mode.visible_lines();
+    let last_visible_index = visible_lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap();
+    let last_line = copy_mode.scroll_top().saturating_add(last_visible_index);
+    let last_column = visible_lines[last_visible_index].chars().count();
+    copy_mode
+        .select_range(
+            CopyPosition { line: 0, column: 0 },
+            CopyPosition {
+                line: last_line,
+                column: last_column,
+            },
+        )
+        .unwrap();
+
+    let copied = copy_mode.copy_selection().unwrap();
+    assert_eq!(copied, markdown);
+    assert!(!copied.contains('┌') && !copied.contains('─'), "{copied}");
+}
+
 /// Verifies rendered markdown blocks no longer copy a synthetic frame row.
 ///
 /// Markdown `say` output now stays in the ordinary assistant transcript flow

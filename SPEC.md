@@ -4249,8 +4249,15 @@ normalized. Unknown, unlabelled, and indented code blocks MUST remain literal,
 sanitized terminal text. Before generic fence highlighting, product callers MAY
 apply a specialized renderer that renders a replacement, preserves the literal
 fence, or declines handling; a declined fence continues to generic highlighting
-or literal fallback. Markdown table presentation SHOULD use Unicode box-drawing
-separators while preserving raw pipe-table markdown for copy operations. Every
+or literal fallback. Completed agent Markdown MAY render fenced `mermaid`
+flowchart and sequence diagrams as terminal-native Unicode rows. Such rendering
+MUST be display-only, MUST retain the original fenced Markdown for transcript
+persistence and copy operations, and MUST NOT be applied to non-agent Markdown.
+Malformed, unsupported, over-limit, overwide, or excess Mermaid fences MUST
+remain literal source without preventing surrounding Markdown from rendering.
+Rendered diagram rows MUST NOT be soft-wrapped. Markdown table presentation
+SHOULD use Unicode box-drawing separators while preserving raw pipe-table
+markdown for copy operations. Every
 rendered markdown block SHOULD be visually framed above by one synthetic markdown thematic-break
 row: the copy representation of the frame row SHOULD be `***`, and the
 presentation SHOULD use Unicode box-drawing divider characters across the

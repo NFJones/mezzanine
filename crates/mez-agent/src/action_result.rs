@@ -80,11 +80,14 @@ impl ActionContentBlock {
 
     /// Encodes this block as compact MAAP JSON.
     pub fn to_json(&self) -> String {
-        serde_json::json!({
-            "type": self.block_type,
-            "text": self.text,
-        })
-        .to_string()
+        let fields = std::collections::BTreeMap::from([
+            ("text", serde_json::Value::String(self.text.clone())),
+            (
+                "type",
+                serde_json::Value::String(self.block_type.to_string()),
+            ),
+        ]);
+        serde_json::to_string(&fields).unwrap_or_else(|_| "{}".to_string())
     }
 }
 

@@ -1061,11 +1061,12 @@ pub fn normalize_openai_strict_schema(mut value: serde_json::Value) -> serde_jso
     schema.remove("format");
 
     if let Some(serde_json::Value::Object(properties)) = schema.get_mut("properties") {
-        let required = properties
+        let mut required = properties
             .keys()
             .cloned()
             .map(serde_json::Value::String)
             .collect::<Vec<_>>();
+        required.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
         for property_schema in properties.values_mut() {
             *property_schema = normalize_openai_strict_schema(std::mem::take(property_schema));
         }

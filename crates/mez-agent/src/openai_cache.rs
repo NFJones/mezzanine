@@ -84,8 +84,8 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
         serde_json::json!("none")
     } else {
         serde_json::json!({
-            "type": "function",
-            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
+            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+            "type": "function"
         })
     };
     let provider_request_shape =
