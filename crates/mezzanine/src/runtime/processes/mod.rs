@@ -98,9 +98,6 @@ pub(crate) struct RuntimeProcessComponent {
         crate::security::sandbox::BubblewrapCapabilityCacheKey,
         crate::security::sandbox::BubblewrapCapability,
     >,
-    /// Fail-closed probe outcomes keyed by the same exact capability identity.
-    pane_bubblewrap_capability_failures:
-        std::collections::BTreeMap<crate::security::sandbox::BubblewrapCapabilityCacheKey, String>,
     /// Panes with an in-flight bootstrap transaction.
     pane_bootstrap_pending: BTreeSet<String>,
     /// Modeled terminal screen state keyed by pane id.

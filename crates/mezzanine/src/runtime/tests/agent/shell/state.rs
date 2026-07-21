@@ -211,6 +211,176 @@ fn configure_path_resolution_bubblewrap(service: &mut RuntimeSessionService) {
         .replace_configured_permissions(configured);
 }
 
+/// Builds a ready pane with Bubblewrap configured for capability-probe tests.
+fn bubblewrap_probe_service() -> RuntimeSessionService {
+    let root = temp_root("runtime-bubblewrap-probe");
+    fs::create_dir_all(&root).unwrap();
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+    service
+}
+
+/// Removes and returns the sole in-flight Bubblewrap capability probe.
+fn take_bubblewrap_probe_transaction(
+    service: &mut RuntimeSessionService,
+) -> (String, RunningShellTransactionRef) {
+    let marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+            )
+            .then(|| marker.clone())
+        })
+        .unwrap();
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .remove(&marker)
+        .unwrap();
+    (marker, transaction)
+}
+
+/// Verifies one failed probe settles only its waiting action and a later
+/// independent action sends a fresh probe for the same capability identity.
+#[test]
+fn runtime_bubblewrap_probe_failure_allows_later_reprobe() {
+    let mut service = bubblewrap_probe_service();
+    let turn = path_resolution_turn();
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-1")
+            .unwrap()
+    );
+    let (marker, transaction) = take_bubblewrap_probe_transaction(&mut service);
+
+    service
+        .fail_bubblewrap_capability_probe_transaction(
+            &marker,
+            transaction,
+            "bubblewrap_probe_failed",
+            "transient probe failure",
+            false,
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Ready
+    );
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-2")
+            .unwrap()
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::BubblewrapCapabilityProbe { action_id, .. }
+                    if action_id == "action-2"
+            ))
+    );
+}
+
+/// Verifies concurrent waiters share one exact in-flight capability probe.
+#[test]
+fn runtime_bubblewrap_probe_deduplicates_in_flight_requests() {
+    let mut service = bubblewrap_probe_service();
+    let turn = path_resolution_turn();
+
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-1")
+            .unwrap()
+    );
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-2")
+            .unwrap()
+    );
+    assert_eq!(service.running_shell_transactions_for_tests().len(), 1);
+}
+
+/// Verifies a successful probe remains cached and suppresses later probes for
+/// the same pane environment and runtime-profile identity.
+#[test]
+fn runtime_bubblewrap_successful_probe_is_cached() {
+    let mut service = bubblewrap_probe_service();
+    let turn = path_resolution_turn();
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-1")
+            .unwrap()
+    );
+    let (marker, mut transaction) = take_bubblewrap_probe_transaction(&mut service);
+    let RunningShellTransactionKind::BubblewrapCapabilityProbe { probe_plan, .. } =
+        &transaction.kind
+    else {
+        unreachable!();
+    };
+    transaction.observed_output_preview = probe_plan.expected_stdout.to_string();
+
+    service
+        .observe_bubblewrap_capability_probe_transaction_end(&marker, transaction, 0)
+        .unwrap();
+
+    assert!(
+        service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-2")
+            .unwrap()
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+}
+
+/// Verifies a timed-out probe leaves no durable negative entry, while pane
+/// readiness recovery remains an explicit prerequisite for a later reprobe.
+#[test]
+fn runtime_bubblewrap_probe_timeout_allows_reprobe_after_readiness_recovery() {
+    let mut service = bubblewrap_probe_service();
+    let turn = path_resolution_turn();
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-1")
+            .unwrap()
+    );
+    let (marker, transaction) = take_bubblewrap_probe_transaction(&mut service);
+
+    service
+        .fail_bubblewrap_capability_probe_transaction(
+            &marker,
+            transaction,
+            "bubblewrap_probe_timeout",
+            "transient probe timeout",
+            true,
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Degraded
+    );
+
+    mark_test_pane_ready(&mut service, "%1");
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-2")
+            .unwrap()
+    );
+}
+
 /// Resolves and caches the configured project root as maximum authority.
 fn cache_path_resolution_maximum(service: &mut RuntimeSessionService, root: &Path) {
     let request = mez_agent::shell::PanePathResolutionRequest::new(

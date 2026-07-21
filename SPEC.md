@@ -2780,10 +2780,16 @@ Mezzanine MUST additionally resolve `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
 and `.docker` descendants regardless of effect completeness. Existing protected
 descendants MUST be replaced by private tmpfs mounts emitted after host binds;
 absent descendants MUST remain unmounted. The multi-user `/home` root and direct
-credential-directory authority MUST fail closed. Raw Bubblewrap arguments,
-arbitrary binds, host networking, and inherited environment allowlists MUST NOT
-be configurable. The schema v20 to v21 migration MUST preserve policy-only
-behavior and MUST NOT invent scopes, rule identities, or effects.
+credential-directory authority MUST fail closed. A failed, stale, truncated,
+or timed-out Bubblewrap capability probe MUST fail only the action waiting on
+that probe and MUST NOT permit policy-only or unsandboxed fallback. Failed
+probe results MUST NOT be cached; a later independent action MAY issue one
+fresh probe for the same identity after shell readiness recovers. Successful
+probe results MUST remain cached, and concurrent waiters MUST share one
+in-flight probe. Raw Bubblewrap arguments, arbitrary binds, host networking,
+and inherited environment allowlists MUST NOT be configurable. The schema v20
+to v21 migration MUST preserve policy-only behavior and MUST NOT invent scopes,
+rule identities, or effects.
 
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`
 with a minimal `[permissions]` table and `approval_policy = "ask"` when a

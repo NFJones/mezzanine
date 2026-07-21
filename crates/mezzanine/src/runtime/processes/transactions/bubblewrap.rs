@@ -63,15 +63,6 @@ impl RuntimeSessionService {
             runtime_profile_version: crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
             probe_sha256: probe_plan.probe_sha256.clone(),
         };
-        if let Some(reason) = self
-            .process
-            .pane_bubblewrap_capability_failures
-            .get(&cache_key)
-        {
-            return Err(crate::MezError::invalid_state(format!(
-                "Bubblewrap capability probe failed: {reason}"
-            )));
-        }
         if self
             .process
             .pane_bubblewrap_capabilities
@@ -211,9 +202,6 @@ impl RuntimeSessionService {
                         || key.executable == cache_key.executable
                 });
                 self.process
-                    .pane_bubblewrap_capability_failures
-                    .remove(&cache_key);
-                self.process
                     .pane_bubblewrap_capabilities
                     .insert(cache_key, capability);
                 let previous = self.pane_readiness_state(&transaction.pane_id);
@@ -295,9 +283,6 @@ impl RuntimeSessionService {
             return Ok(());
         };
         self.process.pane_bubblewrap_capabilities.remove(&cache_key);
-        self.process
-            .pane_bubblewrap_capability_failures
-            .insert(cache_key, message.to_string());
         let previous = self.pane_readiness_state(&transaction.pane_id);
         self.set_pane_readiness(
             &transaction.pane_id,

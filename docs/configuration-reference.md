@@ -755,10 +755,13 @@ environment before launching a sandboxed workload. The probe requires usable
 user, mount, PID, IPC, UTS, cgroup, and network namespaces plus the fixed
 read-only runtime projection. Missing executables and unsupported namespace
 facilities fail closed; Mezzanine never retries the workload under
-`policy-only`. The Linux adversarial test suite reports an explicit unsupported-
-host skip when this production profile cannot run, while a profile that probes
-successfully is expected to pass the real filesystem, environment, IPC, and
-network confinement tests.
+`policy-only`. A failed or timed-out probe settles only its waiting action and
+is not cached. After shell readiness recovers, a later independent action may
+probe the same identity again. Successful capabilities remain cached, and
+concurrent waiters share one in-flight probe. The Linux adversarial test suite
+reports an explicit unsupported-host skip when this production profile cannot
+run, while a profile that probes successfully is expected to pass the real
+filesystem, environment, IPC, and network confinement tests.
 
 ### `subagents.<name>`
 
