@@ -921,16 +921,14 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies a macro-step child failure without a shell binding still resolves the joined parent dependency.
+/// Verifies a joined child failure without a shell binding settles its parent.
 ///
-/// Macro steps are ordinary child agent-shell turns, but queued or blocked
-/// children can fail through the no-shell-session cleanup path before a
-/// provider execution exists. The parent macro orchestration turn must receive
-/// that failed step result as a runtime-level failed parent action so the
-/// macro stops with the user-visible explanation required by SPEC §10.5 instead
-/// of treating the child failure as a successful join.
+/// Joined children can fail through the no-shell-session cleanup path before a
+/// provider execution exists. The parent must receive that failed result and
+/// leave blocked scheduler and ledger state instead of retaining an execution
+/// that no provider task can continue.
 #[test]
-fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
+fn runtime_joined_child_failure_without_shell_session_settles_parent() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
@@ -1046,19 +1044,19 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
 
     assert!(!service.has_joined_subagent_dependency(&child.turn_id));
     assert!(!service.agent_provider_task_is_pending(&parent.turn_id));
-    let execution = service
-        .agent_turn_executions()
-        .get(&parent.turn_id)
-        .unwrap();
-    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
-    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
-    let structured = execution.action_results[0]
-        .structured_content_json
-        .as_deref()
-        .unwrap_or_default();
-    assert!(structured.contains(r#""success":false"#), "{structured}");
     assert!(
-        structured.contains("failed without provider output"),
-        "{structured}"
+        service
+            .agent_turn_executions()
+            .get(&parent.turn_id)
+            .is_none()
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
     );
 }

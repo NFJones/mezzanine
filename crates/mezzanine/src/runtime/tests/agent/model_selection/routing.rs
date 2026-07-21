@@ -831,6 +831,140 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
     );
 }
 
+/// Verifies a failed joined descendant settles its routed worker and releases
+/// the outer routed workflow instead of leaving the worker publicly waiting.
+#[test]
+fn runtime_routed_worker_joined_child_failure_recovers_parent() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 recover failed joined descendant");
+    let primary = service
+        .session
+        .primary_client_id()
+        .cloned()
+        .expect("primary should remain attached");
+    let child_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(child_pane.as_str())
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen(child_pane.to_string(), screen);
+    let child_turn = service
+        .start_agent_prompt_turn(child_pane.as_str(), "joined descendant")
+        .unwrap();
+    let child_turn_record = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == child_turn.turn_id)
+        .cloned()
+        .expect("joined descendant turn should be recorded");
+    let spawn = runtime_spawn_agent_action("spawn-descendant", "joined descendant");
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(
+            &worker_turn.turn_id,
+            &worker_turn.agent_id,
+        ),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "spawn joined descendant".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "delegate joined work".to_string(),
+                thought: None,
+                turn_id: worker_turn.turn_id.clone(),
+                agent_id: worker_turn.agent_id.clone(),
+                actions: vec![spawn.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &worker_turn,
+            &spawn,
+            vec!["waiting for joined descendant".to_string()],
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .agent_turn_executions_mut()
+        .insert(worker_turn.turn_id.clone(), execution.clone());
+    service
+        .append_agent_execution_chronology(&worker_turn, &execution)
+        .unwrap();
+    service.insert_joined_subagent_dependency(
+        child_turn.turn_id.clone(),
+        JoinedSubagentDependency {
+            parent_turn_id: worker_turn.turn_id.clone(),
+            parent_action_id: spawn.id.clone(),
+            child_turn_id: child_turn.turn_id.clone(),
+            child_agent_id: child_turn.agent_id.clone(),
+            child_display_name: Some("joined descendant".to_string()),
+        },
+    );
+    service.remove_pending_agent_provider_task(&worker_turn.turn_id);
+    service
+        .agent_scheduler_mut()
+        .wait_running(&worker_turn.turn_id)
+        .unwrap();
+    service
+        .agent_turn_ledger_mut()
+        .finish_turn(&worker_turn.turn_id, AgentTurnState::Blocked)
+        .unwrap();
+    service.start_ready_agent_turns().unwrap();
+
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &child_turn_record,
+            AgentTurnState::Failed,
+            "joined_descendant_failed",
+        )
+        .unwrap();
+
+    assert!(!service.has_joined_subagent_dependency(&child_turn.turn_id));
+    assert!(
+        !service
+            .agent_scheduler()
+            .waiting_turns()
+            .any(|work| work.turn_id == worker_turn.turn_id),
+        "failed routed worker must leave dependency-waiting scheduler state"
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    let workflow = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .expect("failed worker should retain routed recovery state");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent_turn_id)
+    );
+}
+
 /// Verifies routed loop continuation queue failure terminates the controller
 /// and resumes the blocked parent through one bounded explanation.
 ///

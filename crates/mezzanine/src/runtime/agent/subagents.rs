@@ -1122,7 +1122,7 @@ impl RuntimeSessionService {
             )));
         }
         let parent_previous_state = parent_turn.state;
-        let (observed_result, ready_for_continuation) = {
+        let (observed_result, ready_for_continuation, terminal_state) = {
             let Some(execution) = self
                 .agent_turn_executions_mut()
                 .get_mut(&dependency.parent_turn_id)
@@ -1207,7 +1207,11 @@ impl RuntimeSessionService {
             );
             let ready_for_continuation =
                 runtime_execution_ready_for_provider_continuation(execution);
-            (observed_result, ready_for_continuation)
+            (
+                observed_result,
+                ready_for_continuation,
+                execution.terminal_state,
+            )
         };
         self.append_action_result_context_if_absent(&dependency.parent_turn_id, &observed_result)?;
         let mut failed_macro_parent_turn = None;
@@ -1284,6 +1288,40 @@ impl RuntimeSessionService {
             self.start_ready_agent_turns()?;
             return Ok(());
         }
+        self.agent
+            .joined_subagent_dependencies
+            .remove(&dependency.child_turn_id);
+        if terminal_state != AgentTurnState::Running {
+            let execution = self
+                .agent_turn_executions()
+                .get(&parent_turn.turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("terminal joined-subagent parent execution is missing")
+                })?;
+            self.persist_runtime_agent_turn_execution_transcript(&parent_turn, &execution)?;
+            self.emit_subagent_task_result_for_execution(&parent_turn, &execution)?;
+            let _ = self.agent.agent_scheduler.cancel(&parent_turn.turn_id);
+            self.append_agent_trace_turn_event(
+                &parent_turn.pane_id,
+                &parent_turn.turn_id,
+                &format!(
+                    "scheduler waiting -> {} reason=joined_subagent_result_settled",
+                    runtime_agent_turn_state_name(terminal_state)
+                ),
+            )?;
+            if self
+                .agent_shell_store()
+                .get(&parent_turn.pane_id)
+                .and_then(|session| session.running_turn_id.as_deref())
+                == Some(parent_turn.turn_id.as_str())
+            {
+                self.finish_agent_turn(&parent_turn.pane_id, &parent_turn.turn_id, terminal_state)?;
+            } else {
+                self.finish_agent_turn_without_shell_session(&parent_turn, terminal_state)?;
+            }
+            return Ok(());
+        }
         if ready_for_continuation {
             self.agent
                 .agent_scheduler
@@ -1298,9 +1336,6 @@ impl RuntimeSessionService {
                 "agent: subagent results received; continuing",
             )?;
         }
-        self.agent
-            .joined_subagent_dependencies
-            .remove(&dependency.child_turn_id);
         self.start_ready_agent_turns()?;
         Ok(())
     }
