@@ -312,8 +312,11 @@ pub(crate) enum RunningShellTransactionKind {
     },
     /// Internal Bubblewrap runtime-profile capability probe.
     BubblewrapCapabilityProbe {
-        /// Pending action resumed or failed when the probe settles.
+        /// Pending action that initiated the probe.
         action_id: String,
+        /// Every turn/action pair awaiting this exact probe, including the
+        /// initiating action. Each terminal probe path settles every waiter.
+        waiters: Vec<(String, String)>,
         /// Exact capability identity captured before pane dispatch.
         cache_key: crate::security::sandbox::BubblewrapCapabilityCacheKey,
         /// Exact deterministic probe plan whose output must be validated.

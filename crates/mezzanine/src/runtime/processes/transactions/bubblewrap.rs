@@ -70,20 +70,29 @@ impl RuntimeSessionService {
         {
             return Ok(true);
         }
-        if self
-            .process
-            .running_shell_transactions
-            .values()
-            .any(|transaction| {
-                matches!(
-                    &transaction.kind,
-                    RunningShellTransactionKind::BubblewrapCapabilityProbe {
-                        cache_key: pending,
-                        ..
-                    } if pending == &cache_key
-                )
-            })
+        if let Some(transaction) =
+            self.process
+                .running_shell_transactions
+                .values_mut()
+                .find(|transaction| {
+                    matches!(
+                        &transaction.kind,
+                        RunningShellTransactionKind::BubblewrapCapabilityProbe {
+                            cache_key: pending,
+                            ..
+                        } if pending == &cache_key
+                    )
+                })
         {
+            let RunningShellTransactionKind::BubblewrapCapabilityProbe { waiters, .. } =
+                &mut transaction.kind
+            else {
+                return Ok(false);
+            };
+            let waiter = (turn.turn_id.clone(), action_id.to_string());
+            if !waiters.contains(&waiter) {
+                waiters.push(waiter);
+            }
             return Ok(false);
         }
 
@@ -124,6 +133,7 @@ impl RuntimeSessionService {
                 turn_id: turn.turn_id.clone(),
                 kind: RunningShellTransactionKind::BubblewrapCapabilityProbe {
                     action_id: action_id.to_string(),
+                    waiters: vec![(turn.turn_id.clone(), action_id.to_string())],
                     cache_key,
                     probe_plan,
                 },
@@ -170,6 +180,7 @@ impl RuntimeSessionService {
     ) -> Result<usize> {
         let RunningShellTransactionKind::BubblewrapCapabilityProbe {
             action_id: _,
+            waiters,
             cache_key,
             probe_plan,
         } = transaction.kind.clone()
@@ -214,7 +225,13 @@ impl RuntimeSessionService {
                         runtime_pane_readiness_state_name(previous)
                     ),
                 )?;
-                let _ = self.dispatch_stored_running_shell_actions(&transaction.turn_id)?;
+                for turn_id in waiters
+                    .into_iter()
+                    .map(|(turn_id, _)| turn_id)
+                    .collect::<std::collections::BTreeSet<_>>()
+                {
+                    let _ = self.dispatch_stored_running_shell_actions(&turn_id)?;
+                }
                 Ok(1)
             }
             Ok(_) => {
@@ -275,7 +292,8 @@ impl RuntimeSessionService {
         timed_out: bool,
     ) -> Result<()> {
         let RunningShellTransactionKind::BubblewrapCapabilityProbe {
-            action_id,
+            action_id: _,
+            waiters,
             cache_key,
             ..
         } = transaction.kind.clone()
@@ -301,14 +319,6 @@ impl RuntimeSessionService {
                 if degraded { "degraded" } else { "ready" }
             ),
         )?;
-        if self.offer_sandbox_pre_payload_fallback_approval(
-            marker,
-            &transaction.turn_id,
-            &action_id,
-            code,
-        )? {
-            return Ok(());
-        }
         let terminal_observation = serde_json::json!({
             "source": "pty",
             "stream": "pty_combined",
@@ -319,23 +329,35 @@ impl RuntimeSessionService {
             "boundary_state": "bubblewrap-capability-probe-failed",
             "output_truncated": transaction.observed_output_truncated
         });
-        let _ = self.fail_running_shell_transaction_action(
-            &transaction,
-            marker,
-            RuntimeShellTransactionActionFailure {
-                action_id,
-                status: if timed_out {
-                    ActionStatus::TimedOut
-                } else {
-                    ActionStatus::Failed
+        for (turn_id, action_id) in waiters {
+            let mut waiter_transaction = transaction.clone();
+            waiter_transaction.turn_id = turn_id;
+            if self.offer_sandbox_pre_payload_fallback_approval(
+                marker,
+                &waiter_transaction.turn_id,
+                &action_id,
+                code,
+            )? {
+                continue;
+            }
+            let _ = self.fail_running_shell_transaction_action(
+                &waiter_transaction,
+                marker,
+                RuntimeShellTransactionActionFailure {
+                    action_id,
+                    status: if timed_out {
+                        ActionStatus::TimedOut
+                    } else {
+                        ActionStatus::Failed
+                    },
+                    code: code.to_string(),
+                    message: message.to_string(),
+                    sent_to_pane: false,
+                    terminal_observation: terminal_observation.clone(),
+                    trace_reason: code.to_string(),
                 },
-                code: code.to_string(),
-                message: message.to_string(),
-                sent_to_pane: false,
-                terminal_observation,
-                trace_reason: code.to_string(),
-            },
-        )?;
+            )?;
+        }
         Ok(())
     }
 }

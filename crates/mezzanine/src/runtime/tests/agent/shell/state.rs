@@ -430,6 +430,49 @@ fn sandbox_fallback_execution_service() -> (RuntimeSessionService, String, Strin
     (service, turn.turn_id, action_id)
 }
 
+/// Adds one additional sandbox-first shell action to a running test turn so a
+/// shared capability probe can exercise terminal settlement for every waiter.
+fn add_sandbox_fallback_probe_waiter(
+    service: &mut RuntimeSessionService,
+    turn_id: &str,
+    action_id: &str,
+) {
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    let mut action = service
+        .agent_turn_executions()
+        .get(turn_id)
+        .and_then(|execution| execution.response.action_batch.as_ref())
+        .and_then(|batch| batch.actions.first())
+        .cloned()
+        .unwrap();
+    action.id = action_id.to_string();
+    let mut result = mez_agent::ActionResult::running(
+        &turn,
+        &action,
+        vec!["local action accepted for sandbox-first dispatch".to_string()],
+        None,
+    );
+    result.permission_evaluation = Some(Box::new(sandbox_fallback_prompt_evaluation()));
+    let execution = service
+        .agent_turn_executions_mut()
+        .get_mut(turn_id)
+        .unwrap();
+    execution
+        .response
+        .action_batch
+        .as_mut()
+        .unwrap()
+        .actions
+        .push(action);
+    execution.action_results.push(result);
+}
+
 /// Primes one sandbox-first action through a successful capability probe so
 /// workload preparation can exercise typed compiler failures without running
 /// a real Bubblewrap process.
@@ -919,7 +962,8 @@ fn runtime_bubblewrap_probe_failure_allows_later_reprobe() {
     );
 }
 
-/// Verifies concurrent waiters share one exact in-flight capability probe.
+/// Verifies concurrent waiters share one exact in-flight capability probe and
+/// may both continue once that probe has populated the capability cache.
 #[test]
 fn runtime_bubblewrap_probe_deduplicates_in_flight_requests() {
     let mut service = bubblewrap_probe_service();
@@ -936,6 +980,145 @@ fn runtime_bubblewrap_probe_deduplicates_in_flight_requests() {
             .unwrap()
     );
     assert_eq!(service.running_shell_transactions_for_tests().len(), 1);
+    let waiters = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find_map(|transaction| match &transaction.kind {
+            RunningShellTransactionKind::BubblewrapCapabilityProbe { waiters, .. } => {
+                Some(waiters.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        waiters,
+        vec![
+            ("path-resolution-turn".to_string(), "action-1".to_string()),
+            ("path-resolution-turn".to_string(), "action-2".to_string()),
+        ]
+    );
+    let (marker, mut transaction) = take_bubblewrap_probe_transaction(&mut service);
+    let RunningShellTransactionKind::BubblewrapCapabilityProbe { probe_plan, .. } =
+        &transaction.kind
+    else {
+        unreachable!();
+    };
+    transaction.observed_output_preview = probe_plan.expected_stdout.to_string();
+    service
+        .observe_bubblewrap_capability_probe_transaction_end(&marker, transaction, 0)
+        .unwrap();
+    assert!(
+        service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-1")
+            .unwrap()
+    );
+    assert!(
+        service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-2")
+            .unwrap()
+    );
+}
+
+/// Verifies a failed shared capability probe settles every waiting action
+/// rather than leaving later actions in the running state indefinitely.
+#[test]
+fn runtime_bubblewrap_probe_failure_settles_all_waiters() {
+    let root = temp_root("runtime-bubblewrap-probe-failure-waiters");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+    add_sandbox_fallback_probe_waiter(&mut service, &turn_id, "second-waiter");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, &action_id)
+            .unwrap()
+    );
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "second-waiter")
+            .unwrap()
+    );
+    let (marker, transaction) = take_bubblewrap_probe_transaction(&mut service);
+    service
+        .fail_bubblewrap_capability_probe_transaction(
+            &marker,
+            transaction,
+            "bubblewrap_probe_failed",
+            "probe failed",
+            false,
+            false,
+        )
+        .unwrap();
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert!(
+        execution
+            .action_results
+            .iter()
+            .all(|result| result.status != ActionStatus::Running)
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a timed-out shared capability probe settles every waiting action
+/// rather than leaving later actions in the running state indefinitely.
+#[test]
+fn runtime_bubblewrap_probe_timeout_settles_all_waiters() {
+    let root = temp_root("runtime-bubblewrap-probe-timeout-waiters");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+    add_sandbox_fallback_probe_waiter(&mut service, &turn_id, "second-waiter");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, &action_id)
+            .unwrap()
+    );
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "second-waiter")
+            .unwrap()
+    );
+    let (marker, transaction) = take_bubblewrap_probe_transaction(&mut service);
+    service
+        .fail_bubblewrap_capability_probe_transaction(
+            &marker,
+            transaction,
+            "bubblewrap_probe_timeout",
+            "probe timed out",
+            true,
+            true,
+        )
+        .unwrap();
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert!(
+        execution
+            .action_results
+            .iter()
+            .all(|result| result.status != ActionStatus::Running)
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Verifies a successful probe remains cached and suppresses later probes for
