@@ -107,7 +107,11 @@ impl RuntimeSessionService {
 
     /// Applies one input chunk to a retained record-browser overlay, when one
     /// is active.
-    fn apply_primary_record_browser_overlay_input(&mut self, input: &[u8]) -> Result<Option<bool>> {
+    fn apply_primary_record_browser_overlay_input(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        input: &[u8],
+    ) -> Result<Option<bool>> {
         let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
         let prose_width = terminal_width
             .min(self.presentation.settings.terminal_agent_wrap_column_cap)
@@ -122,6 +126,64 @@ impl RuntimeSessionService {
             return self
                 .apply_primary_record_browser_prompt_input(input)
                 .map(Some);
+        }
+        if matches!(
+            record_browser.source,
+            Some(RuntimeRecordBrowserOverlaySource::Approvals)
+        ) && matches!(input, b"a" | b"d")
+        {
+            let active_index = overlay
+                .active_selection_index
+                .unwrap_or_else(|| record_browser.browser.active_index());
+            let mut selected = record_browser.browser.clone();
+            selected.set_active_index(active_index);
+            let Some(approval_id) = selected.active_record_id().map(str::to_string) else {
+                return Ok(Some(false));
+            };
+            let decision = if input == b"a" {
+                "approve"
+            } else {
+                "disapprove"
+            };
+            let scope = if input == b"a" {
+                r#", "scope":{"persistence":"once"}"#
+            } else {
+                ""
+            };
+            let request = format!(
+                r#"{{"jsonrpc":"2.0","id":"approval-browser","method":"approval/decide","params":{{"approval_id":"{}","decision":"{}"{},"idempotency_key":"approval-browser-{}-{}"}}}}"#,
+                json_escape(&approval_id),
+                decision,
+                scope,
+                json_escape(&approval_id),
+                current_unix_seconds()
+            );
+            let response = self.dispatch_runtime_control_body(&request, primary_client_id);
+            let error = serde_json::from_str::<serde_json::Value>(&response)
+                .ok()
+                .and_then(|value| value.get("error").cloned())
+                .and_then(|error| {
+                    error
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                });
+            let mut browser = self.approval_record_browser()?;
+            browser.set_active_index(active_index);
+            browser.set_error(error);
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(None);
+            };
+            record_browser.browser = browser;
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
         }
         if input == b"a" {
             let source = record_browser.source.clone();
@@ -444,7 +506,8 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         if overlay.search_input.is_none()
-            && let Some(changed) = self.apply_primary_record_browser_overlay_input(input)?
+            && let Some(changed) =
+                self.apply_primary_record_browser_overlay_input(primary_client_id, input)?
         {
             return Ok(changed);
         }

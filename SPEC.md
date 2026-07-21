@@ -5444,7 +5444,8 @@ The baseline command capabilities are:
   effect-type names.
 - `/permissions`: Inspect and change the active permission preset and approval
   policy.
-- `/approvals`: Alias for `/permissions`.
+- `/show-approvals`: Browse pending approvals for the live session. It MAY
+  accept one approval id to open that request directly.
 - `/approval`: Inspect or set the session approval mode. It MUST accept `ask`,
   `auto-allow`, or `full-access`.
 - `/directive`: Inspect or set a pane-local session directive that is appended
@@ -5581,6 +5582,12 @@ The baseline command capabilities are:
   records to open, preserve resolved records for history, and support an
   optional body for the stable description and optional mutable notes for
   progress, handoff context, and next steps.
+- `/show-approvals`: Browse all pending blocked approvals in the live session,
+  ordered deterministically. Its list MUST show pane id, requesting agent id,
+  action kind, and the full actionable summary with exactly one selectable
+  stable-id link per request. It MUST provide detail and empty states, preserve
+  generic `/` search, use `a` to approve the selected request once, and use `d`
+  to deny it.
 - `/show-context`: Browse durable transcript entries for the current pane conversation
   in transcript order. It MUST support arrow-key selection, `Enter` for entry
   details, `/` search, and `d` to delete the selected entry from durable context.
@@ -5686,11 +5693,20 @@ actions that are now allowed by the active policy MUST be decided and resumed
 through the normal blocked-action resume path rather than remaining in
 `waiting_approval`.
 
-The `/approve` command MUST route decisions through the same approval policy,
-hook, audit, persistent-rule, and blocked-action resume machinery as the
-`approval/decide` control method. Pending approval requests visible in an agent
-pane MUST clearly log the approval id, requested action, and the corresponding
-`/approve` command before the action waits for the user.
+The `/show-approvals` browser MUST route approve-once and deny decisions through
+the `approval/decide` control method. After each decision it MUST refresh the
+pending rows in place, retain the selected stable id when it remains present,
+and otherwise select a valid neighboring row without transferring the decision
+to that row. A stale or concurrently decided id MUST surface an in-place error
+and MUST NOT act on any other request. Approval-browser decision keys MUST NOT
+intercept input while pager search or another browser input is active.
+
+The `/approve` command MUST remain pane-local and MUST route decisions through
+the same approval policy, hook, audit, persistent-rule, and blocked-action
+resume machinery as the `approval/decide` control method. Pending approval
+requests visible in an agent pane MUST clearly log the approval id, requested
+action, and the corresponding `/approve` command before the action waits for
+the user.
 
 The `/trust` command MUST route decisions through the same project trust,
 configuration reload, lifecycle event, and audit machinery as the

@@ -22,6 +22,72 @@ use std::{fs, path::PathBuf};
 const DEFAULT_SHOW_RECORD_LIMIT: usize = 100;
 
 impl RuntimeSessionService {
+    /// Executes `/show-approvals` by projecting the live pending queue into the
+    /// shared retained record browser.
+    pub(super) fn execute_agent_shell_show_approvals_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let slash = parse_slash_command(input)?.ok_or_else(|| {
+            MezError::invalid_args("show-approvals command must be a slash command")
+        })?;
+        let args = slash.args.split_whitespace().collect::<Vec<_>>();
+        if args.len() > 1 {
+            return Err(MezError::invalid_args(
+                "show-approvals accepts at most one approval id",
+            ));
+        }
+        let mut browser = self.approval_record_browser()?;
+        if let Some(approval_id) = args.first() {
+            if !browser.set_active_record_id(approval_id) {
+                return Err(MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "pending approval was not found",
+                ));
+            }
+            browser.apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
+        }
+        let page = browser.render_page();
+        self.register_pending_record_browser_overlay(
+            pane_id,
+            "show-approvals",
+            browser,
+            Some(RuntimeRecordBrowserOverlaySource::Approvals),
+        );
+        Ok(AgentShellCommandOutcome::Display {
+            command: "show-approvals".to_string(),
+            body: page.raw_markdown,
+        })
+    }
+
+    /// Builds a deterministic session-wide browser for pending approvals.
+    pub(crate) fn approval_record_browser(&self) -> Result<RecordBrowser> {
+        let mut approvals = self.blocked_approvals().pending();
+        approvals.sort_by(|left, right| {
+            left.created_at_unix_seconds
+                .cmp(&right.created_at_unix_seconds)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        let mut browser = RecordBrowser::new(
+            "Pending approvals",
+            approvals.into_iter().map(approval_browser_record).collect(),
+            Vec::new(),
+        )?;
+        browser.set_table_columns(vec![
+            "Pane".to_string(),
+            "Agent".to_string(),
+            "Action".to_string(),
+            "Summary".to_string(),
+        ]);
+        browser.set_help(
+            Some("**Keys:** `Enter` open · `a` approve once · `d` deny · `/` search".to_string()),
+            Some("**Keys:** `Esc` back · `a` approve once · `d` deny · `/` search".to_string()),
+        );
+        browser.set_empty_message(Some("No pending approvals.".to_string()));
+        Ok(browser)
+    }
+
     /// Executes `/show-context` for the active pane conversation.
     pub(super) fn execute_agent_shell_show_context_command(
         &mut self,
@@ -111,6 +177,11 @@ impl RuntimeSessionService {
         active_index: usize,
     ) -> Result<RecordBrowser> {
         let mut browser = match source {
+            RuntimeRecordBrowserOverlaySource::Approvals => {
+                return Err(MezError::invalid_state(
+                    "approval browser records cannot be deleted",
+                ));
+            }
             RuntimeRecordBrowserOverlaySource::Context {
                 conversation_id,
                 pane_id,
@@ -431,6 +502,7 @@ impl RuntimeSessionService {
         source: &RuntimeRecordBrowserOverlaySource,
     ) -> Result<RecordBrowser> {
         match source {
+            RuntimeRecordBrowserOverlaySource::Approvals => self.approval_record_browser(),
             RuntimeRecordBrowserOverlaySource::Context {
                 conversation_id,
                 pane_id,
@@ -523,6 +595,7 @@ impl RuntimeSessionService {
         source: &RuntimeRecordBrowserOverlaySource,
     ) -> RuntimeRecordBrowserOverlaySource {
         match source {
+            RuntimeRecordBrowserOverlaySource::Approvals => source.clone(),
             RuntimeRecordBrowserOverlaySource::Context { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
@@ -574,6 +647,7 @@ impl RuntimeSessionService {
     ) -> Result<RuntimeRecordBrowserOverlaySource> {
         let value = value.trim();
         match source {
+            RuntimeRecordBrowserOverlaySource::Approvals => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Context { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
@@ -663,6 +737,7 @@ fn set_record_browser_scope_indicator(
     source: &RuntimeRecordBrowserOverlaySource,
 ) {
     let indicator = match source {
+        RuntimeRecordBrowserOverlaySource::Approvals => "live session".to_string(),
         RuntimeRecordBrowserOverlaySource::Context { pane_id, .. } => {
             format!("current pane {pane_id}")
         }
@@ -675,6 +750,51 @@ fn set_record_browser_scope_indicator(
             .unwrap_or_else(|| "all scopes".to_string()),
     };
     browser.set_scope_indicator(Some(indicator));
+}
+
+/// Projects one pending approval into a single-link browser record.
+fn approval_browser_record(
+    approval: &mez_agent::permissions::BlockedApprovalRequest,
+) -> RecordBrowserRecord {
+    let metadata = vec![
+        ("Pane".to_string(), approval.pane_id.clone()),
+        ("Agent".to_string(), approval.requesting_agent_id.clone()),
+        ("Action".to_string(), approval.action_kind.clone()),
+        ("Summary".to_string(), approval.action_summary.clone()),
+        (
+            "Created".to_string(),
+            approval
+                .created_at_unix_seconds
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        ),
+    ];
+    let mut markdown = vec![format!("**Summary:** {}", approval.action_summary)];
+    if !approval.declared_effects.is_empty() {
+        markdown.push(format!(
+            "**Declared effects:** {}",
+            approval.declared_effects.join(", ")
+        ));
+    }
+    if !approval.matched_rules.is_empty() {
+        markdown.push(format!(
+            "**Matched rules:** {}",
+            approval.matched_rules.join(", ")
+        ));
+    }
+    if !approval.parent_agent_chain.is_empty() {
+        markdown.push(format!(
+            "**Parent agent chain:** {}",
+            approval.parent_agent_chain.join(" → ")
+        ));
+    }
+    RecordBrowserRecord {
+        id: approval.id.clone(),
+        open_command: Some(format!("/show-approvals {}", approval.id)),
+        title: format!("{} — {}", approval.action_kind, approval.action_summary),
+        metadata,
+        markdown: markdown.join("\n\n"),
+    }
 }
 
 #[derive(Debug, Default)]

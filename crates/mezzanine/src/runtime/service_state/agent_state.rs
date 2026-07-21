@@ -62,6 +62,8 @@ pub(crate) type RuntimeRecordBrowserOverlayFrame =
 /// Query context retained for one backend-specific record-browser overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeRecordBrowserOverlaySource {
+    /// Live session-wide pending approval queue.
+    Approvals,
     /// Durable transcript backing the current pane's context browser.
     Context {
         /// Conversation whose entries are displayed and may be deleted.

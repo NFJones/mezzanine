@@ -258,6 +258,10 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "modified-file listing requires the live pane runtime".to_string(),
         },
+        "show-approvals" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "pending approval browsing requires the live runtime".to_string(),
+        },
         "copy-context" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "model request context dumps require the live running turn".to_string(),

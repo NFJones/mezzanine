@@ -71,14 +71,10 @@ impl fmt::Display for SlashCommandParseError {
 pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
     vec![
         slash("help", &[], SlashCommandEffect::ReadOnly, true),
-        slash(
-            "permissions",
-            &["approvals"],
-            SlashCommandEffect::PolicyMutation,
-            true,
-        ),
+        slash("permissions", &[], SlashCommandEffect::PolicyMutation, true),
         slash("approval", &[], SlashCommandEffect::PolicyMutation, true),
         slash("approve", &[], SlashCommandEffect::PolicyMutation, true),
+        slash("show-approvals", &[], SlashCommandEffect::ReadOnly, true),
         slash("trust", &[], SlashCommandEffect::PolicyMutation, true),
         slash("list-sessions", &[], SlashCommandEffect::ReadOnly, true),
         slash("list-macros", &[], SlashCommandEffect::ReadOnly, true),
@@ -208,17 +204,21 @@ mod tests {
     };
 
     #[test]
-    /// Verifies aliases normalize to canonical commands while preserving
-    /// arguments and effect metadata used by product execution adapters.
-    fn slash_parser_normalizes_aliases_and_effects() {
-        let invocation = parse_slash_command(" /approvals add git status ")
+    /// Verifies the pending-approval browser is a canonical read-only command
+    /// while the former permissions alias is rejected.
+    fn slash_parser_exposes_show_approvals_and_rejects_former_alias() {
+        let invocation = parse_slash_command(" /show-approvals ba1 ")
             .unwrap()
             .unwrap();
 
-        assert_eq!(invocation.name, "permissions");
-        assert_eq!(invocation.args, "add git status");
-        assert_eq!(invocation.effect, SlashCommandEffect::PolicyMutation);
+        assert_eq!(invocation.name, "show-approvals");
+        assert_eq!(invocation.args, "ba1");
+        assert_eq!(invocation.effect, SlashCommandEffect::ReadOnly);
         assert!(invocation.queueable_while_running);
+        assert_eq!(
+            parse_slash_command("/approvals").unwrap_err(),
+            SlashCommandParseError::UnknownCommand
+        );
     }
 
     #[test]

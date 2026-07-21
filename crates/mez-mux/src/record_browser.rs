@@ -151,6 +151,10 @@ pub struct RecordBrowser {
     scope_indicator: Option<String>,
     records: Vec<RecordBrowserRecord>,
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
+    table_columns: Vec<String>,
+    list_help: Option<String>,
+    detail_help: Option<String>,
+    empty_message: Option<String>,
     deletion_enabled: bool,
     active_index: usize,
     scroll_offset: usize,
@@ -187,6 +191,10 @@ impl RecordBrowser {
             scope_indicator: None,
             records,
             kind_filter_choices,
+            table_columns: Vec::new(),
+            list_help: None,
+            detail_help: None,
+            empty_message: None,
             deletion_enabled: false,
             active_index: 0,
             scroll_offset: 0,
@@ -204,6 +212,25 @@ impl RecordBrowser {
     /// Replaces the scope label rendered near the browser title.
     pub fn set_scope_indicator(&mut self, scope_indicator: Option<String>) {
         self.scope_indicator = scope_indicator.filter(|value| !value.trim().is_empty());
+    }
+
+    /// Selects metadata fields rendered as columns in the list view.
+    pub fn set_table_columns(&mut self, columns: Vec<String>) {
+        self.table_columns = columns
+            .into_iter()
+            .filter(|column| !column.trim().is_empty())
+            .collect();
+    }
+
+    /// Replaces the default list and detail key guidance.
+    pub fn set_help(&mut self, list_help: Option<String>, detail_help: Option<String>) {
+        self.list_help = list_help.filter(|value| !value.trim().is_empty());
+        self.detail_help = detail_help.filter(|value| !value.trim().is_empty());
+    }
+
+    /// Replaces the default empty-list message.
+    pub fn set_empty_message(&mut self, empty_message: Option<String>) {
+        self.empty_message = empty_message.filter(|value| !value.trim().is_empty());
     }
 
     /// Returns the currently active modal prompt, if one is open.
@@ -230,6 +257,13 @@ impl RecordBrowser {
     /// Returns the selected row index retained by the list view.
     pub fn active_index(&self) -> usize {
         self.active_index
+    }
+
+    /// Returns the stable id of the active list record.
+    pub fn active_record_id(&self) -> Option<&str> {
+        self.records
+            .get(self.active_index)
+            .map(|record| record.id.as_str())
     }
 
     /// Selects one bounded list record by index.
@@ -401,13 +435,7 @@ impl RecordBrowser {
     }
 
     fn render_list_page(&self) -> RecordBrowserPage {
-        let raw_markdown = list_markdown(
-            &self.title,
-            self.scope_indicator.as_deref(),
-            &self.records,
-            self.deletion_enabled,
-            !self.kind_filter_choices.is_empty(),
-        );
+        let raw_markdown = list_markdown(self);
         let mut markdown = String::new();
         if let Some(error) = &self.error {
             markdown.push_str(&format!("Error: {error}\n\n"));
@@ -428,6 +456,7 @@ impl RecordBrowser {
         let raw_markdown = detail_markdown(
             record,
             self.scope_indicator.as_deref(),
+            self.detail_help.as_deref(),
             self.deletion_enabled,
             !self.kind_filter_choices.is_empty(),
         );
@@ -541,31 +570,70 @@ fn filter_field_name(field: RecordBrowserFilterField) -> &'static str {
     }
 }
 
-fn list_markdown(
-    title: &str,
-    scope_indicator: Option<&str>,
-    records: &[RecordBrowserRecord],
-    deletion_enabled: bool,
-    filter_controls_enabled: bool,
-) -> String {
-    let mut lines = vec![format!("# {title}"), String::new()];
-    if let Some(scope_indicator) = scope_indicator {
+fn list_markdown(browser: &RecordBrowser) -> String {
+    let mut lines = vec![format!("# {}", browser.title), String::new()];
+    if let Some(scope_indicator) = browser.scope_indicator.as_deref() {
         lines.push(format!("**Scope:** {scope_indicator}"));
         lines.push(String::new());
     }
-    lines.push(if deletion_enabled && !filter_controls_enabled {
+    lines.push(browser.list_help.as_deref().map(str::to_string).unwrap_or_else(|| if browser.deletion_enabled && browser.kind_filter_choices.is_empty() {
         "**Keys:** `Enter` open · `d` delete · `/` search · `s` save".to_string()
-    } else if deletion_enabled {
+    } else if browser.deletion_enabled {
         "**Keys:** `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save"
             .to_string()
     } else {
         "**Keys:** `a` all/default scope · `k` kind · `p` project · `x` text · `s` save".to_string()
-    });
+    }));
     lines.push(String::new());
-    if records.is_empty() {
-        lines.push("No records found.".to_string());
+    if browser.records.is_empty() {
+        lines.push(
+            browser
+                .empty_message
+                .as_deref()
+                .unwrap_or("No records found.")
+                .to_string(),
+        );
+    } else if !browser.table_columns.is_empty() {
+        lines.push(format!(
+            "| Approval | {} |",
+            browser.table_columns.join(" | ")
+        ));
+        lines.push(format!(
+            "| --- | {} |",
+            browser
+                .table_columns
+                .iter()
+                .map(|_| "---")
+                .collect::<Vec<_>>()
+                .join(" | ")
+        ));
+        for record in &browser.records {
+            let id = if let Some(command) = record.open_command.as_deref() {
+                format!(
+                    "[`{}`](mez-agent:{})",
+                    escape_markdown_link_label(&record.id),
+                    encode_mez_agent_command(command)
+                )
+            } else {
+                format!("**{}**", escape_markdown_table(&record.id))
+            };
+            let values = browser
+                .table_columns
+                .iter()
+                .map(|column| {
+                    record
+                        .metadata
+                        .iter()
+                        .find(|(key, _)| key == column)
+                        .map(|(_, value)| escape_markdown_table(value))
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            lines.push(format!("| {id} | {values} |"));
+        }
     } else {
-        for record in records {
+        for record in &browser.records {
             let label = list_record_label(record);
             if let Some(command) = record.open_command.as_deref() {
                 lines.push(format!(
@@ -584,6 +652,7 @@ fn list_markdown(
 fn detail_markdown(
     record: &RecordBrowserRecord,
     scope_indicator: Option<&str>,
+    custom_help: Option<&str>,
     deletion_enabled: bool,
     filter_controls_enabled: bool,
 ) -> String {
@@ -592,13 +661,15 @@ fn detail_markdown(
         lines.push(format!("**Scope:** {scope_indicator}"));
         lines.push(String::new());
     }
-    lines.push(if deletion_enabled && !filter_controls_enabled {
-        "**Keys:** `Esc` back · `d` delete · `s` save".to_string()
-    } else if deletion_enabled {
-        "**Keys:** `a` all/default scope · `Esc` back · `d` delete · `s` save".to_string()
-    } else {
-        "**Keys:** `a` all/default scope · `Esc` back · `s` save".to_string()
-    });
+    lines.push(custom_help.map(str::to_string).unwrap_or_else(|| {
+        if deletion_enabled && !filter_controls_enabled {
+            "**Keys:** `Esc` back · `d` delete · `s` save".to_string()
+        } else if deletion_enabled {
+            "**Keys:** `a` all/default scope · `Esc` back · `d` delete · `s` save".to_string()
+        } else {
+            "**Keys:** `a` all/default scope · `Esc` back · `s` save".to_string()
+        }
+    }));
     lines.push(String::new());
     lines.push(record.title.clone());
     lines.push(String::new());
@@ -645,7 +716,14 @@ fn list_metadata_key_is_prominent(key: &str) -> bool {
 }
 
 fn escape_markdown_table(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('|', "\\|")
+    value
+        .replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
+        .replace('|', "\\|")
+        .replace(['\r', '\n'], " ")
 }
 
 fn escape_markdown_link_label(value: &str) -> String {
@@ -858,6 +936,38 @@ mod tests {
             }
             other => panic!("expected save outcome, got {other:?}"),
         }
+    }
+
+    /// Verifies table rendering preserves exactly one selectable record link
+    /// when untrusted metadata contains Markdown link syntax and line breaks.
+    #[test]
+    fn record_browser_table_escapes_untrusted_metadata_links() {
+        let mut browser = RecordBrowser::new(
+            "Approvals",
+            vec![RecordBrowserRecord {
+                id: "ba1".to_string(),
+                open_command: Some("/show-approvals ba1".to_string()),
+                title: "Shell command".to_string(),
+                metadata: vec![(
+                    "Summary".to_string(),
+                    "run [neighbor](mez-agent:%2Fapprove) | now\nthen exit".to_string(),
+                )],
+                markdown: "Detail body".to_string(),
+            }],
+            Vec::new(),
+        )
+        .unwrap();
+        browser.set_table_columns(vec!["Summary".to_string()]);
+
+        let page = browser.render_page();
+
+        assert_eq!(page.raw_markdown.matches("](mez-agent:").count(), 1);
+        assert!(page.raw_markdown.contains("\\|"), "{}", page.raw_markdown);
+        assert!(
+            !page.raw_markdown.contains("now\nthen"),
+            "{}",
+            page.raw_markdown
+        );
     }
 
     /// Verifies destructive intent uses the highlighted stable record id and

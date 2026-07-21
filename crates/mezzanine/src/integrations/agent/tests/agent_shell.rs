@@ -87,6 +87,11 @@ fn agent_shell_executes_builtin_slash_command_effects() {
         body.contains("browse project issue records and open issue details."),
         "{body}"
     );
+    assert!(body.contains("| `/show-approvals` |"), "{body}");
+    assert!(
+        body.contains("browse and decide pending approvals for the live session."),
+        "{body}"
+    );
     assert!(!body.contains("run the slash command."), "{body}");
     assert!(body.contains("| Copy and diagnostics |  |  |"), "{body}");
     assert!(body.contains("| Configuration |  |  |"), "{body}");
@@ -430,7 +435,7 @@ fn agent_shell_permissions_command_lists_injected_policy() {
     let summary = policy.agent_shell_summary();
 
     let display =
-        execute_agent_shell_command_with_permissions(&mut store, "%1", "/approvals", &summary)
+        execute_agent_shell_command_with_permissions(&mut store, "%1", "/permissions", &summary)
             .unwrap()
             .unwrap();
 

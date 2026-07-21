@@ -569,6 +569,239 @@ fn apply_record_browser_input(
         .unwrap();
 }
 
+/// Builds one pending approval fixture with the fields rendered by the live
+/// approval browser and consumed by the canonical decision boundary.
+fn pending_approval_request(
+    requesting_agent_id: &str,
+    pane_id: &str,
+    action_summary: &str,
+) -> BlockedApprovalRequest {
+    BlockedApprovalRequest {
+        id: String::new(),
+        requesting_agent_id: requesting_agent_id.to_string(),
+        pane_id: pane_id.to_string(),
+        parent_agent_chain: vec![requesting_agent_id.to_string()],
+        action_kind: "shell_command".to_string(),
+        action_summary: action_summary.to_string(),
+        declared_effects: vec!["process_control".to_string()],
+        matched_rules: vec!["default.prompt".to_string()],
+        read_scopes: vec![".".to_string()],
+        write_scopes: Vec::new(),
+        cooperation_mode: None,
+        created_at_unix_seconds: None,
+        decided_at_unix_seconds: None,
+        decided_by_client_id: None,
+        state: mez_agent::permissions::BlockedApprovalState::Pending,
+        decision: None,
+        redirect_instruction: None,
+    }
+}
+
+/// Verifies `/show-approvals` projects the live cross-agent queue and routes
+/// approve-once and deny hotkeys through the canonical decision boundary.
+///
+/// The selected stable approval id must be decided, the neighboring request
+/// must remain pending, and each decision must refresh the retained pager
+/// without forwarding input to the pane.
+#[test]
+fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let first_id = service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-first",
+            &pane_id,
+            "cargo check",
+        ))
+        .unwrap();
+    let second_id = service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-second",
+            &pane_id,
+            "cargo test --all-targets",
+        ))
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-approvals")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("agent-first"))
+    );
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("agent-second"))
+    );
+    assert_eq!(overlay.selections.len(), 2);
+    let view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(120, 14).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let footer = view.lines.last().cloned().unwrap_or_default();
+    assert!(footer.contains("a: approve once"), "{footer}");
+    assert!(footer.contains("d: deny"), "{footer}");
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+    apply_record_browser_input(&mut service, &primary, b"a");
+
+    assert_eq!(
+        service.blocked_approvals().get(&second_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Approved
+    );
+    assert_eq!(
+        service.blocked_approvals().get(&first_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Pending
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    let browser = &overlay.record_browser.as_ref().unwrap().browser;
+    assert_eq!(browser.active_record_id(), Some(first_id.as_str()));
+    assert_eq!(overlay.selections.len(), 1);
+
+    apply_record_browser_input(&mut service, &primary, b"d");
+
+    assert_eq!(
+        service.blocked_approvals().get(&first_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Disapproved
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("No pending approvals."))
+    );
+    assert!(overlay.selections.is_empty());
+}
+
+/// Verifies approval decision keys remain ordinary search text while the
+/// retained browser search editor is active.
+///
+/// Approval-specific shortcuts must not bypass the generic browser input
+/// precedence or decide a request while the user is entering a query.
+#[test]
+fn runtime_agent_shell_show_approvals_preserves_search_input_precedence() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let approval_id = service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-search",
+            &pane_id,
+            "cargo audit",
+        ))
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-approvals")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    apply_record_browser_input(&mut service, &primary, b"/");
+    apply_record_browser_input(&mut service, &primary, b"a");
+
+    assert_eq!(
+        service.blocked_approvals().get(&approval_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Pending
+    );
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .search_input
+            .as_deref(),
+        Some("a")
+    );
+}
+
+/// Verifies a concurrently settled approval cannot transfer a browser
+/// decision to the row that moves into its former list position.
+///
+/// The stale stable id must be sent through `approval/decide`, its error must
+/// remain visible after refresh, and the neighboring request must stay pending.
+#[test]
+fn runtime_agent_shell_show_approvals_rejects_stale_selected_id() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let stale_id = service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-stale",
+            &pane_id,
+            "cargo check",
+        ))
+        .unwrap();
+    let neighboring_id = service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-neighbor",
+            &pane_id,
+            "cargo test",
+        ))
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-approvals")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    let settle = format!(
+        r#"{{"jsonrpc":"2.0","id":"concurrent","method":"approval/decide","params":{{"approval_id":"{stale_id}","decision":"disapprove","idempotency_key":"concurrent-settlement"}}}}"#
+    );
+    let settle_response = service.dispatch_runtime_control_body(&settle, &primary);
+    assert!(settle_response.contains(r#""result""#), "{settle_response}");
+
+    apply_record_browser_input(&mut service, &primary, b"a");
+
+    assert_eq!(
+        service
+            .blocked_approvals()
+            .get(&neighboring_id)
+            .unwrap()
+            .state,
+        mez_agent::permissions::BlockedApprovalState::Pending
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    let browser = &overlay.record_browser.as_ref().unwrap().browser;
+    assert_eq!(browser.active_record_id(), Some(neighboring_id.as_str()));
+    assert!(
+        overlay.lines.iter().any(|line| line.contains("Error:")),
+        "{overlay:?}"
+    );
+}
+
 /// Verifies the memory record browser deletes its selected durable record and
 /// refreshes the same pager to an empty, valid selection state.
 #[test]

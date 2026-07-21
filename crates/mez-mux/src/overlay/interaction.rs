@@ -119,6 +119,13 @@ pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized>, size: Size) -> Strin
     } else if overlay
         .record_browser
         .as_ref()
+        .is_some_and(|browser| browser.command == "show-approvals")
+    {
+        "esc: back | /: search | enter: open | a: approve once | d: deny | arrows pgup/pgdn"
+            .to_string()
+    } else if overlay
+        .record_browser
+        .as_ref()
         .is_some_and(|browser| browser.browser.deletion_enabled())
     {
         "esc: back | /: search | enter: open | a: all | k/p/x: filter | d: delete | s: save | arrows pgup/pgdn"
