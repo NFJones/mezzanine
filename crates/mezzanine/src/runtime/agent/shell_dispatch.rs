@@ -836,36 +836,40 @@ impl RuntimeSessionService {
             let permission_evaluation = execution.action_results[index]
                 .permission_evaluation
                 .clone();
-            match self.ensure_bubblewrap_path_resolution_for_action(
-                turn,
-                &action.id,
-                permission_evaluation.as_deref(),
-            ) {
-                Ok(true) => {}
-                Ok(false) => break,
-                Err(error) => {
-                    execution.action_results[index] = self.shell_action_runtime_error_result(
-                        turn,
-                        action,
-                        command,
-                        "bubblewrap_path_resolution",
-                        &error,
-                    )?;
-                    continue;
+            let sandbox_bypassed =
+                self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
+            if !sandbox_bypassed {
+                match self.ensure_bubblewrap_path_resolution_for_action(
+                    turn,
+                    &action.id,
+                    permission_evaluation.as_deref(),
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        execution.action_results[index] = self.shell_action_runtime_error_result(
+                            turn,
+                            action,
+                            command,
+                            "bubblewrap_path_resolution",
+                            &error,
+                        )?;
+                        continue;
+                    }
                 }
-            }
-            match self.ensure_bubblewrap_capability_for_action(turn, &action.id) {
-                Ok(true) => {}
-                Ok(false) => break,
-                Err(error) => {
-                    execution.action_results[index] = self.shell_action_runtime_error_result(
-                        turn,
-                        action,
-                        command,
-                        "bubblewrap_capability_probe",
-                        &error,
-                    )?;
-                    continue;
+                match self.ensure_bubblewrap_capability_for_action(turn, &action.id) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        execution.action_results[index] = self.shell_action_runtime_error_result(
+                            turn,
+                            action,
+                            command,
+                            "bubblewrap_capability_probe",
+                            &error,
+                        )?;
+                        continue;
+                    }
                 }
             }
             if let Err(error) = self.dispatch_shell_action_to_pane(
@@ -1072,6 +1076,7 @@ impl RuntimeSessionService {
         stage: &str,
         error: &MezError,
     ) -> Result<ActionResult> {
+        self.clear_sandbox_bypass_for_action(&turn.turn_id, &action.id);
         let error_kind = runtime_mezzanine_error_code(error.kind());
         let error_message = format!("{stage}: {}", error.message());
         let mut result = ActionResult::failed(

@@ -79,6 +79,17 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<Vec<String>> {
+        self.queue_blocked_approvals_for_execution_with_sandbox_bypass(turn, execution, None)
+    }
+
+    /// Queues blocked approvals while optionally granting one exact action an
+    /// unsandboxed retry after the approval is accepted.
+    fn queue_blocked_approvals_for_execution_with_sandbox_bypass(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+        sandbox_bypass_action_id: Option<&str>,
+    ) -> Result<Vec<String>> {
         let mut approval_ids = Vec::new();
         let subagent_scope = self.subagent_scope_declaration_for_turn(turn);
         for result in execution
@@ -96,6 +107,8 @@ impl RuntimeSessionService {
                 BlockedAgentApprovalRef {
                     turn_id: turn.turn_id.clone(),
                     action_id: result.action_id.clone(),
+                    sandbox_bypass_after_approval: sandbox_bypass_action_id
+                        == Some(result.action_id.as_str()),
                 },
             );
             if let Some(approval) = self.blocked_approvals().get(&approval_id).cloned() {
@@ -110,6 +123,137 @@ impl RuntimeSessionService {
             ));
         }
         Ok(approval_ids)
+    }
+
+    /// Converts a trusted pre-payload Bubblewrap failure into one ordinary
+    /// approval for an exact, one-shot unsandboxed retry.
+    pub(crate) fn offer_sandbox_pre_payload_fallback_approval(
+        &mut self,
+        marker: &str,
+        turn_id: &str,
+        action_id: &str,
+        proof: &str,
+    ) -> Result<bool> {
+        let turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("sandbox fallback turn is unavailable"))?;
+        let mut execution = self
+            .agent_turn_executions()
+            .get(turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("sandbox fallback execution is unavailable"))?;
+        let batch = execution.response.action_batch.as_ref().ok_or_else(|| {
+            MezError::invalid_state("sandbox fallback execution has no action batch")
+        })?;
+        let action = batch
+            .actions
+            .iter()
+            .find(|action| action.id == action_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("sandbox fallback action is unavailable"))?;
+        let result_index = execution
+            .action_results
+            .iter()
+            .position(|result| result.action_id == action_id)
+            .ok_or_else(|| MezError::invalid_state("sandbox fallback result is unavailable"))?;
+        if execution.action_results[result_index].status != ActionStatus::Running {
+            return Ok(false);
+        }
+        let Some(evaluation) = execution.action_results[result_index]
+            .permission_evaluation
+            .clone()
+        else {
+            return Ok(false);
+        };
+        if evaluation.decision != RuleDecision::Prompt {
+            return Ok(false);
+        }
+        let plan = local_action_plan(&action)?.ok_or_else(|| {
+            MezError::invalid_state("sandbox fallback action is not shell-backed")
+        })?;
+        let mut blocked = ActionResult::blocked(
+            &turn,
+            &action,
+            vec![
+                "Bubblewrap failed before payload execution was proven".to_string(),
+                "approval is required for one exact unsandboxed retry".to_string(),
+            ],
+            mez_agent::shell_action_structured_content_json(
+                &action,
+                &plan,
+                Some("pane_shell"),
+                true,
+                serde_json::json!({
+                    "state": "pending",
+                    "kind": action.action_type(),
+                    "action_id": action.id.as_str(),
+                    "command": plan.policy_command,
+                    "sandbox_fallback": {
+                        "backend": "bubblewrap",
+                        "reason": "pre_payload_failure",
+                        "proof": proof,
+                        "payload_exec_proven": false,
+                        "partial_effect_warning": false
+                    }
+                }),
+                &evaluation.matched_rule_ids,
+                serde_json::json!({
+                    "source": "runtime",
+                    "marker": marker,
+                    "boundary_state": "bubblewrap-pre-payload-failure",
+                    "payload_exec_proven": false,
+                    "partial_effect_warning": false
+                }),
+            ),
+        );
+        blocked.permission_evaluation = Some(evaluation);
+        execution.action_results[result_index] = blocked;
+        execution.terminal_state = runtime_agent_turn_state_from_action_results(
+            &execution.action_results,
+            execution.final_turn,
+        );
+        if execution.terminal_state != AgentTurnState::Blocked {
+            return Err(MezError::invalid_state(
+                "sandbox fallback approval did not block the agent turn",
+            ));
+        }
+
+        self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
+        let transcript_entries =
+            self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
+        self.queue_blocked_approvals_for_execution_with_sandbox_bypass(
+            &turn,
+            &execution,
+            Some(action_id),
+        )?;
+        self.agent_turn_executions_mut()
+            .insert(turn_id.to_string(), execution.clone());
+        let _ = self.agent.agent_scheduler.block_running(turn_id);
+        self.agent.pending_agent_provider_tasks.remove(turn_id);
+        self.agent_turn_ledger_mut()
+            .finish_turn(turn_id, AgentTurnState::Blocked)?;
+        self.append_agent_trace_turn_transition(
+            &turn,
+            turn.state,
+            AgentTurnState::Blocked,
+            "bubblewrap_pre_payload_fallback_approval",
+        )?;
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"blocked","sandbox_fallback":"pre_payload_failure","marker":"{}","transcript_entries":{}}}"#,
+                json_escape(&turn.pane_id),
+                json_escape(turn_id),
+                json_escape(marker),
+                transcript_entries
+            ),
+        )?;
+        self.start_ready_agent_turns()?;
+        Ok(true)
     }
 
     /// Reconciles pending blocked agent approvals after permission policy changes.
@@ -369,6 +513,9 @@ impl RuntimeSessionService {
         let retained_permission_evaluation = execution.action_results[result_index]
             .permission_evaluation
             .clone();
+        if approval_ref.sandbox_bypass_after_approval {
+            self.grant_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
+        }
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,

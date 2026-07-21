@@ -126,6 +126,16 @@ impl RuntimeSessionService {
         self.process
             .shell_transaction_started_markers
             .remove(marker);
+        self.process
+            .sandboxed_shell_transaction_markers
+            .remove(marker);
+    }
+
+    /// Records that one live agent-action transaction uses Bubblewrap.
+    pub(crate) fn register_sandboxed_shell_transaction_marker(&mut self, marker: &str) {
+        self.process
+            .sandboxed_shell_transaction_markers
+            .insert(marker.to_string());
     }
 
     /// Interrupts a pane after a protocol violation when the process is live.

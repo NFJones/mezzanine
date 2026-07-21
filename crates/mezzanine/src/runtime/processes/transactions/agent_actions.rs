@@ -3,13 +3,13 @@
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, AgentActionPayload, AgentTurnState,
     ApplyPatchTransactionPhase, EventKind, HookEvent, MezError, PaneReadinessState, Result,
-    RunningShellTransactionKind, RuntimeSessionService, apply_patch_transaction_phase,
-    current_unix_millis, decode_shell_output_transport_with_diagnostics, json_escape,
-    local_action_plan, postprocess_shell_action_success_output,
-    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
-    runtime_execution_ready_for_provider_continuation, runtime_post_shell_hook_payload,
-    runtime_running_shell_transaction_kind_name, shell_action_failure_diagnostic,
-    shell_command_result_content,
+    RunningShellTransactionKind, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    apply_patch_transaction_phase, current_unix_millis,
+    decode_shell_output_transport_with_diagnostics, json_escape, local_action_plan,
+    postprocess_shell_action_success_output, runtime_agent_turn_state_from_action_results,
+    runtime_agent_turn_state_name, runtime_execution_ready_for_provider_continuation,
+    runtime_post_shell_hook_payload, runtime_running_shell_transaction_kind_name,
+    shell_action_failure_diagnostic, shell_command_result_content,
 };
 use mez_agent::semantic_patch_planning::{
     APPLY_PATCH_RESULT_MARKER, ApplyPatchFileOutcome, parse_apply_patch_file_outcomes,
@@ -142,6 +142,10 @@ impl RuntimeSessionService {
         else {
             return Ok(0);
         };
+        let sandboxed = self
+            .process
+            .sandboxed_shell_transaction_markers
+            .contains(marker);
         self.clear_shell_transaction_protocol_state(marker);
         if transaction_ref.kind == RunningShellTransactionKind::ReadinessProbe {
             return self.observe_readiness_probe_transaction_end(
@@ -208,6 +212,95 @@ impl RuntimeSessionService {
                 "shell transaction marker identity does not match agent turn",
             ));
         }
+        if sandboxed {
+            let status = if transaction_ref.observed_output_truncated {
+                Err("Bubblewrap status transport was truncated".to_string())
+            } else {
+                mez_agent::decode_shell_status_transport(&transaction_ref.observed_output_preview)
+                    .map_err(|error| error.message().to_string())
+                    .and_then(|status| {
+                        crate::security::sandbox::parse_bubblewrap_status(&status)
+                            .map_err(|error| error.message().to_string())
+                    })
+            };
+            match status {
+                Ok(status) if status.exit_code.is_none() => {
+                    self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+                    if self.offer_sandbox_pre_payload_fallback_approval(
+                        marker,
+                        turn_id,
+                        action_id,
+                        "trusted_status_closed_without_exit_code",
+                    )? {
+                        return Ok(1);
+                    }
+                    return self.fail_running_shell_transaction_action(
+                        &transaction_ref,
+                        marker,
+                        RuntimeShellTransactionActionFailure {
+                            action_id: action_id.clone(),
+                            status: ActionStatus::Failed,
+                            code: "bubblewrap_pre_payload_failure".to_string(),
+                            message: "Bubblewrap failed before payload execution".to_string(),
+                            sent_to_pane: true,
+                            terminal_observation: serde_json::json!({
+                                "source": "bubblewrap_status",
+                                "marker": marker,
+                                "exit_code": null,
+                                "payload_exec_proven": false,
+                                "boundary_state": "bubblewrap-pre-payload-failure"
+                            }),
+                            trace_reason: "bubblewrap_pre_payload_failure".to_string(),
+                        },
+                    );
+                }
+                Ok(status) if status.exit_code != Some(exit_code) => {
+                    return self.fail_running_shell_transaction_action(
+                        &transaction_ref,
+                        marker,
+                        RuntimeShellTransactionActionFailure {
+                            action_id: action_id.clone(),
+                            status: ActionStatus::Failed,
+                            code: "bubblewrap_status_mismatch".to_string(),
+                            message:
+                                "Bubblewrap status exit code contradicts the shell transaction"
+                                    .to_string(),
+                            sent_to_pane: true,
+                            terminal_observation: serde_json::json!({
+                                "source": "bubblewrap_status",
+                                "marker": marker,
+                                "exit_code": exit_code,
+                                "reported_exit_code": status.exit_code,
+                                "boundary_state": "bubblewrap-status-mismatch"
+                            }),
+                            trace_reason: "bubblewrap_status_mismatch".to_string(),
+                        },
+                    );
+                }
+                Err(message) => {
+                    return self.fail_running_shell_transaction_action(
+                        &transaction_ref,
+                        marker,
+                        RuntimeShellTransactionActionFailure {
+                            action_id: action_id.clone(),
+                            status: ActionStatus::Failed,
+                            code: "bubblewrap_status_invalid".to_string(),
+                            message: format!("Bubblewrap status was invalid: {message}"),
+                            sent_to_pane: true,
+                            terminal_observation: serde_json::json!({
+                                "source": "bubblewrap_status",
+                                "marker": marker,
+                                "exit_code": exit_code,
+                                "boundary_state": "bubblewrap-status-invalid",
+                                "status_error": message
+                            }),
+                            trace_reason: "bubblewrap_status_invalid".to_string(),
+                        },
+                    );
+                }
+                Ok(_) => {}
+            }
+        }
         if self.dispatch_apply_patch_followup_if_needed(
             &turn,
             action_id,
@@ -216,6 +309,7 @@ impl RuntimeSessionService {
         )? {
             return Ok(1);
         }
+        self.clear_sandbox_bypass_for_action(turn_id, action_id);
 
         let (
             mut terminal_state,

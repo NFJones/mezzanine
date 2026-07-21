@@ -146,6 +146,8 @@ pub(crate) struct BlockedAgentApprovalRef {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(crate) action_id: String,
+    /// Whether approval grants one exact unsandboxed retry for this action.
+    pub(crate) sandbox_bypass_after_approval: bool,
 }
 
 /// Carries Running Shell Transaction Ref state for this subsystem.

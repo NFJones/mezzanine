@@ -300,6 +300,12 @@ pub(crate) struct RuntimeAgentComponent {
     fail_routed_loop_continuation_queue: bool,
     /// Approval continuation metadata keyed by blocked approval id.
     blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
+    /// Exact turn/action identities granted one unsandboxed retry after a
+    /// Bubblewrap fallback approval. Dispatch consumes each identity once.
+    sandbox_bypass_after_approval: BTreeSet<(String, String)>,
+    /// Approved bypasses that have started dispatch and remain active across
+    /// every internal transaction phase of that exact action.
+    active_sandbox_bypasses: BTreeSet<(String, String)>,
     /// Spawned child turns currently joined by parent agent actions.
     joined_subagent_dependencies: BTreeMap<String, JoinedSubagentDependency>,
     /// Declared scope and permission inheritance keyed by child agent id.
@@ -609,6 +615,18 @@ impl RuntimeSessionService {
         approval_ids_by_turn
     }
 
+    /// Reports whether one blocked approval grants an exact sandbox bypass.
+    #[cfg(test)]
+    pub(crate) fn blocked_approval_grants_sandbox_bypass_for_tests(
+        &self,
+        approval_id: &str,
+    ) -> bool {
+        self.agent
+            .blocked_agent_approval_refs
+            .get(approval_id)
+            .is_some_and(|approval_ref| approval_ref.sandbox_bypass_after_approval)
+    }
+
     /// Removes every blocked approval continuation owned by one turn.
     pub(crate) fn clear_blocked_agent_approvals_for_turn(&mut self, turn_id: &str) {
         self.agent
@@ -619,6 +637,52 @@ impl RuntimeSessionService {
     /// Clears all blocked approval continuations on session replacement.
     pub(crate) fn clear_all_blocked_agent_approval_refs(&mut self) {
         self.agent.blocked_agent_approval_refs.clear();
+    }
+
+    /// Grants one exact action a single unsandboxed dispatch after approval.
+    pub(crate) fn grant_sandbox_bypass_after_approval(
+        &mut self,
+        turn_id: impl Into<String>,
+        action_id: impl Into<String>,
+    ) {
+        self.agent
+            .sandbox_bypass_after_approval
+            .insert((turn_id.into(), action_id.into()));
+    }
+
+    /// Consumes an approved sandbox bypass so it cannot authorize a replay.
+    pub(crate) fn take_sandbox_bypass_after_approval(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> bool {
+        self.agent
+            .sandbox_bypass_after_approval
+            .remove(&(turn_id.to_string(), action_id.to_string()))
+    }
+
+    /// Activates or reuses the exact approved bypass for one action.
+    pub(crate) fn activate_sandbox_bypass_after_approval(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> bool {
+        let identity = (turn_id.to_string(), action_id.to_string());
+        if self.agent.active_sandbox_bypasses.contains(&identity) {
+            return true;
+        }
+        if !self.take_sandbox_bypass_after_approval(turn_id, action_id) {
+            return false;
+        }
+        self.agent.active_sandbox_bypasses.insert(identity);
+        true
+    }
+
+    /// Clears any pending or active bypass for one settled action.
+    pub(crate) fn clear_sandbox_bypass_for_action(&mut self, turn_id: &str, action_id: &str) {
+        let identity = (turn_id.to_string(), action_id.to_string());
+        self.agent.sandbox_bypass_after_approval.remove(&identity);
+        self.agent.active_sandbox_bypasses.remove(&identity);
     }
 
     /// Reports whether one managed macro child is registered.
@@ -1319,6 +1383,12 @@ impl RuntimeSessionService {
         self.clear_agent_failure_feedback_attempts_for_turn(turn_id);
         self.clear_agent_execution_group_ownership_for_turn(turn_id);
         self.clear_agent_issue_query_freshness_for_turn(turn_id);
+        self.agent
+            .sandbox_bypass_after_approval
+            .retain(|(owner_turn_id, _)| owner_turn_id != turn_id);
+        self.agent
+            .active_sandbox_bypasses
+            .retain(|(owner_turn_id, _)| owner_turn_id != turn_id);
         self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
         self.agent.agent_turn_network_action_history.remove(turn_id);
         self.agent

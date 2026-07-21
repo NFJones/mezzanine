@@ -228,6 +228,158 @@ fn bubblewrap_probe_service() -> RuntimeSessionService {
     service
 }
 
+/// Builds one prompting shell evaluation retained by sandbox-first dispatch.
+fn sandbox_fallback_prompt_evaluation() -> mez_agent::permissions::PermissionEvaluation {
+    let effects = path_resolution_effects();
+    mez_agent::permissions::PermissionEvaluation {
+        decision: RuleDecision::Prompt,
+        candidates: vec![mez_agent::permissions::CandidateEvaluation {
+            command: "env".to_string(),
+            decision: RuleDecision::Prompt,
+            matched_rule_ids: vec!["sandbox-fallback-prompt".to_string()],
+            effects: effects.clone(),
+            completeness: mez_agent::permissions::EffectCompleteness::Complete,
+        }],
+        matched_rule_ids: vec!["sandbox-fallback-prompt".to_string()],
+        effects,
+        completeness: mez_agent::permissions::EffectCompleteness::Complete,
+    }
+}
+
+/// Builds a live prompt turn whose sole shell action is awaiting sandbox
+/// settlement.
+fn sandbox_fallback_execution_service() -> (RuntimeSessionService, String, String) {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    let started = service
+        .start_agent_prompt_turn("%1", "show the environment")
+        .unwrap();
+    service.remove_pending_agent_provider_task(&started.turn_id);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action_id = "sandbox-fallback-shell".to_string();
+    let action = mez_agent::AgentAction {
+        id: action_id.clone(),
+        rationale: "inspect the environment".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the environment".to_string(),
+            command: "env".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let mut result = mez_agent::ActionResult::running(
+        &turn,
+        &action,
+        vec!["local action accepted for sandbox-first dispatch".to_string()],
+        None,
+    );
+    result.permission_evaluation = Some(Box::new(sandbox_fallback_prompt_evaluation()));
+    service.agent_turn_executions_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture(&turn.turn_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run env".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "exercise sandbox fallback".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![result],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    (service, turn.turn_id, action_id)
+}
+
+/// Verifies trusted evidence that Bubblewrap closed without an exit-code event
+/// creates one normal approval for an exact unsandboxed retry while retaining
+/// the original prompt evaluation.
+#[test]
+fn runtime_bubblewrap_pre_payload_failure_offers_exact_fallback_approval() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+
+    assert!(
+        service
+            .offer_sandbox_pre_payload_fallback_approval(
+                "sandbox-marker",
+                &turn_id,
+                &action_id,
+                "trusted_status_closed_without_exit_code",
+            )
+            .unwrap()
+    );
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Blocked);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Blocked);
+    assert_eq!(
+        execution.action_results[0]
+            .permission_evaluation
+            .as_ref()
+            .map(|evaluation| evaluation.decision),
+        Some(RuleDecision::Prompt)
+    );
+    let approval_ids = service.blocked_agent_approval_ids_by_turn();
+    let approval_id = approval_ids.get(&turn_id).unwrap().first().unwrap();
+    assert!(service.blocked_approval_grants_sandbox_bypass_for_tests(approval_id));
+    assert!(
+        service
+            .blocked_approvals()
+            .get(approval_id)
+            .unwrap()
+            .action_summary
+            .contains("env")
+    );
+}
+
+/// Verifies an approved sandbox bypass is scoped to one exact turn/action,
+/// remains active across internal phases, and cannot survive settlement.
+#[test]
+fn runtime_sandbox_fallback_bypass_is_exact_and_cleared_on_settlement() {
+    let mut service = test_runtime_service();
+    service.grant_sandbox_bypass_after_approval("turn-1", "action-1");
+
+    assert!(service.activate_sandbox_bypass_after_approval("turn-1", "action-1"));
+    assert!(service.activate_sandbox_bypass_after_approval("turn-1", "action-1"));
+    assert!(!service.activate_sandbox_bypass_after_approval("turn-1", "action-2"));
+    assert!(!service.activate_sandbox_bypass_after_approval("turn-2", "action-1"));
+
+    service.clear_sandbox_bypass_for_action("turn-1", "action-1");
+    assert!(!service.activate_sandbox_bypass_after_approval("turn-1", "action-1"));
+}
+
 /// Removes and returns the sole in-flight Bubblewrap capability probe.
 fn take_bubblewrap_probe_transaction(
     service: &mut RuntimeSessionService,

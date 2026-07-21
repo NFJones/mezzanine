@@ -108,6 +108,8 @@ pub(crate) struct RuntimeProcessComponent {
     shell_transaction_require_start_markers: BTreeSet<String>,
     /// Markers whose mandatory wrapper start event has been observed.
     shell_transaction_started_markers: BTreeSet<String>,
+    /// Agent-action markers whose child launch uses the Bubblewrap backend.
+    sandboxed_shell_transaction_markers: BTreeSet<String>,
     /// Active pane output pipes keyed by their source pane id.
     active_pane_pipes: std::collections::BTreeMap<String, ActivePanePipe>,
     /// Primary process ids for panes whose handles are adapter-owned.

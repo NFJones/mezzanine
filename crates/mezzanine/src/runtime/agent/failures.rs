@@ -226,6 +226,7 @@ impl RuntimeSessionService {
         marker: &str,
         failure: RuntimeShellTransactionActionFailure,
     ) -> Result<usize> {
+        self.clear_sandbox_bypass_for_action(&transaction_ref.turn_id, &failure.action_id);
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()

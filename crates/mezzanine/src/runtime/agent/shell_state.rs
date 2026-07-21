@@ -99,7 +99,11 @@ impl RuntimeSessionService {
             command,
         )?;
         let mut sandbox_audit_summary = None;
-        if let SandboxConfig::Bubblewrap(config) = self.configured_permissions().sandbox.clone() {
+        let sandbox_bypassed =
+            self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
+        if let SandboxConfig::Bubblewrap(config) = self.configured_permissions().sandbox.clone()
+            && !sandbox_bypassed
+        {
             let evaluation = permission_evaluation.ok_or_else(|| {
                 MezError::invalid_state(
                     "Bubblewrap dispatch requires the retained structured permission evaluation",
@@ -300,6 +304,9 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if sandbox_audit_summary.is_some() {
+            self.register_sandboxed_shell_transaction_marker(&marker_id);
+        }
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
