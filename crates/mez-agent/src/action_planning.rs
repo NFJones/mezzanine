@@ -18,6 +18,9 @@ use crate::{
     shell_read_observations_for_command, turn_state_from_action_results,
 };
 
+const APPROVAL_BROWSER_GUIDANCE: &str =
+    "Use /show-approvals to review requests that remain pending.";
+
 /// Product-supplied facts needed to plan one validated action result.
 #[derive(Debug, Clone, Copy)]
 pub struct ActionPlanningInput<'a> {
@@ -268,6 +271,7 @@ fn plan_local_action(
                 vec![
                     "local action auto-allowed by model assessment".to_string(),
                     reason,
+                    APPROVAL_BROWSER_GUIDANCE.to_string(),
                 ],
                 Some(shell_action_structured_content_json(
                     action,
@@ -325,7 +329,7 @@ fn plan_network_action(
     let (content, approval, response) = match decision {
         RuleDecision::Allow => (vec!["network action accepted for runtime execution".to_string()], serde_json::Value::Null, serde_json::json!({"state":"pending_runtime_network"})),
         RuleDecision::Prompt if input.approval_policy == ApprovalPolicy::AutoAllow && action_supports_auto_allow(action, input) => (
-            vec!["network action auto-allowed by model assessment".to_string(), action_auto_allow_reason(action, input)],
+            vec!["network action auto-allowed by model assessment".to_string(), action_auto_allow_reason(action, input), APPROVAL_BROWSER_GUIDANCE.to_string()],
             auto_allow_approval_json(action, action.action_type(), input), serde_json::json!({"state":"pending_runtime_network"})),
         RuleDecision::Prompt => return Ok(ActionResult::blocked(
             turn, action, vec!["approval required before executing network action".to_string()],
@@ -369,7 +373,15 @@ fn plan_config_change(
     } else {
         policy_approval_json(action, "config_change", input)
     };
-    Ok(ActionResult::running(turn, action, vec!["configuration change accepted for runtime application".to_string()], Some(
+    let content = if auto_allowed {
+        vec![
+            "configuration change accepted for runtime application".to_string(),
+            APPROVAL_BROWSER_GUIDANCE.to_string(),
+        ]
+    } else {
+        vec!["configuration change accepted for runtime application".to_string()]
+    };
+    Ok(ActionResult::running(turn, action, content, Some(
         serde_json::json!({"approval":approval,"setting_path":setting_path,"operation":operation,"validation":{"status":"pending_runtime_config_change"},"applied_layer":serde_json::Value::Null,"persistence":{"requested":true,"completed":false,"scope":"user"}}).to_string()
     )))
 }
@@ -396,6 +408,7 @@ fn plan_mcp_call(
         vec![
             "mcp call auto-allowed by model assessment".to_string(),
             action_auto_allow_reason(action, input),
+            APPROVAL_BROWSER_GUIDANCE.to_string(),
         ]
     } else if input.mcp_approval_required {
         vec!["mcp call accepted by approval policy".to_string()]
@@ -732,6 +745,99 @@ mod tests {
         assert!(
             structured.contains("inspect repository files"),
             "{structured}"
+        );
+        assert!(
+            result
+                .content
+                .iter()
+                .any(|block| block.text.contains("/show-approvals")),
+            "{:?}",
+            result.content
+        );
+    }
+
+    #[test]
+    /// Verifies every ask-fallthrough auto-allow presentation advertises the
+    /// pending browser while ordinary policy-allowed work does not.
+    fn action_planning_limits_approval_browser_guidance_to_auto_allow() {
+        let network = AgentAction {
+            id: "search-1".to_string(),
+            rationale: "inspect current documentation".to_string(),
+            payload: AgentActionPayload::WebSearch {
+                query: "mezzanine documentation".to_string(),
+                domains: Vec::new(),
+                recency_days: None,
+                max_results: None,
+            },
+        };
+        let network_plan = NetworkActionPlan {
+            summary: "Search current documentation".to_string(),
+            policy_command: "curl https://example.test".to_string(),
+        };
+        let config = AgentAction {
+            id: "config-1".to_string(),
+            rationale: "set theme".to_string(),
+            payload: AgentActionPayload::ConfigChange {
+                setting_path: "ui.theme".to_string(),
+                operation: "set".to_string(),
+                value: Some(r#""default""#.to_string()),
+            },
+        };
+        let mcp = AgentAction {
+            id: "mcp-1".to_string(),
+            rationale: "inspect issue".to_string(),
+            payload: AgentActionPayload::McpCall {
+                server: "gitlab".to_string(),
+                tool: "get_issue".to_string(),
+                arguments_json: r#"{"id":1}"#.to_string(),
+            },
+        };
+        let auto_allow = ActionPlanningInput {
+            approval_policy: ApprovalPolicy::AutoAllow,
+            ..ActionPlanningInput::default()
+        };
+        let results = [
+            plan_action_result(
+                &TestTurn,
+                &network,
+                ActionPlanningInput {
+                    network_plan: Some(&network_plan),
+                    network_rule_decision: Some(RuleDecision::Prompt),
+                    ..auto_allow
+                },
+            )
+            .unwrap(),
+            plan_action_result(&TestTurn, &config, auto_allow).unwrap(),
+            plan_action_result(&TestTurn, &mcp, auto_allow).unwrap(),
+        ];
+        for result in results {
+            assert!(
+                result
+                    .content
+                    .iter()
+                    .any(|block| block.text.contains("/show-approvals")),
+                "{:?}",
+                result.content
+            );
+        }
+
+        let allowed = plan_action_result(
+            &TestTurn,
+            &shell_action("inspect repository files"),
+            ActionPlanningInput {
+                local_plan: Some(&local_plan()),
+                local_rule_decision: Some(RuleDecision::Allow),
+                ..ActionPlanningInput::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            allowed
+                .content
+                .iter()
+                .all(|block| !block.text.contains("/show-approvals")),
+            "{:?}",
+            allowed.content
         );
     }
 

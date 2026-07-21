@@ -5705,8 +5705,10 @@ The `/approve` command MUST remain pane-local and MUST route decisions through
 the same approval policy, hook, audit, persistent-rule, and blocked-action
 resume machinery as the `approval/decide` control method. Pending approval
 requests visible in an agent pane MUST clearly log the approval id, requested
-action, and the corresponding `/approve` command before the action waits for
-the user.
+action, the session-wide `/show-approvals` browser, and the corresponding
+pane-local `/approve` command before the action waits for the user. Auto-allow
+messages produced from ask fallthrough MUST also mention `/show-approvals` for
+pending-request discoverability without implying observer decision authority.
 
 The `/trust` command MUST route decisions through the same project trust,
 configuration reload, lifecycle event, and audit machinery as the

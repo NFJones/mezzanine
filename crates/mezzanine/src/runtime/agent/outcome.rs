@@ -456,7 +456,7 @@ pub(super) fn runtime_humanize_agent_diagnostic(value: &str) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn runtime_agent_pending_approval_log_line(approval: &BlockedApprovalRequest) -> String {
     format!(
-        "agent approval {} pending: {} {} (approve with /approve {})",
+        "agent approval {} pending: {} {} (browse with /show-approvals; approve in this pane with /approve {})",
         approval.id,
         approval.action_kind,
         runtime_agent_terminal_preview(&approval.action_summary),
@@ -548,11 +548,44 @@ pub(super) fn runtime_agent_action_outcome_line(
 
 #[cfg(test)]
 mod tests {
-    use super::RuntimeTerminalActionObservations;
+    use super::{RuntimeTerminalActionObservations, runtime_agent_pending_approval_log_line};
     use mez_agent::{
         ActionContentBlock, ActionError, ActionResult, ActionStatus, AgentContext, ContextBlock,
         ContextExecutionGroupId,
+        permissions::{BlockedApprovalRequest, BlockedApprovalState},
     };
+
+    /// Verifies pending approval output preserves actionable identifiers while
+    /// advertising both the session-wide browser and pane-local command.
+    #[test]
+    fn pending_approval_log_points_to_show_approvals() {
+        let approval = BlockedApprovalRequest {
+            id: "approval-1".to_string(),
+            requesting_agent_id: "agent-1".to_string(),
+            pane_id: "%1".to_string(),
+            parent_agent_chain: vec!["agent-1".to_string()],
+            action_kind: "shell_command".to_string(),
+            action_summary: "cargo test".to_string(),
+            declared_effects: Vec::new(),
+            matched_rules: Vec::new(),
+            read_scopes: vec![".".to_string()],
+            write_scopes: Vec::new(),
+            cooperation_mode: None,
+            created_at_unix_seconds: None,
+            decided_at_unix_seconds: None,
+            decided_by_client_id: None,
+            state: BlockedApprovalState::Pending,
+            decision: None,
+            redirect_instruction: None,
+        };
+
+        let line = runtime_agent_pending_approval_log_line(&approval);
+
+        assert!(line.contains("approval-1"), "{line}");
+        assert!(line.contains("shell_command cargo test"), "{line}");
+        assert!(line.contains("/show-approvals"), "{line}");
+        assert!(line.contains("/approve approval-1"), "{line}");
+    }
 
     /// Builds one action result at the supplied actor-visible lifecycle state.
     fn result(action_id: &str, action_type: &'static str, status: ActionStatus) -> ActionResult {
