@@ -159,7 +159,8 @@ impl RuntimeSessionService {
                     }
                 })
                 .collect();
-            let child_launch = ShellChildLaunch::new(launch_plan.executable, arguments)?;
+            let child_launch = ShellChildLaunch::new(launch_plan.executable, arguments)?
+                .with_status_fd(crate::security::sandbox::BUBBLEWRAP_STATUS_FD)?;
             transaction = transaction.with_child_launch(child_launch);
         }
         let transaction = transaction.with_output_transport(if stateful {

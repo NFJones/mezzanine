@@ -580,4 +580,18 @@ fn typed_child_launch_rejects_invalid_argv_contracts() {
         )
         .is_ok()
     );
+    assert!(
+        ShellChildLaunch::new("/usr/bin/bwrap", Vec::new())
+            .unwrap()
+            .with_status_fd(2)
+            .is_err()
+    );
+    assert_eq!(
+        ShellChildLaunch::new("/usr/bin/bwrap", Vec::new())
+            .unwrap()
+            .with_status_fd(3)
+            .unwrap()
+            .status_fd,
+        Some(3)
+    );
 }

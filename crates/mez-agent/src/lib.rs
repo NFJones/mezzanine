@@ -452,8 +452,10 @@ pub use shell_read_observation::{
 };
 pub use shell_transport::{
     SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER,
-    SHELL_OUTPUT_BASE64_END_MARKER, ShellTransportDecodeResult, ShellTransportDiagnostics,
-    decode_shell_output_transport, decode_shell_output_transport_with_diagnostics,
+    SHELL_OUTPUT_BASE64_END_MARKER, SHELL_STATUS_BASE64_BEGIN_MARKER,
+    SHELL_STATUS_BASE64_END_MARKER, ShellStatusTransportError, ShellTransportDecodeResult,
+    ShellTransportDiagnostics, decode_shell_output_transport,
+    decode_shell_output_transport_with_diagnostics, decode_shell_status_transport,
 };
 pub use skill_workflow::{
     ParsedSkillDocument, SKILL_ADDITIONAL_CONTEXT_HEADING, SKILL_FILE_NAME, SkillActionContext,

@@ -16,6 +16,37 @@ pub const SHELL_OUTPUT_BASE64_END_MARKER: &str = "__MEZ_SHELL_OUTPUT_BASE64_END_
 /// Marker that reports raw bytes dropped before base64 output emission.
 pub const SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER: &str =
     "__MEZ_SHELL_OUTPUT_BASE64_DROPPED_BYTES__";
+/// Marker that begins one runtime-owned child-status frame.
+pub const SHELL_STATUS_BASE64_BEGIN_MARKER: &str = "__MEZ_SHELL_STATUS_BASE64_BEGIN__";
+/// Marker that ends one runtime-owned child-status frame.
+pub const SHELL_STATUS_BASE64_END_MARKER: &str = "__MEZ_SHELL_STATUS_BASE64_END__";
+
+/// Typed failure returned when trusted child-status framing is invalid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellStatusTransportError {
+    message: String,
+}
+
+impl ShellStatusTransportError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable status-transport diagnostic.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for ShellStatusTransportError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ShellStatusTransportError {}
 
 /// Decoded shell-output transport payload plus integrity diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +137,46 @@ pub fn decode_shell_output_transport_with_diagnostics(stdout: &str) -> ShellTran
         SHELL_OUTPUT_BASE64_BEGIN_MARKER,
         SHELL_OUTPUT_BASE64_END_MARKER,
     )
+}
+
+/// Decodes exactly one runtime-owned child-status frame.
+pub fn decode_shell_status_transport(stdout: &str) -> Result<String, ShellStatusTransportError> {
+    let normalized = stdout.replace("\r\n", "\n").replace('\r', "\n");
+    let mut encoded = String::new();
+    let mut in_frame = false;
+    let mut completed = false;
+    for line in normalized.lines() {
+        if line == SHELL_STATUS_BASE64_BEGIN_MARKER {
+            if in_frame || completed {
+                return Err(ShellStatusTransportError::new(
+                    "child-status transport contains duplicate or nested frames",
+                ));
+            }
+            in_frame = true;
+        } else if line == SHELL_STATUS_BASE64_END_MARKER {
+            if !in_frame || completed {
+                return Err(ShellStatusTransportError::new(
+                    "child-status transport contains an unmatched end marker",
+                ));
+            }
+            in_frame = false;
+            completed = true;
+        } else if in_frame {
+            encoded.push_str(line.trim());
+        }
+    }
+    if in_frame || !completed {
+        return Err(ShellStatusTransportError::new(
+            "child-status transport is missing a complete frame",
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|_| {
+            ShellStatusTransportError::new("child-status transport is not valid base64")
+        })?;
+    String::from_utf8(bytes)
+        .map_err(|_| ShellStatusTransportError::new("child-status transport is not valid UTF-8"))
 }
 
 /// Decodes one marker-bounded base64 transport stream.
@@ -245,6 +316,41 @@ fn decode_base64_transport_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies trusted child status is decoded independently from ordinary
+    /// command output and wrapper text.
+    #[test]
+    fn shell_status_transport_decodes_one_isolated_frame() {
+        let stdout = format!(
+            "{SHELL_OUTPUT_BASE64_BEGIN_MARKER}\nZm9vCg==\n{SHELL_OUTPUT_BASE64_END_MARKER}\n{SHELL_STATUS_BASE64_BEGIN_MARKER}\neyBcImV4aXQtY29kZVwiOiA3IH0K\n{SHELL_STATUS_BASE64_END_MARKER}\n"
+        );
+
+        assert_eq!(
+            decode_shell_status_transport(&stdout).unwrap(),
+            r#"{ \"exit-code\": 7 }
+"#
+        );
+        assert_eq!(decode_shell_output_transport(&stdout), "foo\n");
+    }
+
+    /// Verifies malformed, missing, and duplicate child-status frames fail
+    /// closed rather than becoming trusted status evidence.
+    #[test]
+    fn shell_status_transport_rejects_invalid_framing_and_encoding() {
+        assert!(decode_shell_status_transport("ordinary output").is_err());
+        assert!(
+            decode_shell_status_transport(&format!(
+                "{SHELL_STATUS_BASE64_BEGIN_MARKER}\n%%%\n{SHELL_STATUS_BASE64_END_MARKER}\n"
+            ))
+            .is_err()
+        );
+        assert!(
+            decode_shell_status_transport(&format!(
+                "{SHELL_STATUS_BASE64_BEGIN_MARKER}\n{SHELL_STATUS_BASE64_END_MARKER}\n{SHELL_STATUS_BASE64_BEGIN_MARKER}\n{SHELL_STATUS_BASE64_END_MARKER}\n"
+            ))
+            .is_err()
+        );
+    }
 
     #[test]
     /// Verifies partial base64 quartets are counted as structured diagnostics

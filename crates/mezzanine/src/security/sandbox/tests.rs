@@ -142,6 +142,23 @@ fn sandbox_compiler_accepts_prompts_and_rejects_forbids() {
     assert_eq!(error.kind(), SandboxCompileErrorKind::Unauthorized);
 }
 
+/// Trusted Bubblewrap status requires ordered typed lifecycle documents and
+/// treats absence of an exit-code event as no proof of payload execution.
+#[test]
+fn bubblewrap_status_parser_validates_payload_execution_evidence() {
+    let complete =
+        parse_bubblewrap_status("{\"child-pid\":42,\"mnt-namespace\":7}\n{\"exit-code\":9}\n")
+            .unwrap();
+    assert_eq!(complete.child_pid, Some(42));
+    assert_eq!(complete.exit_code, Some(9));
+
+    let pre_exec = parse_bubblewrap_status("{\"child-pid\":42}\n").unwrap();
+    assert_eq!(pre_exec.exit_code, None);
+    assert!(parse_bubblewrap_status("{\"exit-code\":0}\n").is_err());
+    assert!(parse_bubblewrap_status("{\"child-pid\":42}\n{\"child-pid\":43}\n").is_err());
+    assert!(parse_bubblewrap_status("not-json\n").is_err());
+}
+
 /// Unknown effects retain configured maximum authority without exposing host
 /// root, host networking, IPC sockets, or inherited environment variables.
 #[test]

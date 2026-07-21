@@ -29,6 +29,8 @@ use crate::runtime::{
 
 /// Version of the fixed runtime projection emitted by this compiler.
 pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v1";
+/// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
+pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
 const SANDBOX_COMMAND_PATH: &str = "/run/mez/command";
 /// Sentinel replaced by the pane transaction's materialized command-file
@@ -192,6 +194,71 @@ pub(crate) struct BubblewrapCapabilityCacheKey {
 pub(crate) struct BubblewrapCapability {
     /// Exact cache identity that must match before capability reuse.
     pub(crate) cache_key: BubblewrapCapabilityCacheKey,
+}
+
+/// Validated Bubblewrap lifecycle evidence captured outside workload output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BubblewrapStatus {
+    /// Bubblewrap child process identity, when process creation was reported.
+    pub(crate) child_pid: Option<u32>,
+    /// Payload exit status, which proves payload exec succeeded when present.
+    pub(crate) exit_code: Option<i32>,
+}
+
+/// Parses ordered JSON status documents emitted by Bubblewrap.
+pub(crate) fn parse_bubblewrap_status(
+    status: &str,
+) -> Result<BubblewrapStatus, SandboxCompileError> {
+    let mut parsed = BubblewrapStatus {
+        child_pid: None,
+        exit_code: None,
+    };
+    for line in status.lines().filter(|line| !line.trim().is_empty()) {
+        let value = serde_json::from_str::<serde_json::Value>(line).map_err(|_| {
+            SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                "Bubblewrap status contains malformed JSON",
+            )
+        })?;
+        let object = value.as_object().ok_or_else(|| {
+            SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                "Bubblewrap status document must be a JSON object",
+            )
+        })?;
+        match (object.get("child-pid"), object.get("exit-code")) {
+            (Some(child_pid), None) if parsed.child_pid.is_none() && parsed.exit_code.is_none() => {
+                let child_pid = child_pid
+                    .as_u64()
+                    .and_then(|value| u32::try_from(value).ok());
+                let child_pid = child_pid.filter(|value| *value > 0).ok_or_else(|| {
+                    SandboxCompileError::new(
+                        SandboxCompileErrorKind::InvalidInput,
+                        "Bubblewrap child-pid status must be a positive u32",
+                    )
+                })?;
+                parsed.child_pid = Some(child_pid);
+            }
+            (None, Some(exit_code)) if parsed.child_pid.is_some() && parsed.exit_code.is_none() => {
+                let exit_code = exit_code
+                    .as_i64()
+                    .and_then(|value| i32::try_from(value).ok());
+                parsed.exit_code = Some(exit_code.ok_or_else(|| {
+                    SandboxCompileError::new(
+                        SandboxCompileErrorKind::InvalidInput,
+                        "Bubblewrap exit-code status must be an i32",
+                    )
+                })?);
+            }
+            _ => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "Bubblewrap status documents are duplicate, unknown, or out of order",
+                ));
+            }
+        }
+    }
+    Ok(parsed)
 }
 
 /// Stable failure categories emitted before a workload is launched.
@@ -826,6 +893,8 @@ fn bubblewrap_arguments(
     policy: &EffectiveSandboxPolicy,
 ) -> Vec<String> {
     let mut arguments = vec![
+        "--json-status-fd",
+        "3",
         "--unshare-user",
         "--unshare-pid",
         "--unshare-ipc",

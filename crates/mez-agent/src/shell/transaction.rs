@@ -6,7 +6,8 @@
 use super::{AgentShellValidationError, AgentShellValidationResult, shell_quote};
 use crate::{
     SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER,
-    SHELL_OUTPUT_BASE64_END_MARKER,
+    SHELL_OUTPUT_BASE64_END_MARKER, SHELL_STATUS_BASE64_BEGIN_MARKER,
+    SHELL_STATUS_BASE64_END_MARKER,
 };
 use base64::Engine;
 use std::path::Path;
@@ -242,6 +243,12 @@ pub struct ShellChildLaunch {
     pub executable: String,
     /// Ordered argv elements excluding argv[0].
     pub arguments: Vec<ShellChildArgument>,
+    /// Optional runtime-owned descriptor used to capture trusted child status.
+    ///
+    /// The transaction wrapper redirects this descriptor to a private temporary
+    /// file and emits that file through a framing channel separate from child
+    /// stdout and stderr after the process exits.
+    pub status_fd: Option<u8>,
 }
 
 impl ShellChildLaunch {
@@ -278,7 +285,19 @@ impl ShellChildLaunch {
         Ok(Self {
             executable,
             arguments,
+            status_fd: None,
         })
+    }
+
+    /// Selects one inherited descriptor for runtime-owned child status.
+    pub fn with_status_fd(mut self, status_fd: u8) -> AgentShellValidationResult<Self> {
+        if !(3..=9).contains(&status_fd) {
+            return Err(AgentShellValidationError::invalid_args(
+                "typed child status fd must be between 3 and 9",
+            ));
+        }
+        self.status_fd = Some(status_fd);
+        Ok(self)
     }
 }
 
@@ -403,8 +422,18 @@ fn posix_child_command_invocation_lines(
     transport: ShellTransactionOutputTransport,
     child_env: &str,
     shell_invocation: &str,
+    status_fd: Option<u8>,
 ) -> String {
     let mut lines = Vec::new();
+    if status_fd.is_some() {
+        lines.push("MEZ_STATUS_FILE=".to_string());
+        lines.push(
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_STATUS_FILE=$(mktemp) || MEZ_WRITE_STATUS=1; fi"
+                .to_string(),
+        );
+    } else {
+        lines.push("MEZ_STATUS_FILE=".to_string());
+    }
     if transport == ShellTransactionOutputTransport::Base64 {
         lines.push("MEZ_OUTPUT_FILE=".to_string());
         lines.push("MEZ_OUTPUT_DROPPED=0".to_string());
@@ -419,13 +448,20 @@ fn posix_child_command_invocation_lines(
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then".to_string(),
         "  if command -v setsid >/dev/null 2>&1 && command setsid -w true >/dev/null 2>&1; then"
             .to_string(),
-        posix_child_command_line("    command setsid -w", child_env, shell_invocation, transport),
+        posix_child_command_line(
+            "    command setsid -w",
+            child_env,
+            shell_invocation,
+            transport,
+            status_fd,
+        ),
         "  elif command -v python3 >/dev/null 2>&1; then".to_string(),
         posix_child_command_line(
             "    command python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])'",
             child_env,
             shell_invocation,
             transport,
+            status_fd,
         ),
         "  elif command -v perl >/dev/null 2>&1; then".to_string(),
         posix_child_command_line(
@@ -433,9 +469,16 @@ fn posix_child_command_invocation_lines(
             child_env,
             shell_invocation,
             transport,
+            status_fd,
         ),
         "  else".to_string(),
-        posix_child_command_line("    command", child_env, shell_invocation, transport),
+        posix_child_command_line(
+            "    command",
+            child_env,
+            shell_invocation,
+            transport,
+            status_fd,
+        ),
         "  fi".to_string(),
         "  MEZ_STATUS=$?".to_string(),
     ]);
@@ -467,6 +510,19 @@ fn posix_child_command_invocation_lines(
             ),
         ]);
     }
+    if status_fd.is_some() {
+        lines.extend([
+            format!(
+                "  printf '\\n%s\\n' {}",
+                shell_quote(SHELL_STATUS_BASE64_BEGIN_MARKER)
+            ),
+            "  if [ -n \"$MEZ_STATUS_FILE\" ]; then base64 < \"$MEZ_STATUS_FILE\"; fi".to_string(),
+            format!(
+                "  printf '%s\\n' {}",
+                shell_quote(SHELL_STATUS_BASE64_END_MARKER)
+            ),
+        ]);
+    }
     lines.extend([
         "else".to_string(),
         "  MEZ_STATUS=$MEZ_WRITE_STATUS".to_string(),
@@ -487,13 +543,17 @@ fn posix_child_command_line(
     child_env: &str,
     shell_invocation: &str,
     transport: ShellTransactionOutputTransport,
+    status_fd: Option<u8>,
 ) -> String {
     let redirect = if transport == ShellTransactionOutputTransport::Base64 {
         " > \"$MEZ_OUTPUT_FILE\" 2>&1"
     } else {
         ""
     };
-    format!("{prefix} {child_env} {shell_invocation} </dev/null{redirect}")
+    let status_redirect = status_fd
+        .map(|fd| format!(" {fd}>\"$MEZ_STATUS_FILE\""))
+        .unwrap_or_default();
+    format!("{prefix} {child_env} {shell_invocation} </dev/null{redirect}{status_redirect}")
 }
 
 /// Renders the isolated Fish child-shell execution block.
@@ -506,8 +566,17 @@ fn fish_child_command_invocation_lines(
     transport: ShellTransactionOutputTransport,
     noninteractive_env: &str,
     shell_invocation: &str,
+    status_fd: Option<u8>,
 ) -> String {
     let mut lines = Vec::new();
+    if status_fd.is_some() {
+        lines.push("set -l MEZ_STATUS_FILE ''".to_string());
+        lines.push("if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string());
+        lines.push("set MEZ_STATUS_FILE (mktemp); or set MEZ_WRITE_STATUS 1".to_string());
+        lines.push("end".to_string());
+    } else {
+        lines.push("set -l MEZ_STATUS_FILE ''".to_string());
+    }
     if transport == ShellTransactionOutputTransport::Base64 {
         lines.push("set -l MEZ_OUTPUT_FILE ''".to_string());
         lines.push("set -l MEZ_OUTPUT_DROPPED 0".to_string());
@@ -525,6 +594,7 @@ fn fish_child_command_invocation_lines(
             noninteractive_env,
             shell_invocation,
             transport,
+            status_fd,
         ),
         "else if command -q python3".to_string(),
         fish_child_command_line(
@@ -532,6 +602,7 @@ fn fish_child_command_invocation_lines(
             noninteractive_env,
             shell_invocation,
             transport,
+            status_fd,
         ),
         "else if command -q perl".to_string(),
         fish_child_command_line(
@@ -539,9 +610,16 @@ fn fish_child_command_invocation_lines(
             noninteractive_env,
             shell_invocation,
             transport,
+            status_fd,
         ),
         "else".to_string(),
-        fish_child_command_line("    command env", noninteractive_env, shell_invocation, transport),
+        fish_child_command_line(
+            "    command env",
+            noninteractive_env,
+            shell_invocation,
+            transport,
+            status_fd,
+        ),
         "end".to_string(),
         "set MEZ_STATUS $status".to_string(),
     ]);
@@ -579,6 +657,19 @@ fn fish_child_command_invocation_lines(
             ),
         ]);
     }
+    if status_fd.is_some() {
+        lines.extend([
+            format!(
+                "printf '\\n%s\\n' {}",
+                fish_quote(SHELL_STATUS_BASE64_BEGIN_MARKER)
+            ),
+            "if test -n \"$MEZ_STATUS_FILE\"; base64 < \"$MEZ_STATUS_FILE\"; end".to_string(),
+            format!(
+                "printf '%s\\n' {}",
+                fish_quote(SHELL_STATUS_BASE64_END_MARKER)
+            ),
+        ]);
+    }
     lines.extend([
         "else".to_string(),
         "set MEZ_STATUS $MEZ_WRITE_STATUS".to_string(),
@@ -599,13 +690,19 @@ fn fish_child_command_line(
     noninteractive_env: &str,
     shell_invocation: &str,
     transport: ShellTransactionOutputTransport,
+    status_fd: Option<u8>,
 ) -> String {
     let redirect = if transport == ShellTransactionOutputTransport::Base64 {
         " > \"$MEZ_OUTPUT_FILE\" 2>&1"
     } else {
         ""
     };
-    format!("{prefix} {noninteractive_env} {shell_invocation} </dev/null{redirect}")
+    let status_redirect = status_fd
+        .map(|fd| format!(" {fd}>\"$MEZ_STATUS_FILE\""))
+        .unwrap_or_default();
+    format!(
+        "{prefix} {noninteractive_env} {shell_invocation} </dev/null{redirect}{status_redirect}"
+    )
 }
 
 /// Renders one typed child launch as POSIX shell words.
@@ -720,6 +817,9 @@ impl ShellTransaction {
             self.output_transport,
             &child_env,
             &shell_invocation,
+            self.child_launch
+                .as_ref()
+                .and_then(|launch| launch.status_fd),
         );
         let wrapper = format!(
             "{history_start}\
@@ -733,7 +833,8 @@ MEZ_PANE={pane}\n\
 if [ -n \"$MEZ_COMMAND_FILE\" ]; then command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_COMMAND_B64\" ]; then command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_OUTPUT_FILE\" ]; then command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1 || :; fi\n\
-unset MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
+if [ -n \"$MEZ_STATUS_FILE\" ]; then command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1 || :; fi\n\
+unset MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
 unset -f {function_name} 2>/dev/null || :\n\
 {history_restore}\
 {history_marker_finish}command printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
@@ -869,6 +970,9 @@ unset -f {function_name} 2>/dev/null || :\n\
             self.output_transport,
             &child_env,
             &shell_invocation,
+            self.child_launch
+                .as_ref()
+                .and_then(|launch| launch.status_fd),
         );
         let wrapper = format!(
             "{history_start}\
@@ -883,7 +987,8 @@ set -l MEZ_STATUS 0\n\
 if test -n \"$MEZ_COMMAND_FILE\"; command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_COMMAND_B64\"; command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_OUTPUT_FILE\"; command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1; or true; end\n\
-set -e MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
+if test -n \"$MEZ_STATUS_FILE\"; command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1; or true; end\n\
+set -e MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
 printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
 $MEZ_STATUS $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE\n\
 {history_restore}\
