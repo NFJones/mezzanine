@@ -80,6 +80,12 @@ pub trait PermissionPlanning: Send + Sync {
 
     /// Returns whether the product currently bypasses fresh approvals.
     fn approval_bypass(&self) -> bool;
+
+    /// Returns whether prompting local actions may proceed to a configured
+    /// sandbox before requesting user approval.
+    fn sandbox_first_local_prompts(&self) -> bool {
+        false
+    }
 }
 
 /// Bounded permission state shown by agent-shell status commands.

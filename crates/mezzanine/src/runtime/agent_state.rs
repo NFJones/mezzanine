@@ -152,6 +152,9 @@ pub struct RuntimeAgentProviderDispatch {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub permission_policy: PermissionPolicy,
+    /// Whether prompting local actions may attempt Bubblewrap execution before
+    /// requesting user approval.
+    pub sandbox_first_local_prompts: bool,
     /// Stores the session approvals value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

@@ -14,6 +14,7 @@ pub struct ProductPermissionPlanning<'a> {
     policy: &'a PermissionPolicy,
     approvals: &'a SessionApprovalStore,
     path_scopes: Option<&'a PathScopes>,
+    sandbox_first_local_prompts: bool,
 }
 
 impl<'a> ProductPermissionPlanning<'a> {
@@ -27,7 +28,15 @@ impl<'a> ProductPermissionPlanning<'a> {
             policy,
             approvals,
             path_scopes,
+            sandbox_first_local_prompts: false,
         }
+    }
+
+    /// Enables sandbox-first dispatch for local actions that would otherwise
+    /// require a fresh approval.
+    pub fn with_sandbox_first_local_prompts(mut self, enabled: bool) -> Self {
+        self.sandbox_first_local_prompts = enabled;
+        self
     }
 }
 
@@ -47,5 +56,9 @@ impl PermissionPlanning for ProductPermissionPlanning<'_> {
 
     fn approval_bypass(&self) -> bool {
         self.policy.approval_bypass()
+    }
+
+    fn sandbox_first_local_prompts(&self) -> bool {
+        self.sandbox_first_local_prompts
     }
 }

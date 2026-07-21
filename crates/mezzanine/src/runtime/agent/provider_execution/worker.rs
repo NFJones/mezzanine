@@ -228,6 +228,10 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
+        let sandbox_first_local_prompts = matches!(
+            self.configured_permissions().sandbox,
+            crate::runtime::SandboxConfig::Bubblewrap(_)
+        );
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -242,7 +246,8 @@ impl RuntimeSessionService {
                     &permission_policy,
                     self.session_approvals(),
                     path_scopes.as_ref(),
-                ),
+                )
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers: available_mcp_servers.clone(),
@@ -534,6 +539,10 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
+        let sandbox_first_local_prompts = matches!(
+            self.configured_permissions().sandbox,
+            crate::runtime::SandboxConfig::Bubblewrap(_)
+        );
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -548,7 +557,8 @@ impl RuntimeSessionService {
                     &permission_policy,
                     self.session_approvals(),
                     path_scopes.as_ref(),
-                ),
+                )
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers: available_mcp_servers.clone(),

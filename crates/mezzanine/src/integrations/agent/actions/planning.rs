@@ -60,6 +60,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                 approval_bypass: self.permissions.approval_bypass(),
                 mcp_approval_required,
                 subagent_scope_violation: subagent_scope_violation.as_deref(),
+                sandbox_first_local_prompts: self.permissions.sandbox_first_local_prompts(),
             },
         )
         .map_err(|error| MezError::invalid_state(error.message()))

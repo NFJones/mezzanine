@@ -44,6 +44,9 @@ pub struct ActionPlanningInput<'a> {
     pub mcp_approval_required: bool,
     /// Product-computed subagent scope violation for a local action.
     pub subagent_scope_violation: Option<&'a str>,
+    /// Whether a prompting local action may attempt sandboxed execution before
+    /// requesting user approval.
+    pub sandbox_first_local_prompts: bool,
 }
 
 impl Default for ActionPlanningInput<'_> {
@@ -59,6 +62,7 @@ impl Default for ActionPlanningInput<'_> {
             approval_bypass: false,
             mcp_approval_required: true,
             subagent_scope_violation: None,
+            sandbox_first_local_prompts: false,
         }
     }
 }
@@ -284,6 +288,20 @@ fn plan_local_action(
                 )),
             ))
         }
+        RuleDecision::Prompt if input.sandbox_first_local_prompts => Ok(ActionResult::running(
+            turn,
+            action,
+            vec!["local action accepted for sandbox-first dispatch".to_string()],
+            Some(shell_action_structured_content_json(
+                action,
+                plan,
+                Some("pending_local_dispatch"),
+                false,
+                serde_json::json!({"state":"sandbox_first","kind":action.action_type(),"action_id":action.id}),
+                matched_rule_ids,
+                serde_json::json!({"state":"pending_sandbox_dispatch"}),
+            )),
+        )),
         RuleDecision::Prompt => Ok(ActionResult::blocked(
             turn,
             action,
@@ -670,6 +688,46 @@ mod tests {
             .unwrap();
             assert_eq!(result.status, status);
         }
+    }
+
+    #[test]
+    /// Verifies only an explicitly enabled sandbox-first backend converts a
+    /// prompting local action into pending sandbox dispatch.
+    fn action_planning_routes_prompted_local_actions_to_enabled_sandbox_first_dispatch() {
+        let action = shell_action("inspect repository files");
+        let plan = local_plan();
+        let result = plan_action_result(
+            &TestTurn,
+            &action,
+            ActionPlanningInput {
+                local_plan: Some(&plan),
+                local_rule_decision: Some(RuleDecision::Prompt),
+                sandbox_first_local_prompts: true,
+                ..ActionPlanningInput::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.status, ActionStatus::Running);
+        assert!(
+            result
+                .structured_content_json
+                .as_deref()
+                .unwrap()
+                .contains(r#""state":"pending_sandbox_dispatch""#)
+        );
+
+        let policy_only = plan_action_result(
+            &TestTurn,
+            &action,
+            ActionPlanningInput {
+                local_plan: Some(&plan),
+                local_rule_decision: Some(RuleDecision::Prompt),
+                ..ActionPlanningInput::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(policy_only.status, ActionStatus::Blocked);
     }
 
     #[test]

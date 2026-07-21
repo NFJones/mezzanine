@@ -125,6 +125,23 @@ fn capability(config: &BubblewrapConfig) -> BubblewrapCapability {
     parse_bubblewrap_capability_probe("pane-env-sha256", &plan, 0, plan.expected_stdout).unwrap()
 }
 
+/// Prompt evaluations may compile for sandbox-first execution, while hard
+/// forbids remain terminal and cannot produce a Bubblewrap launch plan.
+#[test]
+fn sandbox_compiler_accepts_prompts_and_rejects_forbids() {
+    let config = config();
+    let authority = authority();
+    let mut prompt = evaluation(EffectCompleteness::Unknown, effects());
+    prompt.decision = RuleDecision::Prompt;
+
+    compile_bubblewrap_launch_plan(request(&config, &authority, &prompt)).unwrap();
+
+    let mut forbid = prompt;
+    forbid.decision = RuleDecision::Forbid;
+    let error = compile_bubblewrap_launch_plan(request(&config, &authority, &forbid)).unwrap_err();
+    assert_eq!(error.kind(), SandboxCompileErrorKind::Unauthorized);
+}
+
 /// Unknown effects retain configured maximum authority without exposing host
 /// root, host networking, IPC sockets, or inherited environment variables.
 #[test]

@@ -506,6 +506,7 @@ async fn execute_runtime_agent_provider_dispatch(
         auto_sizing_provider,
         provider,
         permission_policy,
+        sandbox_first_local_prompts,
         session_approvals,
         path_scopes,
         subagent_scope,
@@ -643,7 +644,8 @@ async fn execute_runtime_agent_provider_dispatch(
                     &permission_policy,
                     &session_approvals,
                     path_scopes.as_ref(),
-                ),
+                )
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -675,7 +677,8 @@ async fn execute_runtime_agent_provider_dispatch(
                     &permission_policy,
                     &session_approvals,
                     path_scopes.as_ref(),
-                ),
+                )
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -707,7 +710,8 @@ async fn execute_runtime_agent_provider_dispatch(
                     &permission_policy,
                     &session_approvals,
                     path_scopes.as_ref(),
-                ),
+                )
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -739,7 +743,8 @@ async fn execute_runtime_agent_provider_dispatch(
                     &permission_policy,
                     &session_approvals,
                     path_scopes.as_ref(),
-                ),
+                )
+                .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,

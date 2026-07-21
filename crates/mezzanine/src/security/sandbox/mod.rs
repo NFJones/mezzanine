@@ -443,10 +443,10 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
             "Bubblewrap capability does not match the active pane environment, executable, or runtime profile",
         ));
     }
-    if request.permission_evaluation.decision != RuleDecision::Allow {
+    if request.permission_evaluation.decision == RuleDecision::Forbid {
         return Err(SandboxCompileError::new(
             SandboxCompileErrorKind::Unauthorized,
-            "sandbox compilation requires an allowed permission evaluation",
+            "sandbox compilation rejects forbidden permission evaluations",
         ));
     }
     if request.maximum_authority.resolution_status != PathResolutionStatus::ShellResolved {
