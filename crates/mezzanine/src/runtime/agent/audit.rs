@@ -11,6 +11,7 @@ use super::{
     exact_command_sha256, runtime_mezzanine_error_code, runtime_permission_preset_name,
     runtime_provider_audit_error_message,
 };
+use crate::security::sandbox::SandboxAuditSummary;
 use mez_agent::permissions::{EffectCompleteness, PermissionEvaluation};
 
 impl RuntimeSessionService {
@@ -25,8 +26,10 @@ impl RuntimeSessionService {
         action: &AgentAction,
         command: &str,
         permission_evaluation: Option<&PermissionEvaluation>,
+        sandbox_summary: Option<&SandboxAuditSummary>,
         outcome: &str,
     ) -> Result<()> {
+        let sandbox_backend = self.configured_permissions().sandbox.as_str().to_string();
         let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
@@ -46,7 +49,29 @@ impl RuntimeSessionService {
         .with_metadata(
             "command_sha256",
             exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, command),
-        );
+        )
+        .with_metadata("sandbox_backend", sandbox_backend);
+        if let Some(summary) = sandbox_summary {
+            record = record
+                .with_metadata("sandbox_profile_version", summary.runtime_profile_version)
+                .with_metadata(
+                    "sandbox_authority_source",
+                    summary.authority_source.as_str(),
+                )
+                .with_metadata(
+                    "sandbox_read_only_mount_count",
+                    summary.read_only_mount_count.to_string(),
+                )
+                .with_metadata(
+                    "sandbox_read_write_mount_count",
+                    summary.read_write_mount_count.to_string(),
+                )
+                .with_metadata(
+                    "sandbox_protected_mask_count",
+                    summary.protected_mask_count.to_string(),
+                )
+                .with_metadata("sandbox_plan_sha256", summary.plan_sha256.clone());
+        }
         if let Some(evaluation) = permission_evaluation {
             record = record
                 .with_metadata(

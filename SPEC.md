@@ -8550,6 +8550,14 @@ changes, approval prompts, approval decisions, shell commands sent by agents,
 configuration changes, subagent spawns, local protocol bridge changes, external
 connector use, credential access attempts, and logout.
 
+Agent shell-command audit records MUST identify `sandbox_backend` as
+`policy-only` or `bubblewrap`. Bubblewrap records MUST also include the fixed
+runtime-profile version, maximum or narrowed authority source, read-only and
+read-write host-mount counts, protected-mask count, and deterministic launch-plan
+SHA-256. These records MUST NOT include mount paths, Bubblewrap argv, command
+content, or environment values; policy-only records MUST omit plan-specific
+fields.
+
 Audit records MUST redact secrets by default.
 
 Audit records MUST NOT include raw credential values, provider tokens, private

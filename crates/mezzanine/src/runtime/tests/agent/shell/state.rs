@@ -77,6 +77,117 @@ fn path_resolution_effects() -> mez_agent::permissions::EffectiveCommandEffects 
     }
 }
 
+/// Builds one shell action for focused audit-record tests.
+fn sandbox_audit_action() -> mez_agent::AgentAction {
+    mez_agent::AgentAction {
+        id: "sandbox-audit-action".to_string(),
+        rationale: "exercise sandbox audit metadata".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect a protected fixture".to_string(),
+            command: "cat /private/workspace/secret.txt".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    }
+}
+
+/// Verifies policy-only shell audit records identify their backend without
+/// inventing Bubblewrap plan metadata or retaining command content.
+#[test]
+fn runtime_policy_only_shell_audit_omits_plan_metadata() {
+    let root = temp_root("runtime-policy-only-sandbox-audit");
+    let audit_path = root.join("audit.jsonl");
+    let mut service = test_runtime_service();
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+
+    service
+        .append_agent_shell_command_audit(
+            &turn,
+            &action,
+            "cat /private/workspace/secret.txt",
+            None,
+            None,
+            "sent",
+        )
+        .unwrap();
+
+    let record: serde_json::Value =
+        serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
+    let metadata = record["metadata"].as_object().unwrap();
+    assert_eq!(metadata["sandbox_backend"], "policy-only");
+    assert!(!metadata.contains_key("sandbox_plan_sha256"));
+    assert!(!metadata.contains_key("sandbox_authority_source"));
+    assert!(
+        !fs::read_to_string(&audit_path)
+            .unwrap()
+            .contains("/private/workspace/secret.txt")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies Bubblewrap shell audit records retain only the compiler's redacted
+/// profile identity, authority source, counts, and deterministic plan digest.
+#[test]
+fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
+    let root = temp_root("runtime-bubblewrap-sandbox-audit");
+    let audit_path = root.join("audit.jsonl");
+    let mut service = test_runtime_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: true,
+        required: true,
+    }));
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+    let plan_sha256 = "a".repeat(64);
+    let summary = crate::security::sandbox::SandboxAuditSummary {
+        runtime_profile_version: crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
+        authority_source: crate::security::sandbox::SandboxAuthoritySource::Narrowed,
+        read_only_mount_count: 2,
+        read_write_mount_count: 1,
+        protected_mask_count: 6,
+        plan_sha256: plan_sha256.clone(),
+    };
+
+    service
+        .append_agent_shell_command_audit(
+            &turn,
+            &action,
+            "cat /private/workspace/secret.txt",
+            None,
+            Some(&summary),
+            "sent",
+        )
+        .unwrap();
+
+    let serialized = fs::read_to_string(&audit_path).unwrap();
+    let record: serde_json::Value = serde_json::from_str(serialized.trim()).unwrap();
+    let metadata = record["metadata"].as_object().unwrap();
+    assert_eq!(metadata["sandbox_backend"], "bubblewrap");
+    assert_eq!(
+        metadata["sandbox_profile_version"],
+        crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION
+    );
+    assert_eq!(metadata["sandbox_authority_source"], "narrowed");
+    assert_eq!(metadata["sandbox_read_only_mount_count"], "2");
+    assert_eq!(metadata["sandbox_read_write_mount_count"], "1");
+    assert_eq!(metadata["sandbox_protected_mask_count"], "6");
+    assert_eq!(metadata["sandbox_plan_sha256"], plan_sha256);
+    assert!(!serialized.contains("/private/workspace/secret.txt"));
+    assert!(!serialized.contains("--ro-bind"));
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Configures Bubblewrap with one project root as maximum read/write authority.
 fn configure_path_resolution_bubblewrap(service: &mut RuntimeSessionService) {
     let configured =

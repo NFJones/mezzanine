@@ -1116,7 +1116,7 @@ impl RuntimeSessionService {
                 error.message()
             ),
         );
-        let _ = self.append_agent_shell_command_audit(turn, action, command, None, "failed");
+        let _ = self.append_agent_shell_command_audit(turn, action, command, None, None, "failed");
         Ok(result)
     }
 }

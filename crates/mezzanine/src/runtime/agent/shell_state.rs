@@ -98,6 +98,7 @@ impl RuntimeSessionService {
             self.session.shell.path(),
             command,
         )?;
+        let mut sandbox_audit_summary = None;
         if let SandboxConfig::Bubblewrap(config) = self.configured_permissions().sandbox.clone() {
             let evaluation = permission_evaluation.ok_or_else(|| {
                 MezError::invalid_state(
@@ -144,6 +145,7 @@ impl RuntimeSessionService {
                 },
             )
             .map_err(|error| MezError::invalid_state(error.message()))?;
+            sandbox_audit_summary = Some(launch_plan.audit_summary.clone());
             let arguments = launch_plan
                 .arguments
                 .into_iter()
@@ -241,6 +243,7 @@ impl RuntimeSessionService {
             action,
             command,
             permission_evaluation,
+            sandbox_audit_summary.as_ref(),
             "sent",
         )?;
         self.append_agent_trace_turn_event(
