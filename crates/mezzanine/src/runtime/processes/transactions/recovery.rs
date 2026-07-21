@@ -6,6 +6,10 @@ use super::{
     runtime_pane_readiness_state_name,
 };
 
+/// Idle-cleanup observations allowed before a foreground process blocks one
+/// undispatched shell action fail-closed.
+const PENDING_SHELL_DISPATCH_BLOCKED_RECOVERY_LIMIT: usize = 3;
+
 impl RuntimeSessionService {
     /// Requeues pending shell dispatches that have no live transaction and are
     /// waiting behind readiness state that can be safely retried.
@@ -76,13 +80,62 @@ impl RuntimeSessionService {
                     }
                 }
                 PaneReadinessState::Busy => {
-                    let recovery = match self.pane_foreground_primary_shell_state(&turn.pane_id) {
+                    let foreground_primary_shell =
+                        self.pane_foreground_primary_shell_state(&turn.pane_id);
+                    if foreground_primary_shell != Some(false)
+                        && let Some(action_id) =
+                            self.pending_shell_action_id_for_turn(&turn.turn_id)
+                    {
+                        self.clear_pending_shell_dispatch_blocked_recovery_attempt(
+                            &turn.turn_id,
+                            &action_id,
+                        );
+                    }
+                    let recovery = match foreground_primary_shell {
                         Some(true) => Some((
                             PaneReadinessState::PromptCandidate,
                             "agent: shell readiness looked stale; retrying pending shell command",
                             "provider_task queued reason=stale_busy_recovery",
                         )),
-                        Some(false) => None,
+                        Some(false) => {
+                            let Some(action_id) =
+                                self.pending_shell_action_id_for_turn(&turn.turn_id)
+                            else {
+                                continue;
+                            };
+                            let attempts = self
+                                .record_pending_shell_dispatch_blocked_recovery_attempt(
+                                    &turn.turn_id,
+                                    &action_id,
+                                );
+                            if attempts >= PENDING_SHELL_DISPATCH_BLOCKED_RECOVERY_LIMIT {
+                                if self.queue_agent_provider_task(turn.turn_id.clone()) {
+                                    recovered = recovered.saturating_add(1);
+                                    self.append_agent_status_text_to_terminal_buffer(
+                                        &turn.pane_id,
+                                        "agent: shell command could not start because a foreground process remained active",
+                                    )?;
+                                    self.append_agent_trace_turn_event(
+                                        &turn.pane_id,
+                                        &turn.turn_id,
+                                        &format!(
+                                            "provider_task queued reason=foreground_process_dispatch_block_exhausted action={} attempts={}",
+                                            action_id, attempts
+                                        ),
+                                    )?;
+                                }
+                            } else {
+                                self.append_agent_trace_turn_event(
+                                    &turn.pane_id,
+                                    &turn.turn_id,
+                                    &format!(
+                                        "action {} waiting reason=foreground_process_dispatch_blocked attempts={}",
+                                        action_id, attempts
+                                    ),
+                                )?;
+                            }
+                            None
+                        }
                         None => Some((
                             PaneReadinessState::Degraded,
                             "agent: shell readiness metadata was unavailable; retrying pending shell command",

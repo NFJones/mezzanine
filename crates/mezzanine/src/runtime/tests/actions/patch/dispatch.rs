@@ -440,6 +440,110 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a shell action blocked behind a persistent foreground program
+/// settles after bounded idle recovery without injecting input into that program.
+#[test]
+fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(primary_pid.saturating_add(1)));
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "shell-blocked".to_string(),
+        rationale: "inspect without disturbing the foreground program".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect with shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+
+    for expected_attempts in 1..=3 {
+        service.recover_stranded_agent_shell_dispatches().unwrap();
+        assert_eq!(
+            service.pending_shell_dispatch_blocked_recovery_attempts(&turn.turn_id, &action.id,),
+            expected_attempts
+        );
+    }
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
+
+    let settled = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(settled.action_results[0].status, ActionStatus::Denied);
+    assert_eq!(
+        settled.action_results[0].error.as_ref().unwrap().code,
+        "foreground_process_blocked_dispatch"
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|record| record.turn_id == turn.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Failed
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies runtime shell dispatch honors per-action shell timeouts.
 ///
 /// The MAAP parser and semantic lowering preserve `timeout_ms`; the runtime

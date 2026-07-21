@@ -204,6 +204,9 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_issue_query_freshness: BTreeMap<String, BTreeMap<String, String>>,
     /// Per-turn successful shell dispatch history.
     agent_turn_shell_dispatch_history: BTreeMap<String, AgentShellDispatchHistory>,
+    /// Consecutive idle-recovery observations of shell actions blocked behind
+    /// a non-shell foreground process, keyed by turn and action identity.
+    pending_shell_dispatch_blocked_recovery_attempts: BTreeMap<(String, String), usize>,
     /// Per-turn network action history.
     agent_turn_network_action_history: BTreeMap<String, AgentNetworkActionHistory>,
     /// Successful semantic configuration mutations keyed by turn and signature.
@@ -1409,6 +1412,7 @@ impl RuntimeSessionService {
             .active_sandbox_bypasses
             .retain(|(owner_turn_id, _)| owner_turn_id != turn_id);
         self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
+        self.clear_pending_shell_dispatch_blocked_recovery_attempts_for_turn(turn_id);
         self.agent.agent_turn_network_action_history.remove(turn_id);
         self.agent
             .agent_turn_config_change_successes
@@ -1429,9 +1433,62 @@ impl RuntimeSessionService {
         self.agent.agent_provider_tool_calls_by_turn.clear();
         self.agent.agent_turn_issue_query_freshness.clear();
         self.agent.agent_turn_shell_dispatch_history.clear();
+        self.agent
+            .pending_shell_dispatch_blocked_recovery_attempts
+            .clear();
         self.agent.agent_turn_network_action_history.clear();
         self.agent.agent_turn_config_change_successes.clear();
         self.agent.agent_pre_shell_hook_completions.clear();
+    }
+
+    /// Records one idle-recovery observation of an undispatched shell action
+    /// blocked behind a foreground process and returns its bounded count.
+    pub(crate) fn record_pending_shell_dispatch_blocked_recovery_attempt(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> usize {
+        let attempts = self
+            .agent
+            .pending_shell_dispatch_blocked_recovery_attempts
+            .entry((turn_id.to_string(), action_id.to_string()))
+            .or_default();
+        *attempts = attempts.saturating_add(1);
+        *attempts
+    }
+
+    /// Returns recorded foreground-process recovery observations for one action.
+    pub(crate) fn pending_shell_dispatch_blocked_recovery_attempts(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> usize {
+        self.agent
+            .pending_shell_dispatch_blocked_recovery_attempts
+            .get(&(turn_id.to_string(), action_id.to_string()))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Clears foreground-process recovery observations for one action.
+    pub(crate) fn clear_pending_shell_dispatch_blocked_recovery_attempt(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+    ) {
+        self.agent
+            .pending_shell_dispatch_blocked_recovery_attempts
+            .remove(&(turn_id.to_string(), action_id.to_string()));
+    }
+
+    /// Clears foreground-process recovery observations for one completed turn.
+    pub(crate) fn clear_pending_shell_dispatch_blocked_recovery_attempts_for_turn(
+        &mut self,
+        turn_id: &str,
+    ) {
+        self.agent
+            .pending_shell_dispatch_blocked_recovery_attempts
+            .retain(|(owner_turn_id, _), _| owner_turn_id != turn_id);
     }
 
     /// Clears provider-execution identities and action ownership for one turn.

@@ -1967,8 +1967,12 @@ stored shell action for readiness handling. If the pane still says busy or
 interactive-blocked but host process metadata shows the primary pane shell is
 again the foreground process, the runtime MUST treat the blocking state as
 stale, move the pane back to prompt-candidate, and requeue the stored shell
-action. This recovery MUST avoid spamming visible logs while preserving
-trace-level state-transition evidence.
+action. If host process metadata continues to show a non-shell foreground
+process, recovery MUST remain bounded and MUST settle the undispatched action
+without injecting shell input into that process. A managed routed child settled
+this way MUST release its parent from the worker-result wait. This recovery MUST
+avoid spamming visible logs while preserving trace-level state-transition
+evidence.
 When an async provider worker claims a provider task, the runtime MUST record a
 finite claim lease before removing the task from the pending-provider queue. A
 claimed provider worker that does not report completion or failure before its

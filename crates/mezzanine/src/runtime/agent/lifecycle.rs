@@ -139,6 +139,7 @@ impl RuntimeSessionService {
         self.clear_agent_execution_group_ownership_for_turn(turn_id);
         self.clear_agent_issue_query_freshness_for_turn(turn_id);
         self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
+        self.clear_pending_shell_dispatch_blocked_recovery_attempts_for_turn(turn_id);
         self.agent.agent_turn_network_action_history.remove(turn_id);
         self.agent
             .agent_turn_config_change_successes
@@ -226,6 +227,7 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_shell_dispatch_history
             .remove(&turn.turn_id);
+        self.clear_pending_shell_dispatch_blocked_recovery_attempts_for_turn(&turn.turn_id);
         self.agent
             .agent_turn_network_action_history
             .remove(&turn.turn_id);
@@ -467,6 +469,7 @@ impl RuntimeSessionService {
                 self.agent
                     .agent_turn_shell_dispatch_history
                     .remove(&turn.turn_id);
+                self.clear_pending_shell_dispatch_blocked_recovery_attempts_for_turn(&turn.turn_id);
                 self.agent
                     .agent_turn_network_action_history
                     .remove(&turn.turn_id);

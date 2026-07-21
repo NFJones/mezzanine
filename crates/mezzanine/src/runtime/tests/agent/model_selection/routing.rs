@@ -1108,6 +1108,85 @@ fn runtime_routed_loop_worker_provider_failure_terminates_controller() {
     );
 }
 
+/// Verifies a routed worker whose shell action is denied after a persistent
+/// foreground-process block releases its parent for bounded error explanation.
+#[test]
+fn runtime_routed_worker_foreground_dispatch_block_recovers_parent() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 inspect foreground dispatch recovery");
+    let action = mez_agent::AgentAction {
+        id: "shell-blocked".to_string(),
+        rationale: "inspect without disturbing the foreground program".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let denied = mez_agent::ActionResult::failed(
+        &worker_turn,
+        &action,
+        ActionStatus::Denied,
+        "foreground_process_blocked_dispatch",
+        "the foreground process remained active",
+    )
+    .unwrap();
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(
+            &worker_turn.turn_id,
+            &worker_turn.agent_id,
+        ),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "shell dispatch blocked".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "inspect with shell".to_string(),
+                thought: None,
+                turn_id: worker_turn.turn_id.clone(),
+                agent_id: worker_turn.agent_id.clone(),
+                actions: vec![action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![denied],
+        final_turn: false,
+        terminal_state: AgentTurnState::Failed,
+    };
+
+    service
+        .emit_subagent_task_result_for_execution(&worker_turn, &execution)
+        .unwrap();
+    service
+        .agent_scheduler_mut()
+        .complete(&worker_turn.turn_id)
+        .unwrap();
+    service.start_ready_agent_turns().unwrap();
+
+    let workflow = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .expect("foreground dispatch failure should retain recovery state");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent_turn_id)
+    );
+}
+
 /// Verifies routed `--fork` and `--new` loops restore the invoking parent at
 /// their iteration limit while keeping worker attempts ephemeral and isolated.
 ///

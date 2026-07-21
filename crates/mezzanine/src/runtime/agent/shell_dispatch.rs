@@ -672,10 +672,53 @@ impl RuntimeSessionService {
                             )?;
                         }
                         Some(false) => {
+                            let attempts = self.pending_shell_dispatch_blocked_recovery_attempts(
+                                &turn.turn_id,
+                                &action.id,
+                            );
+                            if attempts >= 3 {
+                                let message = format!(
+                                    "pane {} kept a non-shell foreground process active; shell command was not dispatched",
+                                    turn.pane_id
+                                );
+                                let mut result = ActionResult::failed(
+                                    turn,
+                                    action,
+                                    ActionStatus::Denied,
+                                    "foreground_process_blocked_dispatch",
+                                    message.clone(),
+                                )?;
+                                result.structured_content_json = Some(format!(
+                                    r#"{{"state":"dispatch_blocked","reason":"foreground_process_active","attempts":{},"command":"{}"}}"#,
+                                    attempts,
+                                    json_escape(&runtime_agent_context_command(action, command))
+                                ));
+                                execution.action_results[index] = result;
+                                self.clear_pending_shell_dispatch_blocked_recovery_attempt(
+                                    &turn.turn_id,
+                                    &action.id,
+                                );
+                                self.append_agent_error_text_to_terminal_buffer(
+                                    &turn.pane_id,
+                                    &format!("agent: {message}"),
+                                )?;
+                                self.append_agent_trace_turn_event(
+                                    &turn.pane_id,
+                                    &turn.turn_id,
+                                    &format!(
+                                        "action {} failed reason=foreground_process_blocked_dispatch attempts={}",
+                                        action.id, attempts
+                                    ),
+                                )?;
+                                break;
+                            }
                             self.append_agent_trace_turn_event(
                                 &turn.pane_id,
                                 &turn.turn_id,
-                                &format!("action {} waiting reason=pane_readiness_busy", action.id),
+                                &format!(
+                                    "action {} waiting reason=pane_readiness_busy attempts={}",
+                                    action.id, attempts
+                                ),
                             )?;
                         }
                     }
