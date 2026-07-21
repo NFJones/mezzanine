@@ -76,6 +76,8 @@ pub fn memory_context_blocks(
 /// loaded skill names a server with `@<server-id>`. The injected block is
 /// model-visible turn context, not a durable prompt catalog.
 const MCP_INTEGRATIONS_CONTEXT_LABEL: &str = "mcp integrations";
+/// Runtime-owned label for the original task copied into a routed worker.
+const ROUTED_CONTROLLER_TASK_LABEL: &str = "routed controller task";
 
 pub fn append_mcp_context(
     mut context: AgentContext,
@@ -331,10 +333,13 @@ fn resolve_explicit_mcp_invocations(
 fn explicit_mcp_invocations_from_context(context: &AgentContext) -> Vec<String> {
     let mut names = Vec::new();
     for block in context.blocks() {
-        if !matches!(
+        let eligible_instruction = matches!(
             block.source,
             ContextSourceKind::UserInstruction | ContextSourceKind::SkillInstruction
-        ) {
+        );
+        let routed_controller_task = block.source == ContextSourceKind::LocalMessage
+            && block.label == ROUTED_CONTROLLER_TASK_LABEL;
+        if !eligible_instruction && !routed_controller_task {
             continue;
         }
         for name in explicit_mcp_invocations_from_text(&block.content) {

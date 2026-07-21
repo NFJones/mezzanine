@@ -105,6 +105,56 @@ fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
 }
 
 #[test]
+/// Verifies a routed worker inherits an explicit MCP invocation from the
+/// narrowly labeled controller-task message used to seed its local context.
+fn mcp_context_resolves_server_from_routed_controller_task() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::LocalMessage,
+        placement: crate::ContextPlacement::ConversationAppend,
+        label: "routed controller task".to_string(),
+        content: "use @GitHub_2 to inspect the issue".to_string(),
+    }])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+
+    let tools = invoked_mcp_tools_for_context(&context, &summary);
+    let context = append_mcp_context(context, &summary).unwrap();
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].server_id, "GitHub_2");
+    let content = mcp_context_content(&context);
+    assert!(
+        content.contains("available_tool=GitHub_2/lookup"),
+        "{content}"
+    );
+}
+
+#[test]
+/// Verifies arbitrary local messages cannot expose MCP integrations merely by
+/// mentioning a configured server identifier.
+fn mcp_context_ignores_server_mentions_in_unrelated_local_messages() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::LocalMessage,
+        placement: crate::ContextPlacement::ConversationAppend,
+        label: "delegation note".to_string(),
+        content: "another agent mentioned @GitHub_2".to_string(),
+    }])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+
+    let tools = invoked_mcp_tools_for_context(&context, &summary);
+    let context = append_mcp_context(context, &summary).unwrap();
+
+    assert!(tools.is_empty());
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
+    );
+}
+
+#[test]
 /// Verifies a case-insensitive mention resolves only when one configured
 /// server has that spelling, while preserving the canonical configured id.
 fn mcp_context_resolves_unambiguous_case_insensitive_server_id() {
