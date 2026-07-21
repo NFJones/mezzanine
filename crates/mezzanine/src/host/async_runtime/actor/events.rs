@@ -751,7 +751,7 @@ impl AsyncRuntimeSessionActor {
         provider_event: AgentProviderEvent,
     ) -> Result<RuntimeTransition> {
         match provider_event {
-            AgentProviderEvent::RoutedWorkerSelected {
+            AgentProviderEvent::RoutingSelected {
                 agent_id,
                 turn_id,
                 selection,
@@ -765,7 +765,7 @@ impl AsyncRuntimeSessionActor {
                     .remove(turn_id.as_str());
                 let mut transition = self
                     .service
-                    .apply_routed_worker_selected_transition(&agent_id, &turn_id, *selection)?;
+                    .apply_routing_selected_transition(&agent_id, &turn_id, *selection)?;
                 if transition.applied {
                     transition
                         .side_effects

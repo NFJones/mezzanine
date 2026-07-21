@@ -4871,11 +4871,16 @@ Agents MUST support optional routing model sizing. When routing
 is enabled for a pane, agent, or subagent, the first provider step for each new
 turn MUST be a bounded classification request to the configured auto-sizing
 router model. The router decision MUST select one configured size bucket
-(`small`, `medium`, or `large`) and one allowed reasoning effort. Mezzanine MUST
-keep the parent turn bound to its normal user-selected model profile and MUST
-apply the selected model profile and reasoning effort only to a managed routed
-worker forked from the parent conversation. The routed worker result MUST return
-to the parent for main-profile presentation. After worker completion, Mezzanine
+(`small`, `medium`, or `large`) and one allowed reasoning effort. For a
+root-agent turn, Mezzanine MUST keep the parent turn bound to its normal
+user-selected model profile and MUST apply the selected model profile and
+reasoning effort to a managed routed worker forked from the parent conversation.
+The routed worker result MUST return to the parent for main-profile presentation.
+For a turn owned by an existing spawned subagent, Mezzanine MUST retain that
+subagent and turn identity, apply the selected profile only to that turn, and
+redispatch it through normal provider resolution. A routed turn MUST be marked
+as already classified without disabling pane-level routing for descendants or
+later independent turns. After worker completion, Mezzanine
 MUST request one bounded structured context summary from the managed child,
 preserve the exact worker final output separately, and append both values to the
 parent context before resuming the parent on its main profile. Worker, summary,

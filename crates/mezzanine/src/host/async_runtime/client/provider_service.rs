@@ -381,8 +381,8 @@ fn provider_worker_event(
             }),
             true,
         ),
-        Ok(Ok(RuntimeAgentProviderWorkerOutcome::RoutedWorkerSelected(selection))) => (
-            RuntimeEvent::AgentProvider(AgentProviderEvent::RoutedWorkerSelected {
+        Ok(Ok(RuntimeAgentProviderWorkerOutcome::RoutingSelected(selection))) => (
+            RuntimeEvent::AgentProvider(AgentProviderEvent::RoutingSelected {
                 agent_id,
                 turn_id,
                 selection,
@@ -631,8 +631,8 @@ async fn execute_runtime_agent_provider_dispatch(
                 auto_sizing.router_profile.provider
             )));
         };
-        return Ok(RuntimeAgentProviderWorkerOutcome::RoutedWorkerSelected(
-            Box::new(auto_sizing_execution.into_worker_selection()),
+        return Ok(RuntimeAgentProviderWorkerOutcome::RoutingSelected(
+            Box::new(auto_sizing_execution.into_routing_selection()),
         ));
     }
     match provider {

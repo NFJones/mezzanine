@@ -198,14 +198,14 @@ pub enum ProcessEvent {
 /// Event emitted by an async agent provider worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProviderEvent {
-    /// Auto-sizing completed and the actor should start a managed routed worker.
-    RoutedWorkerSelected {
-        /// Parent agent identity.
+    /// Auto-sizing completed and awaits policy-specific runtime application.
+    RoutingSelected {
+        /// Routed agent identity.
         agent_id: AgentId,
-        /// Parent turn identity and routed workflow identity.
+        /// Routed turn identity.
         turn_id: String,
-        /// Provider-independent routed worker selection.
-        selection: Box<mez_agent::AutoSizingWorkerSelection>,
+        /// Provider-independent routing selection.
+        selection: Box<mez_agent::AutoSizingRoutingSelection>,
     },
     /// Provider work completed outside the runtime actor and the runtime should
     /// apply the produced turn execution.

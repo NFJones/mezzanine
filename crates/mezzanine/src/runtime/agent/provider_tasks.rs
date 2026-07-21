@@ -1402,10 +1402,10 @@ impl RuntimeSessionService {
                     let agent_id = AgentId::opaque(turn.agent_id.clone()).ok_or_else(|| {
                         MezError::invalid_state("runtime agent turn has an invalid agent id")
                     })?;
-                    self.apply_routed_worker_selected_transition(
+                    self.apply_routing_selected_transition(
                         &agent_id,
                         &turn_id,
-                        auto_sizing_execution.into_worker_selection(),
+                        auto_sizing_execution.into_routing_selection(),
                     )?;
                     continue;
                 }

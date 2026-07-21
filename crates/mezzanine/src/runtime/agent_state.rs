@@ -12,7 +12,7 @@ use super::{
     SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::integrations::agent::provider::AnthropicMessagesProvider;
-use mez_agent::{AutoSizingWorkerSelection, McpPromptTool, PreparedModelContext};
+use mez_agent::{AutoSizingRoutingSelection, McpPromptTool, PreparedModelContext};
 
 /// Carries Runtime Agent Provider Task state for this subsystem.
 ///
@@ -204,8 +204,8 @@ pub struct RuntimeAgentProviderDispatch {
 pub enum RuntimeAgentProviderWorkerOutcome {
     /// A normal provider execution ready for runtime application.
     Execution(Box<AgentTurnExecution>),
-    /// A routing decision that must create a managed child in the runtime actor.
-    RoutedWorkerSelected(Box<AutoSizingWorkerSelection>),
+    /// A routing decision ready for policy-specific application by the runtime actor.
+    RoutingSelected(Box<AutoSizingRoutingSelection>),
 }
 
 /// Identifies the role of one runtime turn owned by a `/loop` command.

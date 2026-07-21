@@ -225,8 +225,8 @@ impl AutoSizingExecution {
         BTreeMap::from([(self.router_token_usage_key.clone(), self.router_token_usage)])
     }
 
-    /// Converts this classifier result into a managed-worker selection.
-    pub fn into_worker_selection(self) -> AutoSizingWorkerSelection {
+    /// Converts this classifier result into a policy-neutral routing selection.
+    pub fn into_routing_selection(self) -> AutoSizingRoutingSelection {
         let routing_token_usage_by_model = self.token_usage_by_model();
         let decision_summary = self.decision.as_ref().map(|decision| {
             format!(
@@ -234,8 +234,8 @@ impl AutoSizingExecution {
                 decision.reasoning_effort, self.selected_profile.model
             )
         });
-        AutoSizingWorkerSelection {
-            worker_profile: self.selected_profile,
+        AutoSizingRoutingSelection {
+            selected_profile: self.selected_profile,
             routing_token_usage_by_model,
             decision_summary,
             fallback: self.fallback,
@@ -243,11 +243,20 @@ impl AutoSizingExecution {
     }
 }
 
-/// Agent-domain payload transferred from a sizing worker to routed execution.
+/// Runtime application policy for one completed automatic-routing decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoSizingRoutingPolicy {
+    /// Execute a root turn through a runtime-managed routed subagent.
+    Subagent,
+    /// Apply the selected profile to the existing subagent turn.
+    InPlace,
+}
+
+/// Agent-domain payload transferred from the router to runtime application.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AutoSizingWorkerSelection {
-    /// Model and reasoning profile pinned to the managed routed worker.
-    pub worker_profile: ModelProfile,
+pub struct AutoSizingRoutingSelection {
+    /// Model and reasoning profile selected for routed execution.
+    pub selected_profile: ModelProfile,
     /// Router token usage retained for parent-turn accounting.
     pub routing_token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     /// Bounded user-visible routing decision summary when classification succeeded.
@@ -1097,17 +1106,17 @@ mod tests {
             execution.token_usage_by_model(),
             BTreeMap::from([(ModelTokenUsageKey::new("openai", "router"), usage)])
         );
-        let worker = execution.into_worker_selection();
-        assert_eq!(worker.worker_profile.model, "large");
+        let selection = execution.into_routing_selection();
+        assert_eq!(selection.selected_profile.model, "large");
         assert_eq!(
-            worker.worker_profile.reasoning_profile.as_deref(),
+            selection.selected_profile.reasoning_profile.as_deref(),
             Some("high")
         );
         assert_eq!(
-            worker.decision_summary.as_deref(),
+            selection.decision_summary.as_deref(),
             Some("high reasoning on large")
         );
-        assert!(worker.fallback.is_none());
+        assert!(selection.fallback.is_none());
     }
 
     /// Verifies fallback conversion omits all-zero router accounting and never
@@ -1120,11 +1129,11 @@ mod tests {
             AutoSizingExecution::from_selection(&dispatch, selection, ModelTokenUsage::default());
 
         assert!(execution.token_usage_by_model().is_empty());
-        let worker = execution.into_worker_selection();
-        assert_eq!(worker.worker_profile.model, "default");
-        assert!(worker.decision_summary.is_none());
+        let selection = execution.into_routing_selection();
+        assert_eq!(selection.selected_profile.model, "default");
+        assert!(selection.decision_summary.is_none());
         assert_eq!(
-            worker.fallback.as_deref(),
+            selection.fallback.as_deref(),
             Some("invalid resolved constraints")
         );
     }

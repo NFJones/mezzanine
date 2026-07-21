@@ -9,10 +9,10 @@
 
 use super::{
     AgentContext, AgentId, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
-    AutoSizingWorkerSelection, ContextSourceKind, MezError, Result, RuntimeAgentLoopCompletion,
-    RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeSessionService, ScheduledWork,
-    current_unix_seconds, runtime_spawn_json_agent_and_turn, runtime_subagent_placement_mode,
-    runtime_subagent_spawn_request,
+    AutoSizingRoutingPolicy, AutoSizingRoutingSelection, ContextSourceKind, MezError, Result,
+    RuntimeAgentLoopCompletion, RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeSessionService,
+    ScheduledWork, current_unix_seconds, runtime_spawn_json_agent_and_turn,
+    runtime_subagent_placement_mode, runtime_subagent_spawn_request,
 };
 use mez_agent::routed_workflow::{
     RoutedFailurePlan, RoutedPresentationCompletionPlan, RoutedWorkerCompletionPlan,
@@ -113,13 +113,13 @@ impl RuntimeSessionService {
 
     /// Accepts a completed routing decision at the actor boundary.
     ///
-    /// The full managed-child transition is deliberately actor-owned so no
-    /// provider worker mutates pane, scheduler, transcript, or subagent state.
-    pub(crate) fn apply_routed_worker_selected_transition(
+    /// Root turns retain the managed-child workflow, while existing subagents
+    /// apply the selected profile to their current turn and redispatch it.
+    pub(crate) fn apply_routing_selected_transition(
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
-        selection: AutoSizingWorkerSelection,
+        selection: AutoSizingRoutingSelection,
     ) -> Result<crate::runtime::RuntimeTransition> {
         let turn = self
             .agent_turn_ledger()
@@ -127,14 +127,20 @@ impl RuntimeSessionService {
             .iter()
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
-            .ok_or_else(|| MezError::invalid_state("routed parent turn is unavailable"))?;
+            .ok_or_else(|| MezError::invalid_state("routed turn is unavailable"))?;
         if turn.agent_id != agent_id.as_str() {
             return Err(MezError::invalid_args(
-                "routed worker selection agent id does not match parent turn",
+                "routing selection agent id does not match turn",
             ));
         }
         if turn.state != mez_agent::AgentTurnState::Running {
             return Ok(crate::runtime::RuntimeTransition::default());
+        }
+        if self.agent_turn_routing_applied(turn_id) {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        }
+        if self.auto_sizing_routing_policy_for_turn(&turn) == AutoSizingRoutingPolicy::InPlace {
+            return self.commit_in_place_routing_selection(&turn, selection);
         }
         if self
             .agent
@@ -155,12 +161,60 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Applies one routing selection to an existing subagent turn exactly once.
+    fn commit_in_place_routing_selection(
+        &mut self,
+        turn: &AgentTurnRecord,
+        selection: AutoSizingRoutingSelection,
+    ) -> Result<crate::runtime::RuntimeTransition> {
+        if !self.mark_agent_turn_routing_applied(turn.turn_id.clone()) {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        }
+        self.set_agent_turn_model_profile(turn.turn_id.clone(), selection.selected_profile.clone());
+        for (key, usage) in &selection.routing_token_usage_by_model {
+            self.integration
+                .runtime_metrics_mut()
+                .record_provider_token_usage(*usage, *usage, key);
+        }
+        self.record_agent_provider_token_usage_by_model(
+            &turn.pane_id,
+            &selection.routing_token_usage_by_model,
+        );
+        if let Some(summary) = selection.decision_summary.as_deref() {
+            self.append_agent_status_text_to_terminal_buffer(
+                &turn.pane_id,
+                &format!("agent: routing selected {summary}"),
+            )?;
+        } else if let Some(fallback) = selection.fallback.as_deref() {
+            self.append_agent_status_text_to_terminal_buffer(
+                &turn.pane_id,
+                &format!(
+                    "agent: routing fallback model {}: {fallback}",
+                    selection.selected_profile.model
+                ),
+            )?;
+        }
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "routing selected policy=in_place provider={} model={}",
+                selection.selected_profile.provider, selection.selected_profile.model
+            ),
+        )?;
+        self.queue_agent_provider_task(turn.turn_id.clone());
+        Ok(self.runtime_transition_with_render(
+            true,
+            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+        ))
+    }
+
     /// Commits one routed worker selection after the parent boundary is valid.
     fn commit_routed_worker_selected_transition(
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
-        selection: AutoSizingWorkerSelection,
+        selection: AutoSizingRoutingSelection,
     ) -> Result<crate::runtime::RuntimeTransition> {
         let turn = self
             .agent_turn_ledger()
@@ -238,19 +292,26 @@ impl RuntimeSessionService {
                     Some(parent_session.session_id.clone()),
                     parent_session.transcript_entries,
                 )?;
-            self.set_agent_routing_override(&child_pane_id, Some(false));
+            self.set_agent_routing_override(
+                &child_pane_id,
+                Some(self.agent_routing_enabled_for_pane(&turn.pane_id)),
+            );
+            self.set_agent_auto_sizing_override(
+                &child_pane_id,
+                Some(self.agent_auto_sizing_for_pane(&turn.pane_id).clone()),
+            );
 
             let child_turn = self.queue_routed_child_turn(RoutedChildTurnRequest {
                 parent_turn: &turn,
                 child_agent_id: &child_agent_id,
                 child_pane_id: &child_pane_id,
                 prompt: &original_user_prompt,
-                model_profile: selection.worker_profile.clone(),
+                model_profile: selection.selected_profile.clone(),
                 seed_context: Some(worker_seed_context),
                 initial_capability: None,
                 reason: "routed_worker_execute",
             })?;
-            self.adopt_routed_worker_loop(&turn.turn_id, &child_turn, &selection.worker_profile)?;
+            self.adopt_routed_worker_loop(&turn.turn_id, &child_turn, &selection.selected_profile)?;
             self.agent
                 .routed_workflow_by_child_turn
                 .insert(child_turn.turn_id.clone(), turn.turn_id.clone());
@@ -264,7 +325,7 @@ impl RuntimeSessionService {
                 .insert(turn.turn_id.clone(), child_context);
             self.agent
                 .routed_child_profiles_by_parent_turn
-                .insert(turn.turn_id.clone(), selection.worker_profile.clone());
+                .insert(turn.turn_id.clone(), selection.selected_profile.clone());
             self.agent.routed_workflows_by_parent_turn.insert(
                 turn.turn_id.clone(),
                 RoutedWorkflowState {
@@ -275,7 +336,7 @@ impl RuntimeSessionService {
                     parent_transcript_entries: parent_session.transcript_entries,
                     original_user_prompt,
                     main_model_profile: turn.model_profile.clone(),
-                    worker_model_profile: Some(selection.worker_profile.model.clone()),
+                    worker_model_profile: Some(selection.selected_profile.model.clone()),
                     child_agent_id: Some(child_agent_id.clone()),
                     child_conversation_id: Some(child_conversation_id),
                     child_turn_id: Some(child_turn.turn_id.clone()),
@@ -306,7 +367,7 @@ impl RuntimeSessionService {
                     &turn.pane_id,
                     &format!(
                         "agent: routing fallback worker {}: {fallback}",
-                        selection.worker_profile.model
+                        selection.selected_profile.model
                     ),
                 )?;
             }
@@ -318,8 +379,8 @@ impl RuntimeSessionService {
                 turn_id,
                 &format!(
                     "routed_worker selected provider={} model={} child_agent={} child_turn={}",
-                    selection.worker_profile.provider,
-                    selection.worker_profile.model,
+                    selection.selected_profile.provider,
+                    selection.selected_profile.model,
                     child_agent_id,
                     child_turn.turn_id
                 ),
@@ -1350,6 +1411,7 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_model_profiles
             .insert(turn_id.clone(), model_profile);
+        self.mark_agent_turn_routing_applied(turn_id.clone());
         self.agent
             .subagent_task_routes
             .insert(turn_id.clone(), parent_turn.agent_id.clone());

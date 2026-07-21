@@ -71,10 +71,10 @@ use mez_agent::semantic_patch_planning::{
 };
 use mez_agent::{
     ActiveWriteScope, AgentContext, AgentNetworkActionHistory, AgentShellDispatchHistory,
-    AgentShellStore, AgentTurnLedger, AutoSizingWorkerSelection, DEFAULT_PROVIDER_TIMEOUT_MS,
-    EnvironmentSignature, MaapBatch, MacroManagedSubagent, MacroRunState, ModelInteractionKind,
-    ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext, ProviderApiCompatibility,
-    ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory,
+    AgentShellStore, AgentTurnLedger, AutoSizingRoutingPolicy, AutoSizingRoutingSelection,
+    DEFAULT_PROVIDER_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MacroManagedSubagent,
+    MacroRunState, ModelInteractionKind, ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext,
+    ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory,
     append_mcp_context_for_provider, assistant_context_content_for_execution,
     invoked_mcp_tools_for_context, set_project_guidance_context,
 };
@@ -218,6 +218,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_pre_shell_hook_completions: BTreeSet<RuntimeAgentPreShellHookCompletion>,
     /// Effective provider model profile retained for each active turn.
     agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
+    /// Turns whose automatic routing decision has already been applied.
+    agent_turn_routing_applied: BTreeSet<String>,
     /// Provider turns queued for worker dispatch.
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Provider turns claimed by workers but not yet settled.
@@ -769,14 +771,6 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn take_routed_loop_continuation_queue_failure_for_tests(&mut self) -> bool {
         std::mem::take(&mut self.agent.fail_routed_loop_continuation_queue)
-    }
-
-    /// Reports whether a routed parent retains a macro-loop completion.
-    #[cfg(test)]
-    pub(crate) fn has_routed_loop_completion_for_tests(&self, parent_turn_id: &str) -> bool {
-        self.agent
-            .routed_loop_completions_by_parent_turn
-            .contains_key(parent_turn_id)
     }
 
     /// Returns the parent macro turn for one child step turn.
@@ -1388,12 +1382,36 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Option<ModelProfile> {
+        self.agent.agent_turn_routing_applied.remove(turn_id);
         self.agent.agent_turn_model_profiles.remove(turn_id)
     }
 
     /// Clears all retained turn model profiles for session replacement.
     pub(crate) fn clear_agent_turn_model_profiles(&mut self) {
         self.agent.agent_turn_model_profiles.clear();
+        self.agent.agent_turn_routing_applied.clear();
+    }
+
+    /// Reports whether automatic routing has already been applied to a turn.
+    pub(crate) fn agent_turn_routing_applied(&self, turn_id: &str) -> bool {
+        self.agent.agent_turn_routing_applied.contains(turn_id)
+    }
+
+    /// Marks a turn's automatic routing decision as applied.
+    pub(crate) fn mark_agent_turn_routing_applied(&mut self, turn_id: impl Into<String>) -> bool {
+        self.agent.agent_turn_routing_applied.insert(turn_id.into())
+    }
+
+    /// Selects how a routing decision applies to the owning runtime turn.
+    pub(crate) fn auto_sizing_routing_policy_for_turn(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> AutoSizingRoutingPolicy {
+        if self.subagent_lineage(&turn.agent_id).is_some() {
+            AutoSizingRoutingPolicy::InPlace
+        } else {
+            AutoSizingRoutingPolicy::Subagent
+        }
     }
 
     /// Clears correction attempts and action histories for one completed turn.

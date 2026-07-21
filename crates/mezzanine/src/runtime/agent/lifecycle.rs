@@ -146,7 +146,7 @@ impl RuntimeSessionService {
             .remove(turn_id);
         self.clear_joined_subagent_dependencies_for_turn(turn_id);
         self.clear_agent_pre_shell_hook_completions_for_turn(turn_id);
-        self.agent.agent_turn_model_profiles.remove(turn_id);
+        self.remove_agent_turn_model_profile(turn_id);
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
         self.clear_agent_provider_retry_attempt(turn_id);
@@ -236,7 +236,7 @@ impl RuntimeSessionService {
             .remove(&turn.turn_id);
         self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
         self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-        self.agent.agent_turn_model_profiles.remove(&turn.turn_id);
+        self.remove_agent_turn_model_profile(&turn.turn_id);
         self.agent
             .pending_agent_provider_tasks
             .remove(&turn.turn_id);
@@ -478,7 +478,7 @@ impl RuntimeSessionService {
                     .remove(&turn.turn_id);
                 self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
                 self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-                self.agent.agent_turn_model_profiles.remove(&turn.turn_id);
+                self.remove_agent_turn_model_profile(&turn.turn_id);
                 self.agent
                     .pending_agent_provider_tasks
                     .remove(&turn.turn_id);

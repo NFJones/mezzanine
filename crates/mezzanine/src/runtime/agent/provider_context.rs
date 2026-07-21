@@ -361,6 +361,7 @@ impl RuntimeSessionService {
         default_profile: &ModelProfile,
     ) -> Result<Option<RuntimeAutoSizingDispatch>> {
         if !self.agent_routing_enabled_for_pane(&turn.pane_id)
+            || self.agent_turn_routing_applied(&turn.turn_id)
             || self.agent_turn_executions().contains_key(&turn.turn_id)
         {
             return Ok(None);
