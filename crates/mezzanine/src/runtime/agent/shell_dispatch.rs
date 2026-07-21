@@ -834,6 +834,24 @@ impl RuntimeSessionService {
             let permission_evaluation = execution.action_results[index]
                 .permission_evaluation
                 .clone();
+            match self.ensure_bubblewrap_path_resolution_for_action(
+                turn,
+                &action.id,
+                permission_evaluation.as_deref(),
+            ) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => {
+                    execution.action_results[index] = self.shell_action_runtime_error_result(
+                        turn,
+                        action,
+                        command,
+                        "bubblewrap_path_resolution",
+                        &error,
+                    )?;
+                    continue;
+                }
+            }
             match self.ensure_bubblewrap_capability_for_action(turn, &action.id) {
                 Ok(true) => {}
                 Ok(false) => break,

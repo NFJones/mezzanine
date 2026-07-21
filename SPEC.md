@@ -2770,10 +2770,16 @@ be opt-in and fail closed. Configured scopes define maximum resource authority,
 MUST be resolved in the pane environment, and MUST NOT be inferred from command
 patterns, approvals, presets, or trusted directories. Rule `effects` MAY declare
 complete or unknown read, write, network, credential, and process-control
-requirements; they MAY only narrow maximum authority. Raw Bubblewrap arguments,
-arbitrary binds, host networking, and inherited environment allowlists MUST NOT
-be configurable. The schema v20 to v21 migration MUST preserve policy-only
-behavior and MUST NOT invent scopes, rule identities, or effects.
+requirements; they MAY only narrow maximum authority. Before Bubblewrap
+compilation, complete read, write, create, delete, and touch paths MUST be
+resolved through the pane shell as one action-specific bounded request. The
+action MUST remain pending until exact evidence settles; resolver failure,
+timeout, truncation, or stale identity MUST fail it closed. Unknown effects MUST
+retain bounded maximum authority without an action-specific resolver. Raw
+Bubblewrap arguments, arbitrary binds, host networking, and inherited
+environment allowlists MUST NOT be configurable. The schema v20 to v21
+migration MUST preserve policy-only behavior and MUST NOT invent scopes, rule
+identities, or effects.
 
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`
 with a minimal `[permissions]` table and `approval_policy = "ask"` when a
@@ -7559,8 +7565,10 @@ existing parent and preserve the remaining unambiguous path components. NUL
 bytes, unexpanded home syntax, lexical traversal ambiguity, symlink escape,
 missing resolver output, and partially validated results MUST fail closed.
 Resolver results MAY be cached only for the exact pane environment signature,
-configuration generation, and bounded path request. A working-directory,
-environment, or relevant configuration change MUST invalidate stale results.
+configuration generation, and bounded path request. Distinct exact requests in
+one unchanged pane identity MUST coexist so primary, subagent, and per-action
+evidence remain available together. A working-directory, environment, or
+relevant configuration change MUST invalidate stale results.
 
 A shell action MAY run without fresh approval only when all of the following
 are true:

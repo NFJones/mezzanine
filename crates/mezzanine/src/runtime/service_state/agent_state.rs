@@ -272,6 +272,8 @@ pub(crate) enum RunningShellTransactionKind {
     PathResolution {
         /// Cache identity captured before the transaction was dispatched.
         cache_key: RuntimePathResolutionCacheKey,
+        /// Pending action resumed or failed when action-specific resolution settles.
+        action_id: Option<String>,
     },
     /// Internal Bubblewrap runtime-profile capability probe.
     BubblewrapCapabilityProbe {

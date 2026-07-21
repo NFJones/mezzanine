@@ -23,6 +23,226 @@ fn path_resolution_environment(working_directory: &Path) -> mez_agent::Environme
     .unwrap()
 }
 
+/// Builds a running turn identity for action-specific path-resolution tests.
+fn path_resolution_turn() -> mez_agent::AgentTurnRecord {
+    mez_agent::AgentTurnRecord {
+        turn_id: "path-resolution-turn".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: mez_agent::AgentTurnState::Running,
+        cooperation_mode: None,
+        initial_capability: None,
+    }
+}
+
+/// Builds one permission evaluation with caller-supplied filesystem effects.
+fn path_resolution_evaluation(
+    completeness: mez_agent::permissions::EffectCompleteness,
+    effects: mez_agent::permissions::EffectiveCommandEffects,
+) -> mez_agent::permissions::PermissionEvaluation {
+    mez_agent::permissions::PermissionEvaluation {
+        decision: RuleDecision::Allow,
+        candidates: vec![mez_agent::permissions::CandidateEvaluation {
+            command: "test command".to_string(),
+            decision: RuleDecision::Allow,
+            matched_rule_ids: vec!["test-rule".to_string()],
+            effects: effects.clone(),
+            completeness,
+        }],
+        matched_rule_ids: vec!["test-rule".to_string()],
+        effects,
+        completeness,
+    }
+}
+
+/// Builds empty non-filesystem effects for path-resolution tests.
+fn path_resolution_effects() -> mez_agent::permissions::EffectiveCommandEffects {
+    mez_agent::permissions::EffectiveCommandEffects {
+        reads: Vec::new(),
+        writes: Vec::new(),
+        creates: Vec::new(),
+        deletes: Vec::new(),
+        touches: Vec::new(),
+        network: false,
+        credentials: false,
+        process_control: false,
+        destructive: false,
+        privilege_change: false,
+        unknown: false,
+    }
+}
+
+/// Configures Bubblewrap with one project root as maximum read/write authority.
+fn configure_path_resolution_bubblewrap(service: &mut RuntimeSessionService) {
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "read_scopes": ["."],
+                "write_scopes": ["."],
+                "network_policy": "deny",
+                "bubblewrap": {
+                    "executable": "/usr/bin/bwrap",
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal"
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+}
+
+/// Resolves and caches the configured project root as maximum authority.
+fn cache_path_resolution_maximum(service: &mut RuntimeSessionService, root: &Path) {
+    let request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        vec![".".to_string()],
+        Vec::new(),
+    )
+    .unwrap();
+    let command = mez_agent::shell::pane_path_resolution_command(
+        &request,
+        mez_agent::ShellClassification::PosixSh,
+    )
+    .unwrap();
+    let output = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let cache_key = service.path_resolution_cache_key("%1", &request).unwrap();
+    service
+        .observe_path_resolution_transaction_end(
+            "maximum-path-resolution",
+            "%1",
+            0,
+            cache_key,
+            &String::from_utf8(output.stdout).unwrap(),
+            false,
+        )
+        .unwrap();
+}
+
+/// Verifies complete read, write, create, delete, and touch effects are
+/// deduplicated into one action-specific resolver request before execution.
+#[test]
+fn runtime_complete_effects_request_action_specific_path_resolution() {
+    let root = temp_root("runtime-action-path-resolution");
+    for directory in ["src", "target", "generated", "obsolete", "metadata"] {
+        fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    cache_path_resolution_maximum(&mut service, &root);
+    mark_test_pane_ready(&mut service, "%1");
+
+    let mut effects = path_resolution_effects();
+    effects.reads = vec!["src".to_string(), "src".to_string()];
+    effects.writes = vec!["target".to_string()];
+    effects.creates = vec!["generated/new.txt".to_string()];
+    effects.deletes = vec!["obsolete/old.txt".to_string()];
+    effects.touches = vec!["metadata/stamp".to_string()];
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Complete,
+        effects,
+    );
+
+    assert!(
+        !service
+            .ensure_bubblewrap_path_resolution_for_action(
+                &path_resolution_turn(),
+                "action-1",
+                Some(&evaluation),
+            )
+            .unwrap()
+    );
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find(|transaction| {
+            matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::PathResolution {
+                    action_id: Some(action_id),
+                    ..
+                } if action_id == "action-1"
+            )
+        })
+        .unwrap();
+    let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind else {
+        unreachable!();
+    };
+    assert_eq!(
+        cache_key.request.additional_paths,
+        vec![
+            "generated/new.txt",
+            "metadata/stamp",
+            "obsolete/old.txt",
+            "src",
+            "target",
+        ]
+    );
+    assert_eq!(cache_key.request.read_scopes, vec![root.to_string_lossy()]);
+    assert_eq!(cache_key.request.write_scopes, vec![root.to_string_lossy()]);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies unknown filesystem effects retain maximum authority and do not
+/// dispatch an unnecessary action-specific resolver transaction.
+#[test]
+fn runtime_unknown_effects_skip_action_specific_path_resolution() {
+    let root = temp_root("runtime-unknown-action-path-resolution");
+    fs::create_dir_all(root.join("src")).unwrap();
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    cache_path_resolution_maximum(&mut service, &root);
+    mark_test_pane_ready(&mut service, "%1");
+
+    let mut effects = path_resolution_effects();
+    effects.reads.push("src".to_string());
+    effects.unknown = true;
+    let evaluation =
+        path_resolution_evaluation(mez_agent::permissions::EffectCompleteness::Unknown, effects);
+
+    assert!(
+        service
+            .ensure_bubblewrap_path_resolution_for_action(
+                &path_resolution_turn(),
+                "action-1",
+                Some(&evaluation),
+            )
+            .unwrap()
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies resolved authority is cached only for the exact pane environment,
 /// configuration generation, and bounded request that produced it.
 #[test]
@@ -81,6 +301,72 @@ fn runtime_path_resolution_cache_invalidates_on_config_generation() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies exact path-resolution requests coexist within one unchanged pane
+/// environment so action-specific evidence does not evict maximum authority.
+#[test]
+fn runtime_path_resolution_cache_retains_distinct_exact_requests() {
+    let root = temp_root("runtime-path-resolution-cache-coexistence");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("target")).unwrap();
+    let mut service = test_runtime_service();
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    let maximum_request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![".".to_string()],
+        vec![".".to_string()],
+        Vec::new(),
+    )
+    .unwrap();
+    let action_request = mez_agent::shell::PanePathResolutionRequest::new(
+        vec![root.to_string_lossy().into_owned()],
+        vec![root.to_string_lossy().into_owned()],
+        vec!["src".to_string(), "target".to_string()],
+    )
+    .unwrap();
+
+    for (marker, request) in [
+        ("maximum-path-resolution", &maximum_request),
+        ("action-path-resolution", &action_request),
+    ] {
+        let command = mez_agent::shell::pane_path_resolution_command(
+            request,
+            mez_agent::ShellClassification::PosixSh,
+        )
+        .unwrap();
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let cache_key = service.path_resolution_cache_key("%1", request).unwrap();
+        service
+            .observe_path_resolution_transaction_end(
+                marker,
+                "%1",
+                0,
+                cache_key,
+                &String::from_utf8(output.stdout).unwrap(),
+                false,
+            )
+            .unwrap();
+    }
+
+    assert!(
+        service
+            .path_scopes_for_pane_request("%1", &maximum_request)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        service
+            .path_scopes_for_pane_request("%1", &action_request)
+            .unwrap()
+            .is_some()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies a terminal resolver failure is retained for the exact cache key so
 /// provider polling fails closed instead of repeatedly launching the resolver.
 #[test]
@@ -100,6 +386,7 @@ fn runtime_path_resolution_failure_is_terminal_for_exact_identity() {
         turn_id: "path-resolution-turn".to_string(),
         kind: RunningShellTransactionKind::PathResolution {
             cache_key: cache_key.clone(),
+            action_id: None,
         },
         pane_id: "%1".to_string(),
         command: "path resolution".to_string(),

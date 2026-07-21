@@ -737,8 +737,14 @@ Command rule fields for each entry in a command rule array:
 | `effects.process_control` | boolean | required when complete | Whether host process control is required; initially unsupported by Bubblewrap mode. |
 
 Effects are accepted only on `allow` rules and may narrow but never grant authority.
-Bubblewrap activation requires explicit usable scopes. Schema v20 migration selects
-`policy-only` and does not infer scopes or effects.
+For complete effects, Mezzanine resolves read, write, create, delete, and touch
+paths in one action-specific pane-shell request before probing or launching
+Bubblewrap. The action waits for exact evidence; resolver failure, timeout,
+truncation, or stale pane identity fails closed. Unknown effects retain bounded
+maximum authority without this extra resolution. Exact primary, subagent, and
+action requests are cached independently for the current pane environment and
+configuration generation. Bubblewrap activation requires explicit usable scopes.
+Schema v20 migration selects `policy-only` and does not infer scopes or effects.
 
 On Linux, Mezzanine validates the configured executable inside the target pane
 environment before launching a sandboxed workload. The probe requires usable

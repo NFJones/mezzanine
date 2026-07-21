@@ -15,8 +15,42 @@ use super::{
     runtime_marker_for_action, runtime_pane_readiness_state_name,
 };
 use crate::runtime::SandboxConfig;
-use mez_agent::permissions::PermissionEvaluation;
+use mez_agent::permissions::{EffectCompleteness, PermissionEvaluation};
 use mez_agent::{ShellChildArgument, ShellChildLaunch};
+
+/// Builds the exact resolver request needed for complete per-action filesystem
+/// effects. Unknown effects retain maximum authority and require no extra
+/// resolver transaction.
+fn bubblewrap_action_path_resolution_request(
+    maximum: &PathScopes,
+    evaluation: &PermissionEvaluation,
+) -> Result<Option<mez_agent::shell::PanePathResolutionRequest>> {
+    if evaluation.completeness != EffectCompleteness::Complete {
+        return Ok(None);
+    }
+    let additional_paths = evaluation
+        .effects
+        .reads
+        .iter()
+        .chain(&evaluation.effects.writes)
+        .chain(&evaluation.effects.creates)
+        .chain(&evaluation.effects.deletes)
+        .chain(&evaluation.effects.touches)
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if additional_paths.is_empty() {
+        return Ok(None);
+    }
+    mez_agent::shell::PanePathResolutionRequest::new(
+        maximum.read_scopes.clone(),
+        maximum.write_scopes.clone(),
+        additional_paths,
+    )
+    .map(Some)
+    .map_err(|error| MezError::invalid_args(error.message()))
+}
 
 /// Per-action inputs required to render and track one pane shell transaction.
 pub(super) struct ShellActionDispatch<'a> {
@@ -92,7 +126,7 @@ impl RuntimeSessionService {
                     "Bubblewrap capability is unavailable for the active pane environment",
                 )
             })?;
-            let maximum_authority = self.bubblewrap_path_scopes_for_turn(turn)?;
+            let maximum_authority = self.bubblewrap_path_scopes_for_turn(turn, evaluation)?;
             let launch_plan = crate::security::sandbox::compile_bubblewrap_launch_plan(
                 crate::security::sandbox::BubblewrapCompileRequest {
                     config: &config,
@@ -253,8 +287,63 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Ensures complete filesystem effects have exact pane-shell path evidence
+    /// before Bubblewrap capability probing or workload compilation begins.
+    pub(crate) fn ensure_bubblewrap_path_resolution_for_action(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action_id: &str,
+        evaluation: Option<&PermissionEvaluation>,
+    ) -> Result<bool> {
+        if !matches!(
+            self.configured_permissions().sandbox,
+            SandboxConfig::Bubblewrap(_)
+        ) {
+            return Ok(true);
+        }
+        let evaluation = evaluation.ok_or_else(|| {
+            MezError::invalid_state(
+                "Bubblewrap path resolution requires the retained permission evaluation",
+            )
+        })?;
+        let maximum = self.bubblewrap_maximum_path_scopes_for_turn(turn)?;
+        let Some(request) = bubblewrap_action_path_resolution_request(&maximum, evaluation)? else {
+            return Ok(true);
+        };
+        if self
+            .path_scopes_for_pane_request(&turn.pane_id, &request)?
+            .is_some()
+        {
+            return Ok(true);
+        }
+        let _ = self.dispatch_action_path_resolution_to_pane(turn, action_id, request)?;
+        Ok(false)
+    }
+
+    /// Returns the exact pane-resolved authority and effect evidence used to
+    /// compile one Bubblewrap action.
+    fn bubblewrap_path_scopes_for_turn(
+        &self,
+        turn: &AgentTurnRecord,
+        evaluation: &PermissionEvaluation,
+    ) -> Result<PathScopes> {
+        let maximum = self.bubblewrap_maximum_path_scopes_for_turn(turn)?;
+        let Some(request) = bubblewrap_action_path_resolution_request(&maximum, evaluation)? else {
+            return Ok(maximum);
+        };
+        self.path_scopes_for_pane_request(&turn.pane_id, &request)?
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "Bubblewrap dispatch requires resolved action filesystem effects",
+                )
+            })
+    }
+
     /// Returns the exact pane-resolved maximum authority for one turn.
-    fn bubblewrap_path_scopes_for_turn(&self, turn: &AgentTurnRecord) -> Result<PathScopes> {
+    fn bubblewrap_maximum_path_scopes_for_turn(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> Result<PathScopes> {
         let primary = self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
             MezError::invalid_state("Bubblewrap dispatch requires resolved primary path authority")
         })?;

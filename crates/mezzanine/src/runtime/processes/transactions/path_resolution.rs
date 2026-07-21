@@ -6,10 +6,10 @@
 //! configuration generation, and bounded request that produced them.
 
 use super::{
-    EventKind, MezError, PaneReadinessState, Result, RunningShellTransactionKind,
-    RunningShellTransactionRef, RuntimeSessionService, ShellTransaction, current_unix_millis,
-    current_unix_seconds, json_escape, runtime_pane_readiness_state_name,
-    runtime_random_marker_token,
+    ActionStatus, EventKind, MezError, PaneReadinessState, Result, RunningShellTransactionKind,
+    RunningShellTransactionRef, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    ShellTransaction, current_unix_millis, current_unix_seconds, json_escape,
+    runtime_pane_readiness_state_name, runtime_random_marker_token,
 };
 use crate::runtime::RuntimePathResolutionCacheKey;
 
@@ -59,6 +59,30 @@ impl RuntimeSessionService {
         pane_id: &str,
         request: mez_agent::shell::PanePathResolutionRequest,
     ) -> Result<bool> {
+        self.dispatch_path_resolution_to_pane_with_continuation(pane_id, request, None)
+    }
+
+    /// Dispatches path resolution retained as a prerequisite of one action.
+    pub(crate) fn dispatch_action_path_resolution_to_pane(
+        &mut self,
+        turn: &mez_agent::AgentTurnRecord,
+        action_id: &str,
+        request: mez_agent::shell::PanePathResolutionRequest,
+    ) -> Result<bool> {
+        self.dispatch_path_resolution_to_pane_with_continuation(
+            &turn.pane_id,
+            request,
+            Some((turn, action_id)),
+        )
+    }
+
+    /// Dispatches one exact resolver request with an optional action continuation.
+    fn dispatch_path_resolution_to_pane_with_continuation(
+        &mut self,
+        pane_id: &str,
+        request: mez_agent::shell::PanePathResolutionRequest,
+        continuation: Option<(&mez_agent::AgentTurnRecord, &str)>,
+    ) -> Result<bool> {
         let cache_key = self
             .path_resolution_cache_key(pane_id, &request)
             .ok_or_else(|| {
@@ -69,19 +93,44 @@ impl RuntimeSessionService {
                 "pane path resolution failed: {reason}"
             )));
         }
-        if self.process.pane_path_scopes.contains_key(&cache_key)
-            || self
-                .process
+        if self.process.pane_path_scopes.contains_key(&cache_key) {
+            return Ok(false);
+        }
+        if let Some(transaction) =
+            self.process
                 .running_shell_transactions
-                .values()
-                .any(|transaction| {
+                .values_mut()
+                .find(|transaction| {
                     matches!(
                         &transaction.kind,
-                        RunningShellTransactionKind::PathResolution { cache_key: pending }
-                            if pending == &cache_key
+                        RunningShellTransactionKind::PathResolution {
+                            cache_key: pending,
+                            ..
+                        } if pending == &cache_key
                     )
                 })
         {
+            if let Some((turn, action_id)) = continuation {
+                let RunningShellTransactionKind::PathResolution {
+                    action_id: pending_action_id,
+                    ..
+                } = &mut transaction.kind
+                else {
+                    return Err(MezError::invalid_state(
+                        "matching path-resolution transaction has the wrong kind",
+                    ));
+                };
+                if pending_action_id
+                    .as_deref()
+                    .is_some_and(|pending| pending != action_id)
+                {
+                    return Err(MezError::conflict(
+                        "path-resolution request is already retained for another action",
+                    ));
+                }
+                *pending_action_id = Some(action_id.to_string());
+                transaction.turn_id = turn.turn_id.clone();
+            }
             return Ok(false);
         }
         self.require_pane_ready_for_agent_command(pane_id)?;
@@ -89,8 +138,22 @@ impl RuntimeSessionService {
         let classification = self.shell_classification_for_pane(pane_id);
         let command = mez_agent::shell::pane_path_resolution_command(&request, classification)
             .map_err(|error| MezError::invalid_args(error.message()))?;
-        let turn_id = format!("path-resolution-{pane_id}-{}", current_unix_seconds());
-        let agent_id = format!("agent-{pane_id}");
+        let (turn_id, agent_id, action_id) = continuation.map_or_else(
+            || {
+                (
+                    format!("path-resolution-{pane_id}-{}", current_unix_seconds()),
+                    format!("agent-{pane_id}"),
+                    None,
+                )
+            },
+            |(turn, action_id)| {
+                (
+                    turn.turn_id.clone(),
+                    turn.agent_id.clone(),
+                    Some(action_id.to_string()),
+                )
+            },
+        );
         let marker = runtime_random_marker_token(&format!(
             "path-resolution\0{pane_id}\0{turn_id}\0{}",
             cache_key.environment_signature
@@ -117,7 +180,10 @@ impl RuntimeSessionService {
             marker_id.clone(),
             RunningShellTransactionRef {
                 turn_id,
-                kind: RunningShellTransactionKind::PathResolution { cache_key },
+                kind: RunningShellTransactionKind::PathResolution {
+                    cache_key,
+                    action_id,
+                },
                 pane_id: pane_id.to_string(),
                 command,
                 started_at_unix_ms: current_unix_millis(),
@@ -142,6 +208,74 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(true)
+    }
+
+    /// Resumes a waiting action after successful exact resolution or fails it
+    /// closed when the resolver produced no trusted evidence.
+    pub(crate) fn settle_action_path_resolution_transaction(
+        &mut self,
+        marker: &str,
+        transaction: &RunningShellTransactionRef,
+        cache_key: &RuntimePathResolutionCacheKey,
+        action_id: &str,
+    ) -> Result<usize> {
+        match self.path_scopes_for_pane_request(&transaction.pane_id, &cache_key.request) {
+            Ok(Some(_)) => {
+                let _ = self.dispatch_stored_running_shell_actions(&transaction.turn_id)?;
+                Ok(1)
+            }
+            Ok(None) => self.fail_action_path_resolution_transaction(
+                marker,
+                transaction,
+                action_id,
+                ActionStatus::Failed,
+                "bubblewrap_path_resolution_stale",
+                "Bubblewrap action path resolution completed for a stale pane environment",
+            ),
+            Err(error) => self.fail_action_path_resolution_transaction(
+                marker,
+                transaction,
+                action_id,
+                ActionStatus::Failed,
+                "bubblewrap_path_resolution_failed",
+                error.message(),
+            ),
+        }
+    }
+
+    /// Settles an action whose prerequisite path-resolution transaction failed.
+    pub(crate) fn fail_action_path_resolution_transaction(
+        &mut self,
+        marker: &str,
+        transaction: &RunningShellTransactionRef,
+        action_id: &str,
+        status: ActionStatus,
+        code: &str,
+        message: &str,
+    ) -> Result<usize> {
+        let timed_out = status == ActionStatus::TimedOut;
+        self.fail_running_shell_transaction_action(
+            transaction,
+            marker,
+            RuntimeShellTransactionActionFailure {
+                action_id: action_id.to_string(),
+                status,
+                code: code.to_string(),
+                message: message.to_string(),
+                sent_to_pane: false,
+                terminal_observation: serde_json::json!({
+                    "source": "pty",
+                    "stream": "pty_combined",
+                    "marker": marker,
+                    "exit_code": null,
+                    "timed_out": timed_out,
+                    "combined_output_bytes": transaction.observed_output_bytes,
+                    "boundary_state": "bubblewrap-path-resolution-failed",
+                    "output_truncated": transaction.observed_output_truncated
+                }),
+                trace_reason: code.to_string(),
+            },
+        )
     }
 
     /// Settles one internal path-resolution transaction and caches only fresh,
@@ -172,12 +306,7 @@ impl RuntimeSessionService {
                 });
                 match resolved {
                     Ok(scopes) => {
-                        self.process
-                            .pane_path_scopes
-                            .retain(|key, _| key.pane_id != pane_id);
-                        self.process
-                            .pane_path_scope_failures
-                            .retain(|key, _| key.pane_id != pane_id);
+                        self.process.pane_path_scope_failures.remove(&cache_key);
                         self.process
                             .pane_path_scopes
                             .insert(cache_key.clone(), scopes);
@@ -200,12 +329,8 @@ impl RuntimeSessionService {
                 .as_ref()
                 == Some(&cache_key)
         {
-            self.process
-                .pane_path_scopes
-                .retain(|key, _| key.pane_id != pane_id);
-            self.process
-                .pane_path_scope_failures
-                .retain(|key, _| key.pane_id != pane_id);
+            self.process.pane_path_scopes.remove(&cache_key);
+            self.process.pane_path_scope_failures.remove(&cache_key);
             self.process
                 .pane_path_scope_failures
                 .insert(cache_key, reason);
@@ -235,18 +360,14 @@ impl RuntimeSessionService {
         transaction: &RunningShellTransactionRef,
         reason: &str,
     ) -> Result<()> {
-        self.process
-            .pane_path_scopes
-            .retain(|key, _| key.pane_id != transaction.pane_id);
-        if let RunningShellTransactionKind::PathResolution { cache_key } = &transaction.kind
+        if let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind
             && self
                 .path_resolution_cache_key(&transaction.pane_id, &cache_key.request)
                 .as_ref()
                 == Some(cache_key)
         {
-            self.process
-                .pane_path_scope_failures
-                .retain(|key, _| key.pane_id != transaction.pane_id);
+            self.process.pane_path_scopes.remove(cache_key);
+            self.process.pane_path_scope_failures.remove(cache_key);
             self.process
                 .pane_path_scope_failures
                 .insert(cache_key.clone(), reason.to_string());
@@ -288,6 +409,22 @@ impl RuntimeSessionService {
                 marker
             ),
         )?;
+        if let RunningShellTransactionKind::PathResolution {
+            action_id: Some(action_id),
+            ..
+        } = &transaction.kind
+        {
+            self.fail_action_path_resolution_transaction(
+                marker,
+                &transaction,
+                action_id,
+                ActionStatus::TimedOut,
+                "bubblewrap_path_resolution_timeout",
+                &format!(
+                    "Bubblewrap action path resolution timed out after {elapsed_ms} ms (limit {timeout_ms} ms)"
+                ),
+            )?;
+        }
         Ok(())
     }
 
@@ -314,6 +451,22 @@ impl RuntimeSessionService {
                 marker
             ),
         )?;
+        if let RunningShellTransactionKind::PathResolution {
+            action_id: Some(action_id),
+            ..
+        } = &transaction.kind
+        {
+            self.fail_action_path_resolution_transaction(
+                marker,
+                &transaction,
+                action_id,
+                ActionStatus::Failed,
+                "bubblewrap_path_resolution_write_failed",
+                &format!(
+                    "pane input write failed while sending Bubblewrap action path resolution: {error}"
+                ),
+            )?;
+        }
         Ok(())
     }
 }

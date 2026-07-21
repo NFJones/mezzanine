@@ -154,17 +154,28 @@ impl RuntimeSessionService {
                 transaction_ref.observed_output_truncated,
             );
         }
-        if let RunningShellTransactionKind::PathResolution { cache_key } =
-            transaction_ref.kind.clone()
+        if let RunningShellTransactionKind::PathResolution {
+            cache_key,
+            action_id,
+        } = transaction_ref.kind.clone()
         {
-            return self.observe_path_resolution_transaction_end(
+            let observed = self.observe_path_resolution_transaction_end(
                 marker,
                 pane_id,
                 exit_code,
-                cache_key,
+                cache_key.clone(),
                 &transaction_ref.observed_output_preview,
                 transaction_ref.observed_output_truncated,
-            );
+            )?;
+            if let Some(action_id) = action_id {
+                return self.settle_action_path_resolution_transaction(
+                    marker,
+                    &transaction_ref,
+                    &cache_key,
+                    &action_id,
+                );
+            }
+            return Ok(observed);
         }
         if matches!(
             transaction_ref.kind,
