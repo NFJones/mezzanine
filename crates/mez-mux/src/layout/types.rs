@@ -348,6 +348,9 @@ pub struct Window {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) last_active_pane_index: Option<usize>,
+    /// Bounded oldest-to-newest stable pane identities previously focused in
+    /// this window. The history is transient and is never persisted.
+    pub(super) pane_focus_history: Vec<PaneId>,
     /// Stores the zoomed pane id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

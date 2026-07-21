@@ -1494,12 +1494,14 @@ impl Session {
             ));
         }
 
+        let previous_focus = self.focus_before_window_removal();
         let pane = self.windows[source_window_index].take_pane_at(source_pane_index);
         let joined_pane_id = pane.id.clone();
         let removed_source_window = self.windows[source_window_index].panes().is_empty();
         if removed_source_window {
             self.windows.remove(source_window_index);
             self.after_window_removed(source_window_index);
+            self.restore_focus_after_window_removal(previous_focus.0, previous_focus.1);
         }
 
         let (destination_window_index, destination_pane_target) =
@@ -1587,9 +1589,11 @@ impl Session {
             ));
         }
 
+        let previous_focus = self.focus_before_window_removal();
         let removed = if window.panes().len() == 1 {
             let window = self.windows.remove(window_index);
             self.after_window_removed(window_index);
+            self.restore_focus_after_window_removal(previous_focus.0, previous_focus.1);
             window.panes().first().cloned()
         } else {
             let target_id = target_pane.id.to_string();
@@ -1627,9 +1631,11 @@ impl Session {
         pane_id: &str,
     ) -> Result<RemovePaneTransition> {
         let (window_index, _pane_index) = self.pane_location(Some(pane_id))?;
+        let previous_focus = self.focus_before_window_removal();
         let removed = if self.windows[window_index].panes().len() == 1 {
             let window = self.windows.remove(window_index);
             self.after_window_removed(window_index);
+            self.restore_focus_after_window_removal(previous_focus.0, previous_focus.1);
             window.panes().first().cloned()
         } else {
             Some(self.windows[window_index].kill_pane(Some(pane_id))?)
@@ -1672,6 +1678,7 @@ impl Session {
         self.window_groups.clear();
         self.active_group_index = 0;
         self.last_active_group_index = None;
+        self.group_focus_history.clear();
         self.active_window_index = 0;
         self.last_active_window_index = None;
         self.state = SessionState::Empty;
@@ -1694,6 +1701,7 @@ impl Session {
         self.window_groups.clear();
         self.active_group_index = 0;
         self.last_active_group_index = None;
+        self.group_focus_history.clear();
         self.active_window_index = 0;
         self.last_active_window_index = None;
         self.state = SessionState::Empty;
@@ -1730,8 +1738,10 @@ impl Session {
                 "killing a window with live panes requires an explicit force flag",
             ));
         }
+        let previous_focus = self.focus_before_window_removal();
         let removed = self.windows.remove(index);
         self.after_window_removed(index);
+        self.restore_focus_after_window_removal(previous_focus.0, previous_focus.1);
         let effects = self
             .windows
             .iter()
@@ -1787,6 +1797,7 @@ impl Session {
             ));
         }
 
+        let previous_focus = self.focus_before_window_removal();
         let mut removed = Vec::new();
         let mut index = 0usize;
         while index < self.windows.len() {
@@ -1798,10 +1809,7 @@ impl Session {
         }
         self.reindex_windows();
         self.reconcile_window_groups_after_window_removal();
-        if !self.windows.is_empty() {
-            self.active_window_index = self.active_window_index.min(self.windows.len() - 1);
-            self.sync_active_group_to_active_window();
-        }
+        self.restore_focus_after_window_removal(previous_focus.0, previous_focus.1);
         let effects = self
             .windows
             .iter()

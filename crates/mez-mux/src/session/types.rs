@@ -431,6 +431,9 @@ pub struct WindowGroup {
     pub active_window_id: Option<WindowId>,
     /// Stable identity of the previous active window inside this group.
     pub last_active_window_id: Option<WindowId>,
+    /// Bounded oldest-to-newest stable window identities previously focused
+    /// in this group. The history is transient and is never persisted.
+    pub(super) window_focus_history: Vec<WindowId>,
     /// Unix timestamp for group creation when known.
     pub created_at_unix_seconds: Option<u64>,
 }
@@ -451,6 +454,7 @@ impl WindowGroup {
             window_ids: vec![window_id.clone()],
             active_window_id: Some(window_id),
             last_active_window_id: None,
+            window_focus_history: Vec::new(),
             created_at_unix_seconds,
         }
     }
@@ -533,6 +537,9 @@ pub struct Session {
     /// The value is used by `last-group` and is cleared when the referenced
     /// group is removed.
     pub(super) last_active_group_index: Option<usize>,
+    /// Bounded oldest-to-newest stable group identities previously focused in
+    /// this session. The history is transient and is never persisted.
+    pub(super) group_focus_history: Vec<WindowGroupId>,
     /// Stores the active window index value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

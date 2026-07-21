@@ -39,6 +39,7 @@ impl Window {
             panes: vec![pane],
             active_pane_index: 0,
             last_active_pane_index: None,
+            pane_focus_history: Vec::new(),
             zoomed_pane_id: None,
             layout_policy: LayoutPolicy::Tiled,
             layout_root: LayoutNode::single_pane(0),
@@ -123,6 +124,12 @@ impl Window {
     /// Returns the currently stored pane rectangles for this window.
     pub fn pane_geometries(&self) -> Vec<PaneGeometry> {
         self.pane_geometries.clone()
+    }
+
+    /// Returns transient pane focus history for crate-owned regression tests.
+    #[cfg(test)]
+    pub(crate) fn pane_focus_history(&self) -> &[PaneId] {
+        &self.pane_focus_history
     }
 
     /// Returns pane rectangles reapportioned to a caller-supplied render area.
@@ -524,12 +531,14 @@ impl Window {
         if self.panes.is_empty() {
             self.active_pane_index = 0;
             self.last_active_pane_index = None;
+            self.pane_focus_history.clear();
             self.zoomed_pane_id = None;
             return removed;
         }
 
         let next_active = if removed.active {
-            index.min(self.panes.len() - 1)
+            self.most_recent_surviving_pane_index()
+                .unwrap_or_else(|| index.min(self.panes.len() - 1))
         } else if self.active_pane_index > index {
             self.active_pane_index - 1
         } else {
@@ -537,7 +546,7 @@ impl Window {
         };
         self.reindex_panes();
         self.reflow_after_pane_removal(index, removed.size);
-        self.set_active_pane_index(next_active);
+        self.set_active_pane_index_without_history(next_active);
         self.retain_valid_zoom();
         removed
     }
@@ -607,6 +616,7 @@ impl Window {
             panes: vec![pane],
             active_pane_index: 0,
             last_active_pane_index: None,
+            pane_focus_history: Vec::new(),
             zoomed_pane_id: None,
             layout_policy: LayoutPolicy::Tiled,
             layout_root: LayoutNode::single_pane(0),
@@ -730,6 +740,7 @@ impl Window {
             panes,
             active_pane_index,
             last_active_pane_index: None,
+            pane_focus_history: Vec::new(),
             zoomed_pane_id: None,
             layout_policy: layout.layout_policy,
             layout_root,
@@ -803,7 +814,8 @@ impl Window {
         let removed = self.panes.remove(index);
 
         let next_active = if removed.active {
-            index.min(self.panes.len() - 1)
+            self.most_recent_surviving_pane_index()
+                .unwrap_or_else(|| index.min(self.panes.len() - 1))
         } else {
             self.panes
                 .iter()
@@ -812,7 +824,7 @@ impl Window {
         };
         self.reindex_panes();
         self.reflow_after_pane_removal(index, removed.size);
-        self.set_active_pane_index(next_active);
+        self.set_active_pane_index_without_history(next_active);
         self.retain_valid_zoom();
         Ok(removed)
     }
@@ -935,13 +947,48 @@ impl Window {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn set_active_pane_index(&mut self, index: usize) {
-        if self.active_pane_index != index && self.active_pane_index < self.panes.len() {
+        if self.active_pane_index != index
+            && self.active_pane_index < self.panes.len()
+            && self.panes[self.active_pane_index].active
+        {
             self.last_active_pane_index = Some(self.active_pane_index);
+            let previous_pane_id = self.panes[self.active_pane_index].id.clone();
+            record_bounded_focus(&mut self.pane_focus_history, previous_pane_id);
         }
+        self.set_active_pane_index_without_history(index);
+    }
+
+    /// Applies a focus choice after removal without recording an index whose
+    /// occupant may have changed when the pane vector was compacted.
+    fn set_active_pane_index_without_history(&mut self, index: usize) {
         self.active_pane_index = index;
         for (pane_index, pane) in self.panes.iter_mut().enumerate() {
             pane.active = pane_index == index;
         }
+        self.prune_pane_focus_history();
+    }
+
+    /// Returns the newest history entry that still belongs to this window.
+    fn most_recent_surviving_pane_index(&mut self) -> Option<usize> {
+        self.prune_pane_focus_history();
+        self.pane_focus_history
+            .iter()
+            .rev()
+            .find_map(|pane_id| self.panes.iter().position(|pane| &pane.id == pane_id))
+    }
+
+    /// Removes stale and duplicate pane identities from transient focus history.
+    fn prune_pane_focus_history(&mut self) {
+        let panes = &self.panes;
+        let mut retained = Vec::new();
+        for pane_id in self.pane_focus_history.drain(..) {
+            if panes.iter().any(|pane| pane.id == pane_id)
+                && !retained.iter().any(|existing| existing == &pane_id)
+            {
+                retained.push(pane_id);
+            }
+        }
+        self.pane_focus_history = retained;
     }
 
     /// Runs the swap pane indices operation for this subsystem.
@@ -1801,6 +1848,15 @@ fn fallback_pane_rects(window_size: Size, panes: &[Pane]) -> Vec<PaneRect> {
             rect
         })
         .collect()
+}
+
+/// Records one stable focus identity in a bounded oldest-to-newest MRU list.
+fn record_bounded_focus<T: Clone + PartialEq>(history: &mut Vec<T>, value: T) {
+    history.retain(|existing| existing != &value);
+    history.push(value);
+    if history.len() > 10 {
+        history.remove(0);
+    }
 }
 
 /// Infers whether a newly created or restored window name is generated.

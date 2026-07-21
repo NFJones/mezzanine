@@ -43,6 +43,7 @@ impl Session {
             window_groups: vec![group],
             active_group_index: 0,
             last_active_group_index: None,
+            group_focus_history: Vec::new(),
             active_window_index: 0,
             last_active_window_index: None,
             synchronized_window_ids: BTreeSet::new(),

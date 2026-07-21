@@ -4,7 +4,7 @@
 //! shared helper state updates used by client and window operations.
 
 use crate::{MuxError as MezError, MuxErrorKind, Result};
-use mez_core::{PaneId, WindowId};
+use mez_core::{PaneId, WindowGroupId, WindowId};
 
 use super::time::current_unix_seconds;
 use super::types::{Session, SessionState};
@@ -284,7 +284,6 @@ impl Session {
         } else if removed_index <= self.active_window_index && self.active_window_index > 0 {
             self.active_window_index -= 1;
         }
-        self.sync_active_group_to_active_window();
     }
 
     /// Runs the reindex windows operation for this subsystem.
@@ -360,6 +359,13 @@ impl Session {
             .window_index_by_id(window_id.as_str())
             .ok_or_else(|| MezError::invalid_state("window group active window is missing"))?;
         if self.active_group_index != index {
+            if let Some(previous_group_id) = self
+                .window_groups
+                .get(self.active_group_index)
+                .map(|group| group.id.clone())
+            {
+                record_bounded_focus(&mut self.group_focus_history, previous_group_id);
+            }
             self.last_active_group_index = Some(self.active_group_index);
             self.active_group_index = index;
         }
@@ -385,15 +391,120 @@ impl Session {
             return;
         };
         if self.active_group_index != group_index {
+            if let Some(previous_group_id) = self
+                .window_groups
+                .get(self.active_group_index)
+                .map(|group| group.id.clone())
+            {
+                record_bounded_focus(&mut self.group_focus_history, previous_group_id);
+            }
             self.last_active_group_index = Some(self.active_group_index);
             self.active_group_index = group_index;
         }
         if let Some(group) = self.window_groups.get_mut(group_index)
             && group.active_window_id.as_ref() != Some(&window_id)
         {
-            group.last_active_window_id = group.active_window_id.clone().or(previous_window_id);
+            let previous_window_id = group.active_window_id.clone().or(previous_window_id);
+            if let Some(previous_window_id) = previous_window_id.clone() {
+                record_bounded_focus(&mut group.window_focus_history, previous_window_id);
+            }
+            group.last_active_window_id = previous_window_id;
             group.active_window_id = Some(window_id);
         }
+    }
+
+    /// Captures stable focus identities before a destructive window mutation.
+    pub(super) fn focus_before_window_removal(&self) -> (Option<WindowId>, Option<WindowGroupId>) {
+        (
+            self.windows
+                .get(self.active_window_index)
+                .map(|window| window.id.clone()),
+            self.window_groups
+                .get(self.active_group_index)
+                .map(|group| group.id.clone()),
+        )
+    }
+
+    /// Restores focus after destructive window removal using hierarchical MRU.
+    pub(super) fn restore_focus_after_window_removal(
+        &mut self,
+        previous_window_id: Option<WindowId>,
+        previous_group_id: Option<WindowGroupId>,
+    ) {
+        if self.windows.is_empty() {
+            self.active_window_index = 0;
+            self.active_group_index = 0;
+            self.group_focus_history.clear();
+            self.state = SessionState::Empty;
+            return;
+        }
+
+        if let Some(window_index) = previous_window_id
+            .as_ref()
+            .and_then(|window_id| self.window_index_by_id(window_id.as_str()))
+        {
+            self.active_window_index = window_index;
+            self.sync_active_group_to_active_window();
+            return;
+        }
+
+        let group_index = previous_group_id
+            .as_ref()
+            .and_then(|group_id| {
+                self.window_groups
+                    .iter()
+                    .position(|group| &group.id == group_id)
+            })
+            .or_else(|| self.most_recent_surviving_group_index())
+            .unwrap_or_else(|| self.active_group_index.min(self.window_groups.len() - 1));
+        self.active_group_index = group_index;
+
+        let window_id = self
+            .most_recent_surviving_window_id(group_index)
+            .or_else(|| {
+                self.window_groups[group_index]
+                    .active_window_id
+                    .clone()
+                    .or_else(|| self.window_groups[group_index].window_ids.first().cloned())
+            });
+        if let Some(window_index) = window_id
+            .as_ref()
+            .and_then(|window_id| self.window_index_by_id(window_id.as_str()))
+        {
+            self.active_window_index = window_index;
+            self.window_groups[group_index].active_window_id = window_id;
+        }
+    }
+
+    /// Returns the newest live window history entry owned by one group.
+    fn most_recent_surviving_window_id(&mut self, group_index: usize) -> Option<WindowId> {
+        let live_window_ids = self
+            .windows
+            .iter()
+            .map(|window| window.id.clone())
+            .collect::<Vec<_>>();
+        let group = self.window_groups.get_mut(group_index)?;
+        group.window_focus_history.retain(|window_id| {
+            group.window_ids.iter().any(|member| member == window_id)
+                && live_window_ids.iter().any(|live| live == window_id)
+        });
+        group.window_focus_history.last().cloned()
+    }
+
+    /// Returns the newest live group history entry in this session.
+    fn most_recent_surviving_group_index(&mut self) -> Option<usize> {
+        let live_group_ids = self
+            .window_groups
+            .iter()
+            .map(|group| group.id.clone())
+            .collect::<Vec<_>>();
+        self.group_focus_history
+            .retain(|group_id| live_group_ids.iter().any(|live| live == group_id));
+        self.group_focus_history.iter().rev().find_map(|group_id| {
+            self.window_groups
+                .iter()
+                .position(|group| &group.id == group_id)
+        })
     }
 
     /// Removes stale window references and empty groups after flat window removal.
@@ -421,6 +532,9 @@ impl Session {
             {
                 group.last_active_window_id = None;
             }
+            group
+                .window_focus_history
+                .retain(|window_id| group.window_ids.iter().any(|id| id == window_id));
         }
         self.window_groups
             .retain(|group| !group.window_ids.is_empty());
@@ -431,6 +545,22 @@ impl Session {
         self.last_active_group_index = self
             .last_active_group_index
             .filter(|index| *index < self.window_groups.len());
+        let live_group_ids = self
+            .window_groups
+            .iter()
+            .map(|group| group.id.clone())
+            .collect::<Vec<_>>();
+        self.group_focus_history
+            .retain(|group_id| live_group_ids.iter().any(|id| id == group_id));
+    }
+}
+
+/// Records one stable focus identity in a bounded oldest-to-newest MRU list.
+fn record_bounded_focus<T: PartialEq>(history: &mut Vec<T>, value: T) {
+    history.retain(|existing| existing != &value);
+    history.push(value);
+    if history.len() > 10 {
+        history.remove(0);
     }
 }
 

@@ -171,6 +171,7 @@ impl Session {
             window_groups,
             active_group_index,
             last_active_group_index: None,
+            group_focus_history: Vec::new(),
             active_window_index,
             last_active_window_index: None,
             synchronized_window_ids: BTreeSet::new(),
@@ -204,6 +205,7 @@ impl Session {
         self.last_active_window_index = None;
         self.active_group_index = active_group_index;
         self.last_active_group_index = last_active_group_index;
+        self.group_focus_history.clear();
         self.pane_state_metadata = pane_state_metadata;
         self.record_event();
         Ok(())

@@ -388,6 +388,30 @@ fn killing_pane_removes_it_and_keeps_one_active() {
     assert!(window.active_pane().active);
 }
 
+/// Verifies closing the focused pane returns to the newest surviving pane in
+/// that window rather than selecting a structural neighbor.
+#[test]
+fn killing_active_pane_uses_local_mru_focus_history() {
+    let mut ids = IdFactory::default();
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(120, 40).unwrap());
+    window
+        .split_active(&mut ids, SplitDirection::Vertical)
+        .unwrap();
+    window
+        .split_active(&mut ids, SplitDirection::Horizontal)
+        .unwrap();
+    let first = window.panes()[0].id.clone();
+    let second = window.panes()[1].id.clone();
+    let third = window.panes()[2].id.clone();
+
+    window.select_pane(first.as_str()).unwrap();
+    window.select_pane(second.as_str()).unwrap();
+    window.select_pane(third.as_str()).unwrap();
+    window.kill_pane(Some(third.as_str())).unwrap();
+
+    assert_eq!(window.active_pane().id, second);
+}
+
 /// Verifies that killing an inactive target pane preserves focus on the current
 /// active pane. This matches default mux behavior where targeted pane closure
 /// should not unexpectedly move the user's focus unless the active pane itself
@@ -406,6 +430,22 @@ fn killing_inactive_pane_preserves_active_pane_focus() {
     assert_eq!(removed.index, 0);
     assert_eq!(window.active_pane().id, active_before);
     assert_eq!(window.active_pane().index, 0);
+}
+
+/// Verifies pane focus history retains only the ten newest stable identities.
+#[test]
+fn killing_active_pane_uses_bounded_local_focus_history() {
+    let mut ids = IdFactory::default();
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(60_000, 40).unwrap());
+    let oldest = window.active_pane().id.clone();
+    for _ in 0..11 {
+        window
+            .split_active(&mut ids, SplitDirection::Vertical)
+            .unwrap();
+    }
+
+    assert_eq!(window.pane_focus_history.len(), 10);
+    assert!(!window.pane_focus_history.contains(&oldest));
 }
 
 /// Verifies that closing a pane collapses its split-tree slot and resizes the

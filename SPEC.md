@@ -565,6 +565,14 @@ If the active window closes and other windows remain, Mezzanine MUST select
 another window as the active window. The selection rule MAY be configurable, but
 it MUST be deterministic.
 
+Focus fallback after destructive closure MUST use transient, bounded histories of
+the ten most recently focused stable identities. Pane fallback MUST remain local
+to the surviving window, window fallback MUST remain local to the surviving
+group, and group fallback MUST be consulted only when the focused group is
+removed. Stale or nonmember identities MUST be ignored, inactive closures MUST
+preserve the active focus chain, and restore or layout replacement MUST reset
+these histories without changing explicit last-active navigation state.
+
 If the final window in a session closes, Mezzanine MUST either terminate the
 session or enter a configured empty-session state.
 

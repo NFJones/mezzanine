@@ -2,9 +2,12 @@
 
 use super::SessionShell;
 use super::{
-    ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState, Session, SessionState,
+    ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState, RestoredPane,
+    RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session, SessionRestoreInput,
+    SessionState,
 };
 use crate as mez_mux;
+use mez_core::IdFactory;
 use mez_mux::layout::{LayoutPolicy, PaneGeometry, PaneNavigationDirection, Size, SplitDirection};
 use std::path::PathBuf;
 
@@ -18,6 +21,76 @@ fn test_session() -> Session {
         SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
         Size::new(80, 24).unwrap(),
     )
+}
+
+/// Builds one valid dependency-neutral layout for restore lifecycle tests.
+fn single_window_restore_input() -> SessionRestoreInput {
+    let mut ids = IdFactory::default();
+    let session_id = ids.session();
+    let window_id = ids.window();
+    let pane_id = ids.pane();
+    let group_id = ids.window_group();
+    let size = Size::new(80, 24).unwrap();
+
+    SessionRestoreInput {
+        session_id,
+        name: "restored".to_string(),
+        state: RestoredSessionState::Running,
+        authoritative_size: size,
+        active_window_id: Some(window_id.clone()),
+        windows: vec![RestoredWindow {
+            id: window_id.clone(),
+            index: 0,
+            name: "restored-window".to_string(),
+            active: true,
+            size,
+            layout_policy: LayoutPolicy::Tiled,
+            layout_root: None,
+            panes: vec![RestoredPane {
+                id: pane_id,
+                index: 0,
+                title: "restored-pane".to_string(),
+                active: true,
+                size,
+                geometry: None,
+                current_working_directory: None,
+                readiness_state: "unknown".to_string(),
+                alternate_screen_active: false,
+            }],
+        }],
+        window_groups: vec![RestoredWindowGroup {
+            id: group_id,
+            index: 0,
+            name: "restored-group".to_string(),
+            window_ids: vec![window_id.clone()],
+            active_window_id: Some(window_id),
+            last_active_window_id: None,
+            active: true,
+        }],
+    }
+}
+
+/// Verifies restoration and live layout replacement initialize transient focus
+/// histories empty instead of carrying navigation state across snapshots.
+#[test]
+fn restore_and_layout_replacement_reset_transient_focus_histories() {
+    let shell = SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true);
+    let restored = Session::from_restore_input(shell, single_window_restore_input()).unwrap();
+    assert!(restored.group_focus_history.is_empty());
+    assert!(restored.window_groups[0].window_focus_history.is_empty());
+
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    session.new_window(&primary, "second", true).unwrap();
+    session.new_group(&primary, "other", true).unwrap();
+    assert!(!session.group_focus_history.is_empty());
+
+    session
+        .replace_layout_from_restore_input(single_window_restore_input())
+        .unwrap();
+
+    assert!(session.group_focus_history.is_empty());
+    assert!(session.window_groups[0].window_focus_history.is_empty());
 }
 
 /// Verifies new session has one window and one pane.
@@ -445,6 +518,147 @@ fn closing_last_window_in_group_closes_group() {
 
     let error = session.kill_group(&primary, None, true).unwrap_err();
     assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
+}
+
+/// Verifies closing the focused window returns to the newest surviving window
+/// in the same group, even when that differs from structural index fallback.
+#[test]
+fn killing_active_window_uses_group_local_mru_focus_history() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let first = session.windows()[0].id.clone();
+    let second = session.new_window(&primary, "second", true).unwrap();
+    let third = session.new_window(&primary, "third", true).unwrap();
+
+    session.select_window(&primary, second.as_str()).unwrap();
+    session.select_window(&primary, first.as_str()).unwrap();
+    session.select_window(&primary, third.as_str()).unwrap();
+    session
+        .kill_window(&primary, Some(third.as_str()), true)
+        .unwrap();
+
+    assert_eq!(session.active_window().unwrap().id, first);
+    assert!(session.active_group().unwrap().window_focus_history.len() <= 10);
+}
+
+/// Verifies window focus history retains only the ten newest stable identities
+/// within its owning group.
+#[test]
+fn window_focus_history_evicts_entries_beyond_ten() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let oldest = session.active_window().unwrap().id.clone();
+    for index in 0..11 {
+        session
+            .new_window(&primary, format!("window-{index}"), true)
+            .unwrap();
+    }
+
+    let history = &session.active_group().unwrap().window_focus_history;
+    assert_eq!(history.len(), 10);
+    assert!(!history.contains(&oldest));
+}
+
+/// Verifies closing an inactive window leaves the complete active focus chain
+/// unchanged rather than consulting local or session focus history.
+#[test]
+fn killing_inactive_window_preserves_global_focus_chain() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let inactive = session.windows()[0].id.clone();
+    let active = session.new_window(&primary, "active", true).unwrap();
+    let active_group = session.active_group().unwrap().id.clone();
+
+    session
+        .kill_window(&primary, Some(inactive.as_str()), true)
+        .unwrap();
+
+    assert_eq!(session.active_group().unwrap().id, active_group);
+    assert_eq!(session.active_window().unwrap().id, active);
+}
+
+/// Verifies closing the focused group returns to the newest surviving group
+/// in session history instead of choosing the structurally adjacent group.
+#[test]
+fn killing_active_group_uses_session_mru_focus_history() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let default_group = session.active_group().unwrap().id.clone();
+    let (second_group, _second_window) = session.new_group(&primary, "second", true).unwrap();
+    let (third_group, _third_window) = session.new_group(&primary, "third", true).unwrap();
+
+    session
+        .select_group(&primary, second_group.as_str())
+        .unwrap();
+    session
+        .select_group(&primary, default_group.as_str())
+        .unwrap();
+    session
+        .select_group(&primary, third_group.as_str())
+        .unwrap();
+    session
+        .kill_group(&primary, Some(third_group.as_str()), true)
+        .unwrap();
+
+    assert_eq!(session.active_group().unwrap().id, default_group);
+}
+
+/// Verifies group focus history retains only the ten newest stable identities
+/// in the session.
+#[test]
+fn group_focus_history_evicts_entries_beyond_ten() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let oldest = session.active_group().unwrap().id.clone();
+    for index in 0..11 {
+        session
+            .new_group(&primary, format!("group-{index}"), true)
+            .unwrap();
+    }
+
+    assert_eq!(session.group_focus_history.len(), 10);
+    assert!(!session.group_focus_history.contains(&oldest));
+}
+
+/// Verifies closing an inactive group leaves the complete active focus chain
+/// unchanged rather than consulting session focus history.
+#[test]
+fn killing_inactive_group_preserves_global_focus_chain() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let inactive_group = session.active_group().unwrap().id.clone();
+    let (active_group, active_window) = session.new_group(&primary, "active", true).unwrap();
+
+    session
+        .kill_group(&primary, Some(inactive_group.as_str()), true)
+        .unwrap();
+
+    assert_eq!(session.active_group().unwrap().id, active_group);
+    assert_eq!(session.active_window().unwrap().id, active_window);
+}
+
+/// Verifies natural pane-exit closure uses the same local MRU fallback as an
+/// explicit forced pane closure.
+#[test]
+fn closing_exited_active_pane_uses_local_mru_focus_history() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    session
+        .split_active_pane(&primary, SplitDirection::Horizontal)
+        .unwrap();
+    let first = session.active_window().unwrap().panes()[0].id.clone();
+    let second = session.active_window().unwrap().panes()[1].id.clone();
+    let third = session.active_window().unwrap().panes()[2].id.clone();
+    session.select_pane(&primary, first.as_str()).unwrap();
+    session.select_pane(&primary, second.as_str()).unwrap();
+    session.select_pane(&primary, third.as_str()).unwrap();
+
+    session.close_exited_pane(third.as_str()).unwrap();
+
+    assert_eq!(session.active_window().unwrap().active_pane().id, second);
 }
 
 /// Verifies kill-group removes all windows in the target group.
@@ -1026,6 +1240,70 @@ fn primary_can_break_pane_into_new_window() {
             .contains(&window_id),
         "broken-out window should remain in the source group"
     );
+}
+
+/// Verifies break and join transitions prune transient focus identities that
+/// no longer belong to their original window or group.
+#[test]
+fn break_and_join_keep_focus_histories_within_current_ownership() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let source_window_id = session.active_window().unwrap().id.clone();
+    let source_pane_id = session.active_window().unwrap().panes()[0].id.clone();
+    let moved_pane_id = session
+        .split_active_pane_select(&primary, SplitDirection::Vertical, true)
+        .unwrap();
+    session
+        .select_pane(&primary, source_pane_id.as_str())
+        .unwrap();
+    session
+        .select_pane(&primary, moved_pane_id.as_str())
+        .unwrap();
+
+    let destination_window_id = session
+        .break_pane(&primary, None, Some("moved".to_string()), true)
+        .unwrap();
+
+    for window in session.windows() {
+        assert!(
+            window
+                .pane_focus_history()
+                .iter()
+                .all(|pane_id| { window.panes().iter().any(|pane| &pane.id == pane_id) })
+        );
+    }
+    session
+        .join_pane(
+            &primary,
+            Some(source_pane_id.as_str()),
+            destination_window_id.as_str(),
+            SplitDirection::Vertical,
+            true,
+        )
+        .unwrap();
+
+    assert!(
+        session
+            .windows()
+            .iter()
+            .all(|window| window.id != source_window_id)
+    );
+    for window in session.windows() {
+        assert!(
+            window
+                .pane_focus_history()
+                .iter()
+                .all(|pane_id| { window.panes().iter().any(|pane| &pane.id == pane_id) })
+        );
+    }
+    for group in session.window_groups() {
+        assert!(
+            group
+                .window_focus_history
+                .iter()
+                .all(|window_id| group.window_ids.contains(window_id))
+        );
+    }
 }
 
 /// Verifies pane breaks expose the complete resulting pane-size set.
