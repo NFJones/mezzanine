@@ -25,8 +25,8 @@ use super::{
     frame_markdown_lines, parse_unified_diff_sections, wrap_rich_text_lines_to_width,
 };
 use crate::runtime::render::{
-    ActionResult, AgentPresentationEntry, MezError, Result, RuntimeSessionService, TerminalScreen,
-    current_unix_seconds, default_runtime_agent_prompt_input,
+    ActionResult, AgentPresentationEntry, MezError, Result, RuntimeSessionService, Size,
+    TerminalScreen, current_unix_seconds, default_runtime_agent_prompt_input,
 };
 use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, agent_output_content_type_is_diff,
@@ -331,6 +331,51 @@ impl RuntimeSessionService {
             .agent_presentation_replay_panes
             .remove(pane_id);
         result
+    }
+
+    /// Rebuilds a resized agent pane from bounded durable presentation source.
+    ///
+    /// The rebuild is intentionally limited to histories that contain semantic
+    /// source. Snapshot-only histories retain ordinary terminal resize behavior
+    /// because their saved rows cannot reproduce renderer-level layout.
+    pub(crate) fn rebuild_agent_presentation_after_resize(
+        &mut self,
+        pane_id: &str,
+        size: Size,
+    ) -> Result<bool> {
+        const MAX_PRESENTATION_REPLAY_ENTRIES: usize = 200;
+        const MAX_PRESENTATION_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
+
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(false);
+        };
+        let Some(store) = self.persistence.transcript_store() else {
+            return Ok(false);
+        };
+        let entries = store.inspect_recent_presentation(
+            &session.session_id,
+            MAX_PRESENTATION_REPLAY_ENTRIES,
+            MAX_PRESENTATION_REPLAY_BYTES,
+        )?;
+        if !entries.iter().any(|entry| entry.source_text.is_some()) {
+            return Ok(false);
+        }
+        let previous = self.pane_screen(pane_id).cloned();
+        let rebuilt = TerminalScreen::new_with_history_config(
+            size,
+            self.terminal_history_limit(),
+            self.terminal_history_rotate_lines(),
+        )?;
+        self.set_pane_screen(pane_id.to_string(), rebuilt);
+        if let Err(error) =
+            self.replay_agent_presentation_entries_to_terminal_buffer(pane_id, &entries)
+        {
+            if let Some(previous) = previous {
+                self.set_pane_screen(pane_id.to_string(), previous);
+            }
+            return Err(error);
+        }
+        Ok(true)
     }
 
     /// Appends markdown assistant output as styled presentation lines.

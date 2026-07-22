@@ -682,7 +682,16 @@ impl RuntimeSessionService {
                     },
                 );
             }
-            if let Some(screen) = self
+            let pane_screen_width_changed = self
+                .process
+                .pane_screens
+                .get(descriptor.pane_id.as_str())
+                .is_some_and(|screen| screen.size().columns != process_size.columns);
+            if pane_screen_width_changed
+                && self.rebuild_agent_presentation_after_resize(pane_id, process_size)?
+            {
+                // Source-backed agent output was atomically rebuilt at the new width.
+            } else if let Some(screen) = self
                 .process
                 .pane_screens
                 .get_mut(descriptor.pane_id.as_str())

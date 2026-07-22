@@ -1927,6 +1927,7 @@ Markdown table rows MUST preserve their table layout until they exceed the
 pane terminal width; that configured cap MUST NOT force table rows to wrap on
 wider terminals.
 Durable agent presentation records MUST retain semantic source and renderer media type whenever available. On `/resume`, Mezzanine MUST rerender source-backed records at the active pane geometry and MUST treat saved rows or ANSI bytes only as optional projections. Legacy snapshot-only records MAY use their saved projection fallback; mixed histories MUST preserve presentation order.
+When an agent pane changes width, Mezzanine MUST rebuild its bounded source-backed presentation projection at the new geometry before swapping the pane screen. Arbitrary PTY panes and snapshot-only presentation histories MUST retain ordinary terminal-cell resize behavior. Replay during reconstruction MUST NOT append duplicate durable presentation records.
 When the agent runs a shell command, Mezzanine MUST render the MAAP shell
 action's concise summary and exact command preview before dispatch. The exact
 command preview MUST be visible in normal mode, MUST account for the pane's
