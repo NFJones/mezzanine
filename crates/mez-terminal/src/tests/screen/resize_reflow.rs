@@ -170,6 +170,48 @@ fn terminal_screen_resize_preserves_space_styles_and_hard_line_boundaries() {
     assert_eq!(hard_break.visible_lines(), vec!["abc", "X", ""]);
 }
 
+/// Verifies width-two graphemes survive a resize through a one-column grid.
+///
+/// CJK, emoji-presentation, and multi-scalar emoji graphemes cannot render a
+/// complete two-cell footprint at width one, but their source text must remain
+/// available so widening restores the original glyph and cursor location.
+#[test]
+fn terminal_screen_resize_preserves_overwide_graphemes() {
+    for grapheme in ["界", "✅", "⚠️"] {
+        let mut screen = TerminalScreen::new(Size::new(2, 2).unwrap(), 10).unwrap();
+        screen.feed(grapheme.as_bytes());
+
+        screen.resize(Size::new(1, 2).unwrap());
+        assert_eq!(screen.visible_lines(), vec![grapheme, ""], "{grapheme}");
+        assert_eq!(screen.cursor_state().row, 0, "{grapheme}");
+        assert_eq!(screen.cursor_state().column, 0, "{grapheme}");
+
+        screen.resize(Size::new(2, 2).unwrap());
+        assert_eq!(screen.visible_lines(), vec![grapheme, ""], "{grapheme}");
+        assert_eq!(screen.cursor_state().row, 0, "{grapheme}");
+        assert_eq!(screen.cursor_state().column, 0, "{grapheme}");
+    }
+}
+
+/// Verifies widening an overwide grapheme rebuilds its continuation footprint.
+///
+/// A later write targeting the restored continuation column must clear the
+/// complete old glyph before placing new text, rather than leaving an orphaned
+/// leader or continuation sentinel behind.
+#[test]
+fn terminal_screen_resize_restores_overwide_grapheme_footprint() {
+    let mut screen = TerminalScreen::new(Size::new(2, 2).unwrap(), 10).unwrap();
+    screen.feed("界".as_bytes());
+
+    screen.resize(Size::new(1, 2).unwrap());
+    screen.resize(Size::new(2, 2).unwrap());
+    screen.feed(b"\x1b[1;2HX");
+
+    assert_eq!(screen.visible_lines(), vec![" X", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 1);
+}
+
 /// Verifies agent transcript rows keep their visual gutter on soft-wrap
 /// continuation rows. Agent output is rendered into the same pane buffer as
 /// shell output, so the screen model has to add display-only gutters when

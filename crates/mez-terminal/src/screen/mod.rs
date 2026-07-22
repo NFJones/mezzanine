@@ -840,7 +840,15 @@ fn write_styled_line_to_row(
     let mut column = 0usize;
     for grapheme in terminal_graphemes(&line.text) {
         let width = terminal_grapheme_width(grapheme);
-        if width == 0 || column.saturating_add(width) > columns {
+        if width == 0 {
+            continue;
+        }
+        if column == 0 && width > columns && columns > 0 {
+            cells[0] = TerminalScreenCell::text(grapheme);
+            renditions[0] = styled_line_rendition_at(line, 0);
+            break;
+        }
+        if column.saturating_add(width) > columns {
             break;
         }
         let rendition = styled_line_rendition_at(line, column);
