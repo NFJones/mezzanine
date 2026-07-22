@@ -311,8 +311,16 @@ pub(super) fn common_target_flags() -> &'static [&'static str] {
 /// on duplicated control-flow logic.
 pub(super) fn agent_argument_candidates(
     command: &str,
-    _context: &SelectorTokenContext,
+    context: &SelectorTokenContext,
 ) -> Vec<SelectorCandidate> {
+    if command == "routing"
+        && context
+            .tokens_before
+            .get(1)
+            .is_some_and(|token| token == "policy")
+    {
+        return value_candidates(&["subagent", "in-place"]);
+    }
     let candidates = match command {
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
         "loop" => flag_candidates(&["--fork", "--new", "--limit"]),
@@ -368,7 +376,7 @@ pub(super) fn agent_argument_candidates(
         }
         "list-mcp" => Vec::new(),
         "resume" => flag_candidates(&["--latest"]),
-        "routing" => value_candidates(&["on", "off", "toggle", "status"]),
+        "routing" => value_candidates(&["on", "off", "toggle", "status", "policy"]),
         "thinking" => value_candidates(&["on", "off", "toggle", "status"]),
         "personality" => value_candidates(&["list", "status", "show", "clear", "default"]),
         "copy" => value_candidates(&["pane", "buffer", "clipboard"]),

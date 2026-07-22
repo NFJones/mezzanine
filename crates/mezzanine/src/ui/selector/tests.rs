@@ -74,6 +74,14 @@ fn selector_plans_agent_argument_candidates() {
     let routing_plan = plan_selector(SelectorSurface::AgentCommand, "/routing t", 18).unwrap();
     assert_eq!(routing_plan.candidates[0].value, "toggle");
 
+    let policy_plan = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/routing policy s",
+        "/routing policy s".len(),
+    )
+    .unwrap();
+    assert_eq!(policy_plan.candidates[0].value, "subagent");
+
     let copy_plan = plan_selector(SelectorSurface::AgentCommand, "/copy c", 7).unwrap();
     assert_eq!(copy_plan.candidates[0].value, "clipboard");
 }
@@ -822,6 +830,36 @@ fn selector_shadow_hint_completes_additional_agent_command_values() {
         assert_eq!(hint.text, expected_text, "completion for {line}");
         assert_eq!(hint.kind, expected_kind, "candidate kind for {line}");
     }
+}
+
+/// Verifies `/routing policy` exposes nested policy values through Tab
+/// completion and transient prompt shadow hints.
+#[test]
+fn selector_shadow_hint_completes_routing_policy_values() {
+    let policy_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/routing policy ",
+        "/routing policy ".len(),
+    )
+    .unwrap();
+    let subagent_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/routing policy s",
+        "/routing policy s".len(),
+    )
+    .unwrap();
+    let in_place_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/routing policy i",
+        "/routing policy i".len(),
+    )
+    .unwrap();
+
+    assert_eq!(policy_hint.text, " <subagent|in-place>");
+    assert_eq!(subagent_hint.text, "ubagent");
+    assert_eq!(in_place_hint.text, "n-place");
+    assert_eq!(subagent_hint.kind, SelectorCandidateKind::Value);
+    assert_eq!(in_place_hint.kind, SelectorCandidateKind::Value);
 }
 
 /// Verifies commands without first-slot enumerated arguments do not expose

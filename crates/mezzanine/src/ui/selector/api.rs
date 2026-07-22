@@ -207,7 +207,21 @@ fn parameter_shadow_hint(
     context: &SelectorTokenContext,
     cursor: usize,
 ) -> Option<SelectorShadowHint> {
-    if !context.query.is_empty() || context.tokens_before.len() != 1 {
+    if !context.query.is_empty() {
+        return None;
+    }
+    if surface == SelectorSurface::AgentCommand
+        && context.tokens_before.len() == 2
+        && context.tokens_before[0].trim_start_matches('/') == "routing"
+        && context.tokens_before[1] == "policy"
+    {
+        return Some(SelectorShadowHint {
+            insert_at: cursor,
+            text: " <subagent|in-place>".to_string(),
+            kind: SelectorCandidateKind::Value,
+        });
+    }
+    if context.tokens_before.len() != 1 {
         return None;
     }
     let command = context.tokens_before[0].as_str();
