@@ -336,7 +336,11 @@ impl TerminalScreen {
             };
             for row in dropped_rows {
                 let copy_text = self.line_copy_texts.get(row).cloned().flatten();
-                if copy_text.is_some() || self.cells[row].iter().any(|cell| !cell.is_blank()) {
+                if copy_text.is_some()
+                    || self.cells[row]
+                        .iter()
+                        .any(|cell| cell.is_written() || !cell.is_blank())
+                {
                     self.history.push_styled_line_with_wrap(
                         styled_line_from_row_with_copy_text(
                             &self.cells[row],

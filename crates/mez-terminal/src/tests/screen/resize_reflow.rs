@@ -128,6 +128,48 @@ fn terminal_screen_resize_reflows_content_with_active_scroll_region() {
     assert_eq!(screen.cursor_state().column, 4);
 }
 
+/// Verifies default-styled spaces printed at a soft-wrap boundary survive
+/// width reflow.
+///
+/// Printed spaces occupy terminal cells even though they render like untouched
+/// padding. Logical-line reconstruction must retain their used extent so a
+/// later continuation cell does not move left when the pane widens.
+#[test]
+fn terminal_screen_resize_preserves_soft_wrap_boundary_spaces() {
+    for (columns, input, expected, cursor_column) in [
+        (5, b"abc  X".as_slice(), "abc  X", 6),
+        (6, b"abc   X", "abc   X", 7),
+    ] {
+        let mut screen = TerminalScreen::new(Size::new(columns, 3).unwrap(), 10).unwrap();
+        screen.feed(input);
+
+        screen.resize(Size::new(12, 3).unwrap());
+
+        assert_eq!(screen.visible_lines(), vec![expected, "", ""]);
+        assert_eq!(screen.cursor_state().row, 0);
+        assert_eq!(screen.cursor_state().column, cursor_column);
+    }
+}
+
+/// Verifies preserving soft-wrap spaces does not merge hard lines and retains
+/// styled boundary blanks.
+///
+/// The used-cell extent applies only while merging rows marked as soft wraps.
+/// Explicit CRLF boundaries must remain separate, while nondefault blank-cell
+/// renditions continue to survive a width change with their following text.
+#[test]
+fn terminal_screen_resize_preserves_space_styles_and_hard_line_boundaries() {
+    let mut styled = TerminalScreen::new(Size::new(5, 3).unwrap(), 10).unwrap();
+    styled.feed(b"abc\x1b[48;5;42m  \x1b[0mX");
+    styled.resize(Size::new(10, 3).unwrap());
+    assert_eq!(styled.visible_lines(), vec!["abc  X", "", ""]);
+
+    let mut hard_break = TerminalScreen::new(Size::new(5, 3).unwrap(), 10).unwrap();
+    hard_break.feed(b"abc  \r\nX");
+    hard_break.resize(Size::new(10, 3).unwrap());
+    assert_eq!(hard_break.visible_lines(), vec!["abc", "X", ""]);
+}
+
 /// Verifies agent transcript rows keep their visual gutter on soft-wrap
 /// continuation rows. Agent output is rendered into the same pane buffer as
 /// shell output, so the screen model has to add display-only gutters when

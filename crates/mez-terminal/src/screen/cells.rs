@@ -219,7 +219,9 @@ impl TerminalScreen {
                     .iter()
                     .zip(renditions.iter())
                     .any(|(cell, rendition)| {
-                        !cell.is_blank() || *rendition != GraphicRendition::default()
+                        cell.is_written()
+                            || !cell.is_blank()
+                            || *rendition != GraphicRendition::default()
                     })
             })
     }

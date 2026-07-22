@@ -121,6 +121,11 @@ pub(super) struct TerminalScreenCell {
     text: String,
     /// Whether this cell is a continuation column for a previous wide glyph.
     continuation: bool,
+    /// Whether terminal output explicitly wrote this cell.
+    ///
+    /// Written default spaces remain part of a logical line during reflow,
+    /// while untouched or erased padding can still be omitted.
+    written: bool,
 }
 
 impl TerminalScreenCell {
@@ -129,6 +134,7 @@ impl TerminalScreenCell {
         Self {
             text: " ".to_string(),
             continuation: false,
+            written: false,
         }
     }
 
@@ -137,6 +143,7 @@ impl TerminalScreenCell {
         Self {
             text: String::new(),
             continuation: true,
+            written: true,
         }
     }
 
@@ -145,7 +152,13 @@ impl TerminalScreenCell {
         Self {
             text: text.to_string(),
             continuation: false,
+            written: true,
         }
+    }
+
+    /// Returns whether terminal output explicitly occupied this cell.
+    fn is_written(&self) -> bool {
+        self.written
     }
 
     /// Returns whether the cell is a default blank leading cell.
@@ -727,7 +740,7 @@ fn styled_line_from_row_with_copy_text(
         .iter()
         .zip(renditions.iter())
         .rposition(|(cell, rendition)| {
-            !cell.is_blank() || *rendition != GraphicRendition::default()
+            cell.is_written() || !cell.is_blank() || *rendition != GraphicRendition::default()
         })
         .map(|index| index.saturating_add(1))
         .unwrap_or_default();
