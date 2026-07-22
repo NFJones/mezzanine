@@ -147,6 +147,11 @@ impl TerminalScreen {
             return;
         }
 
+        // DECSTBM margins describe coordinates in the current grid. Reset
+        // them before choosing a resize strategy so stale bounds cannot drive
+        // either reflow selection or later cursor movement outside the grid.
+        self.scroll_region = None;
+
         if self.alternate.active() {
             self.resize_alternate_screen(size);
             return;

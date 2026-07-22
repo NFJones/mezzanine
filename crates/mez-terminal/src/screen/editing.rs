@@ -142,7 +142,10 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn active_scroll_region(&self) -> (usize, usize) {
-        self.scroll_region.unwrap_or((0, self.max_row()))
+        let max_row = self.max_row();
+        self.scroll_region
+            .map(|(top, bottom)| (top.min(max_row), bottom.min(max_row)))
+            .unwrap_or((0, max_row))
     }
 
     /// Runs the scroll region up operation for this subsystem.

@@ -24,6 +24,44 @@ fn terminal_screen_alternate_resize_clears_pre_resize_content() {
     assert!(screen.history().is_empty());
 }
 
+/// Verifies a height resize resets DECSTBM before a line feed at the resized
+/// bottom row.
+///
+/// Pane resizing clamps the cursor to the new grid. If the old bottom margin
+/// remains active, LF can then advance the cursor outside the grid and the next
+/// printable character panics instead of scrolling within the resized screen.
+#[test]
+fn terminal_screen_resize_resets_scroll_region_before_line_feed() {
+    let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
+    screen.feed(b"\x1b[2;5r\x1b[5;1H");
+
+    screen.resize(Size::new(8, 3).unwrap());
+    screen.feed(b"\nX");
+
+    assert_eq!(screen.visible_lines(), vec!["", "", "X"]);
+    assert_eq!(screen.cursor_state().row, 2);
+    assert_eq!(screen.cursor_state().column, 1);
+}
+
+/// Verifies a height resize resets DECSTBM before IND when DEC origin mode is
+/// active.
+///
+/// DECOM makes cursor addressing relative to the old margins, but those margins
+/// must not survive a dimension change with rows beyond the resized grid. IND
+/// at the clamped bottom row must scroll safely before printable output arrives.
+#[test]
+fn terminal_screen_resize_resets_origin_region_before_index() {
+    let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
+    screen.feed(b"\x1b[?6h\x1b[2;5r\x1b[4;1H");
+
+    screen.resize(Size::new(8, 3).unwrap());
+    screen.feed(b"\x1bDX");
+
+    assert_eq!(screen.visible_lines(), vec!["", "", "X"]);
+    assert_eq!(screen.cursor_state().row, 2);
+    assert_eq!(screen.cursor_state().column, 1);
+}
+
 /// Verifies that shrinking a pane with content at the live bottom preserves the
 /// bottom of the viewport. Shell prompts usually live at the bottom edge, so a
 /// top/bottom split must keep the latest line visible after the PTY grid shrinks.
