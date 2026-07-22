@@ -309,6 +309,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Test-only one-shot failure injected after a routed worker spawn succeeds.
     #[cfg(test)]
     fail_routed_worker_after_spawn: bool,
+    /// Test-only one-shot failure injected after a routed child is enqueued.
+    #[cfg(test)]
+    fail_routed_child_enqueue_trace: bool,
     /// Test-only one-shot failure injected before a routed loop continuation queues.
     #[cfg(test)]
     fail_routed_loop_continuation_queue: bool,
@@ -764,6 +767,12 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn fail_next_routed_worker_after_spawn_for_tests(&mut self) {
         self.agent.fail_routed_worker_after_spawn = true;
+    }
+
+    /// Injects one routed child trace failure after scheduler publication.
+    #[cfg(test)]
+    pub(crate) fn fail_next_routed_child_enqueue_trace_for_tests(&mut self) {
+        self.agent.fail_routed_child_enqueue_trace = true;
     }
 
     /// Injects one routed loop continuation queue failure.

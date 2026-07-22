@@ -1454,11 +1454,25 @@ impl RuntimeSessionService {
             pane_id: Some(child_pane_id.to_string()),
             kind: ScheduledWorkKind::ShellCapable,
         })?;
-        self.append_agent_trace_turn_event(
+        #[cfg(test)]
+        let trace_result = if std::mem::take(&mut self.agent.fail_routed_child_enqueue_trace) {
+            Err(MezError::invalid_state(
+                "injected routed child enqueue trace failure",
+            ))
+        } else {
+            self.append_agent_trace_turn_event(
+                child_pane_id,
+                &turn_id,
+                &format!("created state=queued reason={reason}"),
+            )
+        };
+        #[cfg(not(test))]
+        let trace_result = self.append_agent_trace_turn_event(
             child_pane_id,
             &turn_id,
             &format!("created state=queued reason={reason}"),
-        )?;
+        );
+        let _ = trace_result;
         Ok(turn)
     }
 }

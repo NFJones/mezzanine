@@ -478,6 +478,63 @@ fn runtime_routed_selection_post_spawn_failure_removes_worker() {
     );
 }
 
+/// Verifies a trace failure after child scheduler publication cannot orphan the
+/// routed worker because workflow and reverse ownership are committed before
+/// best-effort observability runs.
+#[test]
+fn runtime_routed_selection_keeps_enqueued_child_owned_after_trace_failure() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routed-enqueue-trace-failure","method":"agent/shell/command","params":{"idempotency_key":"routed-enqueue-trace-failure","input":"implement this"}}"#,
+        &primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let parent_profile = service
+        .agent_turn_model_profile("turn-1")
+        .expect("parent profile should exist")
+        .clone();
+    service.fail_next_routed_child_enqueue_trace_for_tests();
+
+    service
+        .apply_routing_selected_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            AutoSizingRoutingSelection {
+                selected_profile: parent_profile,
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                decision_summary: None,
+                fallback: None,
+            },
+        )
+        .unwrap();
+
+    let child_turn_id = service
+        .routed_workflow_for_tests("turn-1")
+        .and_then(|workflow| workflow.child_turn_id.clone())
+        .expect("enqueued child should remain owned after trace failure");
+    assert_eq!(
+        service
+            .routed_parent_turn_id_for_child(&child_turn_id)
+            .as_deref(),
+        Some("turn-1")
+    );
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| turn.turn_id == child_turn_id
+                && turn.parent_turn_id.as_deref() == Some("turn-1"))
+    );
+}
+
 /// Verifies routed `/loop` work transfers from the classifier turn to the
 /// selected worker so patch accounting and later settlement remain attached to
 /// one logical loop.
