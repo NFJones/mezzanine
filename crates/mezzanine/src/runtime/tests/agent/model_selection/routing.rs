@@ -1068,6 +1068,7 @@ fn runtime_routed_loop_continuation_queue_failure_recovers_once() {
     let (mut service, parent_turn_id, worker_turn) =
         selected_routed_loop("/loop --limit 3 implement routed queue recovery");
     service.fail_next_routed_loop_continuation_queue_for_tests();
+    service.fail_next_routed_parent_continuation_trace_for_tests();
     let execution = routed_patch_execution(&worker_turn);
 
     service

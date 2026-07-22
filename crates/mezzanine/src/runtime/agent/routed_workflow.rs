@@ -77,11 +77,11 @@ impl RuntimeSessionService {
             self.agent
                 .agent_scheduler
                 .requeue_waiting(&parent_turn.turn_id)?;
-            self.append_agent_trace_turn_event(
+            let _ = self.append_routed_parent_continuation_trace(
                 &parent_turn.pane_id,
                 &parent_turn.turn_id,
                 &format!("scheduler waiting -> queued reason={reason} capacity=reacquire"),
-            )?;
+            );
         } else if self
             .agent
             .agent_scheduler
@@ -91,11 +91,11 @@ impl RuntimeSessionService {
             self.agent
                 .pending_agent_provider_tasks
                 .insert(parent_turn.turn_id.clone());
-            self.append_agent_trace_turn_event(
+            let _ = self.append_routed_parent_continuation_trace(
                 &parent_turn.pane_id,
                 &parent_turn.turn_id,
                 &format!("provider_task queued reason={reason}_already_running"),
-            )?;
+            );
         } else if !self
             .agent
             .agent_scheduler
@@ -109,6 +109,23 @@ impl RuntimeSessionService {
         }
         self.start_ready_agent_turns()?;
         Ok(())
+    }
+
+    /// Records a continuation diagnostic without allowing observability to
+    /// invalidate the already-committed scheduler transition.
+    fn append_routed_parent_continuation_trace(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        message: &str,
+    ) -> Result<()> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.agent.fail_routed_parent_continuation_trace) {
+            return Err(MezError::invalid_state(
+                "injected routed parent continuation trace failure",
+            ));
+        }
+        self.append_agent_trace_turn_event(pane_id, turn_id, message)
     }
 
     /// Accepts a completed routing decision at the actor boundary.

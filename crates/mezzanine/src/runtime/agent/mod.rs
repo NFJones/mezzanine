@@ -312,6 +312,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Test-only one-shot failure injected before a routed loop continuation queues.
     #[cfg(test)]
     fail_routed_loop_continuation_queue: bool,
+    /// Test-only one-shot failure injected while tracing a routed parent continuation.
+    #[cfg(test)]
+    fail_routed_parent_continuation_trace: bool,
     /// Approval continuation metadata keyed by blocked approval id.
     blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
     /// Exact turn/action identities granted one unsandboxed retry after a
@@ -773,6 +776,12 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn take_routed_loop_continuation_queue_failure_for_tests(&mut self) -> bool {
         std::mem::take(&mut self.agent.fail_routed_loop_continuation_queue)
+    }
+
+    /// Injects one routed parent continuation trace failure.
+    #[cfg(test)]
+    pub(crate) fn fail_next_routed_parent_continuation_trace_for_tests(&mut self) {
+        self.agent.fail_routed_parent_continuation_trace = true;
     }
 
     /// Returns the parent macro turn for one child step turn.
