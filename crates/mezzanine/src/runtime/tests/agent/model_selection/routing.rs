@@ -1398,19 +1398,8 @@ fn runtime_routed_selection_missing_parent_context_fails_cleanly() {
         .expect("parent turn should remain in the ledger");
     assert_eq!(parent_turn.state, mez_agent::AgentTurnState::Failed);
     assert!(service.pending_agent_provider_tasks().is_empty());
-    let workflow = service
-        .routed_workflow_for_tests("turn-1")
-        .expect("failed workflow should retain its diagnostic");
-    assert_eq!(
-        workflow.phase,
-        mez_agent::routed_workflow::RoutedWorkflowPhase::Failed
-    );
-    assert!(
-        workflow
-            .diagnostic
-            .as_deref()
-            .is_some_and(|value| value.contains("routed parent context is unavailable"))
-    );
+    assert!(service.routed_workflow_for_tests("turn-1").is_none());
+    assert!(!service.has_active_routed_workflow("turn-1"));
 }
 
 /// Verifies routed child cancellation resumes the parent exactly once and

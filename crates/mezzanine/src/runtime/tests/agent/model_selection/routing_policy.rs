@@ -986,13 +986,8 @@ reasoning_profile = "high"
             "routed error explanation failed",
         )
         .unwrap();
-    assert_eq!(
-        service
-            .routed_workflow_for_tests("turn-1")
-            .map(|workflow| workflow.phase.clone()),
-        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::Failed),
-        "the one allowed error explanation failure must remain observable"
-    );
+    assert!(service.routed_workflow_for_tests("turn-1").is_none());
+    assert!(!service.has_active_routed_workflow("turn-1"));
 }
 
 /// Verifies that an inaccessible routing model fails the turn instead of

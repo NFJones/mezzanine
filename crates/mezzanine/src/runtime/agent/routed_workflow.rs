@@ -1084,6 +1084,10 @@ impl RuntimeSessionService {
                 &parent_turn.turn_id,
                 AgentTurnState::Failed,
             )?;
+            self.agent
+                .routed_workflows_by_parent_turn
+                .remove(&parent_turn.turn_id);
+            self.clear_routed_workflow_runtime_state(&parent_turn.turn_id);
             return Ok(());
         }
         let context = self
@@ -1265,15 +1269,9 @@ impl RuntimeSessionService {
                 self.clear_routed_workflow_runtime_state(turn_id);
                 Ok(false)
             }
-            RoutedPresentationCompletionPlan::FinishErrorExplanation { diagnostic } => {
+            RoutedPresentationCompletionPlan::FinishErrorExplanation { diagnostic: _ } => {
                 self.agent.routed_presentation_turns.remove(turn_id);
-                if let Some(workflow) = self.agent.routed_workflows_by_parent_turn.get_mut(turn_id)
-                {
-                    workflow.phase = RoutedWorkflowPhase::Failed;
-                    if let Some(diagnostic) = diagnostic {
-                        workflow.diagnostic = Some(diagnostic);
-                    }
-                }
+                self.agent.routed_workflows_by_parent_turn.remove(turn_id);
                 self.clear_routed_workflow_runtime_state(turn_id);
                 Ok(false)
             }
@@ -1305,15 +1303,11 @@ impl RuntimeSessionService {
                 Ok(true)
             }
             RoutedPresentationCompletionPlan::Fail {
-                terminal_phase,
-                diagnostic,
+                terminal_phase: _,
+                diagnostic: _,
             } => {
                 self.agent.routed_presentation_turns.remove(turn_id);
-                if let Some(workflow) = self.agent.routed_workflows_by_parent_turn.get_mut(turn_id)
-                {
-                    workflow.phase = terminal_phase;
-                    workflow.diagnostic = Some(diagnostic);
-                }
+                self.agent.routed_workflows_by_parent_turn.remove(turn_id);
                 self.clear_routed_workflow_runtime_state(turn_id);
                 Ok(false)
             }
