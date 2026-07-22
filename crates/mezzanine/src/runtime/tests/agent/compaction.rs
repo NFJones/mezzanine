@@ -329,74 +329,81 @@ context_window_tokens = 40000
             content: format!("provider-context-limit- {}", "cp ".repeat(10_000)),
         },
     );
-    service.remove_pending_agent_provider_task("turn-1");
-    let provider = RuntimeContextLimitThenSuccessProvider {
-        requests: RefCell::new(Vec::new()),
-    };
-
-    let execution = service
-        .execute_agent_turn_with_provider(
+    let before_context = context.blocks().to_vec();
+    let error = MezError::invalid_state("OpenAI Responses API returned status 400: context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"message":"maximum context length exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
+        );
+    let transition = service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
             "turn-1",
-            &provider,
-            service
-                .provider_registry()
-                .resolve_profile("provider-context-limit-test")
-                .unwrap(),
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+            &error,
         )
-        .unwrap();
+        .unwrap()
+        .expect("context-limit recovery transition");
+    assert!(transition.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::DispatchAgentCompaction { pane_id } if pane_id == "%1"
+    )));
+    assert_eq!(
+        service
+            .agent_turn_contexts()
+            .get("turn-1")
+            .unwrap()
+            .blocks(),
+        before_context.as_slice()
+    );
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+    assert_eq!(service.provider_retry_scheduler_mut().attempt("turn-1"), 1);
+    insert_test_context_block(
+        service.agent_turn_contexts_mut().get_mut("turn-1").unwrap(),
+        ContextBlock::user_event(
+            "post-boundary steering",
+            "preserve this post-boundary steering exactly",
+        ),
+    );
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
-    let requests = provider.requests.borrow();
-    assert_eq!(requests.len(), 2);
-    let first_request_text = requests[0]
-        .messages
+    complete_runtime_test_compaction(&mut service, "%1", "model-authored context summary");
+    let compacted_context = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
         .iter()
-        .map(|message| message.content.as_str())
+        .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(
-        first_request_text.contains("provider-context-limit-"),
-        "{first_request_text}"
-    );
-    let second_request_text = requests[1]
-        .messages
-        .iter()
-        .map(|message| message.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        second_request_text.contains("[context compacted]"),
-        "{second_request_text}"
-    );
-    assert!(
-        second_request_text.contains("label=synthetic provider-rejected action result"),
-        "{second_request_text}"
-    );
-    assert!(
-        requests[1]
-            .messages
-            .iter()
-            .all(|message| message.source != ContextSourceKind::ActionResult),
-        "{second_request_text}"
-    );
+    assert!(compacted_context.contains("model-authored context summary"));
+    assert!(compacted_context.contains("preserve this post-boundary steering exactly"));
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+    assert_eq!(service.provider_retry_scheduler_mut().attempt("turn-1"), 1);
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
     assert!(
-        pane_text.contains("provider rejected context as too large; compacted active turn context"),
+        pane_text_unwrapped.contains(
+            "provider rejected context as too large; requesting model-backed context compaction"
+        ),
         "{pane_text}"
     );
 }
 
-/// Verifies a second provider context-limit recovery attempt uses a smaller
-/// explicit compaction budget and still shrinks stored active-turn context.
+/// Verifies a second provider context-limit recovery attempt remains deferred
+/// until a model-authored summary shrinks stored active-turn context.
 ///
-/// Once one local compaction pass has already happened, a second provider
-/// rejection should not stop at the original profile budget. Recovery must use
-/// a smaller retry budget for the already-compacted context and record that
-/// narrower target in user-visible diagnostics.
+/// Once one compaction pass has already happened, a second provider rejection
+/// must queue another model request without mutating the durable context or
+/// prematurely retrying the rejected provider turn.
 #[test]
 fn runtime_provider_context_limit_error_compacts_context_multiple_times() {
     let mut service = test_runtime_service();
@@ -435,15 +442,6 @@ context_window_tokens = 40000
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    let profile_budget_words = service
-        .provider_registry()
-        .resolve_profile("provider-context-limit-multi-test")
-        .unwrap()
-        .context_window_budget_words();
-    let second_recovery_budget_words = profile_budget_words
-        .saturating_mul(3)
-        .saturating_div(4)
-        .max(1);
     service
         .agent_turn_contexts_mut()
         .get_mut("turn-1")
@@ -508,6 +506,24 @@ context_window_tokens = 40000
         .unwrap();
 
     assert!(recovered);
+    let queued_context = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(queued_context, before_context);
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+
+    complete_runtime_test_compaction(&mut service, "%1", "second model-authored summary");
     let after_context = service
         .agent_turn_contexts()
         .get("turn-1")
@@ -517,36 +533,22 @@ context_window_tokens = 40000
         .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert_ne!(after_context, before_context);
-    assert!(
-        after_context.contains("[context compacted]"),
-        "{after_context}"
-    );
+    assert!(after_context.contains("second model-authored summary"));
+    assert!(service.agent_provider_task_is_pending("turn-1"));
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
     let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
-    assert_eq!(
-        pane_text
-            .matches("provider rejected context as too large; compacted active turn context")
-            .count(),
-        1,
+    assert!(
+        pane_text_unwrapped.contains(
+            "provider rejected context as too large; requesting model-backed context compaction"
+        ),
         "{pane_text}"
     );
     assert!(
         !pane_text.contains("no compactable active turn context remains"),
-        "{pane_text}"
-    );
-    assert!(
-        pane_text_unwrapped.contains(&format!("profile_budget_words={profile_budget_words}")),
-        "{pane_text}"
-    );
-    assert!(
-        pane_text_unwrapped.contains(&format!(
-            "recovery_budget_words={second_recovery_budget_words}"
-        )),
         "{pane_text}"
     );
 }
@@ -628,6 +630,15 @@ context_window_tokens = 40000
             },
         ])
         .unwrap();
+    let before_context = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     let error = MezError::invalid_state(
         "OpenAI Responses API returned status 400: This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.",
     )
@@ -645,6 +656,28 @@ context_window_tokens = 40000
         .unwrap();
 
     assert!(recovered);
+    let queued_context = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(queued_context, before_context);
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+
+    complete_runtime_test_compaction(
+        &mut service,
+        "%1",
+        "model-authored action-result prefix summary",
+    );
     let after_context = service
         .agent_turn_contexts()
         .get("turn-1")
@@ -655,16 +688,20 @@ context_window_tokens = 40000
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        after_context.contains("[context compacted]"),
+        after_context.contains("model-authored action-result prefix summary"),
         "{after_context}"
     );
+    assert!(service.agent_provider_task_is_pending("turn-1"));
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
     assert!(
-        pane_text.contains("provider rejected context as too large; compacted active turn context"),
+        pane_text_unwrapped.contains(
+            "provider rejected context as too large; requesting model-backed context compaction"
+        ),
         "{pane_text}"
     );
     assert!(
@@ -1138,6 +1175,24 @@ context_window_tokens = 100000
         .unwrap();
 
     assert!(recovered);
+    let queued_context = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(queued_context.contains("routing-context-pressure-"));
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+
+    complete_runtime_test_compaction(&mut service, "%1", "model-authored routing context summary");
     let stored_context = service
         .agent_turn_contexts()
         .get("turn-1")
@@ -1147,25 +1202,18 @@ context_window_tokens = 100000
         .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(stored_context.contains("[context compacted]"));
-    let stored_blocks = &service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks();
-    assert!(
-        !stored_blocks
-            .iter()
-            .any(|block| block.source == ContextSourceKind::ActionResult)
-    );
-    assert!(stored_context.contains("label=synthetic routing action result"));
+    assert!(stored_context.contains("model-authored routing context summary"));
+    assert!(service.agent_provider_task_is_pending("turn-1"));
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
     assert!(
-        pane_text.contains("provider rejected context as too large; compacted active turn context"),
+        pane_text_unwrapped.contains(
+            "provider rejected context as too large; requesting model-backed context compaction"
+        ),
         "{pane_text}"
     );
 }

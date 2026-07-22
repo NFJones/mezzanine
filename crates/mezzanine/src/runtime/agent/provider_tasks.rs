@@ -180,6 +180,25 @@ impl RuntimeSessionService {
             }
             ProviderRetryRecovery::None => true,
         };
+        if recovered
+            && matches!(recovery, ProviderRetryRecovery::ContextLimit)
+            && self
+                .agent_compaction_resume_ids()
+                .iter()
+                .any(|resume_turn_id| resume_turn_id == turn_id)
+        {
+            let pane_id = self
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .find(|turn| turn.turn_id == turn_id)
+                .map(|turn| turn.pane_id.clone())
+                .ok_or_else(|| MezError::invalid_state("queued compaction turn is unavailable"))?;
+            return Ok(Some(RuntimeTransition {
+                applied: true,
+                side_effects: vec![RuntimeSideEffect::DispatchAgentCompaction { pane_id }],
+            }));
+        }
         if !recovered {
             self.agent
                 .provider_retry_scheduler
@@ -1048,6 +1067,68 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(true)
+    }
+
+    /// Completes deferred context-limit recovery after model compaction and
+    /// queues exactly one provider retry while preserving its bounded attempt.
+    pub(crate) fn queue_agent_provider_recovery_task_after_context_compaction(
+        &mut self,
+        turn_id: &str,
+        attempt: u32,
+    ) -> Result<bool> {
+        if self.agent.provider_retry_scheduler.attempt(turn_id) == 0 {
+            return self.queue_agent_provider_recovery_task_after_compaction(turn_id);
+        }
+        let recovery =
+            self.agent
+                .provider_retry_scheduler
+                .apply(ProviderRetryEvent::RecoveryCompleted {
+                    turn_id: turn_id.to_string(),
+                    attempt,
+                    result: ProviderRetryRecoveryResult::Ready,
+                });
+        if !matches!(
+            recovery,
+            ProviderRetryTransition::Effect(ProviderRetryEffect::ScheduleTimer { .. })
+        ) {
+            return Err(MezError::invalid_state(
+                "context compaction completed outside its provider retry recovery phase",
+            ));
+        }
+        let timer = self
+            .agent
+            .provider_retry_scheduler
+            .apply(ProviderRetryEvent::TimerElapsed {
+                turn_id: turn_id.to_string(),
+                attempt,
+            });
+        if !matches!(
+            timer,
+            ProviderRetryTransition::Effect(ProviderRetryEffect::DispatchProvider { .. })
+        ) {
+            return Err(MezError::invalid_state(
+                "context compaction retry did not become dispatchable",
+            ));
+        }
+        let queued = self.queue_agent_provider_retry_task(turn_id, attempt)?;
+        let completion =
+            self.agent
+                .provider_retry_scheduler
+                .apply(ProviderRetryEvent::DispatchCompleted {
+                    turn_id: turn_id.to_string(),
+                    attempt,
+                    result: if queued {
+                        ProviderRetryDispatchResult::Ready
+                    } else {
+                        ProviderRetryDispatchResult::TurnUnavailable
+                    },
+                });
+        if queued && completion != ProviderRetryTransition::Applied {
+            return Err(MezError::invalid_state(
+                "context compaction provider retry produced an invalid scheduler transition",
+            ));
+        }
+        Ok(queued)
     }
 
     /// Applies an async provider-worker failure event through actor-owned

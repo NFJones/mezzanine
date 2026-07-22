@@ -619,65 +619,61 @@ context_window_tokens = 40000
             content: format!("provider-context-window- {}", "cw ".repeat(10_000)),
         },
     );
-    service.remove_pending_agent_provider_task("turn-1");
-    let provider = RuntimeContextWindowErrorProvider {
-        requests: RefCell::new(Vec::new()),
-    };
+    let before_context = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
+        .to_vec();
+    let error = MezError::invalid_state(
+        "Your input exceeds the context window of this model. Please adjust your input and try again.",
+    );
 
-    let execution = service
-        .execute_agent_turn_with_provider(
+    let transition = service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
             "turn-1",
-            &provider,
-            service
-                .provider_registry()
-                .resolve_profile("provider-context-window-test")
-                .unwrap(),
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+            &error,
         )
-        .unwrap();
+        .unwrap()
+        .expect("context-window recovery transition");
+    assert!(transition.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::DispatchAgentCompaction { pane_id } if pane_id == "%1"
+    )));
+    assert_eq!(
+        service
+            .agent_turn_contexts()
+            .get("turn-1")
+            .unwrap()
+            .blocks(),
+        before_context.as_slice()
+    );
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
-    let requests = provider.requests.borrow();
-    assert_eq!(requests.len(), 2);
-    let first_request_text = requests[0]
-        .messages
+    complete_runtime_test_compaction(&mut service, "%1", "model-authored context-window summary");
+    let compacted_context = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
         .iter()
-        .map(|message| message.content.as_str())
+        .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(
-        first_request_text.contains("provider-context-window-"),
-        "{first_request_text}"
-    );
-    let second_request_text = requests[1]
-        .messages
-        .iter()
-        .map(|message| message.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        second_request_text.contains("[context compacted]"),
-        "{second_request_text}"
-    );
-    assert!(
-        second_request_text
-            .contains("source=action_result label=synthetic provider-context-window action result"),
-        "{second_request_text}"
-    );
-    assert!(
-        requests[1]
-            .messages
-            .iter()
-            .all(|message| message.source != ContextSourceKind::ActionResult),
-        "{second_request_text}"
-    );
+    assert!(compacted_context.contains("model-authored context-window summary"));
+    assert!(service.agent_provider_task_is_pending("turn-1"));
     let retry_notice = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let retry_notice_unwrapped = retry_notice.replace('\n', "").replace("▐ ", "");
     assert!(
-        retry_notice
-            .contains("provider rejected context as too large; compacted active turn context"),
+        retry_notice_unwrapped.contains(
+            "provider rejected context as too large; requesting model-backed context compaction"
+        ),
         "{retry_notice}"
     );
 }

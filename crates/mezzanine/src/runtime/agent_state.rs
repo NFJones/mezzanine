@@ -12,7 +12,9 @@ use super::{
     SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::integrations::agent::provider::AnthropicMessagesProvider;
-use mez_agent::{AutoSizingRoutingSelection, McpPromptTool, PreparedModelContext};
+use mez_agent::{
+    AutoSizingRoutingSelection, McpPromptTool, ModelContextCompactionPlan, PreparedModelContext,
+};
 
 /// Carries Runtime Agent Provider Task state for this subsystem.
 ///
@@ -334,6 +336,24 @@ pub struct RuntimeAgentCompactionTask {
     pub request: ModelRequest,
     /// Running turn to requeue after this compaction completes.
     pub resume_turn_id: Option<String>,
+    /// Exact compaction target retained across the provider worker boundary.
+    pub target: RuntimeAgentCompactionTarget,
+}
+
+/// Durable target for one model-backed compaction request.
+#[derive(Debug, Clone)]
+pub enum RuntimeAgentCompactionTarget {
+    /// Summarize persisted conversation transcript and retain its raw tail.
+    Conversation,
+    /// Apply a model-authored summary to a frozen active-turn context plan.
+    ActiveTurn {
+        /// Running turn that owns the frozen durable context.
+        turn_id: String,
+        /// Provider retry attempt deferred while model compaction runs.
+        recovery_attempt: u32,
+        /// Deterministic selection and application contract.
+        plan: Box<ModelContextCompactionPlan>,
+    },
 }
 
 /// Claimed model compaction dispatch owned by an async provider worker.

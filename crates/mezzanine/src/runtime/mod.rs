@@ -144,7 +144,6 @@ use mez_agent::{
     AgentTurnState, AgentTurnTrigger, ContextBlock, ContextSourceKind, McpExecutionRequest,
     McpExecutionResponse, ModelProfile, ModelProfileOverrides, ModelRequest, ModelResponse,
     ModelTokenUsage, ModelTokenUsageKey, PaneReadinessState, ReadinessOverrideRevocation,
-    compact_model_context_for_budget_at_consumed_sequence,
     decode_shell_output_transport_with_diagnostics, local_action_plan, network_action_plan,
     postprocess_shell_action_success_output, select_model_profile, shell_command_result_content,
     transcript_entries_for_execution,

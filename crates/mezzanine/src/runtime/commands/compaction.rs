@@ -22,7 +22,9 @@ use super::{
     resolve_provider_api, runtime_mezzanine_error_code,
 };
 use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
+use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
+use mez_agent::apply_model_context_compaction_plan;
 
 impl RuntimeSessionService {
     /// Executes `/compact` by queuing model-backed conversation compaction.
@@ -193,6 +195,7 @@ impl RuntimeSessionService {
             model_profile: model_profile.clone(),
             request,
             resume_turn_id: resume_turn_id.map(str::to_string),
+            target: RuntimeAgentCompactionTarget::Conversation,
         });
         self.append_agent_status_text_to_terminal_buffer(
             pane_id,
@@ -280,6 +283,73 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(matches!(outcome, AgentShellCommandOutcome::Mutated { .. }))
+    }
+
+    /// Queues model-backed compaction for one frozen active-turn context.
+    pub(crate) fn queue_agent_context_limit_recovery_compaction(
+        &mut self,
+        turn_id: &str,
+        model_profile_name: String,
+        model_profile: ModelProfile,
+        recovery_attempt: u32,
+        plan: mez_agent::ModelContextCompactionPlan,
+    ) -> Result<bool> {
+        let Some(turn) = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if turn.state != AgentTurnState::Running || self.agent_is_compacting(&turn.pane_id) {
+            return Ok(false);
+        }
+        if !plan.changes_context() {
+            return Ok(false);
+        }
+        let conversation_id = self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("active-turn compaction pane session is unavailable")
+            })?
+            .session_id
+            .clone();
+        let source_context = AgentContext::new_durable(plan.replacement_blocks().to_vec())
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+        let request = runtime_model_compaction_request(
+            &model_profile,
+            &turn.pane_id,
+            &conversation_id,
+            0,
+            &[],
+            &source_context,
+        )?;
+        self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
+            pane_id: turn.pane_id.clone(),
+            conversation_id,
+            source: "provider-context-limit".to_string(),
+            transcript_entries: 0,
+            retained_transcript_entries: 0,
+            summarized_entries: plan.replacement_blocks().len(),
+            model_profile_name,
+            model_profile,
+            request,
+            resume_turn_id: Some(turn.turn_id.clone()),
+            target: RuntimeAgentCompactionTarget::ActiveTurn {
+                turn_id: turn.turn_id.clone(),
+                recovery_attempt,
+                plan: Box::new(plan),
+            },
+        });
+        self.remove_pending_agent_provider_task(turn_id);
+        self.append_agent_status_text_to_terminal_buffer(
+            &turn.pane_id,
+            "agent: provider rejected context as too large; requesting model-backed context compaction",
+        )?;
+        Ok(true)
     }
 
     /// Returns pane ids with queued model-backed compaction tasks.
@@ -436,6 +506,58 @@ impl RuntimeSessionService {
         self.record_agent_provider_quota_usage(pane_id, &response.quota_usage);
         let application = (|| -> Result<()> {
             let summary = runtime_model_compaction_summary_from_response(&response)?;
+            if let RuntimeAgentCompactionTarget::ActiveTurn {
+                turn_id,
+                recovery_attempt,
+                plan,
+            } = &task.target
+            {
+                let Some(turn) = self
+                    .agent_turn_ledger()
+                    .turns()
+                    .iter()
+                    .find(|turn| turn.turn_id == *turn_id)
+                    .cloned()
+                else {
+                    return Err(MezError::invalid_state(
+                        "active-turn compaction completed after its turn disappeared",
+                    ));
+                };
+                if turn.state != AgentTurnState::Running {
+                    return Err(MezError::invalid_state(
+                        "active-turn compaction completed after its turn became terminal",
+                    ));
+                }
+                let context = self
+                    .agent_turn_contexts()
+                    .get(turn_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("active-turn compaction context is unavailable")
+                    })?;
+                let (compacted, report) =
+                    apply_model_context_compaction_plan(context, plan.as_ref(), summary)
+                        .map_err(|error| MezError::invalid_state(error.message()))?;
+                self.agent_turn_contexts_mut()
+                    .insert(turn_id.to_string(), compacted);
+                self.queue_agent_provider_recovery_task_after_context_compaction(
+                    turn_id,
+                    *recovery_attempt,
+                )?;
+                self.append_agent_status_text_to_terminal_buffer(
+                    pane_id,
+                    &format!(
+                        "agent: provider context recovery applied model summary compacted_blocks={}",
+                        report.compacted_blocks
+                    ),
+                )?;
+                self.append_agent_trace_turn_event(
+                    pane_id,
+                    turn_id,
+                    "provider_request recovery_resuming reason=model_context_compaction_completed",
+                )?;
+                return Ok(());
+            }
             let now = current_unix_seconds().max(1);
             let memory_id = format!("compact-{}", task.conversation_id);
             let content = runtime_model_compact_memory_content(

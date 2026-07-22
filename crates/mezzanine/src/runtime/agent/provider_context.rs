@@ -10,8 +10,7 @@
 use super::{
     AgentId, AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind, MezError,
     ModelProfile, Result, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
-    RuntimeSessionService, append_mcp_context_for_provider,
-    compact_model_context_for_budget_at_consumed_sequence, invoked_mcp_tools_for_context,
+    RuntimeSessionService, append_mcp_context_for_provider, invoked_mcp_tools_for_context,
     runtime_cooperation_mode_name, runtime_mezzanine_error_code, set_project_guidance_context,
 };
 #[cfg(test)]
@@ -121,7 +120,7 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Locally compacts active-turn context after a provider rejects the request
+    /// Queues model-backed active-turn compaction after a provider rejects the request
     /// as too large.
     ///
     /// Once the provider has rejected the exact request, the recoverable
@@ -187,13 +186,14 @@ impl RuntimeSessionService {
         }
         .max(1);
         let retained_tail_percent = self.agent_compaction_raw_retention_percent();
-        let (compacted_context, report) = compact_model_context_for_budget_at_consumed_sequence(
-            context,
+        let plan = mez_agent::plan_model_context_compaction_at_consumed_sequence(
+            &context,
             recovery_budget_words,
             retained_tail_percent,
             consumed_sequence_high_water,
-        )?;
-        if !report.changed() {
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        if !plan.changes_context() {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 turn_id,
@@ -217,32 +217,25 @@ impl RuntimeSessionService {
             )?;
             return Ok(false);
         }
-        self.agent_turn_contexts_mut()
-            .insert(turn_id.to_string(), compacted_context);
-        self.append_agent_status_text_to_terminal_buffer(
-            &turn.pane_id,
-            &format!(
-                "agent: provider rejected context as too large; compacted active turn context profile_budget_words={} recovery_budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={}",
-                profile_budget_words,
-                recovery_budget_words,
-                retained_tail_percent,
-                report.compacted_blocks,
-                report.omitted_blocks
-            ),
-        )?;
+        if !self.queue_agent_context_limit_recovery_compaction(
+            turn_id,
+            turn.model_profile.clone(),
+            model_profile,
+            recovery_attempt,
+            plan,
+        )? {
+            return Ok(false);
+        }
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
             &format!(
-                "context_limit_recovery applied attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={} omitted_original_words={} error_kind={}",
+                "context_limit_recovery queued attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} error_kind={}",
                 recovery_attempt,
                 consumed_sequence_high_water,
                 profile_budget_words,
                 recovery_budget_words,
                 retained_tail_percent,
-                report.compacted_blocks,
-                report.omitted_blocks,
-                report.omitted_original_words,
                 runtime_mezzanine_error_code(error.kind())
             ),
         )?;

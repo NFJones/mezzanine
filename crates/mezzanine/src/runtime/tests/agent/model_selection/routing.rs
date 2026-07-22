@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::runtime::RuntimeAgentCompactionTask;
+use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
 use mez_agent::AutoSizingRoutingSelection;
 
 /// Starts a routed loop and returns its blocked parent plus selected worker turn.
@@ -808,6 +809,7 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
                 &worker_turn.agent_id,
             ),
             resume_turn_id: Some(worker_turn.turn_id.clone()),
+            target: RuntimeAgentCompactionTarget::Conversation,
         },
     );
 
@@ -880,6 +882,7 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
                 &worker_turn.agent_id,
             ),
             resume_turn_id: Some(worker_turn.turn_id.clone()),
+            target: RuntimeAgentCompactionTarget::Conversation,
         },
     );
     service
