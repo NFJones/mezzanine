@@ -1,6 +1,6 @@
 //! Regression tests for terminal presentation copy mode behavior.
 
-use crate::host::terminal::CopyMode;
+use crate::host::terminal::{CopyMode, CopySelectionFormat};
 use mez_mux::copy::{CopyPosition, SearchDirection};
 use mez_mux::layout::Size;
 use mez_mux::paste::PasteBuffers;
@@ -299,8 +299,7 @@ fn copy_mode_dedents_orphan_agent_continuation_rows() {
     assert_eq!(copy.copy_selection().unwrap(), "- item\n    code");
 }
 
-/// Verifies selecting one rendered row from a transformed source group keeps
-/// the visible row instead of expanding it into the group's complete source.
+/// Verifies default copy mode keeps transformed presentation rows rendered.
 ///
 /// Presentation transforms such as Mermaid assign one raw source block to
 /// several rendered rows. A selection containing only the first rendered row
@@ -341,6 +340,43 @@ fn copy_mode_keeps_partial_transformed_source_group_rendered() {
 
     assert_eq!(
         copy.copy_selection().unwrap(),
+        "diagram first\ndiagram second"
+    );
+}
+
+/// Verifies explicit rendered and source formats make transformed-block copy
+/// intent independent of whether the selected rows cover the whole display
+/// group. Rendered copy retains the visible rows, while source copy emits the
+/// complete original fence exactly once.
+#[test]
+fn copy_mode_explicit_formats_distinguish_rendered_and_source_groups() {
+    let mut screen = TerminalScreen::new(Size::new(40, 2).unwrap(), 10).unwrap();
+    screen.feed(b"diagram first\ndiagram second");
+    screen.set_recent_normal_copy_texts(
+        &[
+            "```mermaid\nflowchart LR\nA --> B\n```".to_string(),
+            mez_mux::copy::COPY_SKIP_LINE.to_string(),
+        ],
+        mez_mux::copy::COPY_SKIP_LINE,
+    );
+    let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
+    copy.select_range(
+        CopyPosition { line: 0, column: 0 },
+        CopyPosition {
+            line: 0,
+            column: "diagram first".chars().count(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        copy.copy_selection_with_format(CopySelectionFormat::Rendered)
+            .unwrap(),
+        "diagram first"
+    );
+    assert_eq!(
+        copy.copy_selection_with_format(CopySelectionFormat::Source)
+            .unwrap(),
         "```mermaid\nflowchart LR\nA --> B\n```"
     );
 }

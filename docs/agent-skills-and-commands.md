@@ -61,7 +61,7 @@ Open the Mezzanine command prompt with `Ctrl+A :`.
 | `exit` | Terminate the current session and exit Mezzanine. |
 | `help` | Show the terminal command guide. |
 | `copy-mode` | Enter pane-local copy mode. |
-| `copy-selection` | Copy the active selection to a buffer and clipboard when available. |
+| `copy-selection` | Copy the active selection as rendered text (default) or source groups with `--format source`, to a buffer and clipboard when available. |
 | `paste-clipboard` | Paste host clipboard text into the active pane. |
 | `paste-buffer` | Paste a named or recent paste buffer. |
 | `create-buffer` | Create a named internal paste buffer. |

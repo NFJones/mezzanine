@@ -233,7 +233,12 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
         )
         .unwrap();
 
-    assert_eq!(copy_mode.copy_selection().unwrap(), markdown);
+    assert_eq!(
+        copy_mode
+            .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+            .unwrap(),
+        markdown
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -323,7 +328,9 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
         )
         .unwrap();
 
-    let copied = copy_mode.copy_selection().unwrap();
+    let copied = copy_mode
+        .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+        .unwrap();
     assert_eq!(copied, markdown);
     assert!(!copied.contains('│'), "{copied}");
 }
@@ -368,7 +375,9 @@ fn runtime_agent_mermaid_diagram_copy_preserves_raw_fence() {
         )
         .unwrap();
 
-    let copied = copy_mode.copy_selection().unwrap();
+    let copied = copy_mode
+        .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+        .unwrap();
     assert_eq!(copied, markdown);
     assert!(!copied.contains('┌') && !copied.contains('─'), "{copied}");
 }
@@ -426,7 +435,9 @@ fn runtime_agent_markdown_copy_omits_synthetic_frame_row() {
         )
         .unwrap();
 
-    let copied = copy_mode.copy_selection().unwrap();
+    let copied = copy_mode
+        .copy_selection_with_format(crate::host::terminal::CopySelectionFormat::Source)
+        .unwrap();
     assert_eq!(copied, "# Heading");
 }
 

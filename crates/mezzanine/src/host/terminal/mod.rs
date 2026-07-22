@@ -71,7 +71,7 @@ pub use client_loop::{
 pub(crate) use client_loop::{
     HostBracketedPasteBufferState, plan_attached_terminal_client_step_with_host_paste_buffer,
 };
-pub use copy::CopyMode;
+pub use copy::{CopyMode, CopySelectionFormat};
 #[cfg(test)]
 pub use fd::AttachedTerminalFd;
 #[cfg(test)]

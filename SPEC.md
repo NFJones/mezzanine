@@ -1601,7 +1601,7 @@ The baseline commands MUST have the following semantics:
 | `exit` | Terminate the current session and all panes, then exit Mezzanine. It MUST route through the runtime session shutdown path so attached clients and the server process exit cleanly. |
 | `help` | Render a command guide for the Mezzanine command set in the interactive command-output overlay, with a column-aligned key binding list section at the bottom. |
 | `copy-mode` | Enter pane-local copy mode for scrolling visible and historical terminal content, moving a selection cursor, selecting text, and copying text without sending input to the pane process or opening a command-output view. |
-| `copy-selection` | Copy the active copy-mode selection to the active or named paste buffer and to the host clipboard when host clipboard integration is available. |
+| `copy-selection` | Copy the active copy-mode selection to the active or named paste buffer and to the host clipboard when host clipboard integration is available. `--format rendered` copies visible selected text; `--format source` copies each intersected source group once. |
 | `paste-clipboard` | Paste host clipboard text into the active pane, falling back to the most recent paste buffer when host clipboard text is unavailable. It MUST use bracketed paste when bracketed paste is enabled by the pane application. |
 | `paste-buffer` | Paste the selected or named paste buffer into the active pane as bracketed paste when bracketed paste is enabled by the pane application; otherwise paste as ordinary terminal input. |
 | `create-buffer` | Create a named internal paste buffer. The command MUST create an empty buffer by default, MUST NOT overwrite an existing buffer unless an explicit replace flag is supplied, and MAY set the created buffer as active when requested. |
@@ -2176,7 +2176,11 @@ of the buffer. Pressing Escape MUST exit keyboard copy mode. Pressing Ctrl-C
 MUST be consumed without exiting copy mode or forwarding input to the pane
 process.
 Explicit `copy-selection` commands MAY copy the active selection to the active
-or named paste buffer without changing this default Space-toggle workflow.
+or named paste buffer without changing this default Space-toggle workflow. They
+MUST accept `--format rendered` (the default) for selected visible text with
+Mezzanine-owned decoration removed and `--format source` for complete raw source
+groups intersected by the selection. Source mode MUST emit each group once in
+display order and omit rows without a source association.
 
 Mezzanine MUST provide commands to capture pane contents from the visible
 screen, from the bounded history buffer, or from a configured line range.
@@ -5551,7 +5555,7 @@ The baseline command capabilities are:
   diagnostic when the target is `pane` and report that no context was copied.
 - `/copy-trace-log`: Copy the active pane's bounded retained agent trace log.
   The command MUST accept `pane`, `buffer [name]`, and `clipboard` targets;
-  the default target MUST be `pane`. `pane` MUST append the retained trace log
+  the default target MUST be `clipboard`. `pane` MUST append the retained trace log
   to the pane buffer, `buffer` MUST write it to the named internal paste
   buffer or to `agent-trace` when no name is supplied, and `clipboard` MUST
   write it to the `clipboard` paste buffer while attempting a best-effort host

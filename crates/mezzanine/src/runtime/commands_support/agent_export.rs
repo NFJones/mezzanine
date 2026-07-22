@@ -505,7 +505,7 @@ fn runtime_agent_export_target(
     default_buffer_name: &str,
 ) -> Result<RuntimeAgentExportTarget> {
     let mut parts = args.split_whitespace();
-    let target = parts.next().unwrap_or("pane");
+    let target = parts.next().unwrap_or("clipboard");
     match target {
         "pane" => {
             if parts.next().is_some() {

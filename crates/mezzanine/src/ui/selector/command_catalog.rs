@@ -236,6 +236,18 @@ pub(super) fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandid
             ]));
             candidates.extend(value_candidates(&["start", "end"]));
         }
+        "copy-selection" => {
+            candidates.extend(flag_candidates(&[
+                "-b",
+                "--buffer",
+                "-t",
+                "--target-pane",
+                "--format",
+                "-x",
+                "--exit",
+            ]));
+            candidates.extend(value_candidates(&["rendered", "source"]));
+        }
         "paste-buffer" | "create-buffer" | "delete-buffer" | "save-buffer" | "choose-buffer" => {
             candidates.extend(flag_candidates(&[
                 "-b",

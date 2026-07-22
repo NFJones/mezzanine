@@ -8,6 +8,7 @@ use super::{
     CommandInvocation, CopyMode, MezError, PasteBuffer, Result, RuntimeSessionService,
     TerminalScreen, json_escape, runtime_flag_value, runtime_positional_args,
 };
+use crate::host::terminal::CopySelectionFormat;
 
 /// Runs the runtime capture lines operation for this subsystem.
 ///
@@ -140,7 +141,8 @@ pub(super) fn runtime_copy_selection_command(
             "target={pane_id}:copy=not-copied:reason=copy-mode-inactive"
         ));
     };
-    let copied = copy_mode.copy_selection()?;
+    let format = runtime_copy_selection_format(invocation)?;
+    let copied = copy_mode.copy_selection_with_format(format)?;
     let bytes = copied.len();
     service.copy_text_to_buffer_and_host_clipboard(
         buffer_name.as_str(),
@@ -151,8 +153,28 @@ pub(super) fn runtime_copy_selection_command(
         service.active_copy_modes_mut().remove(pane_id.as_str());
     }
     Ok(format!(
-        "target={pane_id}:copy=copied:buffer={buffer_name}:bytes={bytes}"
+        "target={pane_id}:copy=copied:format={}:buffer={buffer_name}:bytes={bytes}",
+        runtime_copy_selection_format_name(format)
     ))
+}
+
+/// Parses the explicit representation requested for a copy-mode selection.
+fn runtime_copy_selection_format(invocation: &CommandInvocation) -> Result<CopySelectionFormat> {
+    match runtime_flag_value(&invocation.args, "--format").unwrap_or("rendered") {
+        "rendered" => Ok(CopySelectionFormat::Rendered),
+        "source" => Ok(CopySelectionFormat::Source),
+        value => Err(MezError::invalid_args(format!(
+            "copy-selection format must be rendered or source, got {value}"
+        ))),
+    }
+}
+
+/// Returns the stable command-output name for one selection representation.
+fn runtime_copy_selection_format_name(format: CopySelectionFormat) -> &'static str {
+    match format {
+        CopySelectionFormat::Rendered => "rendered",
+        CopySelectionFormat::Source => "source",
+    }
 }
 
 /// Runs the runtime paste clipboard command operation for this subsystem.

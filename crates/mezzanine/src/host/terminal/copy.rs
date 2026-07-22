@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use std::collections::BTreeSet;
 use std::ops::{Deref, DerefMut};
 
 use super::{Result, TerminalScreen};
@@ -29,6 +30,20 @@ const AGENT_COPY_ASSISTANT_LABEL: &str = "mez> ";
 /// Mezzanine transcript/Markdown normalization and host clipboard integration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyMode(StyledCopyMode);
+
+/// Selects the representation written for an active copy-mode selection.
+///
+/// Rendered selection preserves the visible terminal cells while removing
+/// Mezzanine-owned transcript decoration. Source selection emits every
+/// intersected source-backed group once in display order and omits rows that
+/// have no source association.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopySelectionFormat {
+    /// Copy visible terminal text without presentation-to-source recovery.
+    Rendered,
+    /// Copy complete raw source groups that intersect the selection.
+    Source,
+}
 
 impl Deref for CopyMode {
     type Target = StyledCopyMode;
@@ -58,12 +73,21 @@ impl CopyMode {
         )?))
     }
 
-    /// Runs the copy selection operation for this subsystem.
+    /// Copies the active selection in the default rendered representation.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn copy_selection(&self) -> Result<String> {
+        self.copy_selection_with_format(CopySelectionFormat::Rendered)
+    }
+
+    /// Copies the active selection in the requested representation.
+    ///
+    /// Source selection uses only explicit rich-text source associations. Rows
+    /// such as terminal output, transcript gutters, and presentation-only
+    /// decoration have no source association and are deliberately omitted.
+    pub fn copy_selection_with_format(&self, format: CopySelectionFormat) -> Result<String> {
         let Some((start, end)) = self.selection() else {
             return Ok(String::new());
         };
@@ -71,58 +95,90 @@ impl CopyMode {
         validate_position(self.0.lines(), start)?;
         validate_position(self.0.lines(), end)?;
 
+        match format {
+            CopySelectionFormat::Rendered => self.copy_rendered_selection(start, end),
+            CopySelectionFormat::Source => self.copy_source_selection(start, end),
+        }
+    }
+
+    /// Copies terminal display text while preserving the user's selected cells.
+    fn copy_rendered_selection(&self, start: CopyPosition, end: CopyPosition) -> Result<String> {
         let mut copied = Vec::new();
-        let mut line = start.line;
-        while line <= end.line {
-            if let Some((group_end, raw_line)) =
-                self.copy_selected_markdown_source_line(start, end, line)
-            {
-                copied.push(raw_line);
-                line = group_end.saturating_add(1);
-                continue;
-            }
+        for line in start.line..=end.line {
             let line_start = if line == start.line { start.column } else { 0 };
             let line_end = if line == end.line {
                 end.column
             } else {
-                char_count(&self.0.lines()[line])
+                self.0
+                    .lines()
+                    .get(line)
+                    .map(|display_line| char_count(display_line))
+                    .unwrap_or_default()
             };
-            copied.push(self.copy_line_slice(line, line_start, line_end));
-            line = line.saturating_add(1);
+            copied.push(self.copy_rendered_line_slice(line, line_start, line_end));
         }
         Ok(normalize_copied_selection_lines(copied).join("\n"))
     }
 
-    /// Returns the raw markdown source line when the selection fully covers one
-    /// rendered source-line group.
-    fn copy_selected_markdown_source_line(
-        &self,
-        selection_start: CopyPosition,
-        selection_end: CopyPosition,
-        line: usize,
-    ) -> Option<(usize, String)> {
-        let copy_line = self.0.copy_lines().get(line)?;
-        let (group_start, group_end, raw_line) = if let Some((_, raw_line)) =
-            decode_agent_copy_source_line(copy_line)
-        {
-            let (group_start, group_end) = self.markdown_source_group_bounds(line, copy_line);
-            (group_start, group_end, raw_line)
-        } else {
-            let (group_start, group_end) = self.transformed_source_group_bounds(line, copy_line)?;
-            (group_start, group_end, copy_line.as_str())
-        };
-        if line != group_start
-            || !selection_fully_covers_markdown_source_group(
-                self.0.lines(),
-                selection_start,
-                selection_end,
-                group_start,
-                group_end,
-            )
-        {
-            return None;
+    /// Copies each selected raw source group once, in display order.
+    fn copy_source_selection(&self, start: CopyPosition, end: CopyPosition) -> Result<String> {
+        let mut copied = Vec::new();
+        let mut emitted_group_starts = BTreeSet::new();
+        for line in start.line..=end.line {
+            let Some(copy_line) = self.0.copy_lines().get(line) else {
+                continue;
+            };
+            if let Some((group_start, group_end, raw_line)) =
+                self.source_group_for_line(line, copy_line)
+                && group_start <= end.line
+                && group_end >= start.line
+                && emitted_group_starts.insert(group_start)
+            {
+                copied.push(raw_line);
+            }
         }
-        Some((group_end, raw_line.to_string()))
+        Ok(copied.join("\n"))
+    }
+
+    /// Returns source-group metadata for one rendered row when available.
+    fn source_group_for_line(
+        &self,
+        line: usize,
+        copy_line: &str,
+    ) -> Option<(usize, usize, String)> {
+        if let Some((_, raw_line)) = decode_agent_copy_source_line(copy_line) {
+            let (group_start, group_end) = self.markdown_source_group_bounds(line, copy_line);
+            return Some((group_start, group_end, raw_line.to_string()));
+        }
+        let (group_start, group_end) = self.transformed_source_group_bounds_for_line(line)?;
+        let raw_line = self.0.copy_lines().get(group_start)?;
+        Some((group_start, group_end, raw_line.clone()))
+    }
+
+    /// Returns transformed source-group bounds for any row in that group.
+    fn transformed_source_group_bounds_for_line(&self, line: usize) -> Option<(usize, usize)> {
+        let copy_lines = self.0.copy_lines();
+        let mut group_start = line;
+        while group_start > 0
+            && copy_lines
+                .get(group_start)
+                .is_some_and(|candidate| candidate == AGENT_COPY_SKIP_LINE)
+        {
+            group_start = group_start.saturating_sub(1);
+        }
+        let copy_line = copy_lines.get(group_start)?;
+        let (candidate_start, group_end) =
+            self.transformed_source_group_bounds(group_start, copy_line)?;
+        (line >= candidate_start && line <= group_end).then_some((candidate_start, group_end))
+    }
+
+    /// Slices one displayed row without applying source-recovery metadata.
+    fn copy_rendered_line_slice(&self, line: usize, start: usize, end: usize) -> String {
+        self.0
+            .lines()
+            .get(line)
+            .map(|display_line| line_slice(display_line, start, end))
+            .unwrap_or_default()
     }
 
     /// Returns the rows owned by a transformed source block whose first row
@@ -174,42 +230,6 @@ impl CopyMode {
         (start, end)
     }
 
-    /// Slices a displayed line unless the selection covers a full transformed
-    /// presentation line with a non-markdown raw-copy override.
-    fn copy_line_slice(&self, line: usize, start: usize, end: usize) -> String {
-        let Some(display_line) = self.0.lines().get(line) else {
-            return String::new();
-        };
-        let Some(copy_line) = self.0.copy_lines().get(line) else {
-            return line_slice(display_line, start, end);
-        };
-        if copy_line == AGENT_COPY_SKIP_LINE {
-            return AGENT_COPY_SKIP_LINE.to_string();
-        }
-        if decode_agent_copy_source_line(copy_line).is_some() {
-            return line_slice(display_line, start, end);
-        }
-        if self
-            .transformed_source_group_bounds(line, copy_line)
-            .is_some()
-        {
-            return line_slice(display_line, start, end);
-        }
-        let display_end = char_count(display_line);
-        if copy_line != display_line {
-            if start == 0 && end >= display_end {
-                return copy_line.clone();
-            }
-            if let Some(raw_line) = copy_line.strip_prefix(AGENT_COPY_INDICATOR_PREFIX) {
-                return format!(
-                    "{AGENT_COPY_INDICATOR_PREFIX}{}",
-                    line_slice(raw_line, start, end)
-                );
-            }
-        }
-        line_slice(display_line, start, end)
-    }
-
     /// Runs the copy selection to buffer operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -223,33 +243,6 @@ impl CopyMode {
     ) -> Result<()> {
         Ok(buffers.set(name, self.copy_selection()?)?)
     }
-}
-
-/// Returns whether a selection fully covers every rendered row of one markdown
-/// source line.
-fn selection_fully_covers_markdown_source_group(
-    lines: &[String],
-    selection_start: CopyPosition,
-    selection_end: CopyPosition,
-    group_start: usize,
-    group_end: usize,
-) -> bool {
-    if selection_start.line > group_start || selection_end.line < group_end {
-        return false;
-    }
-    if selection_start.line == group_start && selection_start.column > 0 {
-        return false;
-    }
-    if selection_end.line == group_end {
-        let group_end_width = lines
-            .get(group_end)
-            .map(|line| char_count(line))
-            .unwrap_or_default();
-        if selection_end.column < group_end_width {
-            return false;
-        }
-    }
-    true
 }
 
 /// Decodes one markdown source-line copy marker into its source identity and
