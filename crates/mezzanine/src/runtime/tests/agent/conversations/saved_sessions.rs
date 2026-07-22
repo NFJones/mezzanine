@@ -83,6 +83,24 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
                 "\r▐ mez> rendered saved response\r\n▐ agent: rendered saved status\r\n▐ ansi-only replay marker\r\n"
                     .to_string(),
             ),
+            source_text: None,
+            source_content_type: None,
+        })
+        .unwrap();
+    transcript_store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id: "saved".to_string(),
+            sequence: 2,
+            created_at_unix_seconds: 4,
+            pane_id: "%9".to_string(),
+            turn_id: Some("turn-old".to_string()),
+            terminal_width: 80,
+            style_names: vec!["assistant".to_string()],
+            display_lines: vec!["mez> stale cached presentation".to_string()],
+            copy_lines: vec!["stale cached presentation".to_string()],
+            ansi_text: None,
+            source_text: Some("# Rebuilt heading\n\n- source replay uses active width".to_string()),
+            source_content_type: Some("text/markdown; charset=utf-8".to_string()),
         })
         .unwrap();
     service.set_agent_transcript_store(transcript_store.clone());
@@ -157,6 +175,16 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     );
     assert!(
         resumed_pane_text.contains("ansi-only") && resumed_pane_text.contains("arker"),
+        "{resumed_pane_text}"
+    );
+    let resumed_without_whitespace = resumed_pane_text
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>();
+    assert!(
+        resumed_without_whitespace.contains("Rebuiltheading")
+            && resumed_without_whitespace.contains("sourcereplayusesactivewidth")
+            && !resumed_without_whitespace.contains("stalecachedpresentation"),
         "{resumed_pane_text}"
     );
     assert!(

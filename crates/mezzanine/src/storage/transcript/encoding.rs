@@ -34,7 +34,9 @@ const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/1";
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_PRESENTATION_VERSION: &str = "mez-agent-presentation/1";
+const AGENT_PRESENTATION_VERSION: &str = "mez-agent-presentation/2";
+/// Defines the legacy presentation snapshot version accepted during migration.
+const LEGACY_AGENT_PRESENTATION_VERSION: &str = "mez-agent-presentation/1";
 
 /// Encodes one canonical transcript entry into the durable TSV format.
 pub(super) fn encode_transcript_entry(entry: &TranscriptEntry) -> Result<String> {
@@ -80,6 +82,9 @@ impl AgentPresentationEntry {
     /// Returns a presentation entry whose display and copy rows obey the agent
     /// log wrapping contract for the recorded terminal width.
     pub(crate) fn normalized_for_agent_log_wrap(&self) -> Self {
+        if self.source_text.is_some() {
+            return self.clone();
+        }
         if self.style_names.len() != self.display_lines.len() {
             return self.clone();
         }
@@ -122,6 +127,14 @@ impl AgentPresentationEntry {
         if let Some(turn_id) = self.turn_id.as_deref() {
             validate_non_empty("turn id", turn_id)?;
         }
+        if self.source_text.is_some() != self.source_content_type.is_some() {
+            return Err(MezError::invalid_args(
+                "presentation source text and content type must be supplied together",
+            ));
+        }
+        if let Some(content_type) = self.source_content_type.as_deref() {
+            validate_non_empty("presentation source content type", content_type)?;
+        }
         if self.terminal_width == 0 {
             return Err(MezError::invalid_args(
                 "presentation terminal width must be non-zero",
@@ -137,12 +150,14 @@ impl AgentPresentationEntry {
                 "presentation style count must match display line count",
             ));
         }
-        let wrap_width = agent_log_wrap_width(self.terminal_width);
-        for line in &self.display_lines {
-            validate_presentation_line_width("display", line, wrap_width)?;
-        }
-        for line in &self.copy_lines {
-            validate_presentation_line_width("copy", line, wrap_width)?;
+        if self.source_text.is_none() {
+            let wrap_width = agent_log_wrap_width(self.terminal_width);
+            for line in &self.display_lines {
+                validate_presentation_line_width("display", line, wrap_width)?;
+            }
+            for line in &self.copy_lines {
+                validate_presentation_line_width("copy", line, wrap_width)?;
+            }
         }
         for style in &self.style_names {
             validate_non_empty("presentation style", style)?;
@@ -174,6 +189,8 @@ impl AgentPresentationEntry {
             display_lines,
             copy_lines,
             self.ansi_text.clone().unwrap_or_default(),
+            self.source_text.clone().unwrap_or_default(),
+            self.source_content_type.clone().unwrap_or_default(),
         ]
         .into_iter()
         .map(|field| escape_field(&field))
@@ -184,7 +201,10 @@ impl AgentPresentationEntry {
     /// Decodes one presentation entry from the store's TSV format.
     pub(super) fn decode(line: &str) -> Result<Self> {
         let fields = split_fields(line)?;
-        if !(fields.len() == 10 || fields.len() == 11) || fields[0] != AGENT_PRESENTATION_VERSION {
+        let legacy = fields[0] == LEGACY_AGENT_PRESENTATION_VERSION;
+        if !((legacy && (fields.len() == 10 || fields.len() == 11))
+            || (!legacy && fields.len() == 13 && fields[0] == AGENT_PRESENTATION_VERSION))
+        {
             return Err(MezError::invalid_args("invalid presentation entry"));
         }
         let entry = Self {
@@ -198,6 +218,8 @@ impl AgentPresentationEntry {
             display_lines: decode_string_vec(&fields[8], "presentation display lines")?,
             copy_lines: decode_string_vec(&fields[9], "presentation copy lines")?,
             ansi_text: fields.get(10).filter(|value| !value.is_empty()).cloned(),
+            source_text: fields.get(11).filter(|value| !value.is_empty()).cloned(),
+            source_content_type: fields.get(12).filter(|value| !value.is_empty()).cloned(),
         };
         let entry = entry.normalized_for_agent_log_wrap();
         entry.validate()?;

@@ -29,6 +29,10 @@ pub struct AgentPresentationEntry {
     pub copy_lines: Vec<String>,
     /// Exact ANSI terminal bytes encoded as UTF-8 text for replay, if captured.
     pub ansi_text: Option<String>,
+    /// Original assistant payload used to reproduce this entry at another geometry.
+    pub source_text: Option<String>,
+    /// Media type that selects the assistant renderer for `source_text`.
+    pub source_content_type: Option<String>,
 }
 
 /// Filesystem-backed transcript store.

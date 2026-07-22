@@ -53,6 +53,8 @@ fn presentation(conversation_id: &str, sequence: u64) -> AgentPresentationEntry 
         display_lines: vec!["mez> hello".to_string(), "agent: done".to_string()],
         copy_lines: vec!["mez> raw hello".to_string(), "agent: raw done".to_string()],
         ansi_text: Some("\r\n\u{1b}[1m▐ mez> hello\u{1b}[0m\r\n".to_string()),
+        source_text: None,
+        source_content_type: None,
     }
 }
 
@@ -151,6 +153,30 @@ fn transcript_store_wraps_presentation_rows_to_recorded_terminal_width() {
     assert_eq!(inspected[0].style_names, vec!["assistant", "assistant"]);
     assert_eq!(inspected[0].copy_lines, vec!["copy alpha", "beta gamma"]);
     assert!(inspected[0].ansi_text.is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies source-backed presentation records preserve their semantic payload
+/// rather than normalizing a geometry-specific projection during persistence.
+#[test]
+fn transcript_store_round_trips_source_backed_presentation_without_wrapping() {
+    let root = temp_root("presentation-source");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut entry = presentation("conv1", 1);
+    entry.terminal_width = 12;
+    entry.display_lines = vec!["mez> alpha beta gamma".to_string()];
+    entry.style_names = vec!["assistant".to_string()];
+    entry.copy_lines = vec!["alpha beta gamma".to_string()];
+    entry.ansi_text = None;
+    entry.source_text = Some("# Heading\n\nalpha beta gamma".to_string());
+    entry.source_content_type = Some("text/markdown; charset=utf-8".to_string());
+
+    store.append_presentation(&entry).unwrap();
+
+    let inspected = store.inspect_presentation("conv1").unwrap();
+
+    assert_eq!(inspected, vec![entry]);
     let _ = fs::remove_dir_all(root);
 }
 

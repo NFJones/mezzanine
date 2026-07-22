@@ -1926,6 +1926,7 @@ soft wrapping instead of inserting a hard split.
 Markdown table rows MUST preserve their table layout until they exceed the
 pane terminal width; that configured cap MUST NOT force table rows to wrap on
 wider terminals.
+Durable agent presentation records MUST retain semantic source and renderer media type whenever available. On `/resume`, Mezzanine MUST rerender source-backed records at the active pane geometry and MUST treat saved rows or ANSI bytes only as optional projections. Legacy snapshot-only records MAY use their saved projection fallback; mixed histories MUST preserve presentation order.
 When the agent runs a shell command, Mezzanine MUST render the MAAP shell
 action's concise summary and exact command preview before dispatch. The exact
 command preview MUST be visible in normal mode, MUST account for the pane's

@@ -52,6 +52,7 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::UserPrompt,
             rendered_lines.as_slice(),
             &[],
+            None,
         )
     }
 
@@ -100,7 +101,11 @@ impl RuntimeSessionService {
         if agent_output_content_type_is_markdown(content_type)
             && !agent_say_text_is_displayed_patch_block(text)
         {
-            return self.append_agent_assistant_markdown_to_terminal_buffer(pane_id, text);
+            return self.append_agent_assistant_markdown_to_terminal_buffer(
+                pane_id,
+                text,
+                content_type,
+            );
         }
         if agent_output_content_type_is_diff(content_type) {
             return self.append_agent_diff_text_to_terminal_buffer(pane_id, text);
@@ -112,6 +117,7 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::Assistant,
             rendered_lines.as_slice(),
             &[],
+            Some((text, content_type)),
         )
     }
 
@@ -192,6 +198,7 @@ impl RuntimeSessionService {
         display_lines: Vec<String>,
         copy_lines: Vec<String>,
         ansi_text: String,
+        source: Option<(&str, &str)>,
     ) {
         if self
             .presentation
@@ -225,6 +232,8 @@ impl RuntimeSessionService {
             display_lines,
             copy_lines,
             ansi_text: (!ansi_text.is_empty()).then_some(ansi_text),
+            source_text: source.map(|(text, _content_type)| text.to_string()),
+            source_content_type: source.map(|(_text, content_type)| content_type.to_string()),
         };
         let _ = store.append_presentation(&entry);
     }
@@ -245,6 +254,17 @@ impl RuntimeSessionService {
             let mut sorted_entries = entries.iter().collect::<Vec<_>>();
             sorted_entries.sort_by_key(|entry| entry.sequence);
             for entry in sorted_entries {
+                if let (Some(source_text), Some(source_content_type)) = (
+                    entry.source_text.as_deref(),
+                    entry.source_content_type.as_deref(),
+                ) {
+                    self.append_agent_assistant_content_to_terminal_buffer(
+                        pane_id,
+                        source_text,
+                        source_content_type,
+                    )?;
+                    continue;
+                }
                 if let Some(ansi_text) = entry.ansi_text.as_deref() {
                     let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
                         MezError::new(
@@ -318,6 +338,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         markdown: &str,
+        content_type: &str,
     ) -> Result<()> {
         let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
@@ -352,6 +373,7 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::Assistant,
             rendered_lines.as_slice(),
             &copy_lines,
+            Some((markdown, content_type)),
         )
     }
 
@@ -527,6 +549,7 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::Command,
             &rendered_lines,
             &copy_lines,
+            None,
         )
     }
 
@@ -640,6 +663,7 @@ impl RuntimeSessionService {
                 .map(|(_style, line)| line.clone())
                 .collect(),
             ansi_text,
+            None,
         );
         Ok(())
     }
@@ -651,6 +675,7 @@ impl RuntimeSessionService {
         style: AgentTerminalPresentationStyle,
         rendered_lines: &[RichTextLine],
         copy_lines: &[String],
+        source: Option<(&str, &str)>,
     ) -> Result<()> {
         if rendered_lines.is_empty() {
             return Ok(());
@@ -707,6 +732,7 @@ impl RuntimeSessionService {
                 .collect(),
             copy_lines.to_vec(),
             ansi_text,
+            source,
         );
         Ok(())
     }
@@ -870,6 +896,7 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::DiffContext,
             &rendered_lines,
             &[],
+            Some((text, "text/x-diff; charset=utf-8")),
         )
     }
 
@@ -943,6 +970,7 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::Status,
             &[rendered_line],
             &[],
+            None,
         )?;
         Ok(())
     }
