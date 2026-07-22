@@ -107,6 +107,27 @@ fn terminal_screen_resize_reflows_and_restores_soft_wrapped_content() {
     assert_eq!(screen.visible_lines(), vec!["abcdefghij", "klmn", ""]);
 }
 
+/// Verifies an active DECSTBM region cannot disable normal-screen width reflow.
+///
+/// Scroll margins are terminal coordinates rather than a content-preservation
+/// policy. A pane width change must reset those margins and retain every cell
+/// in the logical soft-wrapped line across a narrow-and-wide resize round trip.
+#[test]
+fn terminal_screen_resize_reflows_content_with_active_scroll_region() {
+    let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
+    screen.feed(b"\x1b[1;3rabcdefghijklmn");
+
+    screen.resize(Size::new(5, 3).unwrap());
+    assert_eq!(screen.visible_lines(), vec!["abcde", "fghij", "klmn"]);
+    assert_eq!(screen.cursor_state().row, 2);
+    assert_eq!(screen.cursor_state().column, 4);
+
+    screen.resize(Size::new(10, 3).unwrap());
+    assert_eq!(screen.visible_lines(), vec!["abcdefghij", "klmn", ""]);
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 4);
+}
+
 /// Verifies agent transcript rows keep their visual gutter on soft-wrap
 /// continuation rows. Agent output is rendered into the same pane buffer as
 /// shell output, so the screen model has to add display-only gutters when

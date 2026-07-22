@@ -157,24 +157,19 @@ impl TerminalScreen {
             return;
         }
 
-        if !self.alternate.active() && self.scroll_region.is_none() {
-            if self.normal_viewport_detached_from_history {
-                self.resize_detached_normal_screen(size);
-                return;
-            }
-            if self.normal_screen_viewport_is_cleared() {
-                self.resize_cleared_normal_screen(size);
-                return;
-            }
-            if self.size.columns == size.columns {
-                self.resize_normal_screen_rows_only(size);
-                return;
-            }
-            self.resize_normal_screen_reflowing(size);
+        if self.normal_viewport_detached_from_history {
+            self.resize_detached_normal_screen(size);
             return;
         }
-
-        self.resize_grid_preserving_cells(size);
+        if self.normal_screen_viewport_is_cleared() {
+            self.resize_cleared_normal_screen(size);
+            return;
+        }
+        if self.size.columns == size.columns {
+            self.resize_normal_screen_rows_only(size);
+            return;
+        }
+        self.resize_normal_screen_reflowing(size);
     }
 
     /// Resizes the live alternate screen to a blank application-owned grid.
