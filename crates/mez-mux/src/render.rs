@@ -43,7 +43,7 @@ pub use rich_text::{
     FencedCodeBlock, FencedCodeBlockOutcome, FencedCodeBlockRenderer, MARKDOWN_BLOCK_DIVIDER_GLYPH,
     MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
     MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RichTextLine, RichTextLineKind, RichTextTheme,
-    WrappedRichTextLine, frame_markdown_lines, insert_blank_lines_above_markdown_headings,
+    WrappedRichTextLine, frame_markdown_lines, insert_blank_lines_around_markdown_headings,
     markdown_blank_line, markdown_block_copy_lines, markdown_link_display_ranges,
     markdown_local_continuation_indent_width, markdown_rendered_line_copy_text,
     markdown_rendered_line_is_heading, markdown_rendered_line_is_table_row, prefix_rich_text_lines,

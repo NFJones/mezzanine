@@ -728,7 +728,7 @@ fn render_markdown_internal(
         .filter(|line| line.kind.consumes_markdown_source_line())
         .count();
     if nonblank_source_lines != rendered_source_line_count {
-        return insert_blank_lines_above_markdown_headings(rendered_lines);
+        return insert_blank_lines_around_markdown_headings(rendered_lines);
     }
 
     let mut rendered = rendered_lines.into_iter().peekable();
@@ -767,14 +767,16 @@ fn render_markdown_internal(
         }
         rendered_line
     }));
-    insert_blank_lines_above_markdown_headings(source_aligned_lines)
+    insert_blank_lines_around_markdown_headings(source_aligned_lines)
 }
 
-/// Ensures every rendered markdown heading has a presentation blank line above it.
-pub fn insert_blank_lines_above_markdown_headings(lines: Vec<RichTextLine>) -> Vec<RichTextLine> {
+/// Ensures every rendered markdown heading has presentation blank lines around it.
+pub fn insert_blank_lines_around_markdown_headings(lines: Vec<RichTextLine>) -> Vec<RichTextLine> {
     let mut spaced = Vec::with_capacity(lines.len().saturating_mul(2));
-    for line in lines {
-        if markdown_rendered_line_is_heading(&line)
+    let mut lines = lines.into_iter().peekable();
+    while let Some(line) = lines.next() {
+        let is_heading = markdown_rendered_line_is_heading(&line);
+        if is_heading
             && spaced
                 .last()
                 .is_none_or(|previous: &RichTextLine| !previous.display.trim().is_empty())
@@ -782,6 +784,13 @@ pub fn insert_blank_lines_above_markdown_headings(lines: Vec<RichTextLine>) -> V
             spaced.push(markdown_blank_line());
         }
         spaced.push(line);
+        if is_heading
+            && lines
+                .peek()
+                .is_some_and(|following| !following.display.trim().is_empty())
+        {
+            spaced.push(markdown_blank_line());
+        }
     }
     spaced
 }
@@ -2140,6 +2149,41 @@ mod tests {
             Some("After"),
             "{lines:?}"
         );
+    }
+
+    /// Verifies headings have exactly one presentation-only buffer before
+    /// following prose, list, and code blocks without changing copy source.
+    #[test]
+    fn markdown_headings_buffer_following_blocks() {
+        for (markdown, expected) in [
+            ("# Heading\nAfter", vec!["", "Heading", "", "After"]),
+            ("# Heading\n- item", vec!["", "Heading", "", "• item"]),
+            (
+                "# Heading\n```text\nbody\n```",
+                vec!["", "Heading", "", "body"],
+            ),
+        ] {
+            let lines = render_markdown(markdown, &theme(), None);
+            assert_eq!(
+                lines
+                    .iter()
+                    .map(|line| line.display.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{lines:?}"
+            );
+            assert_eq!(lines[2].copy_text.as_deref(), Some(COPY_SKIP_LINE));
+        }
+
+        let authored_blank = render_markdown("# Heading\n\nAfter", &theme(), None);
+        assert_eq!(
+            authored_blank
+                .iter()
+                .map(|line| line.display.as_str())
+                .collect::<Vec<_>>(),
+            ["", "Heading", "", "After"]
+        );
+        assert_eq!(authored_blank[2].copy_text.as_deref(), Some(""));
     }
 
     /// Verifies generic fenced Rust blocks hide their delimiters while retaining
