@@ -435,8 +435,11 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .get(pane.id.as_str())
             .map(|_| format!("agent-{}", pane.id));
+        let pty_size = self
+            .pane_process_size_for(window, pane.id.as_str())
+            .unwrap_or(pane.size);
         format!(
-            r#"{{"id":"{}","version":1,"session_id":"{}","window_id":"{}","pane_id":"{}","index":{},"title":"{}","active":{},"size":{{"columns":{},"rows":{}}},"columns":{},"rows":{},"primary_pid":{},"process_state":"{}","exit_status":{},"current_working_directory":{},"terminal_profile":"{}","history_limit":{},"alternate_screen_active":{},"readiness_state":"{}","agent_id":{},"live":{}}}"#,
+            r#"{{"id":"{}","version":1,"session_id":"{}","window_id":"{}","pane_id":"{}","index":{},"title":"{}","active":{},"size":{{"columns":{},"rows":{}}},"columns":{},"rows":{},"layout_size":{{"columns":{},"rows":{}}},"primary_pid":{},"process_state":"{}","exit_status":{},"current_working_directory":{},"terminal_profile":"{}","history_limit":{},"alternate_screen_active":{},"readiness_state":"{}","agent_id":{},"live":{}}}"#,
             json_escape(pane.id.as_str()),
             json_escape(self.session.id.as_str()),
             json_escape(window.id.as_str()),
@@ -444,8 +447,10 @@ impl RuntimeSessionService {
             pane.index,
             json_escape(&pane.title),
             pane.active,
-            pane.size.columns,
-            pane.size.rows,
+            pty_size.columns,
+            pty_size.rows,
+            pty_size.columns,
+            pty_size.rows,
             pane.size.columns,
             pane.size.rows,
             primary_pid

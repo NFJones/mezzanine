@@ -314,6 +314,61 @@ fn runtime_service_can_handoff_running_pane_process_to_async_owner() {
         .unwrap();
 }
 
+/// Verifies control pane state reports the actual PTY size after pane-frame
+/// and agent-prompt reservations while retaining the unreserved layout size.
+/// Terminal clients use the reported PTY dimensions for wrapping, so exposing
+/// layout geometry here would make their width and height disagree with the
+/// running pane process.
+#[test]
+fn runtime_control_pane_state_reports_frame_and_prompt_adjusted_pty_size() {
+    let mut service = test_runtime_service_with_size(Size::new(80, 24).unwrap());
+    service.set_frame_visibility_for_tests(false, true);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let step = AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::ExecuteMux(
+            MuxAction::ToggleAgentShell,
+        )],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+    service
+        .apply_attached_terminal_step_plan(&primary, &step)
+        .unwrap();
+
+    let pty_size = service
+        .tracked_pane_descriptors()
+        .into_iter()
+        .find(|descriptor| descriptor.pane_id.as_str() == "%1")
+        .unwrap()
+        .size;
+    let window = service.session().active_window().unwrap();
+    let layout_size = window.active_pane().size;
+    let pane_state = service.runtime_control_pane_state_json(window, window.active_pane());
+
+    assert!(pty_size.rows < layout_size.rows);
+    assert!(pane_state.contains(&format!(
+        r#""size":{{"columns":{},"rows":{}}}"#,
+        pty_size.columns, pty_size.rows
+    )));
+    assert!(pane_state.contains(&format!(
+        r#""columns":{},"rows":{}"#,
+        pty_size.columns, pty_size.rows
+    )));
+    assert!(pane_state.contains(&format!(
+        r#""layout_size":{{"columns":{},"rows":{}}}"#,
+        layout_size.columns, layout_size.rows
+    )));
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies stale async process-exit events cannot close a pane after its id is reused.
 ///
 /// `load-layout` can restart a fresh process for a restored pane id while an

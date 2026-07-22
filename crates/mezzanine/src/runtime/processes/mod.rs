@@ -1851,7 +1851,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn pane_process_size_for(
+    pub(crate) fn pane_process_size_for(
         &self,
         window: &mez_mux::layout::Window,
         pane_id: &str,
