@@ -266,12 +266,25 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
             .is_some_and(|text| text == "Latest say text.")
     );
 
+    let default_response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-copy-default","method":"agent/shell/command","params":{"idempotency_key":"agent-copy-default","input":"/copy"}}"#,
+        &primary,
+    );
+    assert!(
+        default_response.contains("destination=clipboard"),
+        "{default_response}"
+    );
+    assert_eq!(
+        service.paste_buffers().get("clipboard"),
+        Some("Latest say text.")
+    );
+
     service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 6).unwrap(), 20).unwrap(),
     );
     let pane_response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-copy-pane","method":"agent/shell/command","params":{"idempotency_key":"agent-copy-pane","input":"/copy"}}"#,
+        r#"{"jsonrpc":"2.0","id":"agent-copy-pane","method":"agent/shell/command","params":{"idempotency_key":"agent-copy-pane","input":"/copy pane"}}"#,
         &primary,
     );
     assert!(
