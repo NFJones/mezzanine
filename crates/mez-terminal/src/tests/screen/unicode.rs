@@ -199,6 +199,42 @@ fn terminal_screen_erases_warning_sign_continuation_footprint() {
     assert_eq!(screen.visible_lines()[0], "ab  cd");
 }
 
+/// Verifies retroactively widening a grapheme clears an adjacent wide glyph's
+/// complete footprint before installing new continuation cells.
+///
+/// A variation selector can grow a previously narrow warning sign into a
+/// two-column emoji after the base scalar has already replaced the preceding
+/// cell. The newly occupied column must clear both cells of an adjacent CJK
+/// glyph so a later write cannot discover an orphaned continuation sentinel.
+#[test]
+fn terminal_screen_grapheme_growth_clears_adjacent_wide_footprint() {
+    let mut screen = TerminalScreen::new(Size::new(5, 2).unwrap(), 10).unwrap();
+    screen.feed("x界z".as_bytes());
+
+    screen.feed(b"\x1b[1;1H");
+    screen.feed("⚠️Q".as_bytes());
+
+    assert_eq!(screen.visible_lines()[0], "⚠️Qz");
+    assert_eq!(screen.cursor_state().column, 3);
+}
+
+/// Verifies writing through a wide glyph's continuation cell clears the old
+/// leader and continuation before placing a narrow replacement.
+///
+/// Cursor-addressed terminal applications can target either occupied column
+/// of a wide glyph. Replacing the continuation column must not leave the old
+/// leader visible or disturb the following narrow cell.
+#[test]
+fn terminal_screen_narrow_overwrite_clears_wide_footprint() {
+    let mut screen = TerminalScreen::new(Size::new(5, 2).unwrap(), 10).unwrap();
+    screen.feed("界z".as_bytes());
+
+    screen.feed(b"\x1b[1;2HQ");
+
+    assert_eq!(screen.visible_lines()[0], " Qz");
+    assert_eq!(screen.cursor_state().column, 2);
+}
+
 /// Verifies styled visible-row restoration round-trips complete grapheme text.
 /// Snapshot and resize restoration use `write_styled_line_to_row`, so this
 /// catches the previous behavior that stored only the first scalar from each

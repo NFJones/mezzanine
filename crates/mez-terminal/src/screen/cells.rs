@@ -180,8 +180,13 @@ impl TerminalScreen {
         }
 
         self.clear_line_copy_text(self.cursor.row);
-        self.cells[self.cursor.row][leading_column] = TerminalScreenCell::text(&candidate);
         let rendition = self.renditions[self.cursor.row][leading_column];
+        for column in
+            leading_column.saturating_add(old_width)..leading_column.saturating_add(new_width)
+        {
+            self.clear_cell_footprint(self.cursor.row, column, rendition);
+        }
+        self.cells[self.cursor.row][leading_column] = TerminalScreenCell::text(&candidate);
         for offset in 1..new_width {
             self.cells[self.cursor.row][leading_column.saturating_add(offset)] =
                 TerminalScreenCell::continuation();
