@@ -41,9 +41,7 @@ fn list_commands_reports_baseline_command_statuses() {
     assert!(body.contains("set-option:status=store-required"));
     assert!(body.contains("source-file:status=store-required"));
     assert!(body.contains("refresh-client:status=runtime-required"));
-    assert!(body.contains("refresh-provider-info:status=runtime-required"));
     assert!(body.contains("agent-shell:status=runtime-required"));
-    assert!(body.contains("auth-status:status=store-required"));
     assert!(body.contains("mcp-status:status=store-required"));
     assert!(body.contains("mark-pane-ready:status=store-required"));
     assert!(body.contains("copy-selection:status=runtime-required"));
@@ -64,6 +62,8 @@ fn list_commands_reports_baseline_command_statuses() {
     assert!(body.contains("approve-observer:status=runtime-required"));
     assert!(body.contains("reject-observer:status=runtime-required"));
     assert!(body.contains("revoke-observer:status=runtime-required"));
+    assert!(!body.contains("auth-status:"), "{body}");
+    assert!(!body.contains("refresh-provider-info:"), "{body}");
 }
 
 /// Verifies that the command-language `help` command returns a human-readable

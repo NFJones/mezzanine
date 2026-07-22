@@ -796,10 +796,22 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "debug-config"
         | "diff"
         | "list-modified-files" => "copy and diagnostics",
-        "approval" | "approve" | "routing" | "init" | "latency" | "list-mcp" | "log-level"
-        | "memory" | "directive" | "logout" | "model" | "permissions" | "personality" | "trust" => {
-            "configuration"
-        }
+        "approval"
+        | "approve"
+        | "auth-status"
+        | "routing"
+        | "init"
+        | "latency"
+        | "list-mcp"
+        | "log-level"
+        | "memory"
+        | "directive"
+        | "logout"
+        | "model"
+        | "permissions"
+        | "personality"
+        | "refresh-provider-info"
+        | "trust" => "configuration",
         "help" | "list-macros" | "list-sessions" | "list-skills" => "discovery",
         _ => "work control",
     }
@@ -839,6 +851,8 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "exit" => "hide the agent shell after stopping active work.",
         "init" => "generate a project instruction scaffold.",
         "logout" => "log out of a provider account.",
+        "auth-status" => "show non-secret provider authentication status.",
+        "refresh-provider-info" => "refresh cached provider model and quota information.",
         "list-mcp" => "list configured MCP servers and tools.",
         "issue" => "create, inspect, update, or delete project issue records.",
         "show-approvals" => "browse and decide pending approvals for the live session.",

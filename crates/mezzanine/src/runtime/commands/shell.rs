@@ -49,6 +49,8 @@ enum AgentShellAwaitedCommand {
     Remember,
     /// MCP listing after live transport discovery.
     ListMcp,
+    /// Provider catalog refresh through the async runtime.
+    RefreshProviderInfo,
 }
 
 /// Classifies one agent-shell input once before selecting an executor.
@@ -62,6 +64,9 @@ fn agent_shell_command_plan(input: &str) -> AgentShellCommandPlan {
         Some("compact") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Compact),
         Some("remember") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Remember),
         Some("list-mcp") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::ListMcp),
+        Some("refresh-provider-info") => {
+            AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::RefreshProviderInfo)
+        }
         Some(_) => AgentShellCommandPlan::Immediate,
         None if input.trim().is_empty() => AgentShellCommandPlan::Immediate,
         None => AgentShellCommandPlan::Prompt,
@@ -346,6 +351,12 @@ impl RuntimeSessionService {
                         input,
                         Some(&latency_outcome),
                     )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
+                    && command == "auth-status"
+                {
+                    let auth_outcome = self.execute_agent_shell_auth_status_command(input)?;
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&auth_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
                     && command == "thinking"
@@ -843,6 +854,10 @@ impl RuntimeSessionService {
                         outcome.as_ref(),
                     ));
                 }
+                AgentShellAwaitedCommand::RefreshProviderInfo => {
+                    self.execute_agent_shell_refresh_provider_info_command(input)
+                        .await?
+                }
             };
             Ok(runtime_agent_shell_command_response_json(
                 &pane_id,
@@ -1026,6 +1041,10 @@ mod plan_tests {
         assert_eq!(
             agent_shell_command_plan("/list-mcp"),
             AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::ListMcp)
+        );
+        assert_eq!(
+            agent_shell_command_plan("/refresh-provider-info"),
+            AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::RefreshProviderInfo)
         );
     }
 

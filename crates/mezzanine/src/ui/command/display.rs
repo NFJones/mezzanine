@@ -90,9 +90,7 @@ fn terminal_help_command_rows() -> Vec<(&'static str, &'static str)> {
 /// Returns the help category for one terminal command.
 fn terminal_command_category(name: &str) -> &'static str {
     match name {
-        "agent-shell" | "auth-status" | "mcp" | "mcp-status" | "refresh-provider-info" => {
-            "agent and integrations"
-        }
+        "agent-shell" | "mcp" | "mcp-status" => "agent and integrations",
         "bind-key" | "list-keys" | "set-option" | "set-theme" | "show-options" | "source-file"
         | "unbind-key" | "list-themes" => "configuration",
         "capture-pane" | "choose-buffer" | "clear-history" | "copy-mode" | "copy-selection"
@@ -116,7 +114,6 @@ fn terminal_command_description(name: &str) -> &'static str {
         "agent-shell" => "toggle the pane-local agent shell.",
         "approve-observer" => "approve a pending observer.",
         "attach-session" => "attach to an existing session.",
-        "auth-status" => "show non-secret auth status.",
         "bind-key" => "add or replace a live key binding.",
         "break-pane" => "move a pane into a new window.",
         "capture-pane" => "capture visible or historical pane text.",
@@ -167,7 +164,6 @@ fn terminal_command_description(name: &str) -> &'static str {
         "previous-window" => "focus the previous window.",
         "rebalance-window" => "reapply the active window layout.",
         "refresh-client" => "redraw the client.",
-        "refresh-provider-info" => "refresh cached provider model and quota information.",
         "reject-observer" => "reject a pending observer.",
         "rename-group" => "rename a window group.",
         "rename-session" => "rename the current or target session.",
@@ -827,20 +823,6 @@ pub(super) fn hex_digit(nibble: u8) -> char {
         10..=15 => char::from(b'a' + (nibble - 10)),
         _ => unreachable!("hex nibble is always less than 16"),
     }
-}
-
-/// Runs the auth status display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn auth_status_display() -> String {
-    KeyValueLine::spaced()
-        .push("authenticated", "unknown")
-        .push("provider", "openai")
-        .push("profile", "default")
-        .push("source", "not-connected")
-        .finish()
 }
 
 /// Runs the mcp status plan display operation for this subsystem.

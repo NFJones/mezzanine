@@ -14,8 +14,34 @@ use super::{
     runtime_approval_policy_name, runtime_cooperation_mode_name, runtime_markdown_table,
     runtime_permission_preset_name, runtime_single_rename_window_invocation,
 };
+use crate::ui::command::auth_status_store_display;
 
 impl RuntimeSessionService {
+    /// Executes `/auth-status` against the live authentication store.
+    pub(super) fn execute_agent_shell_auth_status_command(
+        &self,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let slash = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("auth-status command must be a slash command"))?;
+        if !slash.args.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "auth-status does not accept arguments",
+            ));
+        }
+        let body = match self.auth_store() {
+            Some(auth_store) => auth_status_store_display(auth_store.status()?),
+            None => {
+                "authenticated=unknown provider=none profile=none source=auth-store-unavailable"
+                    .to_string()
+            }
+        };
+        Ok(AgentShellCommandOutcome::Display {
+            command: "auth-status".to_string(),
+            body: format!("## Authentication Status\n\n{body}"),
+        })
+    }
+
     /// Executes `/title` against the active runtime window title.
     pub(super) fn execute_agent_shell_title_command(
         &mut self,

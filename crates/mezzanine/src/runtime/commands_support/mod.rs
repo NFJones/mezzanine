@@ -86,21 +86,12 @@ pub(super) async fn execute_runtime_command_sequence_async(
     let mut outcomes = Vec::with_capacity(plan.len());
     let mut active_client_id = primary_client_id.clone();
     for command in &plan {
-        match command {
-            RuntimeTerminalCommandPlan::RefreshProviderInfo(invocation) => {
-                outcomes.push(CommandOutcome::Display {
-                    command: invocation.name.clone(),
-                    body: runtime_refresh_provider_info_command_async(service, invocation).await?,
-                });
-            }
-            RuntimeTerminalCommandPlan::Immediate(invocation) => {
-                outcomes.push(execute_runtime_planned_terminal_command(
-                    service,
-                    &mut active_client_id,
-                    invocation,
-                )?);
-            }
-        }
+        let RuntimeTerminalCommandPlan::Immediate(invocation) = command;
+        outcomes.push(execute_runtime_planned_terminal_command(
+            service,
+            &mut active_client_id,
+            invocation,
+        )?);
     }
     Ok(outcomes)
 }
@@ -278,7 +269,6 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_refresh_client_command(service)?,
         })),
-        "refresh-provider-info" => Ok(None),
         "kill-pane" | "killp" => Ok(Some(runtime_kill_pane_command(
             service,
             primary_client_id,
@@ -387,7 +377,7 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_mcp_command(service, invocation)?,
         })),
-        "auth-status" | "mcp-status" => {
+        "mcp-status" => {
             let outcome = {
                 let Some(auth_store) = service.auth_store() else {
                     return Ok(None);

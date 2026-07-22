@@ -7,16 +7,15 @@
 use super::{
     AuditLog, AuthStore, ClientId, CommandInvocation, CommandOutcome, KeyChord, MezError,
     PaneNavigationDirection, PaneReadinessOverrideStore, PaneReadinessState, Result, Session,
-    auth_status_display, auth_status_store_display, bind_key_args, capture_pane_display,
-    choose_buffer_display, clear_history_display, command_help_display, command_target_pane_id,
-    copy_mode_display, copy_selection_display, create_buffer_display, export_history_display,
-    key_chord_notation, list_baseline_commands, list_buffers_display, list_default_key_bindings,
-    list_default_themes, load_layout_selector, mark_pane_ready_audit_record,
-    mark_pane_ready_warning_display, mcp_server_id, mcp_status_plan_display,
-    mcp_status_store_display, mutated_pane_command_outcome, pane_readiness_state_name,
-    paste_buffer_display, paste_clipboard_display, pipe_pane_display, save_buffer_display,
-    save_layout_name, search_history_display, set_option_args, set_theme_arg, show_default_options,
-    show_messages_display, show_metrics_display,
+    bind_key_args, capture_pane_display, choose_buffer_display, clear_history_display,
+    command_help_display, command_target_pane_id, copy_mode_display, copy_selection_display,
+    create_buffer_display, export_history_display, key_chord_notation, list_baseline_commands,
+    list_buffers_display, list_default_key_bindings, list_default_themes, load_layout_selector,
+    mark_pane_ready_audit_record, mark_pane_ready_warning_display, mcp_server_id,
+    mcp_status_plan_display, mcp_status_store_display, mutated_pane_command_outcome,
+    pane_readiness_state_name, paste_buffer_display, paste_clipboard_display, pipe_pane_display,
+    save_buffer_display, save_layout_name, search_history_display, set_option_args, set_theme_arg,
+    show_default_options, show_messages_display, show_metrics_display,
 };
 #[cfg(test)]
 use super::{
@@ -79,10 +78,6 @@ pub fn execute_auth_command(
     invocation: &CommandInvocation,
 ) -> Result<CommandOutcome> {
     match invocation.name.as_str() {
-        "auth-status" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: auth_status_store_display(auth_store.status()?),
-        }),
         "mcp-status" => {
             let server_id = mcp_server_id(invocation, "mcp-status requires a server id")?;
             Ok(CommandOutcome::Display {
@@ -842,16 +837,8 @@ pub fn execute_command(
         "refresh-client" | "refresh" => Ok(CommandOutcome::Noop {
             command: invocation.name.clone(),
         }),
-        "refresh-provider-info" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: "refreshed=false:reason=async-runtime-required".to_string(),
-        }),
         "agent-shell" => Ok(CommandOutcome::Noop {
             command: invocation.name.clone(),
-        }),
-        "auth-status" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: auth_status_display(),
         }),
         "mcp-status" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),

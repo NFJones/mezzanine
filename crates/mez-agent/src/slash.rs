@@ -117,6 +117,13 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("exit", &["quit"], SlashCommandEffect::SessionMutation, true),
         slash("init", &[], SlashCommandEffect::FileMutation, true),
         slash("logout", &[], SlashCommandEffect::CredentialMutation, true),
+        slash("auth-status", &[], SlashCommandEffect::ReadOnly, true),
+        slash(
+            "refresh-provider-info",
+            &[],
+            SlashCommandEffect::ReadOnly,
+            true,
+        ),
         slash("list-mcp", &[], SlashCommandEffect::ReadOnly, true),
         slash("issue", &[], SlashCommandEffect::SessionMutation, true),
         slash(

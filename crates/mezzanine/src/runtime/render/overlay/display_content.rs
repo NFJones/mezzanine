@@ -492,8 +492,7 @@ pub(crate) fn runtime_command_display_transient_status_line(
 pub(crate) fn runtime_transient_terminal_command_name(command: &str) -> bool {
     matches!(
         command,
-        "auth-status"
-            | "agent-shell"
+        "agent-shell"
             | "bind-key"
             | "copy-selection"
             | "create-buffer"
@@ -503,7 +502,6 @@ pub(crate) fn runtime_transient_terminal_command_name(command: &str) -> bool {
             | "paste-clipboard"
             | "pipe-pane"
             | "rebalance-window"
-            | "refresh-provider-info"
             | "resize-pane"
             | "select-layout"
             | "send-prefix"

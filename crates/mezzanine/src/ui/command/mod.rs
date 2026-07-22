@@ -109,23 +109,24 @@ pub use types::{CommandOutcome, LayoutLoadSelector, baseline_commands};
 #[cfg(test)]
 use display::parse_config_command_value;
 use display::{
-    auth_status_display, capture_pane_display, choose_buffer_display, clear_history_display,
-    command_help_display, copy_mode_display, copy_selection_display, create_buffer_display,
-    export_history_display, list_baseline_commands, list_buffers_display,
-    list_default_key_bindings, list_default_themes, load_layout_selector, mcp_status_plan_display,
-    mutated_pane_command_outcome, paste_buffer_display, paste_clipboard_display, pipe_pane_display,
-    save_buffer_display, save_layout_name, search_history_display, set_option_args, set_theme_arg,
-    show_default_options, show_messages_display, show_metrics_display,
+    capture_pane_display, choose_buffer_display, clear_history_display, command_help_display,
+    copy_mode_display, copy_selection_display, create_buffer_display, export_history_display,
+    list_baseline_commands, list_buffers_display, list_default_key_bindings, list_default_themes,
+    load_layout_selector, mcp_status_plan_display, mutated_pane_command_outcome,
+    paste_buffer_display, paste_clipboard_display, pipe_pane_display, save_buffer_display,
+    save_layout_name, search_history_display, set_option_args, set_theme_arg, show_default_options,
+    show_messages_display, show_metrics_display,
 };
 use permissions::{
     command_target_pane_id, credential_store_kind_name, mark_pane_ready_audit_record,
     mark_pane_ready_warning_display, pane_readiness_state_name, validate_command_identifier,
 };
-use stores::{auth_status_store_display, mcp_server_id, mcp_status_store_display};
+pub(crate) use stores::auth_status_store_display;
 #[cfg(test)]
 use stores::{
     config_set_string, config_unset, persist_command_config_mutation, persist_command_theme_config,
 };
+use stores::{mcp_server_id, mcp_status_store_display};
 
 /// Exposes the tests module boundary.
 ///

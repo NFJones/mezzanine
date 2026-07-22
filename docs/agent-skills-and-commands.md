@@ -78,7 +78,6 @@ Open the Mezzanine command prompt with `Ctrl+A :`.
 | `set-option` | Set a live-mutable option. |
 | `source-file` | Load a configuration file. |
 | `refresh-client` | Redraw the client. |
-| `refresh-provider-info` | Refresh cached provider model and quota information. |
 | `agent-shell` | Show, hide, or toggle the agent shell for a pane. |
 | `snapshot-session` | Create a structured session snapshot, optionally named with `--name`. |
 | `resume-session` | Resume a snapshot by id or with `--latest [--session id]`. |

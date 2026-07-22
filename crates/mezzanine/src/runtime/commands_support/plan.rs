@@ -1,10 +1,9 @@
 //! Typed runtime terminal-command execution planning.
 //!
 //! This module classifies a parsed terminal command sequence before runtime
-//! mutation begins. Most commands execute immediately through the serialized
-//! runtime coordinator; provider metadata refresh is identified as an awaited
-//! effect so the async host can execute it without duplicating ordinary
-//! command dispatch.
+//! mutation begins. Terminal commands execute immediately through the
+//! serialized runtime coordinator; provider metadata refresh is available as
+//! the agent-shell `/refresh-provider-info` command.
 
 use super::{CommandInvocation, Result, parse_command_sequence};
 
@@ -13,15 +12,13 @@ use super::{CommandInvocation, Result, parse_command_sequence};
 pub(super) enum RuntimeTerminalCommandPlan {
     /// A command whose complete execution is synchronous inside the runtime.
     Immediate(CommandInvocation),
-    /// Provider metadata discovery that must be awaited by the async host.
-    RefreshProviderInfo(CommandInvocation),
 }
 
 impl RuntimeTerminalCommandPlan {
     /// Returns the parsed command invocation owned by this plan.
     pub(super) fn invocation(&self) -> &CommandInvocation {
         match self {
-            Self::Immediate(invocation) | Self::RefreshProviderInfo(invocation) => invocation,
+            Self::Immediate(invocation) => invocation,
         }
     }
 }
@@ -32,13 +29,7 @@ pub(super) fn runtime_terminal_command_plan(
 ) -> Result<Vec<RuntimeTerminalCommandPlan>> {
     Ok(parse_command_sequence(input)?
         .into_iter()
-        .map(|invocation| {
-            if invocation.name == "refresh-provider-info" {
-                RuntimeTerminalCommandPlan::RefreshProviderInfo(invocation)
-            } else {
-                RuntimeTerminalCommandPlan::Immediate(invocation)
-            }
-        })
+        .map(RuntimeTerminalCommandPlan::Immediate)
         .collect())
 }
 
@@ -57,18 +48,5 @@ mod tests {
         assert!(matches!(plan[1], RuntimeTerminalCommandPlan::Immediate(_)));
         assert_eq!(plan[0].invocation().name, "list-panes");
         assert_eq!(plan[1].invocation().name, "show-metrics");
-    }
-
-    /// Verifies provider refresh is classified as the sole awaited terminal
-    /// effect while surrounding commands remain immediate runtime work.
-    #[test]
-    fn terminal_command_plan_identifies_provider_refresh_effect() {
-        let plan = runtime_terminal_command_plan("list-panes; refresh-provider-info").unwrap();
-
-        assert!(matches!(
-            plan[1],
-            RuntimeTerminalCommandPlan::RefreshProviderInfo(_)
-        ));
-        assert_eq!(plan[1].invocation().name, "refresh-provider-info");
     }
 }

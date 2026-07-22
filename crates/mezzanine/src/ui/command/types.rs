@@ -210,9 +210,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "set-option",
     "source-file",
     "refresh-client",
-    "refresh-provider-info",
     "agent-shell",
-    "auth-status",
     "mcp",
     "mcp-status",
     "save-layout",
@@ -238,30 +236,13 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
 /// on duplicated control-flow logic.
 fn baseline_command_status(name: &str) -> BaselineCommandStatus {
     match name {
-        "copy-mode"
-        | "copy-selection"
-        | "paste-clipboard"
-        | "paste-buffer"
-        | "create-buffer"
-        | "list-buffers"
-        | "choose-buffer"
-        | "delete-buffer"
-        | "capture-pane"
-        | "save-buffer"
-        | "clear-history"
-        | "search-history"
-        | "export-history"
-        | "pipe-pane"
-        | "refresh-client"
-        | "show-metrics"
-        | "refresh-provider-info"
-        | "agent-shell"
-        | "mcp"
-        | "approve-observer"
-        | "reject-observer"
-        | "revoke-observer" => BaselineCommandStatus::RuntimeRequired,
-        "bind-key" | "unbind-key" | "set-theme" | "set-option" | "source-file" | "auth-status"
-        | "mcp-status" | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
+        "copy-mode" | "copy-selection" | "paste-clipboard" | "paste-buffer" | "create-buffer"
+        | "list-buffers" | "choose-buffer" | "delete-buffer" | "capture-pane" | "save-buffer"
+        | "clear-history" | "search-history" | "export-history" | "pipe-pane"
+        | "refresh-client" | "show-metrics" | "agent-shell" | "mcp" | "approve-observer"
+        | "reject-observer" | "revoke-observer" => BaselineCommandStatus::RuntimeRequired,
+        "bind-key" | "unbind-key" | "set-theme" | "set-option" | "source-file" | "mcp-status"
+        | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
         "attach-session" | "list-sessions" | "save-layout" | "load-layout" => {
             BaselineCommandStatus::ControlRequired
         }

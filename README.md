@@ -252,7 +252,7 @@ TUI fixture backlog.
 
 The Mezzanine command prompt accepts commands such as `new-window`,
 `split-window`, `select-pane`, `synchronize-panes`, `set-theme`, `list-keys`,
-`show-options`, `refresh-provider-info`, and `exit`. Commands entered there are parsed
+`show-options`, and `exit`. Commands entered there are parsed
 by Mezzanine, not by the pane shell.
 
 Command output shown in the pager supports `/` text search. Submit a query to

@@ -28,25 +28,23 @@ fn refresh_and_agent_shell_are_noops_without_live_client_state() {
     assert_noop(agent_shell, "agent-shell");
 }
 
-/// Verifies auth commands report planning placeholders.
+/// Verifies removed terminal auth commands are rejected rather than retained as aliases.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn auth_commands_report_planning_placeholders() {
+fn removed_terminal_auth_status_command_is_rejected() {
     let (mut session, primary) = test_session();
 
-    let status = display_body(
-        execute_command(
-            &mut session,
-            &primary,
-            &parse_command_sequence("auth-status").unwrap()[0],
-        )
-        .unwrap(),
-    );
-    assert!(status.contains("authenticated=unknown"));
-    assert!(status.contains("source=not-connected"));
+    let status = execute_command(
+        &mut session,
+        &primary,
+        &parse_command_sequence("auth-status").unwrap()[0],
+    )
+    .unwrap_err();
+    assert_eq!(status.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(status.message().contains("unknown command"));
 
     let logout = execute_command(
         &mut session,
@@ -58,13 +56,13 @@ fn auth_commands_report_planning_placeholders() {
     assert!(logout.message().contains("unknown command"));
 }
 
-/// Verifies auth commands can execute against auth store without printing secret.
+/// Verifies removed terminal auth commands cannot execute against an auth store.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn auth_commands_can_execute_against_auth_store_without_printing_secret() {
+fn removed_terminal_auth_status_is_rejected_by_auth_dispatch() {
     let root = std::env::temp_dir().join(format!("mez-command-auth-store-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
@@ -82,13 +80,9 @@ fn auth_commands_can_execute_against_auth_store_without_printing_secret() {
         .unwrap();
 
     let status_invocation = parse_command_sequence("auth-status").unwrap().remove(0);
-    let status = display_body(execute_auth_command(&auth_store, &status_invocation).unwrap());
-
-    assert!(status.contains("authenticated=true"));
-    assert!(status.contains("provider=openai"));
-    assert!(status.contains("profile=work"));
-    assert!(status.contains("credential_store=file"));
-    assert!(!status.contains("sk-command-secret"));
+    let error = execute_auth_command(&auth_store, &status_invocation).unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.message().contains("not an auth command"));
 
     let _ = fs::remove_dir_all(root);
 }

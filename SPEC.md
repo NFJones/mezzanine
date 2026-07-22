@@ -1533,9 +1533,7 @@ The command language MUST include commands equivalent to:
 - `set-option`
 - `source-file`
 - `refresh-client`
-- `refresh-provider-info`
 - `agent-shell`
-- `auth-status`
 - `mcp`
 - `mcp-status`
 - `save-layout`
@@ -1619,9 +1617,7 @@ The baseline commands MUST have the following semantics:
 | `set-option` | Set a live-mutable option. Persisted changes MUST identify the target configuration layer. |
 | `source-file` | Parse and apply a configuration file according to configuration trust and precedence rules. Untrusted project files MUST block until trust is decided. |
 | `refresh-client` | Redraw the invoking client and recompute client-local display state without changing pane pty sizes unless the invoking client is the primary client and its terminal size changed. |
-| `refresh-provider-info` | Refresh cached provider model and quota information for all configured providers. Ordinary pane creation, pane-frame rendering, and model-list displays MUST NOT trigger provider catalog network refreshes; they MUST use cached provider information or configured fallback models. |
 | `agent-shell` | Show, hide, or toggle the agent shell for the target pane. Hiding MUST request `/stop` for any in-progress pane-local agent task before the shell is hidden. |
-| `auth-status` | Show non-secret provider authentication status and selected model profile. |
 | `mcp` | List and inspect live MCP servers, retry one configured MCP server, and persist MCP server add/remove/enable/disable, safe scalar settings, tool allow/deny lists, and server-level approval settings through the primary configuration. MCP server login/logout remains in the CLI/auth flows because it may require OAuth and credential-store interaction. |
 | `mcp-status` | Show non-secret MCP server authentication status for the requested server. |
 | `save-layout` | Store the current window-group, window, and pane topology with user-assigned group, window, and pane names and each pane's current working directory when available. It MUST accept `--name <name>`; when omitted, the stored layout name MUST default to a generated UUID. On success it MUST report a concise single-line status message instead of dumping raw snapshot-control JSON. The layout store MUST NOT include pane process state, terminal history, client state, agent state, approvals, messages, or MCP runtime state. |
@@ -3088,7 +3084,7 @@ compatible `/models` endpoint.
 Mezzanine SHOULD attempt live provider model-catalog refresh once during daemon
 startup after configuration and authentication stores are available. After
 startup, live provider catalog refresh MUST be explicit through a user or
-control action such as `refresh-provider-info`; pane creation, pane selection,
+control action such as `/refresh-provider-info`; pane creation, pane selection,
 and model selector rendering MUST NOT independently prefetch provider catalogs.
 
 The `mcp_servers` table MUST be a map keyed by MCP server identity. Each MCP
@@ -8330,7 +8326,7 @@ level with a visible star indicator in their cells. It MUST NOT append a usage
 example below the catalog. When provider credentials and metadata endpoints are available,
 Mezzanine SHOULD use the live provider catalog and SHOULD retain the successful
 catalog in a session-local cache for later model-selection UI. Provider catalog
-refresh is best effort: startup refreshes, `refresh-provider-info`, `/model
+refresh is best effort: startup refreshes, `/refresh-provider-info`, `/model
 list`, and pane-frame selectors MUST NOT present catalog refresh failures to
 the user when fallback model information is available or an empty fallback can
 be shown. When a live catalog cannot be queried, Mezzanine MAY fall back to

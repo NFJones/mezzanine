@@ -10,7 +10,7 @@ use super::{
     CommandInvocation, ConfigMutation, ConfigMutationOperation, ConfigMutationValue, EventKind,
     MezError, Result, RuntimePersistedConfigMutationBatchReport, RuntimeSessionService,
     json_escape, runtime_apply_persisted_config_mutation_batch, runtime_config_apply_event_payload,
-    runtime_parse_approval_policy, runtime_plan_live_override_mutation, runtime_positional_args,
+    runtime_parse_approval_policy, runtime_plan_live_override_mutation,
     runtime_store_live_override_plan,
 };
 use crate::integrations::mcp::{
@@ -19,24 +19,6 @@ use crate::integrations::mcp::{
 };
 use crate::runtime::{ConfigPaths, ConfigScope, RuntimeMcpRetryReport};
 use mez_agent::mcp::{McpApprovalSetting, McpServerKind, McpServerStatus};
-
-/// Refreshes provider information through the async runtime command path.
-///
-/// The command intentionally owns live provider discovery so ordinary pane
-/// creation, selector opening, and `/model list` rendering can use cached or
-/// configured information without making provider calls on the hot path.
-pub(super) async fn runtime_refresh_provider_info_command_async(
-    service: &mut RuntimeSessionService,
-    invocation: &CommandInvocation,
-) -> Result<String> {
-    let args = runtime_positional_args(invocation);
-    if !args.is_empty() {
-        return Err(MezError::invalid_args(
-            "refresh-provider-info does not accept positional arguments",
-        ));
-    }
-    service.refresh_provider_info_async().await
-}
 
 /// Executes the live `mcp` terminal command family.
 pub(super) fn runtime_mcp_command(

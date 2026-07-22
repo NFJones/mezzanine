@@ -267,7 +267,7 @@ pub(super) fn mcp_server_id<'a>(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn auth_status_store_display(status: AuthStatus) -> String {
+pub(crate) fn auth_status_store_display(status: AuthStatus) -> String {
     let provider = status
         .metadata
         .as_ref()

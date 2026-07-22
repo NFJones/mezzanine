@@ -2,13 +2,14 @@
 
 use super::*;
 
-/// Verifies that live provider information refresh is an explicit terminal
-/// command and that the result is cached for later model-list displays.
+/// Verifies that `/refresh-provider-info` refreshes live provider metadata and
+/// caches the result for later model-list displays.
 ///
 /// Ordinary pane interaction should not fetch provider catalogs on demand; this
-/// command is the user-visible refresh path after daemon startup has completed.
+/// slash command is the user-visible refresh path after daemon startup has
+/// completed.
 #[tokio::test]
-async fn runtime_terminal_refresh_provider_info_populates_model_catalog_cache() {
+async fn runtime_agent_shell_refresh_provider_info_populates_model_catalog_cache() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -24,9 +25,13 @@ async fn runtime_terminal_refresh_provider_info_populates_model_catalog_cache() 
     let primary = service
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
         .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
 
     let output = service
-        .execute_terminal_command_async(&primary, "refresh-provider-info")
+        .execute_agent_shell_command_async(&primary, "/refresh-provider-info")
         .await
         .unwrap();
 

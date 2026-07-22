@@ -459,9 +459,10 @@ fn runtime_agent_shell_logout_uses_attached_auth_store() {
     assert!(!response.contains("requires_runtime"), "{response}");
     assert!(!response.contains("sk-runtime-secret"), "{response}");
     let status = service
-        .execute_terminal_command(&primary, "auth-status")
+        .execute_agent_shell_command(&primary, "/auth-status")
         .unwrap();
     assert!(status.contains("authenticated=false"), "{status}");
+    assert!(status.contains("Authentication Status"), "{status}");
     let _ = fs::remove_dir_all(root);
 }
 

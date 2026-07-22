@@ -7,19 +7,40 @@
 //! execution focused on state transitions and profile overrides.
 
 use super::{
-    AsyncModelProvider, AuthCredentialKind, DEFAULT_PROVIDER_TIMEOUT_MS, MezError, ModelCatalog,
-    ModelCatalogCandidate, ModelCatalogEntry, ModelCatalogInput, ModelCatalogSource, ModelProfile,
-    ProviderApiCompatibility, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
-    ReqwestProviderHttpTransport, Result, RuntimeSessionService,
+    AgentShellCommandOutcome, AsyncModelProvider, AuthCredentialKind, DEFAULT_PROVIDER_TIMEOUT_MS,
+    MezError, ModelCatalog, ModelCatalogCandidate, ModelCatalogEntry, ModelCatalogInput,
+    ModelCatalogSource, ModelProfile, ProviderApiCompatibility, ProviderModelCatalog,
+    ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport, Result,
+    RuntimeSessionService,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
     normalize_model_catalog_values,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_default_reasoning_levels_for_model,
-    openai_responses_provider_from_auth_store_with_provider_options, resolve_provider_api,
-    runtime_default_models_for_provider, runtime_recommended_model_for_provider,
+    openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
+    resolve_provider_api, runtime_default_models_for_provider,
+    runtime_recommended_model_for_provider,
 };
 
 impl RuntimeSessionService {
+    /// Executes `/refresh-provider-info` through the live provider catalog refresh path.
+    pub(super) async fn execute_agent_shell_refresh_provider_info_command(
+        &mut self,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let slash = parse_slash_command(input)?.ok_or_else(|| {
+            MezError::invalid_args("refresh-provider-info command must be a slash command")
+        })?;
+        if !slash.args.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "refresh-provider-info does not accept arguments",
+            ));
+        }
+        Ok(AgentShellCommandOutcome::Display {
+            command: "refresh-provider-info".to_string(),
+            body: self.refresh_provider_info_async().await?,
+        })
+    }
+
     pub(super) fn runtime_model_catalog_for_provider(
         &mut self,
         provider_id: &str,
