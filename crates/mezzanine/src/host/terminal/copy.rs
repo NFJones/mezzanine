@@ -102,8 +102,15 @@ impl CopyMode {
         line: usize,
     ) -> Option<(usize, String)> {
         let copy_line = self.0.copy_lines().get(line)?;
-        let (_, raw_line) = decode_agent_copy_source_line(copy_line)?;
-        let (group_start, group_end) = self.markdown_source_group_bounds(line, copy_line);
+        let (group_start, group_end, raw_line) = if let Some((_, raw_line)) =
+            decode_agent_copy_source_line(copy_line)
+        {
+            let (group_start, group_end) = self.markdown_source_group_bounds(line, copy_line);
+            (group_start, group_end, raw_line)
+        } else {
+            let (group_start, group_end) = self.transformed_source_group_bounds(line, copy_line)?;
+            (group_start, group_end, copy_line.as_str())
+        };
         if line != group_start
             || !selection_fully_covers_markdown_source_group(
                 self.0.lines(),
@@ -116,6 +123,30 @@ impl CopyMode {
             return None;
         }
         Some((group_end, raw_line.to_string()))
+    }
+
+    /// Returns the rows owned by a transformed source block whose first row
+    /// retains raw source and whose later rows are presentation-only.
+    fn transformed_source_group_bounds(
+        &self,
+        line: usize,
+        copy_line: &str,
+    ) -> Option<(usize, usize)> {
+        let copy_lines = self.0.copy_lines();
+        if copy_line == AGENT_COPY_SKIP_LINE
+            || decode_agent_copy_source_line(copy_line).is_some()
+            || copy_lines.get(line.saturating_add(1))? != AGENT_COPY_SKIP_LINE
+        {
+            return None;
+        }
+        let mut group_end = line.saturating_add(1);
+        while copy_lines
+            .get(group_end.saturating_add(1))
+            .is_some_and(|candidate| candidate == AGENT_COPY_SKIP_LINE)
+        {
+            group_end = group_end.saturating_add(1);
+        }
+        Some((line, group_end))
     }
 
     /// Returns the rendered row bounds belonging to one markdown source line.
@@ -156,6 +187,12 @@ impl CopyMode {
             return AGENT_COPY_SKIP_LINE.to_string();
         }
         if decode_agent_copy_source_line(copy_line).is_some() {
+            return line_slice(display_line, start, end);
+        }
+        if self
+            .transformed_source_group_bounds(line, copy_line)
+            .is_some()
+        {
             return line_slice(display_line, start, end);
         }
         let display_end = char_count(display_line);

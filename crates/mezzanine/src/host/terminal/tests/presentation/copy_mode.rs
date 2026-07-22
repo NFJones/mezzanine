@@ -299,6 +299,52 @@ fn copy_mode_dedents_orphan_agent_continuation_rows() {
     assert_eq!(copy.copy_selection().unwrap(), "- item\n    code");
 }
 
+/// Verifies selecting one rendered row from a transformed source group keeps
+/// the visible row instead of expanding it into the group's complete source.
+///
+/// Presentation transforms such as Mermaid assign one raw source block to
+/// several rendered rows. A selection containing only the first rendered row
+/// is partial at the source-group level, even when it spans that row's full
+/// display width.
+#[test]
+fn copy_mode_keeps_partial_transformed_source_group_rendered() {
+    let mut screen = TerminalScreen::new(Size::new(40, 2).unwrap(), 10).unwrap();
+    screen.feed(b"diagram first\ndiagram second");
+    screen.set_recent_normal_copy_texts(
+        &[
+            "```mermaid\nflowchart LR\nA --> B\n```".to_string(),
+            mez_mux::copy::COPY_SKIP_LINE.to_string(),
+        ],
+        mez_mux::copy::COPY_SKIP_LINE,
+    );
+    let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
+
+    copy.select_range(
+        CopyPosition { line: 0, column: 0 },
+        CopyPosition {
+            line: 0,
+            column: "diagram first".chars().count(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(copy.copy_selection().unwrap(), "diagram first");
+
+    copy.select_range(
+        CopyPosition { line: 0, column: 0 },
+        CopyPosition {
+            line: 1,
+            column: "diagram second".chars().count(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        copy.copy_selection().unwrap(),
+        "```mermaid\nflowchart LR\nA --> B\n```"
+    );
+}
+
 /// Verifies copy mode removes only Mezzanine's agent indicator prefix from
 /// non-assistant agent status lines. Status, error, and command preview lines
 /// keep their text because those labels carry user-visible meaning, but the
