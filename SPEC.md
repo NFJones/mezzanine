@@ -1969,7 +1969,7 @@ again the foreground process, the runtime MUST treat the blocking state as
 stale, move the pane back to prompt-candidate, and requeue the stored shell
 action. If host process metadata continues to show a non-shell foreground
 process, recovery MUST remain bounded and MUST settle the undispatched action
-without injecting shell input into that process. A managed routed child settled
+without injecting shell input into that process. A model-visible readiness or foreground-process dispatch failure MUST include best-effort foreground process name, foreground and primary process-group identifiers, the primary-shell-foreground determination, and metadata availability/source; it MUST NOT include command lines, arguments, environment values, or working directories. A managed routed child settled
 this way MUST release its parent from the worker-result wait. This recovery MUST
 avoid spamming visible logs while preserving trace-level state-transition
 evidence.

@@ -549,6 +549,22 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
         settled.action_results[0].error.as_ref().unwrap().code,
         "foreground_process_blocked_dispatch"
     );
+    let diagnostic: serde_json::Value = serde_json::from_str(
+        settled.action_results[0]
+            .structured_content_json
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    let foreground_process = &diagnostic["foreground_process"];
+    assert_eq!(foreground_process["metadata_available"], true);
+    assert_eq!(foreground_process["foreground_process_group_source"], "pty");
+    assert_eq!(
+        foreground_process["foreground_process_group_id"],
+        primary_pid.saturating_add(1)
+    );
+    assert_eq!(foreground_process["primary_process_id"], primary_pid);
+    assert_eq!(foreground_process["primary_shell_is_foreground"], false);
     assert!(service.running_shell_transactions_for_tests().is_empty());
     assert_eq!(
         service

@@ -5,6 +5,72 @@ use super::{
     runtime_execution_ready_for_provider_continuation,
 };
 
+/// Best-effort foreground-process information attached to a readiness failure.
+///
+/// The runtime uses this diagnostic to explain why it refused to send shell
+/// input without exposing process command lines, arguments, or environment
+/// values. Process metadata is inherently transient, so absent fields mean the
+/// host could not provide that observation at dispatch time.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimePaneForegroundDiagnostic {
+    /// Whether both the pane primary process and foreground process group were available.
+    metadata_available: bool,
+    /// Source of the foreground process-group observation.
+    foreground_process_group_source: &'static str,
+    /// Best-effort display name for the foreground process-group leader.
+    foreground_process_name: Option<String>,
+    /// Foreground process group currently reported for the pane PTY.
+    foreground_process_group_id: Option<u32>,
+    /// Primary pane-shell process id.
+    primary_process_id: Option<u32>,
+    /// Primary pane-shell process group id.
+    primary_process_group_id: Option<u32>,
+    /// Whether the observed foreground group belongs to the primary shell.
+    primary_shell_is_foreground: Option<bool>,
+}
+
+impl RuntimePaneForegroundDiagnostic {
+    /// Renders the diagnostic as structured action-result content.
+    pub(crate) fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "metadata_available": self.metadata_available,
+            "foreground_process_group_source": self.foreground_process_group_source,
+            "foreground_process_name": self.foreground_process_name,
+            "foreground_process_group_id": self.foreground_process_group_id,
+            "primary_process_id": self.primary_process_id,
+            "primary_process_group_id": self.primary_process_group_id,
+            "primary_shell_is_foreground": self.primary_shell_is_foreground,
+        })
+    }
+
+    /// Renders concise safe text for the terminal error buffer and trace.
+    pub(crate) fn summary(&self) -> String {
+        match self.foreground_process_group_id {
+            Some(process_group_id) => format!(
+                "foreground_process={} foreground_process_group={} primary_process={} primary_process_group={} primary_shell_is_foreground={} source={}",
+                self.foreground_process_name
+                    .as_deref()
+                    .unwrap_or("unavailable"),
+                process_group_id,
+                self.primary_process_id
+                    .map(|process_id| process_id.to_string())
+                    .as_deref()
+                    .unwrap_or("unavailable"),
+                self.primary_process_group_id
+                    .map(|process_group_id| process_group_id.to_string())
+                    .as_deref()
+                    .unwrap_or("unavailable"),
+                self.primary_shell_is_foreground
+                    .map(|is_foreground| is_foreground.to_string())
+                    .as_deref()
+                    .unwrap_or("unavailable"),
+                self.foreground_process_group_source,
+            ),
+            None => "foreground_process_metadata=unavailable".to_string(),
+        }
+    }
+}
+
 impl RuntimeSessionService {
     /// Reports whether host process metadata can determine if the pane primary
     /// shell is the foreground process group for its PTY.
@@ -27,6 +93,57 @@ impl RuntimeSessionService {
             .and_then(|leader| u32::try_from(leader).ok())
             .unwrap_or(primary_pid);
         Some(foreground_group == primary_pid || foreground_group == primary_process_group)
+    }
+
+    /// Returns the foreground-process observation available for a pane readiness failure.
+    pub(crate) fn pane_foreground_process_diagnostic(
+        &self,
+        pane_id: &str,
+    ) -> RuntimePaneForegroundDiagnostic {
+        let primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
+        let primary_process_group_id = primary_process_id.map(|primary_process_id| {
+            self.process
+                .pane_processes
+                .process_group_leader(pane_id)
+                .and_then(|leader| u32::try_from(leader).ok())
+                .unwrap_or(primary_process_id)
+        });
+        let live_foreground_process_group_id = self
+            .process
+            .pane_processes
+            .foreground_process_group_id(pane_id);
+        let cached_foreground_process_group_id = self
+            .process
+            .pane_foreground_process_groups
+            .get(pane_id)
+            .copied();
+        let (foreground_process_group_id, foreground_process_group_source) =
+            match live_foreground_process_group_id {
+                Some(process_group_id) => (Some(process_group_id), "pty"),
+                None => match cached_foreground_process_group_id {
+                    Some(process_group_id) => (Some(process_group_id), "worker-cache"),
+                    None => (None, "unavailable"),
+                },
+            };
+        let primary_shell_is_foreground =
+            foreground_process_group_id.and_then(|process_group_id| {
+                primary_process_id.map(|primary_process_id| {
+                    Some(process_group_id) == primary_process_group_id
+                        || process_group_id == primary_process_id
+                })
+            });
+
+        RuntimePaneForegroundDiagnostic {
+            metadata_available: primary_process_id.is_some()
+                && foreground_process_group_id.is_some(),
+            foreground_process_group_source,
+            foreground_process_name: foreground_process_group_id
+                .and_then(|_| self.process.pane_processes.foreground_process_name(pane_id)),
+            foreground_process_group_id,
+            primary_process_id,
+            primary_process_group_id,
+            primary_shell_is_foreground,
+        }
     }
 
     /// Runs the observe agent shell transaction events operation for this subsystem.

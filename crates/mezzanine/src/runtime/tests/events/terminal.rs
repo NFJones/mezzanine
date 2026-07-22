@@ -689,6 +689,25 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
             .map(|error| error.code.as_str()),
         Some("pane_not_ready")
     );
+    let diagnostic: serde_json::Value = serde_json::from_str(
+        execution.action_results[0]
+            .structured_content_json
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        diagnostic["foreground_process"],
+        serde_json::json!({
+            "metadata_available": false,
+            "foreground_process_group_source": "unavailable",
+            "foreground_process_name": null,
+            "foreground_process_group_id": null,
+            "primary_process_id": null,
+            "primary_process_group_id": null,
+            "primary_shell_is_foreground": null,
+        })
+    );
     assert_eq!(execution.action_results[1].status, ActionStatus::Running);
     assert!(!execution.action_results[1].is_error);
     let pane_text = service

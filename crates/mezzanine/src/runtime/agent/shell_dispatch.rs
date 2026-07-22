@@ -677,9 +677,12 @@ impl RuntimeSessionService {
                                 &action.id,
                             );
                             if attempts >= 3 {
+                                let foreground_diagnostic =
+                                    self.pane_foreground_process_diagnostic(&turn.pane_id);
                                 let message = format!(
-                                    "pane {} kept a non-shell foreground process active; shell command was not dispatched",
-                                    turn.pane_id
+                                    "pane {} kept a non-shell foreground process active; shell command was not dispatched ({})",
+                                    turn.pane_id,
+                                    foreground_diagnostic.summary(),
                                 );
                                 let mut result = ActionResult::failed(
                                     turn,
@@ -688,11 +691,16 @@ impl RuntimeSessionService {
                                     "foreground_process_blocked_dispatch",
                                     message.clone(),
                                 )?;
-                                result.structured_content_json = Some(format!(
-                                    r#"{{"state":"dispatch_blocked","reason":"foreground_process_active","attempts":{},"command":"{}"}}"#,
-                                    attempts,
-                                    json_escape(&runtime_agent_context_command(action, command))
-                                ));
+                                result.structured_content_json = Some(
+                                    serde_json::json!({
+                                        "state": "dispatch_blocked",
+                                        "reason": "foreground_process_active",
+                                        "attempts": attempts,
+                                        "command": runtime_agent_context_command(action, command),
+                                        "foreground_process": foreground_diagnostic.json(),
+                                    })
+                                    .to_string(),
+                                );
                                 execution.action_results[index] = result;
                                 self.clear_pending_shell_dispatch_blocked_recovery_attempt(
                                     &turn.turn_id,
@@ -706,8 +714,10 @@ impl RuntimeSessionService {
                                     &turn.pane_id,
                                     &turn.turn_id,
                                     &format!(
-                                        "action {} failed reason=foreground_process_blocked_dispatch attempts={}",
-                                        action.id, attempts
+                                        "action {} failed reason=foreground_process_blocked_dispatch attempts={} {}",
+                                        action.id,
+                                        attempts,
+                                        foreground_diagnostic.summary(),
                                     ),
                                 )?;
                                 break;
@@ -799,10 +809,13 @@ impl RuntimeSessionService {
                     return Ok(dispatched);
                 }
                 state => {
+                    let foreground_diagnostic =
+                        self.pane_foreground_process_diagnostic(&turn.pane_id);
                     let message = format!(
-                        "pane {} is not ready for agent shell input: {}",
+                        "pane {} is not ready for agent shell input: {} ({})",
                         turn.pane_id,
-                        runtime_pane_readiness_state_name(state)
+                        runtime_pane_readiness_state_name(state),
+                        foreground_diagnostic.summary(),
                     );
                     let mut result = ActionResult::failed(
                         turn,
@@ -811,11 +824,15 @@ impl RuntimeSessionService {
                         "pane_not_ready",
                         message.clone(),
                     )?;
-                    result.structured_content_json = Some(format!(
-                        r#"{{"state":"not_ready","readiness_state":"{}","command":"{}"}}"#,
-                        runtime_pane_readiness_state_name(state),
-                        json_escape(&runtime_agent_context_command(action, command))
-                    ));
+                    result.structured_content_json = Some(
+                        serde_json::json!({
+                            "state": "not_ready",
+                            "readiness_state": runtime_pane_readiness_state_name(state),
+                            "command": runtime_agent_context_command(action, command),
+                            "foreground_process": foreground_diagnostic.json(),
+                        })
+                        .to_string(),
+                    );
                     execution.action_results[index] = result;
                     self.append_agent_error_text_to_terminal_buffer(
                         &turn.pane_id,
@@ -825,9 +842,10 @@ impl RuntimeSessionService {
                         &turn.pane_id,
                         &turn.turn_id,
                         &format!(
-                            "action {} failed reason=pane_not_ready readiness={}",
+                            "action {} failed reason=pane_not_ready readiness={} {}",
                             action.id,
-                            runtime_pane_readiness_state_name(state)
+                            runtime_pane_readiness_state_name(state),
+                            foreground_diagnostic.summary(),
                         ),
                     )?;
                     break;
