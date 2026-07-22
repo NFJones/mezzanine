@@ -83,9 +83,15 @@ where
         }
 
         let effects = if pending_pane_io_side_effects.is_empty() {
-            handle
-                .drain_pane_io_side_effects(driver.pane_id().to_string(), config.drain_limit)
-                .await?
+            if let Some(instance) = driver.process_instance().cloned() {
+                handle
+                    .drain_pane_process_io_side_effects(instance, config.drain_limit)
+                    .await?
+            } else {
+                handle
+                    .drain_pane_io_side_effects(driver.pane_id().to_string(), config.drain_limit)
+                    .await?
+            }
         } else {
             drain_pending_pane_io_side_effects(
                 &mut pending_pane_io_side_effects,
@@ -184,19 +190,22 @@ where
     for _ in 0..limit {
         match driver.poll_output_event().await {
             Ok(Some(event)) => {
-                let RuntimeEvent::Pane(PaneEvent::Output {
-                    bytes: output_bytes,
-                    ..
-                }) = event
-                else {
-                    continue;
+                let output_bytes = match event {
+                    RuntimeEvent::Pane(PaneEvent::Output { bytes, .. }) => bytes,
+                    RuntimeEvent::PaneProcess {
+                        event: super::PaneProcessEvent::Pane(PaneEvent::Output { bytes, .. }),
+                        ..
+                    } => bytes,
+                    _ => continue,
                 };
                 *output_events = output_events.saturating_add(1);
                 bytes.extend(output_bytes);
             }
             Ok(None) => break,
             Err(error) if !bytes.is_empty() => {
-                let ingress = submit_batched_pane_output_event(handle, pane_id, bytes).await?;
+                let event =
+                    driver.scope_event(RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }));
+                let ingress = submit_batched_pane_output_event(handle, event).await?;
                 *submitted_events = submitted_events.saturating_add(ingress.accepted);
                 *applied_events = applied_events.saturating_add(ingress.applied);
                 return Err(error);
@@ -207,7 +216,8 @@ where
     if bytes.is_empty() {
         return Ok(false);
     }
-    let ingress = submit_batched_pane_output_event(handle, pane_id, bytes).await?;
+    let event = driver.scope_event(RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }));
+    let ingress = submit_batched_pane_output_event(handle, event).await?;
     *submitted_events = submitted_events.saturating_add(ingress.accepted);
     *applied_events = applied_events.saturating_add(ingress.applied);
     Ok(true)
@@ -216,11 +226,10 @@ where
 /// Submits coalesced pane output bytes as one ordered runtime event.
 pub(super) async fn submit_batched_pane_output_event(
     handle: &AsyncRuntimeSessionHandle,
-    pane_id: String,
-    bytes: Vec<u8>,
+    event: RuntimeEvent,
 ) -> Result<super::RuntimeEventIngressReport> {
     let mut batch = RuntimeEventBatch::new();
-    batch.push(RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }));
+    batch.push(event);
     handle.submit_runtime_events(batch).await
 }
 
@@ -239,24 +248,36 @@ pub(super) async fn terminate_pane_process_for_terminal_state<B>(
 where
     B: AsyncPaneProcessIo,
 {
-    let pane_id = driver.pane_id().to_string();
     let mut force = matches!(
         state,
         RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed
     );
-    let effects = handle
-        .drain_pane_io_side_effects(pane_id, config.drain_limit)
-        .await?;
+    let effects = if let Some(instance) = driver.process_instance().cloned() {
+        handle
+            .drain_pane_process_io_side_effects(instance, config.drain_limit)
+            .await?
+    } else {
+        handle
+            .drain_pane_io_side_effects(driver.pane_id().to_string(), config.drain_limit)
+            .await?
+    };
     report.drained = report
         .drained
         .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
     for effect in effects {
-        if let RuntimeSideEffect::TerminatePane {
-            force: requested_force,
-            ..
-        } = effect
-        {
-            force |= requested_force;
+        match effect {
+            RuntimeSideEffect::TerminatePane {
+                force: requested_force,
+                ..
+            }
+            | RuntimeSideEffect::PaneProcessIo {
+                effect:
+                    super::PaneProcessIoEffect::Terminate {
+                        force: requested_force,
+                    },
+                ..
+            } => force |= requested_force,
+            _ => {}
         }
     }
     let event = driver.terminate_event(force).await;

@@ -11,6 +11,7 @@ use super::{
     Path, Result, RuntimeSessionService, RuntimeSideEffect, Size, SplitDirection, WindowId,
     current_unix_seconds, json_escape, new_window_pane_size, validate_pane_size,
 };
+use crate::runtime::PaneProcessIoEffect;
 
 impl RuntimeSessionService {
     /// Runs the create window with pane process operation for this subsystem.
@@ -672,12 +673,12 @@ impl RuntimeSessionService {
                 self.process
                     .pane_processes
                     .resize_pane(pane_id, process_size)?;
-            } else if self.pane_process_is_adapter_owned(pane_id) {
+            } else if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
                 self.persistence.queue_pane_resize(
                     pane_id.to_string(),
-                    RuntimeSideEffect::ResizePane {
-                        pane_id: pane_id.to_string(),
-                        size: process_size,
+                    RuntimeSideEffect::PaneProcessIo {
+                        instance,
+                        effect: PaneProcessIoEffect::Resize { size: process_size },
                     },
                 );
             }

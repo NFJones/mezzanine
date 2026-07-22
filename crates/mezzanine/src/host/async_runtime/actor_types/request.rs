@@ -11,6 +11,7 @@ use super::{
     RuntimeLifecycleState, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
     RuntimeSnapshotControlAsyncWork, Size, SnapshotRepository, TerminalClientLoopConfig, oneshot,
 };
+use crate::runtime::PaneProcessInstance;
 
 /// Carries Async Runtime Request state for this subsystem.
 ///
@@ -782,6 +783,15 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
     },
+    /// Drains pane I/O effects for one exact adapter-owned process instance.
+    DrainPaneProcessIoSideEffects {
+        /// Exact process ownership lifetime whose effects may be drained.
+        instance: PaneProcessInstance,
+        /// Maximum effects returned in one request.
+        limit: usize,
+        /// Completion channel for the drained effects.
+        reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
+    },
     /// Represents the Take Running Pane Processes For Async Owner case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -796,7 +806,7 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         ///
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
-        reply: oneshot::Sender<Result<Vec<(String, PaneProcess)>>>,
+        reply: oneshot::Sender<Result<Vec<(PaneProcessInstance, PaneProcess)>>>,
     },
     /// Represents the Shutdown case for this enumeration.
     ///

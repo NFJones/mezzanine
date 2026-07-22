@@ -244,6 +244,7 @@ pub(super) fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) 
             | PaneEvent::Resized { .. }
             | PaneEvent::ForegroundProcess { .. },
         )
+        | RuntimeEvent::PaneProcess { .. }
         | RuntimeEvent::Hook(_)
         | RuntimeEvent::Persistence(_)
         | RuntimeEvent::Timer(_) => false,
@@ -325,12 +326,24 @@ pub(super) fn pane_io_side_effect_targets_pane(
     target_pane_id: &str,
 ) -> bool {
     match effect {
+        RuntimeSideEffect::PaneProcessIo { instance, .. } => instance.pane_id == target_pane_id,
         RuntimeSideEffect::WritePaneInput { pane_id, .. }
         | RuntimeSideEffect::WritePaneInputPriority { pane_id, .. }
         | RuntimeSideEffect::ResizePane { pane_id, .. }
         | RuntimeSideEffect::TerminatePane { pane_id, .. } => pane_id == target_pane_id,
         _ => false,
     }
+}
+
+/// Returns whether one pane I/O side effect targets an exact process instance.
+pub(super) fn pane_io_side_effect_targets_instance(
+    effect: &RuntimeSideEffect,
+    target: &crate::runtime::PaneProcessInstance,
+) -> bool {
+    matches!(
+        effect,
+        RuntimeSideEffect::PaneProcessIo { instance, .. } if instance == target
+    )
 }
 
 /// Runs the timer side effect targets timer worker operation for this subsystem.
@@ -371,6 +384,7 @@ pub(super) fn runtime_side_effect_kind_summary<'a>(
 /// Returns a stable diagnostic family for one queued side effect.
 pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static str {
     match effect {
+        RuntimeSideEffect::PaneProcessIo { .. } => "pane-process-io",
         RuntimeSideEffect::WritePaneInput { .. } => "write-pane-input",
         RuntimeSideEffect::WritePaneInputPriority { .. } => "write-pane-input-priority",
         RuntimeSideEffect::ResizePane { .. } => "resize-pane",

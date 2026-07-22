@@ -4,9 +4,10 @@ use super::{
     AsyncPaneProcessDriver, AsyncPaneProcessDriverConfig, AsyncPaneProcessIo,
     AsyncPaneProcessServiceConfig, AsyncPaneProcessServiceReport,
     AsyncPaneProcessSupervisorServiceReport, AsyncPtyPaneProcessIo, AsyncRuntimeSessionHandle,
-    Duration, HashSet, JoinSet, MezError, PaneEvent, ProcessEvent, Result, RuntimeEvent,
-    RuntimeEventBatch, RuntimeLifecycleState, RuntimeSideEffect, VecDeque,
-    is_terminal_runtime_lifecycle_state, run_async_pane_process_service, sleep, watch,
+    Duration, HashSet, JoinSet, MezError, PaneEvent, PaneProcessEvent, PaneProcessInstance,
+    PaneProcessIoEffect, ProcessEvent, Result, RuntimeEvent, RuntimeEventBatch,
+    RuntimeLifecycleState, RuntimeSideEffect, VecDeque, is_terminal_runtime_lifecycle_state,
+    run_async_pane_process_service, sleep, watch,
 };
 
 /// Submits one pane-produced runtime event and accumulates ingress counters.
@@ -26,7 +27,14 @@ pub(super) async fn submit_pane_runtime_event(
 
 /// Returns whether an event reports a terminal pane process exit.
 pub(super) fn is_process_exit_event(event: &RuntimeEvent) -> bool {
-    matches!(event, RuntimeEvent::Process(ProcessEvent::Exited { .. }))
+    matches!(
+        event,
+        RuntimeEvent::Process(ProcessEvent::Exited { .. })
+            | RuntimeEvent::PaneProcess {
+                event: PaneProcessEvent::Process(ProcessEvent::Exited { .. }),
+                ..
+            }
+    )
 }
 
 /// Runs the spawn owned pane process worker operation for this subsystem.
@@ -35,22 +43,26 @@ pub(super) fn is_process_exit_event(event: &RuntimeEvent) -> bool {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn spawn_owned_pane_process_worker(
-    workers: &mut JoinSet<Result<(String, AsyncPaneProcessServiceReport)>>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
     handle: AsyncRuntimeSessionHandle,
-    pane_id: String,
+    instance: PaneProcessInstance,
     process: super::PaneProcess,
     config: AsyncPaneProcessServiceConfig,
 ) -> Result<()> {
+    let pane_id = instance.pane_id.clone();
     let backend = AsyncPtyPaneProcessIo::new(pane_id.clone(), process)?;
-    let driver =
-        AsyncPaneProcessDriver::new(&pane_id, backend, AsyncPaneProcessDriverConfig::default())?;
+    let driver = AsyncPaneProcessDriver::new_for_instance(
+        instance.clone(),
+        backend,
+        AsyncPaneProcessDriverConfig::default(),
+    )?;
     workers.spawn(async move {
         let mut driver = driver;
         let report = run_async_pane_process_service(&handle, &mut driver, config, |_, state| {
             is_terminal_runtime_lifecycle_state(state)
         })
         .await?;
-        Ok((pane_id, report))
+        Ok((instance, report))
     });
     Ok(())
 }
@@ -61,8 +73,8 @@ pub(super) fn spawn_owned_pane_process_worker(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn drain_completed_pane_process_workers(
-    workers: &mut JoinSet<Result<(String, AsyncPaneProcessServiceReport)>>,
-    active_panes: &mut HashSet<String>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
+    active_panes: &mut HashSet<PaneProcessInstance>,
     report: &mut AsyncPaneProcessSupervisorServiceReport,
 ) -> Result<()> {
     while let Some(joined) = workers.try_join_next() {
@@ -77,8 +89,8 @@ pub(super) fn drain_completed_pane_process_workers(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) async fn drain_completed_pane_process_workers_after_yields(
-    workers: &mut JoinSet<Result<(String, AsyncPaneProcessServiceReport)>>,
-    active_panes: &mut HashSet<String>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
+    active_panes: &mut HashSet<PaneProcessInstance>,
     report: &mut AsyncPaneProcessSupervisorServiceReport,
 ) -> Result<()> {
     for _ in 0..16 {
@@ -98,15 +110,15 @@ pub(super) async fn drain_completed_pane_process_workers_after_yields(
 /// on duplicated control-flow logic.
 pub(super) fn record_joined_pane_process_worker(
     joined: std::result::Result<
-        Result<(String, AsyncPaneProcessServiceReport)>,
+        Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>,
         tokio::task::JoinError,
     >,
-    active_panes: &mut HashSet<String>,
+    active_panes: &mut HashSet<PaneProcessInstance>,
     report: &mut AsyncPaneProcessSupervisorServiceReport,
 ) -> Result<()> {
     match joined {
-        Ok(Ok((pane_id, worker_report))) => {
-            active_panes.remove(&pane_id);
+        Ok(Ok((instance, worker_report))) => {
+            active_panes.remove(&instance);
             report.terminal_state = worker_report.terminal_state;
             report.completed_workers = report.completed_workers.saturating_add(1);
             Ok(())
@@ -126,12 +138,15 @@ pub(super) fn record_joined_pane_process_worker(
 /// on duplicated control-flow logic.
 pub(super) async fn wait_for_pane_process_supervisor_wakeup(
     handle: &AsyncRuntimeSessionHandle,
-    workers: &mut JoinSet<Result<(String, AsyncPaneProcessServiceReport)>>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
     side_effect_watcher: &mut watch::Receiver<u64>,
     bounded_idle: Option<Duration>,
 ) -> Option<
-    std::result::Result<Result<(String, AsyncPaneProcessServiceReport)>, tokio::task::JoinError>,
+    std::result::Result<
+        Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>,
+        tokio::task::JoinError,
+    >,
 > {
     match (workers.is_empty(), bounded_idle) {
         (true, Some(idle_interval)) => {
@@ -201,7 +216,7 @@ pub(super) async fn wait_for_pane_process_supervisor_wakeup(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) async fn abort_pane_process_workers(
-    workers: &mut JoinSet<Result<(String, AsyncPaneProcessServiceReport)>>,
+    workers: &mut JoinSet<Result<(PaneProcessInstance, AsyncPaneProcessServiceReport)>>,
 ) {
     workers.abort_all();
     while workers.join_next().await.is_some() {}
@@ -258,6 +273,45 @@ where
     let mut effects: VecDeque<_> = effects.into();
     while let Some(effect) = effects.pop_front() {
         let event = match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect:
+                    PaneProcessIoEffect::WriteInput { bytes }
+                    | PaneProcessIoEffect::WriteInputPriority { bytes },
+            } => {
+                if bytes.is_empty() {
+                    continue;
+                }
+                let chunk_len = bytes
+                    .len()
+                    .min(mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES);
+                let event = driver.write_input_event(&bytes[..chunk_len]).await;
+                if let Some(written) = pane_input_written_bytes(&event)
+                    && written > 0
+                    && written < bytes.len()
+                {
+                    let existing_pending = std::mem::take(pending);
+                    pending.push_back(RuntimeSideEffect::PaneProcessIo {
+                        instance,
+                        effect: PaneProcessIoEffect::WriteInput {
+                            bytes: bytes[written..].to_vec(),
+                        },
+                    });
+                    pending.extend(effects);
+                    pending.extend(existing_pending);
+                    events.push(event);
+                    break;
+                }
+                event
+            }
+            RuntimeSideEffect::PaneProcessIo {
+                effect: PaneProcessIoEffect::Resize { size },
+                ..
+            } => driver.resize_event(size).await,
+            RuntimeSideEffect::PaneProcessIo {
+                effect: PaneProcessIoEffect::Terminate { force },
+                ..
+            } => driver.terminate_event(force).await,
             RuntimeSideEffect::WritePaneInput { pane_id, bytes }
             | RuntimeSideEffect::WritePaneInputPriority { pane_id, bytes } => {
                 if bytes.is_empty() {
@@ -290,4 +344,16 @@ where
         events.push(event);
     }
     events
+}
+
+/// Returns the accepted byte count from legacy or instance-scoped write events.
+fn pane_input_written_bytes(event: &RuntimeEvent) -> Option<usize> {
+    match event {
+        RuntimeEvent::Pane(PaneEvent::InputWritten { bytes, .. })
+        | RuntimeEvent::PaneProcess {
+            event: PaneProcessEvent::Pane(PaneEvent::InputWritten { bytes, .. }),
+            ..
+        } => Some(*bytes),
+        _ => None,
+    }
 }

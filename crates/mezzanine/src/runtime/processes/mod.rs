@@ -37,7 +37,8 @@ use super::{
 use crate::host::terminal::parse_mez_shell_transaction_osc;
 use crate::runtime::service_state::ProgramOwnedPaneTitle;
 use crate::runtime::{
-    PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
+    PaneEvent, PaneProcessInstance, PaneProcessIoEffect, ProcessEvent, RenderInvalidationReason,
+    RuntimeSideEffect, RuntimeTransition,
 };
 use mez_agent::AgentActionPayload;
 use mez_agent::semantic_patch_planning::{
@@ -62,6 +63,15 @@ use transactions::{
     RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES, RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT,
     RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS, runtime_running_shell_transaction_kind_name,
 };
+
+/// Runtime-owned identity for one process handle moved to an async adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DetachedPaneProcess {
+    /// Primary process id retained for lifecycle diagnostics and exit fencing.
+    primary_pid: u32,
+    /// Monotonic generation assigned when adapter ownership begins.
+    generation: u64,
+}
 
 /// Owns live process metadata that is private to the pane process subsystem.
 ///
@@ -112,8 +122,10 @@ pub(crate) struct RuntimeProcessComponent {
     sandboxed_shell_transaction_markers: BTreeSet<String>,
     /// Active pane output pipes keyed by their source pane id.
     active_pane_pipes: std::collections::BTreeMap<String, ActivePanePipe>,
-    /// Primary process ids for panes whose handles are adapter-owned.
-    detached_pane_primary_pids: std::collections::BTreeMap<String, u32>,
+    /// Process identity for panes whose handles are adapter-owned.
+    detached_pane_processes: std::collections::BTreeMap<String, DetachedPaneProcess>,
+    /// Next monotonic adapter-owned process generation.
+    next_detached_pane_generation: u64,
     /// Latest foreground process groups observed by pane workers.
     pane_foreground_process_groups: std::collections::BTreeMap<String, u32>,
     /// Program-owned pane title state keyed by pane id.
@@ -682,7 +694,7 @@ impl RuntimeSessionService {
             false,
         )
         .map(|update| {
-            self.process.detached_pane_primary_pids.remove(&pane_id);
+            self.process.detached_pane_processes.remove(&pane_id);
             Some(update)
         })
     }
@@ -1311,9 +1323,18 @@ impl RuntimeSessionService {
             .process
             .pane_processes
             .take_running_pane_process(pane_id)?;
-        self.process
-            .detached_pane_primary_pids
-            .insert(pane_id.to_string(), primary_pid);
+        self.process.next_detached_pane_generation = self
+            .process
+            .next_detached_pane_generation
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("pane process generation exhausted"))?;
+        self.process.detached_pane_processes.insert(
+            pane_id.to_string(),
+            DetachedPaneProcess {
+                primary_pid,
+                generation: self.process.next_detached_pane_generation,
+            },
+        );
         Ok(process)
     }
 
@@ -1323,10 +1344,10 @@ impl RuntimeSessionService {
     /// pane-process supervisor. Pane state remains in the runtime service while
     /// process, PTY output, input, resize, and termination ownership moves to
     /// one external adapter per returned process.
-    pub fn take_running_pane_processes_for_adapter(
+    pub fn take_running_pane_process_instances_for_adapter(
         &mut self,
         limit: usize,
-    ) -> Result<Vec<(String, PaneProcess)>> {
+    ) -> Result<Vec<(PaneProcessInstance, PaneProcess)>> {
         self.require_live()?;
         if limit == 0 {
             return Err(MezError::invalid_args(
@@ -1343,9 +1364,39 @@ impl RuntimeSessionService {
         let mut processes = Vec::with_capacity(pane_ids.len());
         for pane_id in pane_ids {
             let process = self.take_running_pane_process_for_adapter(&pane_id)?;
-            processes.push((pane_id, process));
+            let generation = self
+                .process
+                .detached_pane_processes
+                .get(&pane_id)
+                .map(|detached| detached.generation)
+                .ok_or_else(|| {
+                    MezError::invalid_state("adapter-owned pane process identity was not recorded")
+                })?;
+            processes.push((
+                PaneProcessInstance {
+                    pane_id,
+                    generation,
+                },
+                process,
+            ));
         }
         Ok(processes)
+    }
+
+    /// Removes running pane processes while retaining the legacy pane-id-only
+    /// handoff shape used by synchronous compatibility callers and fixtures.
+    #[cfg(test)]
+    pub fn take_running_pane_processes_for_adapter(
+        &mut self,
+        limit: usize,
+    ) -> Result<Vec<(String, PaneProcess)>> {
+        self.take_running_pane_process_instances_for_adapter(limit)
+            .map(|processes| {
+                processes
+                    .into_iter()
+                    .map(|(instance, process)| (instance.pane_id, process))
+                    .collect()
+            })
     }
 
     /// Restores a pane process to synchronous manager ownership after a
@@ -1358,7 +1409,7 @@ impl RuntimeSessionService {
     ) -> Result<u32> {
         self.require_live()?;
         let pane_id = pane_id.into();
-        self.process.detached_pane_primary_pids.remove(&pane_id);
+        self.process.detached_pane_processes.remove(&pane_id);
         Ok(self
             .process
             .pane_processes
@@ -1376,9 +1427,29 @@ impl RuntimeSessionService {
 
     /// Returns true when a pane's PTY/process handle is owned by an external adapter.
     pub fn pane_process_is_adapter_owned(&self, pane_id: &str) -> bool {
+        self.process.detached_pane_processes.contains_key(pane_id)
+    }
+
+    /// Returns whether an adapter event belongs to the currently owned process instance.
+    pub(crate) fn pane_process_instance_is_current(&self, instance: &PaneProcessInstance) -> bool {
         self.process
-            .detached_pane_primary_pids
-            .contains_key(pane_id)
+            .detached_pane_processes
+            .get(&instance.pane_id)
+            .is_some_and(|process| process.generation == instance.generation)
+    }
+
+    /// Returns the current adapter-owned process identity for one pane.
+    pub(crate) fn adapter_owned_pane_process_instance(
+        &self,
+        pane_id: &str,
+    ) -> Option<PaneProcessInstance> {
+        self.process
+            .detached_pane_processes
+            .get(pane_id)
+            .map(|process| PaneProcessInstance {
+                pane_id: pane_id.to_string(),
+                generation: process.generation,
+            })
     }
 
     /// Runs the primary pid for live pane process operation for this subsystem.
@@ -1392,9 +1463,9 @@ impl RuntimeSessionService {
             .primary_pid(pane_id)
             .or_else(|| {
                 self.process
-                    .detached_pane_primary_pids
+                    .detached_pane_processes
                     .get(pane_id)
-                    .copied()
+                    .map(|process| process.primary_pid)
             })
     }
 
@@ -1421,18 +1492,20 @@ impl RuntimeSessionService {
                 .pane_processes
                 .write_pane_input(pane_id, input)?);
         }
-        if self.pane_process_is_adapter_owned(pane_id) {
-            self.persistence.queue_pane_input(if priority {
-                RuntimeSideEffect::WritePaneInputPriority {
-                    pane_id: pane_id.to_string(),
-                    bytes: input.to_vec(),
-                }
-            } else {
-                RuntimeSideEffect::WritePaneInput {
-                    pane_id: pane_id.to_string(),
-                    bytes: input.to_vec(),
-                }
-            });
+        if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
+            self.persistence
+                .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect: if priority {
+                        PaneProcessIoEffect::WriteInputPriority {
+                            bytes: input.to_vec(),
+                        }
+                    } else {
+                        PaneProcessIoEffect::WriteInput {
+                            bytes: input.to_vec(),
+                        }
+                    },
+                });
             return Ok(());
         }
         Err(MezError::new(
@@ -1465,17 +1538,15 @@ impl RuntimeSessionService {
                 .terminate_pane(pane_id)
                 .map(|process| process.is_some())?);
         }
-        if self
-            .process
-            .detached_pane_primary_pids
-            .remove(pane_id)
-            .is_some()
-        {
+        if let Some(process) = self.process.detached_pane_processes.get(pane_id).copied() {
             self.persistence.queue_pane_termination(
                 pane_id.to_string(),
-                RuntimeSideEffect::TerminatePane {
-                    pane_id: pane_id.to_string(),
-                    force,
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: PaneProcessInstance {
+                        pane_id: pane_id.to_string(),
+                        generation: process.generation,
+                    },
+                    effect: PaneProcessIoEffect::Terminate { force },
                 },
             );
             return Ok(true);
@@ -1501,7 +1572,7 @@ impl RuntimeSessionService {
     /// Terminates all manager-owned and adapter-owned pane processes.
     pub(super) fn terminate_all_runtime_pane_processes(&mut self, force: bool) -> Result<usize> {
         let mut pane_ids = self.process.pane_processes.tracked_pane_ids();
-        pane_ids.extend(self.process.detached_pane_primary_pids.keys().cloned());
+        pane_ids.extend(self.process.detached_pane_processes.keys().cloned());
         self.terminate_runtime_pane_processes(pane_ids.iter().map(String::as_str), force)
     }
 

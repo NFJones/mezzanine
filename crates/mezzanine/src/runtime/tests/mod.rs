@@ -218,6 +218,14 @@ impl RuntimeSideEffectTestExt for RuntimeSideEffect {
         match self {
             RuntimeSideEffect::WritePaneInput { pane_id, bytes } => (pane_id, bytes, false),
             RuntimeSideEffect::WritePaneInputPriority { pane_id, bytes } => (pane_id, bytes, true),
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: crate::runtime::PaneProcessIoEffect::WriteInput { bytes },
+            } => (&instance.pane_id, bytes, false),
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: crate::runtime::PaneProcessIoEffect::WriteInputPriority { bytes },
+            } => (&instance.pane_id, bytes, true),
             effect => panic!("expected pane-input side effect, got {effect:?}"),
         }
     }
@@ -232,6 +240,11 @@ fn pane_input_effects(effects: &[RuntimeSideEffect]) -> Vec<&RuntimeSideEffect> 
                 effect,
                 RuntimeSideEffect::WritePaneInput { .. }
                     | RuntimeSideEffect::WritePaneInputPriority { .. }
+                    | RuntimeSideEffect::PaneProcessIo {
+                        effect: crate::runtime::PaneProcessIoEffect::WriteInput { .. }
+                            | crate::runtime::PaneProcessIoEffect::WriteInputPriority { .. },
+                        ..
+                    }
             )
         })
         .collect()

@@ -17,7 +17,9 @@ use crate::host::terminal::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalFdInterest,
     plan_attached_terminal_client_step,
 };
-use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition};
+use crate::runtime::{
+    PaneProcessIoEffect, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
+};
 
 impl RuntimeSessionService {
     /// Returns the compact approval label shown in the pane agent status area.
@@ -42,6 +44,21 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .get(&pane_id)
             .is_some_and(|session| session.visibility == AgentShellVisibility::Visible))
+    }
+
+    /// Builds deferred pane input for the owner currently responsible for the PTY.
+    ///
+    /// Adapter-owned processes require their exact generation so an older worker
+    /// cannot consume input intended for a replacement process with the same pane id.
+    fn deferred_pane_input_effect(&self, pane_id: String, bytes: Vec<u8>) -> RuntimeSideEffect {
+        if let Some(instance) = self.adapter_owned_pane_process_instance(&pane_id) {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: PaneProcessIoEffect::WriteInput { bytes },
+            }
+        } else {
+            RuntimeSideEffect::WritePaneInput { pane_id, bytes }
+        }
     }
 
     /// Reports whether the focused pane is waiting for an agent turn to stop before exit.
@@ -409,10 +426,10 @@ impl RuntimeSessionService {
                                     .copy
                                     .scrollback_copy_mode_panes
                                     .remove(descriptor.pane_id.as_str());
-                                pane_input_effects.push(RuntimeSideEffect::WritePaneInput {
-                                    pane_id: descriptor.pane_id.to_string(),
-                                    bytes: input.clone(),
-                                });
+                                pane_input_effects.push(self.deferred_pane_input_effect(
+                                    descriptor.pane_id.to_string(),
+                                    input.clone(),
+                                ));
                                 report.forwarded_bytes =
                                     report.forwarded_bytes.saturating_add(input.len());
                             }
@@ -449,10 +466,10 @@ impl RuntimeSessionService {
                             .copy
                             .scrollback_copy_mode_panes
                             .remove(descriptor.pane_id.as_str());
-                        pane_input_effects.push(RuntimeSideEffect::WritePaneInput {
-                            pane_id: descriptor.pane_id.to_string(),
-                            bytes: input.clone(),
-                        });
+                        pane_input_effects.push(self.deferred_pane_input_effect(
+                            descriptor.pane_id.to_string(),
+                            input.clone(),
+                        ));
                         report.forwarded_bytes = report.forwarded_bytes.saturating_add(input.len());
                     } else {
                         let dispatch = self.write_input_to_pane_descriptor(

@@ -12,6 +12,7 @@ use super::{
     ShutdownEvent, Size, TimerEvent, provider_error_retry_class_from_parts,
     provider_event_error_from_parts, provider_event_error_kind,
 };
+use crate::runtime::PaneProcessEvent;
 
 impl AsyncRuntimeSessionActor {
     /// Runs the notify message delivery operation for this subsystem.
@@ -178,6 +179,23 @@ impl AsyncRuntimeSessionActor {
         event: RuntimeEvent,
     ) -> Result<RuntimeTransition> {
         match event {
+            RuntimeEvent::PaneProcess { instance, event } => {
+                if !self.service.pane_process_instance_is_current(&instance) {
+                    return Ok(RuntimeTransition {
+                        applied: false,
+                        side_effects: Vec::new(),
+                    });
+                }
+                match event {
+                    PaneProcessEvent::Pane(pane_event) => {
+                        Box::pin(self.apply_runtime_event(RuntimeEvent::Pane(pane_event))).await
+                    }
+                    PaneProcessEvent::Process(process_event) => {
+                        Box::pin(self.apply_runtime_event(RuntimeEvent::Process(process_event)))
+                            .await
+                    }
+                }
+            }
             RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }) => {
                 let byte_count = bytes.len();
                 let pane_id_for_pipe_health = pane_id.clone();

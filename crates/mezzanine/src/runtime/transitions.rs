@@ -19,6 +19,40 @@ use mez_mux::presentation::AttachedTerminalOutputModes;
 use mez_terminal::TerminalStyleSpan;
 use std::path::PathBuf;
 
+/// Stable identity for one adapter-owned pane process instance.
+///
+/// Pane ids may be reused while an older async worker is still shutting down.
+/// The generation distinguishes those overlapping ownership lifetimes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PaneProcessInstance {
+    /// Pane whose process is owned by the adapter.
+    pub pane_id: String,
+    /// Monotonic runtime-assigned process generation.
+    pub generation: u64,
+}
+
+/// One I/O operation targeted to an exact adapter-owned pane process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneProcessIoEffect {
+    /// Write ordinary input bytes.
+    WriteInput { bytes: Vec<u8> },
+    /// Write input bytes ahead of already queued input for this instance.
+    WriteInputPriority { bytes: Vec<u8> },
+    /// Resize this process's PTY.
+    Resize { size: Size },
+    /// Terminate this exact process instance.
+    Terminate { force: bool },
+}
+
+/// Pane-process event carrying the instance identity assigned at handoff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneProcessEvent {
+    /// PTY output or completion from one pane worker.
+    Pane(PaneEvent),
+    /// Lifecycle output from one pane worker.
+    Process(ProcessEvent),
+}
+
 /// Source of a runtime event entering the single-owner session actor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeEvent {
@@ -29,6 +63,13 @@ pub enum RuntimeEvent {
     Pane(PaneEvent),
     /// A process lifecycle observer reported spawn, exit, or failure state.
     Process(ProcessEvent),
+    /// An adapter-owned pane process emitted an instance-scoped event.
+    PaneProcess {
+        /// Exact adapter ownership lifetime that emitted the event.
+        instance: PaneProcessInstance,
+        /// Pane or process event produced by that worker.
+        event: PaneProcessEvent,
+    },
     /// An agent provider task completed or failed outside the runtime actor.
     AgentProvider(AgentProviderEvent),
     /// A model-backed conversation compaction completed or failed outside the
@@ -58,6 +99,7 @@ impl RuntimeEvent {
             Self::Client(_) => "client",
             Self::Pane(_) => "pane",
             Self::Process(_) => "process",
+            Self::PaneProcess { .. } => "pane_process",
             Self::AgentProvider(_) => "agent_provider",
             Self::AgentCompaction(_) => "agent_compaction",
             Self::AgentRemember(_) => "agent_remember",
@@ -436,6 +478,13 @@ pub struct ShutdownEvent {
 /// Side-effect request emitted by the runtime actor after handling events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeSideEffect {
+    /// Execute pane I/O only for the exact adapter ownership lifetime.
+    PaneProcessIo {
+        /// Exact pane process targeted by the operation.
+        instance: PaneProcessInstance,
+        /// I/O operation to execute.
+        effect: PaneProcessIoEffect,
+    },
     /// Write bytes to a pane PTY.
     WritePaneInput {
         /// Stores the pane id value for this data structure.
@@ -761,12 +810,26 @@ impl RuntimeEventBatch {
 const fn runtime_event_application_priority(event: &RuntimeEvent) -> u8 {
     match event {
         RuntimeEvent::Shutdown(_) | RuntimeEvent::Process(_) => 0,
+        RuntimeEvent::PaneProcess {
+            event: PaneProcessEvent::Process(_),
+            ..
+        } => 0,
         RuntimeEvent::Pane(PaneEvent::Output { .. })
         | RuntimeEvent::Pane(PaneEvent::InputWritten { .. })
-        | RuntimeEvent::Pane(PaneEvent::Resized { .. }) => 1,
+        | RuntimeEvent::Pane(PaneEvent::Resized { .. })
+        | RuntimeEvent::PaneProcess {
+            event:
+                PaneProcessEvent::Pane(
+                    PaneEvent::Output { .. }
+                    | PaneEvent::InputWritten { .. }
+                    | PaneEvent::Resized { .. },
+                ),
+            ..
+        } => 1,
         RuntimeEvent::Timer(_) => 3,
         RuntimeEvent::Client(_)
         | RuntimeEvent::Pane(_)
+        | RuntimeEvent::PaneProcess { .. }
         | RuntimeEvent::AgentProvider(_)
         | RuntimeEvent::AgentCompaction(_)
         | RuntimeEvent::AgentRemember(_)

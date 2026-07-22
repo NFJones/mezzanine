@@ -49,6 +49,111 @@ async fn async_actor_applies_pane_output_events_to_rendered_view() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies pane output and queued I/O are fenced by the exact process
+/// generation after async ownership begins.
+///
+/// A replacement process can reuse the same pane id while the prior worker is
+/// still draining. Output from a stale generation must not mutate the current
+/// screen, and one generation must not consume another generation's input or
+/// termination effects.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_fences_stale_pane_process_generations() {
+    let mut service = test_service();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut processes = handle
+            .take_running_pane_process_instances_for_adapter(8)
+            .await
+            .unwrap();
+        let (current, mut process) = processes.pop().unwrap();
+        let stale = PaneProcessInstance {
+            pane_id: current.pane_id.clone(),
+            generation: current.generation.saturating_add(1),
+        };
+
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::PaneProcess {
+            instance: stale.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::Output {
+                pane_id: stale.pane_id.clone(),
+                bytes: b"stale-generation-output\n".to_vec(),
+            }),
+        });
+        batch.push(RuntimeEvent::PaneProcess {
+            instance: current.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::Output {
+                pane_id: current.pane_id.clone(),
+                bytes: b"current-generation-output\n".to_vec(),
+            }),
+        });
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.accepted, 2);
+        assert_eq!(report.applied, 1);
+
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: stale.clone(),
+                    effect: PaneProcessIoEffect::Terminate { force: true },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: current.clone(),
+                    effect: PaneProcessIoEffect::WriteInput {
+                        bytes: b"current-input".to_vec(),
+                    },
+                },
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(current.clone(), 8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::PaneProcessIo {
+                instance: current.clone(),
+                effect: PaneProcessIoEffect::WriteInput {
+                    bytes: b"current-input".to_vec(),
+                },
+            }]
+        );
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(stale.clone(), 8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::PaneProcessIo {
+                instance: stale,
+                effect: PaneProcessIoEffect::Terminate { force: true },
+            }]
+        );
+
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+        let _ = process.terminate(Duration::from_millis(10));
+        current.pane_id
+    };
+
+    let (pane_id, mut exit) = tokio::join!(client, actor.run());
+    let content = exit
+        .service
+        .pane_screen(&pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(content.contains("current-generation-output"), "{content:?}");
+    assert!(!content.contains("stale-generation-output"), "{content:?}");
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that foreground process metadata from an async pane worker updates
 /// pane title state through the actor. This protects automatic title refresh
 /// after live PTY ownership has moved out of the synchronous manager.
@@ -510,8 +615,8 @@ async fn async_actor_forced_shutdown_terminates_worker_owned_panes() {
         RuntimeLifecycleState::Killed
     );
     assert!(
-        !exit.service.pane_process_is_adapter_owned(&pane_id),
-        "forced shutdown must release async ownership after queuing worker termination"
+        exit.service.pane_process_is_adapter_owned(&pane_id),
+        "forced shutdown must retain the terminating process generation until its exit settles"
     );
     assert!(exit.service.session().windows().is_empty());
 }
@@ -535,11 +640,11 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
 
     let client = async {
         let mut processes = handle
-            .take_running_pane_processes_for_adapter(8)
+            .take_running_pane_process_instances_for_adapter(8)
             .await
             .unwrap();
         assert_eq!(processes.len(), 1);
-        let (pane_id, mut process) = processes.pop().unwrap();
+        let (instance, mut process) = processes.pop().unwrap();
         let step = AttachedTerminalClientStepPlan {
             actions: vec![TerminalClientLoopAction::ForwardToPane(b"hello\n".to_vec())],
             output_lines: Vec::new(),
@@ -555,12 +660,14 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
         assert_eq!(application.forwarded_bytes, 6);
         assert_eq!(
             handle
-                .drain_pane_io_side_effects(pane_id.as_str(), 8)
+                .drain_pane_process_io_side_effects(instance.clone(), 8)
                 .await
                 .unwrap(),
-            vec![RuntimeSideEffect::WritePaneInput {
-                pane_id,
-                bytes: b"hello\n".to_vec(),
+            vec![RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: PaneProcessIoEffect::WriteInput {
+                    bytes: b"hello\n".to_vec(),
+                },
             }]
         );
         let _ = process.terminate(Duration::from_millis(10));

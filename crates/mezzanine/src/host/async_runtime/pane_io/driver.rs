@@ -1,6 +1,9 @@
 //! Generic async pane backend contract and per-pane event driver.
 
-use super::{MezError, PaneEvent, ProcessEvent, Result, RuntimeEvent, Size};
+use super::{
+    MezError, PaneEvent, PaneProcessEvent, PaneProcessInstance, ProcessEvent, Result, RuntimeEvent,
+    Size,
+};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -94,6 +97,8 @@ pub struct AsyncPaneProcessDriver<B> {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pane_id: String,
+    /// Exact adapter-owned process lifetime for production workers.
+    process_instance: Option<PaneProcessInstance>,
     /// Stores the backend value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -127,15 +132,45 @@ impl<B> AsyncPaneProcessDriver<B> {
         }
         Ok(Self {
             pane_id,
+            process_instance: None,
             backend,
             config,
             exit_reported: false,
         })
     }
 
+    /// Creates a production driver bound to one adapter-owned process instance.
+    pub fn new_for_instance(
+        instance: PaneProcessInstance,
+        backend: B,
+        config: AsyncPaneProcessDriverConfig,
+    ) -> Result<Self> {
+        let mut driver = Self::new(instance.pane_id.clone(), backend, config)?;
+        driver.process_instance = Some(instance);
+        Ok(driver)
+    }
+
     /// Returns the pane identity owned by this driver.
     pub fn pane_id(&self) -> &str {
         &self.pane_id
+    }
+
+    /// Returns the exact adapter-owned process identity when assigned.
+    pub(super) fn process_instance(&self) -> Option<&PaneProcessInstance> {
+        self.process_instance.as_ref()
+    }
+
+    /// Wraps a worker event with its process generation when one is assigned.
+    pub(super) fn scope_event(&self, event: RuntimeEvent) -> RuntimeEvent {
+        let Some(instance) = self.process_instance.clone() else {
+            return event;
+        };
+        let event = match event {
+            RuntimeEvent::Pane(event) => PaneProcessEvent::Pane(event),
+            RuntimeEvent::Process(event) => PaneProcessEvent::Process(event),
+            other => return other,
+        };
+        RuntimeEvent::PaneProcess { instance, event }
     }
 
     /// Waits for backend output activity when the backend can signal it.
@@ -170,10 +205,12 @@ where
         if bytes.is_empty() {
             return Ok(None);
         }
-        Ok(Some(RuntimeEvent::Pane(PaneEvent::Output {
-            pane_id: self.pane_id.clone(),
-            bytes,
-        })))
+        Ok(Some(self.scope_event(RuntimeEvent::Pane(
+            PaneEvent::Output {
+                pane_id: self.pane_id.clone(),
+                bytes,
+            },
+        ))))
     }
 
     /// Polls one process-exit event from the pane backend.
@@ -187,7 +224,7 @@ where
         if matches!(event, ProcessEvent::Exited { .. }) {
             self.exit_reported = true;
         }
-        Ok(Some(RuntimeEvent::Process(event)))
+        Ok(Some(self.scope_event(RuntimeEvent::Process(event))))
     }
 
     /// Polls one foreground-process metadata event from the pane backend.
@@ -195,19 +232,21 @@ where
         let Some(metadata) = self.backend.foreground_process().await? else {
             return Ok(None);
         };
-        Ok(Some(RuntimeEvent::Pane(PaneEvent::ForegroundProcess {
-            pane_id: self.pane_id.clone(),
-            process_name: metadata.process_name,
-            process_group_id: metadata.process_group_id,
-            current_working_directory: metadata
-                .current_working_directory
-                .map(|path| path.to_string_lossy().to_string()),
-        })))
+        Ok(Some(
+            self.scope_event(RuntimeEvent::Pane(PaneEvent::ForegroundProcess {
+                pane_id: self.pane_id.clone(),
+                process_name: metadata.process_name,
+                process_group_id: metadata.process_group_id,
+                current_working_directory: metadata
+                    .current_working_directory
+                    .map(|path| path.to_string_lossy().to_string()),
+            })),
+        ))
     }
 
     /// Writes input and returns the resulting pane I/O event.
     pub async fn write_input_event(&mut self, bytes: &[u8]) -> RuntimeEvent {
-        match self.backend.write_input(bytes).await {
+        let event = match self.backend.write_input(bytes).await {
             Ok(0) => RuntimeEvent::Pane(PaneEvent::WriteFailed {
                 pane_id: self.pane_id.clone(),
                 error: "InvalidState: pane PTY write accepted zero bytes".to_string(),
@@ -220,12 +259,13 @@ where
                 pane_id: self.pane_id.clone(),
                 error: error.to_string(),
             }),
-        }
+        };
+        self.scope_event(event)
     }
 
     /// Resizes the pane PTY and returns the resulting pane I/O event.
     pub async fn resize_event(&mut self, size: Size) -> RuntimeEvent {
-        match self.backend.resize(size).await {
+        let event = match self.backend.resize(size).await {
             Ok(()) => RuntimeEvent::Pane(PaneEvent::Resized {
                 pane_id: self.pane_id.clone(),
                 size,
@@ -234,7 +274,8 @@ where
                 pane_id: self.pane_id.clone(),
                 error: error.to_string(),
             }),
-        }
+        };
+        self.scope_event(event)
     }
 
     /// Terminates the pane process and returns the lifecycle event.
@@ -249,6 +290,6 @@ where
         if matches!(event, RuntimeEvent::Process(ProcessEvent::Exited { .. })) {
             self.exit_reported = true;
         }
-        event
+        self.scope_event(event)
     }
 }

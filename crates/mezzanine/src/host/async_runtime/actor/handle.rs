@@ -600,16 +600,52 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Drains pane I/O effects targeted to one exact process instance.
+    pub async fn drain_pane_process_io_side_effects(
+        &self,
+        instance: crate::runtime::PaneProcessInstance,
+        limit: usize,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        self.request(|reply| AsyncRuntimeRequest::DrainPaneProcessIoSideEffects {
+            instance,
+            limit,
+            reply,
+        })
+        .await?
+    }
+
     /// Moves running pane process handles out of the serialized runtime owner
     /// so external pane process adapters can own PTY I/O.
-    pub async fn take_running_pane_processes_for_adapter(
+    pub async fn take_running_pane_process_instances_for_adapter(
         &self,
         limit: usize,
-    ) -> Result<Vec<(String, crate::host::async_runtime::PaneProcess)>> {
+    ) -> Result<
+        Vec<(
+            crate::runtime::PaneProcessInstance,
+            crate::host::async_runtime::PaneProcess,
+        )>,
+    > {
         self.request(
             |reply| AsyncRuntimeRequest::TakeRunningPaneProcessesForAdapter { limit, reply },
         )
         .await?
+    }
+
+    /// Moves running pane processes while retaining the legacy pane-id-only
+    /// handoff shape used by compatibility tests.
+    #[cfg(test)]
+    pub async fn take_running_pane_processes_for_adapter(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, crate::host::async_runtime::PaneProcess)>> {
+        self.take_running_pane_process_instances_for_adapter(limit)
+            .await
+            .map(|processes| {
+                processes
+                    .into_iter()
+                    .map(|(instance, process)| (instance.pane_id, process))
+                    .collect()
+            })
     }
 
     /// Runs the shutdown operation for this subsystem.

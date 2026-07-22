@@ -14,7 +14,7 @@ use super::{
 use super::{
     AsyncPaneProcessSupervisorServiceConfig, AsyncPaneProcessSupervisorServiceReport,
     AsyncRuntimeService, AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, HashSet, JoinSet,
-    Result, RuntimeLifecycleState, is_terminal_runtime_lifecycle_state,
+    PaneProcessInstance, Result, RuntimeLifecycleState, is_terminal_runtime_lifecycle_state,
 };
 
 /// Builds an auxiliary service for the combined async pane process path.
@@ -65,7 +65,7 @@ where
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut report = AsyncPaneProcessSupervisorServiceReport::new(*lifecycle_watcher.borrow());
-    let mut active_panes = HashSet::<String>::new();
+    let mut active_panes = HashSet::<PaneProcessInstance>::new();
     let mut workers = JoinSet::new();
 
     while report.polls < config.max_polls {
@@ -96,7 +96,7 @@ where
         report.polls = report.polls.saturating_add(1);
         let mut made_progress = false;
         let processes = match handle
-            .take_running_pane_processes_for_adapter(config.take_limit)
+            .take_running_pane_process_instances_for_adapter(config.take_limit)
             .await
         {
             Ok(processes) => processes,
@@ -107,12 +107,12 @@ where
             }
             Err(error) => return Err(error),
         };
-        for (pane_id, process) in processes {
-            active_panes.insert(pane_id.clone());
+        for (instance, process) in processes {
+            active_panes.insert(instance.clone());
             spawn_owned_pane_process_worker(
                 &mut workers,
                 handle.clone(),
-                pane_id,
+                instance,
                 process,
                 config.pane_service,
             )?;

@@ -2,7 +2,8 @@
 
 use super::coalesce::{
     async_runtime_current_unix_millis, coalesce_render_invalidation_reason,
-    pane_io_side_effect_targets_pane, timer_side_effect_targets_timer_worker,
+    pane_io_side_effect_targets_instance, pane_io_side_effect_targets_pane,
+    timer_side_effect_targets_timer_worker,
 };
 use super::{
     AsyncRenderedClientFlush, AsyncRuntimeSessionActor, AttachedTerminalOutputModes, ClientId,
@@ -354,6 +355,67 @@ impl AsyncRuntimeSessionActor {
         let mut retained = VecDeque::with_capacity(self.side_effects.len());
         while let Some(effect) = self.side_effects.pop_front() {
             if drained.len() < limit && pane_io_side_effect_targets_pane(&effect, pane_id) {
+                drained.push(effect);
+            } else {
+                retained.push_back(effect);
+            }
+        }
+        self.side_effects = retained;
+        self.record_side_effect_drain(drained.len());
+        Ok(drained
+            .into_iter()
+            .map(|effect| match effect {
+                RuntimeSideEffect::PaneProcessIo { instance, effect } => match effect {
+                    crate::runtime::PaneProcessIoEffect::WriteInput { bytes } => {
+                        RuntimeSideEffect::WritePaneInput {
+                            pane_id: instance.pane_id,
+                            bytes,
+                        }
+                    }
+                    crate::runtime::PaneProcessIoEffect::WriteInputPriority { bytes } => {
+                        RuntimeSideEffect::WritePaneInputPriority {
+                            pane_id: instance.pane_id,
+                            bytes,
+                        }
+                    }
+                    crate::runtime::PaneProcessIoEffect::Resize { size } => {
+                        RuntimeSideEffect::ResizePane {
+                            pane_id: instance.pane_id,
+                            size,
+                        }
+                    }
+                    crate::runtime::PaneProcessIoEffect::Terminate { force } => {
+                        RuntimeSideEffect::TerminatePane {
+                            pane_id: instance.pane_id,
+                            force,
+                        }
+                    }
+                },
+                effect => effect,
+            })
+            .collect())
+    }
+
+    /// Drains pane I/O side effects for one exact adapter-owned process.
+    pub(super) fn drain_pane_process_io_side_effects(
+        &mut self,
+        instance: &crate::runtime::PaneProcessInstance,
+        limit: usize,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        if instance.pane_id.trim().is_empty() || instance.generation == 0 {
+            return Err(MezError::invalid_args(
+                "async runtime pane process identity must be complete",
+            ));
+        }
+        if limit == 0 {
+            return Err(MezError::invalid_args(
+                "async runtime pane process I/O drain limit must be greater than zero",
+            ));
+        }
+        let mut drained = Vec::new();
+        let mut retained = VecDeque::with_capacity(self.side_effects.len());
+        while let Some(effect) = self.side_effects.pop_front() {
+            if drained.len() < limit && pane_io_side_effect_targets_instance(&effect, instance) {
                 drained.push(effect);
             } else {
                 retained.push_back(effect);

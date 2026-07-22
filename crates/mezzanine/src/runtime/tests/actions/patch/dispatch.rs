@@ -219,7 +219,8 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
         PaneReadinessState::Ready | PaneReadinessState::Busy
     ));
 
-    for _ in 0..900 {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.running_shell_transactions_for_tests().is_empty() {
             break;

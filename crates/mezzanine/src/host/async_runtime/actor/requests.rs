@@ -565,8 +565,18 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(self.drain_pane_io_side_effects(&pane_id, limit));
                 false
             }
+            AsyncRuntimeRequest::DrainPaneProcessIoSideEffects {
+                instance,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(self.drain_pane_process_io_side_effects(&instance, limit));
+                false
+            }
             AsyncRuntimeRequest::TakeRunningPaneProcessesForAdapter { limit, reply } => {
-                let result = self.service.take_running_pane_processes_for_adapter(limit);
+                let result = self
+                    .service
+                    .take_running_pane_process_instances_for_adapter(limit);
                 let _ = reply.send(result);
                 false
             }
