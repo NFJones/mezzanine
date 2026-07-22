@@ -277,12 +277,11 @@ async fn monitor_runtime_agent_provider_dispatch(
     )? {
         return Ok(None);
     }
-    let worker = execute_runtime_agent_provider_dispatch(dispatch, None);
-    tokio::pin!(worker);
+    let mut worker = tokio::spawn(execute_runtime_agent_provider_dispatch(dispatch, None));
     loop {
         tokio::select! {
             result = &mut worker => {
-                return Ok(Some(provider_worker_event(agent_id, turn_id, Ok(result))));
+                return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -296,12 +295,14 @@ async fn monitor_runtime_agent_provider_dispatch(
         }
         let lifecycle_state = *lifecycle.borrow();
         if is_terminal_runtime_lifecycle_state(lifecycle_state) {
+            worker.abort();
             return Ok(None);
         }
         if !classify_provider_monitor_liveness(
             handle.agent_turn_is_running(&turn_id).await,
             &lifecycle,
         )? {
+            worker.abort();
             return Ok(None);
         }
     }
@@ -971,5 +972,45 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
         MezErrorKind::NotFound => "not_found",
         MezErrorKind::Forbidden => "forbidden",
         MezErrorKind::NotImplemented => "not_implemented",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies a provider execution panic becomes a failed-turn event rather
+    /// than escaping the monitor task that owns daemon service supervision.
+    #[tokio::test]
+    async fn provider_worker_panic_becomes_failed_turn_event() {
+        let worker: tokio::task::JoinHandle<Result<RuntimeAgentProviderWorkerOutcome>> =
+            tokio::spawn(async {
+                panic!("injected provider execution panic");
+            });
+
+        let (event, completed) = provider_worker_event(
+            AgentId::opaque("agent-panic").unwrap(),
+            "turn-panic".to_string(),
+            worker.await,
+        );
+
+        assert!(!completed);
+        let RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
+            agent_id,
+            turn_id,
+            kind,
+            message,
+            provider_failure_json,
+            provider_raw_text,
+        }) = event
+        else {
+            panic!("provider panic should produce a failed event");
+        };
+        assert_eq!(agent_id.as_str(), "agent-panic");
+        assert_eq!(turn_id, "turn-panic");
+        assert_eq!(kind, "invalid_state");
+        assert!(message.contains("provider worker join failed"), "{message}");
+        assert!(provider_failure_json.is_none());
+        assert!(provider_raw_text.is_none());
     }
 }
