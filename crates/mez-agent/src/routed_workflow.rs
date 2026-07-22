@@ -18,6 +18,12 @@ pub const ROUTED_HANDOFF_VERSION: u32 = 1;
 /// Maximum serialized size accepted for one routed-worker handoff.
 pub const ROUTED_HANDOFF_MAX_BYTES: usize = 16 * 1024;
 
+/// Maximum invalid handoff output retained for one repair request.
+const ROUTED_HANDOFF_REPAIR_EXCERPT_MAX_BYTES: usize = 4 * 1024;
+
+/// Marker appended when invalid handoff output is truncated for repair.
+const ROUTED_HANDOFF_REPAIR_TRUNCATION_MARKER: &str = "\n[truncated routed handoff output]";
+
 /// Maximum number of corrective handoff requests allowed after invalid output.
 pub const ROUTED_HANDOFF_REPAIR_LIMIT: u8 = 1;
 
@@ -407,6 +413,12 @@ pub fn routed_worker_seed_context(
 /// typed fields, unknown fields, unsupported versions, and payloads over the
 /// fixed byte bound return a stable diagnostic.
 pub fn parse_routed_worker_handoff(output: &str) -> Result<RoutedWorkerHandoff, String> {
+    if output.len() > ROUTED_HANDOFF_MAX_BYTES {
+        return Err(format!(
+            "routed handoff is {} bytes; maximum is {ROUTED_HANDOFF_MAX_BYTES}",
+            output.len()
+        ));
+    }
     let trimmed = output.trim();
     let json = trimmed
         .strip_prefix("```json")
@@ -583,7 +595,7 @@ fn routed_handoff_repair_context_blocks(output: &str, diagnostic: &str) -> Vec<C
             source: ContextSourceKind::RoutedHandoff,
             placement: ContextPlacement::ConversationAppend,
             label: "invalid routed handoff output".to_string(),
-            content: output.to_string(),
+            content: bounded_routed_handoff_repair_excerpt(output),
         },
         ContextBlock {
             source: ContextSourceKind::RoutedHandoff,
@@ -592,6 +604,23 @@ fn routed_handoff_repair_context_blocks(output: &str, diagnostic: &str) -> Vec<C
             content: diagnostic.to_string(),
         },
     ]
+}
+
+/// Returns a UTF-8-safe bounded excerpt for handoff repair context.
+fn bounded_routed_handoff_repair_excerpt(output: &str) -> String {
+    if output.len() <= ROUTED_HANDOFF_REPAIR_EXCERPT_MAX_BYTES {
+        return output.to_string();
+    }
+
+    let mut end = ROUTED_HANDOFF_REPAIR_EXCERPT_MAX_BYTES;
+    while !output.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}{}",
+        &output[..end],
+        ROUTED_HANDOFF_REPAIR_TRUNCATION_MARKER
+    )
 }
 
 /// Classifies phase-specific child cancellation recovery.
@@ -750,7 +779,8 @@ mod tests {
     }
 
     /// Verifies handoff parsing accepts the documented fenced form while
-    /// rejecting missing fields, wrong field types, and oversized payloads.
+    /// rejecting missing fields, wrong field types, and oversized payloads
+    /// before attempting JSON deserialization.
     #[test]
     fn routed_handoff_parser_enforces_the_versioned_bounded_contract() {
         let encoded = serde_json::to_string(&handoff()).unwrap();
@@ -777,6 +807,29 @@ mod tests {
                 .unwrap_err()
                 .contains("maximum is")
         );
+        let oversized_invalid = "{".repeat(ROUTED_HANDOFF_MAX_BYTES + 1);
+        let diagnostic = parse_routed_worker_handoff(&oversized_invalid).unwrap_err();
+        assert!(diagnostic.contains("maximum is"), "{diagnostic}");
+        assert!(!diagnostic.contains("invalid routed handoff JSON"));
+    }
+
+    /// Verifies malformed handoff output retained for a repair request is
+    /// bounded, UTF-8 safe, and explicitly marked when truncated.
+    #[test]
+    fn routed_handoff_repair_context_bounds_invalid_output() {
+        let oversized = "🦀".repeat(ROUTED_HANDOFF_MAX_BYTES);
+
+        let blocks = routed_handoff_repair_context_blocks(&oversized, "invalid JSON");
+
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[0].content.len() < oversized.len());
+        assert!(blocks[0].content.len() <= 4 * 1024 + 64);
+        assert!(
+            blocks[0]
+                .content
+                .ends_with("\n[truncated routed handoff output]")
+        );
+        assert_eq!(blocks[1].content, "invalid JSON");
     }
 
     /// Verifies worker seed projection keeps conversational evidence while
