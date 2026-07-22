@@ -251,3 +251,32 @@ fn runtime_config_reload_applies_subagent_capacity_limits() {
         "{error}"
     );
 }
+
+/// Verifies applying a new emoji-width policy rebuilds existing pane cells
+/// before later output uses the updated width. Without this rebuild, a wide
+/// warning-sign continuation cell would survive the narrow policy and make
+/// subsequent writes wrap at an obsolete column.
+#[test]
+fn runtime_config_reload_rebuilds_live_emoji_cell_footprints() {
+    let mut service = test_runtime_service();
+    let mut screen = TerminalScreen::new(Size::new(5, 2).unwrap(), 10).unwrap();
+    screen.feed("ab⚠️c".as_bytes());
+    service.set_pane_screen("%1".to_string(), screen);
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nemoji_width = \"narrow\"\n".to_string(),
+        }])
+        .unwrap();
+    let screen = service.pane_screen_mut("%1").unwrap();
+    screen.feed(b"d");
+
+    assert_eq!(screen.visible_lines()[0], "ab⚠️cd");
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 4);
+}

@@ -277,3 +277,23 @@ fn terminal_screen_restores_styled_lines_with_complete_graphemes() {
     assert_eq!(screen.visible_lines()[0], "ab⚠️cd");
     assert_eq!(screen.visible_styled_lines()[0].text, "ab⚠️cd");
 }
+
+/// Verifies a width-policy change rebuilds existing emoji footprints before
+/// later output is written. A warning sign occupies two cells under the wide
+/// policy and one under the narrow policy, so retaining its old continuation
+/// sentinel would wrap the final byte at the wrong column.
+#[test]
+fn terminal_screen_rebuilds_emoji_footprints_after_width_policy_change() {
+    crate::set_terminal_emoji_width(crate::TerminalEmojiWidth::Wide);
+    let mut screen = TerminalScreen::new(Size::new(5, 2).unwrap(), 10).unwrap();
+    screen.feed("ab⚠️c".as_bytes());
+
+    crate::set_terminal_emoji_width(crate::TerminalEmojiWidth::Narrow);
+    screen.rebuild_for_width_policy_change();
+    screen.feed(b"d");
+
+    assert_eq!(screen.visible_lines()[0], "ab⚠️cd");
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 4);
+    crate::set_terminal_emoji_width(crate::TerminalEmojiWidth::Wide);
+}

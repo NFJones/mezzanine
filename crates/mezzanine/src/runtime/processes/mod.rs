@@ -327,7 +327,16 @@ impl RuntimeSessionService {
             terminal_term,
             terminal_shell_output_preview_lines: shell_output_preview_lines,
         };
+        let emoji_width_changed = mez_terminal::terminal_emoji_width() != terminal_emoji_width;
         mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
+        if emoji_width_changed {
+            for screen in self.process.pane_screens.values_mut() {
+                screen.rebuild_for_width_policy_change();
+            }
+            for screen in self.process.pane_transaction_osc_screens.values_mut() {
+                screen.rebuild_for_width_policy_change();
+            }
+        }
         Ok(())
     }
 

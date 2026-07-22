@@ -172,6 +172,29 @@ impl TerminalScreen {
         self.resize_normal_screen_reflowing(size);
     }
 
+    /// Rebuilds visible cell footprints after the terminal width policy changes.
+    ///
+    /// Emoji-width policy is process-wide, while leading cells and continuation
+    /// sentinels retain the width that was active when output was parsed. This
+    /// reflows the live buffer at its current dimensions so later writes,
+    /// cursor reports, and resizes all use one consistent footprint model.
+    pub fn rebuild_for_width_policy_change(&mut self) {
+        let size = self.size;
+        // A delayed wrap records that the previous width policy filled the
+        // final cell. Recompute the cursor from the rebuilt footprint instead
+        // of carrying that policy-specific boundary into future output.
+        self.wrap_pending = false;
+        if self.alternate.active() || self.normal_viewport_detached_from_history {
+            self.resize_detached_normal_screen(size);
+            return;
+        }
+        if self.normal_screen_viewport_is_cleared() {
+            self.resize_grid_preserving_cells(size);
+            return;
+        }
+        self.resize_normal_screen_reflowing(size);
+    }
+
     /// Resizes the live alternate screen without recording application content
     /// in normal-screen history.
     ///
