@@ -557,6 +557,101 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies the Save prompt completes relative paths against the owning pane
+/// directory and accepts the selected literal path without shell escaping.
+///
+/// Record-browser exports must not resolve completion candidates against the
+/// Mezzanine process directory because a pane can be operating in a different
+/// project. The accepted completion must also be the path submitted to the
+/// existing pane-relative save boundary.
+#[test]
+fn runtime_record_browser_save_prompt_completes_against_pane_directory() {
+    let root = temp_root("runtime-record-browser-save-completion");
+    let _ = fs::remove_dir_all(&root);
+    let pane_root = root.join("pane");
+    fs::create_dir_all(&pane_root).unwrap();
+    fs::write(pane_root.join("report.md"), "existing").unwrap();
+    fs::write(pane_root.join("report.txt"), "existing").unwrap();
+
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service.set_pane_current_working_directory(pane_id.clone(), pane_root.clone());
+    let browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![mez_mux::record_browser::RecordBrowserRecord {
+            id: "issue-1".to_string(),
+            open_command: None,
+            title: "First issue".to_string(),
+            metadata: Vec::new(),
+            markdown: "Body".to_string(),
+        }],
+        Vec::new(),
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"s");
+    apply_record_browser_input(&mut service, &primary, b"rep");
+    apply_record_browser_input(&mut service, &primary, b"\t");
+
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.prompt())
+            .map(|prompt| match prompt {
+                mez_mux::record_browser::RecordBrowserPrompt::Save { input } => input.clone(),
+                _ => String::new(),
+            }),
+        Some("report.md".to_string())
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"\t");
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.prompt())
+            .map(|prompt| match prompt {
+                mez_mux::record_browser::RecordBrowserPrompt::Save { input } => input.clone(),
+                _ => String::new(),
+            }),
+        Some("report.txt".to_string())
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[Z");
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.prompt())
+            .map(|prompt| match prompt {
+                mez_mux::record_browser::RecordBrowserPrompt::Save { input } => input.clone(),
+                _ => String::new(),
+            }),
+        Some("report.md".to_string())
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    assert!(pane_root.join("report.md").is_file());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Sends one key sequence through the attached terminal into the active pager.
 fn apply_record_browser_input(
     service: &mut RuntimeSessionService,

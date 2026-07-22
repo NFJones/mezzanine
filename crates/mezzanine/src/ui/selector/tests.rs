@@ -3,7 +3,8 @@
 use super::{
     SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
     plan_selector, plan_selector_with_extra, plan_selector_with_extra_in_working_directory,
-    shadow_hint, shadow_hint_with_extra, start_active_selector,
+    record_browser_save_path_candidates, shadow_hint, shadow_hint_with_extra,
+    start_active_selector,
 };
 use mez_mux::selector::apply_selector_candidate;
 use std::fs;
@@ -189,6 +190,39 @@ fn selector_plans_path_candidates_from_explicit_working_directory() {
             .iter()
             .any(|candidate| candidate.value == "src/selector.rs")
     );
+}
+
+/// Verifies record-browser Save completion uses the supplied pane directory
+/// and keeps literal filesystem names intact.
+///
+/// Save paths go straight to filesystem APIs rather than a shell, so paths
+/// containing spaces must remain unescaped. Hidden entries remain opt-in, and
+/// directory candidates retain their continuation slash.
+#[test]
+fn record_browser_save_path_candidates_are_literal_and_pane_relative() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-record-browser-save-paths-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("dir with spaces")).unwrap();
+    fs::write(root.join("report file.md"), "report").unwrap();
+    fs::write(root.join(".hidden.md"), "hidden").unwrap();
+
+    let visible = record_browser_save_path_candidates("", Some(root.as_path()));
+    let hidden = record_browser_save_path_candidates(".", Some(root.as_path()));
+    let _ = fs::remove_dir_all(&root);
+
+    let visible = visible
+        .into_iter()
+        .map(|candidate| candidate.value)
+        .collect::<Vec<_>>();
+    let hidden = hidden
+        .into_iter()
+        .map(|candidate| candidate.value)
+        .collect::<Vec<_>>();
+    assert_eq!(visible, vec!["dir with spaces/", "report file.md"]);
+    assert_eq!(hidden, vec![".hidden.md"]);
 }
 
 /// Verifies first-token agent shell input still plans filesystem

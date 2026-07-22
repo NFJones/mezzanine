@@ -30,6 +30,7 @@ pub use api::{
 };
 use command_catalog::{canonical_agent_command, selector_candidates};
 use filesystem::path_candidates;
+pub use filesystem::record_browser_save_path_candidates;
 use parameters::{
     agent_parameter_hint, flag_candidates, mezzanine_parameter_hint, value_candidates,
 };

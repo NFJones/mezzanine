@@ -48,6 +48,42 @@ pub(super) fn path_candidates(
     candidates
 }
 
+/// Builds literal filesystem candidates for one standalone save-path field.
+///
+/// Record-browser save prompts submit a path directly to filesystem APIs rather
+/// than through a shell. Their candidates therefore retain spaces and quoting
+/// characters verbatim while preserving the normal path lookup, hidden-entry,
+/// ordering, directory-suffix, and candidate-limit behavior.
+pub fn record_browser_save_path_candidates(
+    query: &str,
+    working_directory: Option<&Path>,
+) -> Vec<SelectorCandidate> {
+    let (directory, display_prefix, name_prefix) = path_completion_parts(query, working_directory);
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return Vec::new();
+    };
+    let include_hidden = name_prefix.starts_with('.');
+    let mut candidates = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if (!include_hidden && name.starts_with('.')) || !name.starts_with(&name_prefix) {
+                return None;
+            }
+            let is_dir = entry.file_type().ok().is_some_and(|kind| kind.is_dir());
+            let suffix = if is_dir { "/" } else { "" };
+            Some(SelectorCandidate::new(
+                format!("{display_prefix}{name}{suffix}"),
+                SelectorCandidateKind::Value,
+                false,
+            ))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.value.cmp(&right.value));
+    candidates.truncate(200);
+    candidates
+}
+
 /// Returns whether filesystem completion should be offered for this token.
 ///
 /// # Parameters

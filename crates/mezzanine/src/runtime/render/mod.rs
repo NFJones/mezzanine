@@ -241,6 +241,8 @@ pub(crate) struct RuntimePresentationComponent {
     primary_prefix_key_pending: bool,
     /// Active primary-client modal display overlay.
     primary_display_overlay: Option<RuntimeDisplayOverlay>,
+    /// Transient candidate cycle for a record-browser Save path prompt.
+    record_browser_save_completion: Option<RuntimeRecordBrowserSaveCompletion>,
     /// Typed record browsers waiting for display-response presentation.
     pending_record_browser_overlays:
         std::collections::BTreeMap<(String, String), mez_mux::record_browser::RecordBrowser>,
@@ -264,6 +266,21 @@ pub(crate) struct RuntimePresentationComponent {
     primary_error_status_overlay: Option<String>,
     /// Active pane-agent status selector.
     pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
+}
+
+/// Candidate cycle retained while one record-browser Save prompt is active.
+///
+/// The backend-neutral browser continues to own the editable path. Runtime
+/// presentation retains only candidate ordering and the active candidate so
+/// completion remains scoped to the pane that opened the overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeRecordBrowserSaveCompletion {
+    /// Input used to construct this candidate set.
+    base_input: String,
+    /// Literal candidate paths in stable filesystem order.
+    candidates: Vec<String>,
+    /// Candidate currently selected by Tab cycling.
+    selected_index: usize,
 }
 
 impl RuntimePresentationComponent {

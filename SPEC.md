@@ -5648,7 +5648,9 @@ The baseline command capabilities are:
   changing glob matching, render selectable
   Markdown rows that open issue details, allow deleting the selected issue with
   `d` only when no open issue depends on it, and allow saving the rendered raw
-  Markdown view to a user-supplied file path, overwriting the destination.
+  Markdown view to a user-supplied file path, overwriting the destination. Save prompts
+  MUST complete paths relative to the owning pane working directory: Tab and Shift-Tab
+  cycle literal filesystem candidates, and directory candidates retain `/`.
 - `/show-memories`: Browse persistent memory records in the shared
   pager-backed record browser. It MUST default to active records in the active
   pane project scope when that scope is known, support optional scope, kind,

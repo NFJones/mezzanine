@@ -4,6 +4,7 @@ use super::display_content::*;
 use super::product_content::*;
 use super::selection_adapter::*;
 use crate::runtime::render::*;
+use crate::ui::selector::record_browser_save_path_candidates;
 
 impl RuntimeSessionService {
     /// Reflows an active record browser after terminal geometry changes.
@@ -283,7 +284,10 @@ impl RuntimeSessionService {
             b"x" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
                 mez_mux::record_browser::RecordBrowserFilterField::Text,
             )),
-            b"s" => Some(mez_mux::record_browser::RecordBrowserAction::StartSave),
+            b"s" => {
+                self.presentation.record_browser_save_completion = None;
+                Some(mez_mux::record_browser::RecordBrowserAction::StartSave)
+            }
             _ if matches!(selector_input_action(input), SelectorInputAction::Select) => {
                 Some(mez_mux::record_browser::RecordBrowserAction::OpenActive)
             }
@@ -366,6 +370,81 @@ impl RuntimeSessionService {
             .and_then(|record_browser| record_browser.browser.prompt())
             .map(record_browser_prompt_text)
             .unwrap_or_default();
+        let save_prompt_pane_id = self
+            .presentation
+            .primary_display_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| {
+                matches!(
+                    record_browser.browser.prompt(),
+                    Some(mez_mux::record_browser::RecordBrowserPrompt::Save { .. })
+                )
+                .then(|| record_browser.pane_id.clone())
+            });
+        if let Some(pane_id) = save_prompt_pane_id {
+            if matches!(input, b"\t" | b"\x1b[Z") {
+                let completion = self.presentation.record_browser_save_completion.take();
+                let (candidates, selected_index) = match completion {
+                    Some(completion)
+                        if completion.base_input == prompt_text
+                            || completion
+                                .candidates
+                                .get(completion.selected_index)
+                                .is_some_and(|candidate| candidate == &prompt_text) =>
+                    {
+                        let selected_index = if input == b"\t" {
+                            completion.selected_index.saturating_add(1)
+                                % completion.candidates.len().max(1)
+                        } else if completion.selected_index == 0 {
+                            completion.candidates.len().saturating_sub(1)
+                        } else {
+                            completion.selected_index.saturating_sub(1)
+                        };
+                        (completion.candidates, selected_index)
+                    }
+                    _ => {
+                        let candidates = record_browser_save_path_candidates(
+                            &prompt_text,
+                            self.pane_current_working_directory(&pane_id).as_deref(),
+                        )
+                        .into_iter()
+                        .map(|candidate| candidate.value)
+                        .collect::<Vec<_>>();
+                        (candidates, 0)
+                    }
+                };
+                let Some(selected) = candidates.get(selected_index).cloned() else {
+                    return Ok(false);
+                };
+                self.presentation.record_browser_save_completion =
+                    Some(RuntimeRecordBrowserSaveCompletion {
+                        base_input: prompt_text,
+                        candidates,
+                        selected_index,
+                    });
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                let Some(record_browser) = overlay.record_browser.as_mut() else {
+                    return Ok(false);
+                };
+                record_browser.browser.apply_action(
+                    mez_mux::record_browser::RecordBrowserAction::EditPrompt(selected),
+                )?;
+                return Ok(render_record_browser_overlay(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                    terminal_width,
+                    prose_width,
+                ));
+            }
+            if !matches!(input, b"\r" | b"\n") {
+                self.presentation.record_browser_save_completion = None;
+            }
+        } else {
+            self.presentation.record_browser_save_completion = None;
+        }
         let action = if prompt_has_selector {
             match selector_input_action(input) {
                 SelectorInputAction::Exit => {
@@ -465,6 +544,7 @@ impl RuntimeSessionService {
                     .as_ref()
                     .and_then(|overlay| overlay.record_browser.as_ref())
                     .map(|record_browser| record_browser.pane_id.clone());
+                self.presentation.record_browser_save_completion = None;
                 if let Some(pane_id) = pane_id {
                     self.save_record_browser_overlay_markdown(&pane_id, &path, markdown)?;
                 }
