@@ -398,14 +398,15 @@ context_window_tokens = 40000
     );
 }
 
-/// Verifies a compactor context-limit failure retries with one newer complete
-/// execution group moved unchanged from model input into the exact raw tail.
+/// Verifies compactor backoff and a later normal-request rejection roll the
+/// model-authored summary and exact tail into one final-fit summary epoch.
 ///
 /// The rejected compaction request must not mutate active-turn context or
-/// dispatch the original provider turn. A successful retry then summarizes
-/// only the older group and leaves the excluded newer group byte-for-byte.
+/// dispatch the original provider turn. The first retry summarizes only the
+/// older group and leaves the excluded newer group byte-for-byte; a later
+/// provider rejection then model-summarizes both into one bounded epoch.
 #[test]
-fn runtime_model_compaction_context_limit_retries_with_exact_newer_group() {
+fn runtime_model_compaction_rolls_exact_tail_after_final_request_rejection() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -551,6 +552,73 @@ context_window_tokens = 40000
     assert!(compacted.contains("model-authored older-group summary"));
     assert!(compacted.contains("newer-exact-marker"));
     assert!(!compacted.contains("older-backoff-marker"));
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+
+    let first_round_context = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
+        .to_vec();
+    let final_fit_transition = service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+            &error,
+        )
+        .unwrap()
+        .expect("final-fit recovery transition");
+    assert!(
+        final_fit_transition
+            .side_effects
+            .iter()
+            .any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::DispatchAgentCompaction { pane_id } if pane_id == "%1"
+            ))
+    );
+    assert_eq!(
+        service
+            .agent_turn_contexts()
+            .get("turn-1")
+            .unwrap()
+            .blocks(),
+        first_round_context.as_slice()
+    );
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+    let rolling_task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("rolling final-fit compaction task");
+    let rolling_source = rolling_task
+        .request
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rolling_source.contains("model-authored older-group summary"));
+    assert!(rolling_source.contains("newer-exact-marker"));
+
+    complete_runtime_test_compaction(&mut service, "%1", "rolling final-fit summary");
+    let final_context = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert_eq!(
+        final_context
+            .blocks()
+            .iter()
+            .filter(|block| block.label == "context compaction summary")
+            .count(),
+        1
+    );
+    let final_text = final_context
+        .blocks()
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(final_text.contains("rolling final-fit summary"));
+    assert!(!final_text.contains("model-authored older-group summary"));
+    assert!(!final_text.contains("newer-exact-marker"));
     assert!(service.agent_provider_task_is_pending("turn-1"));
 }
 
