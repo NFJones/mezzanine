@@ -68,7 +68,7 @@ fn runtime_copy_mode_command_preserves_live_viewport_height() {
         .unwrap();
     let pane_id = service.active_pane_id().unwrap().to_string();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
-    screen.feed(b"one\ntwo\nthree\nfour");
+    screen.feed(b"one\r\ntwo\r\nthree\r\nfour");
     service.set_pane_screen(pane_id.clone(), screen);
 
     service
@@ -99,7 +99,7 @@ fn runtime_copy_mode_key_navigation_requests_diff_refresh() {
         .unwrap();
     let pane_id = service.active_pane_id().unwrap().to_string();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 20).unwrap();
-    screen.feed(b"one\ntwo\nthree\nfour\nfive\nsix");
+    screen.feed(b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix");
     service.set_pane_screen(pane_id.clone(), screen);
     service.ensure_active_copy_mode(&pane_id).unwrap();
 
@@ -141,7 +141,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
-    screen.feed(b"ready\n");
+    screen.feed(b"ready\r\n");
     service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()

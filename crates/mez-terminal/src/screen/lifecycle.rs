@@ -54,7 +54,7 @@ impl TerminalScreen {
             sgr_mouse_enabled: false,
             application_cursor_enabled: false,
             origin_mode_enabled: false,
-            line_feed_newline_enabled: true,
+            line_feed_newline_enabled: false,
             application_keypad_enabled: false,
             focus_events_enabled: false,
             saved_dec_private_modes: BTreeMap::new(),

@@ -72,7 +72,7 @@ fn terminal_screen_origin_mode_offsets_cursor_addressing_into_scroll_region() {
 fn terminal_screen_handles_relative_cursor_movement_and_c0_controls() {
     let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
 
-    screen.feed(b"top\nmid\nbot\x1b[A\x1b[2DZZ\x1b[B\x1b[CQ\r!\tT\x08?");
+    screen.feed(b"top\r\nmid\r\nbot\x1b[A\x1b[2DZZ\x1b[B\x1b[CQ\r!\tT\x08?");
 
     assert_eq!(screen.visible_lines()[0], "top");
     assert_eq!(screen.visible_lines()[1], "mZZ");
@@ -88,11 +88,11 @@ fn terminal_screen_handles_relative_cursor_movement_and_c0_controls() {
 fn terminal_screen_handles_erase_display_variants() {
     let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
 
-    screen.feed(b"abc\n123\nxyz\x1b[2;2H\x1b[J");
+    screen.feed(b"abc\r\n123\r\nxyz\x1b[2;2H\x1b[J");
     assert_eq!(screen.visible_lines(), vec!["abc", "1", ""]);
 
     let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
-    screen.feed(b"\x1b[2Jabc\n123\nxyz\x1b[2;2H\x1b[1J");
+    screen.feed(b"\x1b[2Jabc\r\n123\r\nxyz\x1b[2;2H\x1b[1J");
     assert_eq!(screen.visible_lines(), vec!["", "  3", "xyz"]);
 
     let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
@@ -100,7 +100,7 @@ fn terminal_screen_handles_erase_display_variants() {
     assert_eq!(screen.visible_lines()[0], "done");
 
     let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
-    screen.feed(b"one\ntwo\nthree\x1b[3J");
+    screen.feed(b"one\r\ntwo\r\nthree\x1b[3J");
     assert!(screen.history().is_empty());
     assert_eq!(screen.visible_lines()[1], "three");
 }
@@ -234,7 +234,7 @@ fn terminal_screen_handles_erase_line_variants() {
 fn terminal_screen_saves_and_restores_cursor() {
     let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
 
-    screen.feed(b"ab\x1b7cd\x1b8XY\n12\x1b[s34\x1b[uZZ");
+    screen.feed(b"ab\x1b7cd\x1b8XY\r\n12\x1b[s34\x1b[uZZ");
 
     assert_eq!(screen.visible_lines()[0], "abXY");
     assert_eq!(screen.visible_lines()[1], "12ZZ");
@@ -297,27 +297,40 @@ fn terminal_screen_handles_insertion_deletion_and_scroll_regions() {
     assert!(screen.history().is_empty());
 }
 
-/// Verifies VT-style LF, IND, and NEL line movement semantics. Full-screen
-/// applications use these controls inside scroll regions, so LF/IND must keep
-/// the current column while NEL explicitly returns to column zero.
+/// Verifies VT-style LF, IND, and NEL line movement semantics, including LNM
+/// defaults and explicit transitions. Full-screen applications use these
+/// controls inside scroll regions, so LF/IND must keep the current column
+/// unless ANSI line-feed/newline mode is explicitly enabled, while NEL returns
+/// to column zero.
 #[test]
 fn terminal_screen_handles_vt_line_movement_controls() {
     let mut screen = TerminalScreen::new(Size::new(8, 4).unwrap(), 10).unwrap();
 
-    screen.feed(b"\x1b[20l");
     screen.feed(b"ab\ncd");
     assert_eq!(screen.visible_lines(), vec!["ab", "  cd", "", ""]);
     assert_eq!(screen.cursor_state().row, 1);
     assert_eq!(screen.cursor_state().column, 4);
 
-    screen.feed(b"\x1bDef");
-    assert_eq!(screen.visible_lines(), vec!["ab", "  cd", "    ef", ""]);
+    screen.feed(b"\x1b[20h\nef");
+    assert_eq!(screen.visible_lines(), vec!["ab", "  cd", "ef", ""]);
     assert_eq!(screen.cursor_state().row, 2);
-    assert_eq!(screen.cursor_state().column, 6);
+    assert_eq!(screen.cursor_state().column, 2);
+
+    screen.feed(b"\x1b[20l\ngh");
+    assert_eq!(screen.visible_lines(), vec!["ab", "  cd", "ef", "  gh"]);
+    assert_eq!(screen.cursor_state().row, 3);
+    assert_eq!(screen.cursor_state().column, 4);
+
+    let mut screen = TerminalScreen::new(Size::new(8, 4).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1bDef");
+    assert_eq!(screen.visible_lines(), vec!["", "ef", "", ""]);
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 2);
 
     screen.feed(b"\x1bEgh");
-    assert_eq!(screen.visible_lines(), vec!["ab", "  cd", "    ef", "gh"]);
-    assert_eq!(screen.cursor_state().row, 3);
+    assert_eq!(screen.visible_lines(), vec!["", "ef", "gh", ""]);
+    assert_eq!(screen.cursor_state().row, 2);
     assert_eq!(screen.cursor_state().column, 2);
 }
 

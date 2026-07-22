@@ -68,7 +68,7 @@ fn terminal_screen_resize_resets_origin_region_before_index() {
 #[test]
 fn terminal_screen_resize_shrink_preserves_bottom_when_content_overflows() {
     let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
-    screen.feed(b"one\ntwo\nthree\nfour\nfive");
+    screen.feed(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
 
     screen.resize(Size::new(8, 3).unwrap());
 
@@ -82,7 +82,7 @@ fn terminal_screen_resize_shrink_preserves_bottom_when_content_overflows() {
 #[test]
 fn terminal_screen_resize_shrink_keeps_top_when_content_fits() {
     let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
-    screen.feed(b"one\ntwo");
+    screen.feed(b"one\r\ntwo");
 
     screen.resize(Size::new(8, 3).unwrap());
 

@@ -385,7 +385,7 @@ fn runtime_mouse_drag_copies_visible_alternate_screen_content() {
         .unwrap();
     let pane_id = service.active_pane_id().unwrap().to_string();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
-    screen.feed(b"normal-only\n\x1b[?1049halpha beta\nsecond row");
+    screen.feed(b"normal-only\r\n\x1b[?1049halpha beta\r\nsecond row");
     assert!(screen.alternate_screen_active());
     assert!(
         !screen

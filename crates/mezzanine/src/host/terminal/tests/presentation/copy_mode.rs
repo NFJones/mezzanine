@@ -15,7 +15,7 @@ use mez_terminal::TerminalScreen;
 #[test]
 fn copy_mode_starts_at_live_view_and_pages_through_normal_history() {
     let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
-    screen.feed(b"one\ntwo\nthree\nfour");
+    screen.feed(b"one\r\ntwo\r\nthree\r\nfour");
 
     let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
 
@@ -40,7 +40,7 @@ fn copy_mode_starts_at_live_view_and_pages_through_normal_history() {
 #[test]
 fn copy_mode_page_keys_jump_to_edges_when_less_than_one_page_remains() {
     let mut screen = TerminalScreen::new(Size::new(8, 3).unwrap(), 10).unwrap();
-    screen.feed(b"one\ntwo\nthree\nfour\nfive\nsix\nseven");
+    screen.feed(b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\nseven");
 
     let mut copy = CopyMode::from_screen(&screen, 3).unwrap();
 
@@ -68,7 +68,7 @@ fn copy_mode_page_keys_jump_to_edges_when_less_than_one_page_remains() {
 #[test]
 fn copy_mode_cursor_starts_at_live_terminal_cursor() {
     let mut screen = TerminalScreen::new(Size::new(20, 3).unwrap(), 10).unwrap();
-    screen.feed(b"alpha\nbeta\ngamma");
+    screen.feed(b"alpha\r\nbeta\r\ngamma");
     screen.feed(b"\x1b[2;3H");
 
     let mut copy = CopyMode::from_screen(&screen, 3).unwrap();
@@ -87,7 +87,7 @@ fn copy_mode_cursor_starts_at_live_terminal_cursor() {
 #[test]
 fn copy_mode_horizontal_cursor_movement_overflows_between_lines() {
     let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
-    screen.feed(b"abc\ndef");
+    screen.feed(b"abc\r\ndef");
     screen.feed(b"\x1b[1;4H");
     let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
 
@@ -116,7 +116,7 @@ fn copy_mode_horizontal_cursor_movement_overflows_between_lines() {
 #[test]
 fn copy_mode_readline_style_modified_cursor_movement() {
     let mut screen = TerminalScreen::new(Size::new(32, 3).unwrap(), 10).unwrap();
-    screen.feed(b"alpha beta  gamma\nomega");
+    screen.feed(b"alpha beta  gamma\r\nomega");
     screen.feed(b"\x1b[1;13H");
     let mut copy = CopyMode::from_screen(&screen, 3).unwrap();
 
@@ -174,7 +174,7 @@ fn copy_mode_readline_style_modified_cursor_movement() {
 #[test]
 fn copy_mode_preserves_styled_history_lines() {
     let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
-    screen.feed(b"\x1b[31mred\x1b[0m\nplain\nlast");
+    screen.feed(b"\x1b[31mred\x1b[0m\r\nplain\r\nlast");
 
     let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
     copy.page_up();
@@ -196,7 +196,7 @@ fn copy_mode_preserves_styled_history_lines() {
 #[test]
 fn copy_mode_excludes_active_alternate_screen_content() {
     let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
-    screen.feed(b"normal\n\x1b[?1049hsecret");
+    screen.feed(b"normal\r\n\x1b[?1049hsecret");
 
     let copy = CopyMode::from_screen(&screen, 4).unwrap();
 
@@ -217,7 +217,7 @@ fn copy_mode_excludes_active_alternate_screen_content() {
 #[test]
 fn copy_mode_search_selects_and_copies_text() {
     let mut screen = TerminalScreen::new(Size::new(20, 3).unwrap(), 10).unwrap();
-    screen.feed(b"alpha\nbeta target\ngamma");
+    screen.feed(b"alpha\r\nbeta target\r\ngamma");
     let mut copy = CopyMode::from_screen(&screen, 3).unwrap();
 
     let position = copy
@@ -237,7 +237,7 @@ fn copy_mode_search_selects_and_copies_text() {
 #[test]
 fn copy_mode_copies_multiline_selection() {
     let mut screen = TerminalScreen::new(Size::new(20, 3).unwrap(), 10).unwrap();
-    screen.feed(b"alpha\nbeta\ngamma");
+    screen.feed(b"alpha\r\nbeta\r\ngamma");
     let mut copy = CopyMode::from_screen(&screen, 3).unwrap();
 
     copy.select_range(
@@ -258,7 +258,7 @@ fn copy_mode_copies_multiline_selection() {
 fn copy_mode_formats_agent_assistant_output_for_clipboard() {
     let lines = ["▐ mez> ## Heading", "▐        - item", "▐            code"];
     let mut screen = TerminalScreen::new(Size::new(40, 3).unwrap(), 10).unwrap();
-    screen.feed(lines.join("\n").as_bytes());
+    screen.feed(lines.join("\r\n").as_bytes());
     let mut copy = CopyMode::from_screen(&screen, 3).unwrap();
 
     copy.select_range(
@@ -284,7 +284,7 @@ fn copy_mode_formats_agent_assistant_output_for_clipboard() {
 fn copy_mode_dedents_orphan_agent_continuation_rows() {
     let lines = ["▐        - item", "▐            code"];
     let mut screen = TerminalScreen::new(Size::new(40, 2).unwrap(), 10).unwrap();
-    screen.feed(lines.join("\n").as_bytes());
+    screen.feed(lines.join("\r\n").as_bytes());
     let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
 
     copy.select_range(
@@ -308,7 +308,7 @@ fn copy_mode_dedents_orphan_agent_continuation_rows() {
 #[test]
 fn copy_mode_keeps_partial_transformed_source_group_rendered() {
     let mut screen = TerminalScreen::new(Size::new(40, 2).unwrap(), 10).unwrap();
-    screen.feed(b"diagram first\ndiagram second");
+    screen.feed(b"diagram first\r\ndiagram second");
     screen.set_recent_normal_copy_texts(
         &[
             "```mermaid\nflowchart LR\nA --> B\n```".to_string(),
@@ -351,7 +351,7 @@ fn copy_mode_keeps_partial_transformed_source_group_rendered() {
 #[test]
 fn copy_mode_explicit_formats_distinguish_rendered_and_source_groups() {
     let mut screen = TerminalScreen::new(Size::new(40, 2).unwrap(), 10).unwrap();
-    screen.feed(b"diagram first\ndiagram second");
+    screen.feed(b"diagram first\r\ndiagram second");
     screen.set_recent_normal_copy_texts(
         &[
             "```mermaid\nflowchart LR\nA --> B\n```".to_string(),
@@ -415,7 +415,7 @@ fn copy_mode_omits_agent_indicator_prefix_from_status_lines() {
 #[test]
 fn copy_mode_can_write_selection_to_bounded_paste_buffer() {
     let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
-    screen.feed(b"alpha\nbeta");
+    screen.feed(b"alpha\r\nbeta");
     let mut copy = CopyMode::from_screen(&screen, 2).unwrap();
     copy.select_range(
         CopyPosition { line: 0, column: 1 },

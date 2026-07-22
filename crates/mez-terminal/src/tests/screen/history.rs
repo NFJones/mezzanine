@@ -149,7 +149,7 @@ fn alternate_screen_is_not_history_recordable() {
 fn terminal_screen_scrolls_normal_output_into_history() {
     let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
 
-    screen.feed(b"\x1b[4;38;5;42mone\x1b[0m\ntwo\nthree");
+    screen.feed(b"\x1b[4;38;5;42mone\x1b[0m\r\ntwo\r\nthree");
 
     assert_eq!(screen.history().lines().collect::<Vec<_>>(), vec!["one"]);
     let styled_history = screen.history().styled_lines().collect::<Vec<_>>();
@@ -265,7 +265,7 @@ fn terminal_screen_alternate_scroll_region_origin_mode_excludes_history() {
 fn terminal_screen_clear_visible_into_history_preserves_log_rows() {
     let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
 
-    screen.feed(b"\x1b[31mred\x1b[0m\nmiddle\nbottom");
+    screen.feed(b"\x1b[31mred\x1b[0m\r\nmiddle\r\nbottom");
     screen.clear_visible_into_history();
 
     assert_eq!(screen.visible_lines(), vec!["", "", ""]);
@@ -290,7 +290,7 @@ fn terminal_screen_clear_visible_into_history_preserves_log_rows() {
 #[test]
 fn terminal_screen_resize_preserves_blank_viewport_after_clear_visible_into_history() {
     let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
-    screen.feed(b"one\ntwo\nthree");
+    screen.feed(b"one\r\ntwo\r\nthree");
     screen.clear_visible_into_history();
 
     screen.resize(Size::new(5, 3).unwrap());
