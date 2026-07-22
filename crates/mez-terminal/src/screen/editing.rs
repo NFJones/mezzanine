@@ -87,10 +87,10 @@ impl TerminalScreen {
     pub(super) fn index(&mut self) {
         self.wrap_pending = false;
         let (top, bottom) = self.active_scroll_region();
-        if self.cursor.row == bottom {
+        if (top..=bottom).contains(&self.cursor.row) && self.cursor.row == bottom {
             self.scroll_region_up_from(top, bottom, 1);
         } else {
-            self.cursor.row = self.cursor.row.saturating_add(1).min(bottom);
+            self.cursor.row = self.cursor.row.saturating_add(1).min(self.max_row());
         }
     }
 
@@ -130,7 +130,7 @@ impl TerminalScreen {
     pub(super) fn reverse_index(&mut self) {
         self.wrap_pending = false;
         let (top, bottom) = self.active_scroll_region();
-        if self.cursor.row == top {
+        if (top..=bottom).contains(&self.cursor.row) && self.cursor.row == top {
             self.scroll_region_down_from(top, bottom, 1);
         } else {
             self.cursor.row = self.cursor.row.saturating_sub(1);

@@ -355,6 +355,32 @@ fn terminal_screen_origin_mode_clamps_relative_vertical_movement_to_scroll_regio
     assert_eq!(screen.cursor_state().row, 0);
 }
 
+/// Verifies DECSTBM scrolling applies only while the cursor is inside its
+/// margins, while vertical controls outside the region use full-screen bounds.
+///
+/// Applications commonly leave DECOM disabled while moving between a status
+/// row and a scrolling body. LF at a cursor below the bottom margin must not
+/// move upward into the region, and CUU/CUD must retain their full-screen
+/// behavior until DECOM explicitly enables margin-relative addressing.
+#[test]
+fn terminal_screen_decstbm_keeps_outside_vertical_controls_on_full_screen() {
+    let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b[2;4r\x1b[5;1H\nQ");
+    assert_eq!(screen.visible_lines()[4], "Q");
+    assert_eq!(screen.cursor_state().row, 4);
+
+    screen.feed(b"\x1b[2A");
+    assert_eq!(screen.cursor_state().row, 2);
+    screen.feed(b"\x1b[5B");
+    assert_eq!(screen.cursor_state().row, 4);
+
+    screen.feed(b"\x1b[?6h\x1b[10B");
+    assert_eq!(screen.cursor_state().row, 3);
+    screen.feed(b"\x1b[10A");
+    assert_eq!(screen.cursor_state().row, 1);
+}
+
 /// Verifies terminal screen tracks bracketed paste mode.
 ///
 /// This regression scenario documents the behavior being protected so a
