@@ -5654,7 +5654,10 @@ The baseline command capabilities are:
   project/scope filters, `x` for backing-database full-text filters, `s` for
   save-to-file prompts, `Enter` for opening the focused record, and `Esc` for
   closing prompts, returning from detail views to lists, or exiting the
-  top-level list.
+  top-level list. Its list views MUST use the available overlay body width, while
+  record detail prose MUST reflow to the smaller of that width and
+  `terminal.agent_wrap_column_cap`; table-backed lists remain body-width and
+  raw Markdown remains authoritative for copy and save.
 - `/remember`: Ask the active model to generate durable persistent-memory
   records. Without arguments, it MUST derive a small bounded set of memory
   candidates from the current pane context. With arguments, it MUST treat the

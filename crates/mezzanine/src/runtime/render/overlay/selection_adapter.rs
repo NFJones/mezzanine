@@ -100,12 +100,17 @@ pub(super) fn render_record_browser_overlay(
     };
     let page = record_browser.browser.render_page();
     let prompt_selection = record_browser.browser.prompt_selection();
+    let content_width = if record_browser.browser.is_detail_view() {
+        prose_width
+    } else {
+        terminal_width
+    };
     let mut content = runtime_agent_shell_markdown_overlay_content_for_layout(
         Some(record_browser.command.clone()),
         &page.markdown,
         ui_theme,
         terminal_width,
-        prose_width,
+        content_width,
     );
     if let Some(prompt_selection) = prompt_selection {
         content.selections = content

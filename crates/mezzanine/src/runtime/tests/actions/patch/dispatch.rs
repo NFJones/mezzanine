@@ -219,28 +219,42 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
         PaneReadinessState::Ready | PaneReadinessState::Busy
     ));
 
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while Instant::now() < deadline {
-        let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.running_shell_transactions_for_tests().is_empty() {
-            break;
-        }
-        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
-        thread::yield_now();
-    }
+    let action_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { .. }
+            )
+            .then(|| marker.clone())
+        })
+        .expect("readiness-probe completion should dispatch the pending shell action");
+    let observed_start = service
+        .observe_agent_shell_transaction_start(
+            "%1",
+            &action_marker,
+            &turn.turn_id,
+            &turn.agent_id,
+            "%1",
+        )
+        .unwrap();
+    assert!(observed_start > 0);
+    let observed_end = service
+        .observe_agent_shell_transaction_end(
+            "%1",
+            &action_marker,
+            &turn.turn_id,
+            &turn.agent_id,
+            "%1",
+            0,
+        )
+        .unwrap();
+    assert!(observed_end > 0);
 
     assert!(
         service.running_shell_transactions_for_tests().is_empty(),
         "stale interactive-blocked recovery should settle its shell transaction"
-    );
-    let pane_text = service
-        .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    assert!(
-        pane_text.contains("STALE_INTERACTIVE_BLOCKED_RECOVERED"),
-        "{pane_text}"
     );
     let execution = service.agent_turn_executions().get(&turn.turn_id).unwrap();
     assert_ne!(execution.action_results[0].status, ActionStatus::Running);

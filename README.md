@@ -264,10 +264,11 @@ search behavior and add browser-specific keys: `k` opens a kind dropdown selecto
 `p` opens a project/scope filter prompt, `x` opens a database-backed text filter
 prompt, `s` opens a save-to-file prompt, `Enter` opens the focused record, and
 `Esc` closes a prompt, returns from detail to the list, or exits the list view.
-Their Markdown prose reflows to the smaller of the terminal body width and
-`terminal.agent_wrap_column_cap`; tables may use the full body width, and pager
-counts follow the resulting physical rows. Full-row copy and save operations
-continue to use the raw Markdown rather than visual continuation rows.
+List views use the available overlay body width, including table-backed lists;
+record details reflow to the smaller of that width and
+`terminal.agent_wrap_column_cap`. Pager counts follow the resulting physical
+rows. Full-row copy and save operations continue to use the raw Markdown rather
+than visual continuation rows.
 
 ### Use the agent shell
 

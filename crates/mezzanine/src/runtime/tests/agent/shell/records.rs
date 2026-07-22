@@ -66,7 +66,7 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
 fn runtime_record_browser_resize_reflows_rows_and_footer_counts_physical_lines() {
     let mut service = test_runtime_service();
     let primary = service
-        .attach_primary("primary", true, Size::new(40, 6).unwrap(), 120)
+        .attach_primary("primary", true, Size::new(120, 6).unwrap(), 120)
         .unwrap();
     let pane_id = service.active_pane_id().unwrap().to_string();
     let browser = mez_mux::record_browser::RecordBrowser::new(
@@ -74,7 +74,7 @@ fn runtime_record_browser_resize_reflows_rows_and_footer_counts_physical_lines()
         vec![mez_mux::record_browser::RecordBrowserRecord {
             id: "issue-1".to_string(),
             open_command: Some("/show-issues issue-1".to_string()),
-            title: "A record title with enough words to occupy several physical rows".to_string(),
+            title: "A record title with enough words to occupy several physical rows when rendered as a capped detail but not when rendered in the wider list view".to_string(),
             metadata: vec![("kind".to_string(), "defect".to_string())],
             markdown: "A detail body with enough words to wrap.".to_string(),
         }],
@@ -95,6 +95,15 @@ fn runtime_record_browser_resize_reflows_rows_and_footer_counts_physical_lines()
         .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
         .unwrap();
     let wide_line_count = service.primary_display_overlay().unwrap().lines.len();
+
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    let detail_line_count = service.primary_display_overlay().unwrap().lines.len();
+    assert!(detail_line_count > wide_line_count);
+    apply_record_browser_input(&mut service, &primary, b"\x1b");
+    assert_eq!(
+        service.primary_display_overlay().unwrap().lines.len(),
+        wide_line_count
+    );
 
     service
         .resize_attached_primary_terminal(&primary, Size::new(20, 6).unwrap())

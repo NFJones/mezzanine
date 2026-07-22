@@ -312,6 +312,11 @@ impl RecordBrowser {
         }
     }
 
+    /// Reports whether the browser currently renders one record detail page.
+    pub fn is_detail_view(&self) -> bool {
+        self.detail_index.is_some()
+    }
+
     /// Applies one typed pager action to this browser state.
     pub fn apply_action(&mut self, action: RecordBrowserAction) -> Result<RecordBrowserOutcome> {
         match action {
@@ -776,7 +781,10 @@ mod tests {
         .unwrap();
         browser.set_scroll_offset(4);
 
+        assert!(!browser.is_detail_view());
+
         browser.show_first_record_detail();
+        assert!(browser.is_detail_view());
         assert!(browser.render_page().raw_markdown.contains("# First"));
 
         assert_eq!(
@@ -786,6 +794,7 @@ mod tests {
             RecordBrowserOutcome::Updated
         );
         assert_eq!(browser.scroll_offset(), 4);
+        assert!(!browser.is_detail_view());
         let list_page = browser.render_page();
         assert!(
             list_page
