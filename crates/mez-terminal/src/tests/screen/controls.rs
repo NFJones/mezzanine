@@ -507,6 +507,24 @@ fn terminal_screen_restores_terminal_mode_state() {
     assert!(screen.focus_events_enabled());
 }
 
+/// Verifies restoring a snapshot with DECAWM disabled clears any delayed wrap
+/// left by the live screen, so subsequent output overwrites the right margin
+/// instead of unexpectedly advancing to the next row.
+#[test]
+fn terminal_screen_mode_restore_clears_delayed_wrap_when_decawm_is_disabled() {
+    let mut screen = TerminalScreen::new(Size::new(4, 2).unwrap(), 10).unwrap();
+    screen.feed(b"abcd");
+    let mut state = screen.mode_state();
+    state.autowrap_enabled = false;
+
+    screen.restore_mode_state(&state);
+    screen.feed(b"e");
+
+    assert_eq!(screen.visible_lines(), vec!["abce", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 3);
+}
+
 /// Verifies that snapshot resume can restore saved cursor and DEC private-mode
 /// state so later restore escape sequences behave as if the PTY stream had run.
 #[test]

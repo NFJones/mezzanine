@@ -234,6 +234,12 @@ impl TerminalScreen {
         let new_rows = usize::from(size.rows);
         let preserve_bottom = new_rows < old_rows
             && (self.cursor.row >= new_rows || self.last_significant_row() >= Some(new_rows));
+        let preserve_delayed_wrap = self.wrap_pending
+            && self
+                .leading_column_for_cell(self.cursor.row, self.cursor.column)
+                .is_some_and(|column| {
+                    self.cells[self.cursor.row][column].width() <= usize::from(size.columns)
+                });
         let source_rows = self.current_visible_rows();
         let cursor = cursor_logical_position(&source_rows, self.cursor.row, self.cursor.column);
         let logical_lines =
@@ -275,7 +281,7 @@ impl TerminalScreen {
             let (absolute_row, column) = physical_position_for_logical_cursor(
                 &logical_lines,
                 logical_line,
-                logical_column,
+                logical_column.saturating_add(usize::from(preserve_delayed_wrap)),
                 usize::from(size.columns),
                 self.wrap_continuation_prefix.as_deref(),
             );
@@ -285,7 +291,8 @@ impl TerminalScreen {
             self.cursor.row = self.cursor.row.min(max_row);
             self.cursor.column = self.cursor.column.min(max_column);
         }
-        self.wrap_pending = false;
+        self.wrap_pending =
+            preserve_delayed_wrap && self.autowrap_enabled && self.cursor.column == max_column;
         if let Some(cursor) = self.saved_cursor.as_mut() {
             cursor.row = cursor.row.min(max_row);
             cursor.column = cursor.column.min(max_column);
@@ -362,7 +369,8 @@ impl TerminalScreen {
         let max_column = self.max_column();
         self.cursor.row = self.cursor.row.saturating_sub(row_offset).min(max_row);
         self.cursor.column = self.cursor.column.min(max_column);
-        self.wrap_pending = false;
+        self.wrap_pending =
+            self.wrap_pending && self.autowrap_enabled && self.cursor.column == max_column;
         if let Some(cursor) = self.saved_cursor.as_mut() {
             cursor.row = cursor.row.saturating_sub(row_offset).min(max_row);
             cursor.column = cursor.column.min(max_column);
@@ -451,7 +459,8 @@ impl TerminalScreen {
             .saturating_sub(moved_to_history)
             .min(max_row);
         self.cursor.column = self.cursor.column.min(max_column);
-        self.wrap_pending = false;
+        self.wrap_pending =
+            self.wrap_pending && self.autowrap_enabled && self.cursor.column == max_column;
         if let Some(cursor) = self.saved_cursor.as_mut() {
             cursor.row = cursor
                 .row
@@ -473,6 +482,12 @@ impl TerminalScreen {
         let new_rows = usize::from(size.rows);
         let preserve_bottom = new_rows < old_rows
             && (self.cursor.row >= new_rows || self.last_significant_row() >= Some(new_rows));
+        let preserve_delayed_wrap = self.wrap_pending
+            && self
+                .leading_column_for_cell(self.cursor.row, self.cursor.column)
+                .is_some_and(|column| {
+                    self.cells[self.cursor.row][column].width() <= usize::from(size.columns)
+                });
         let source_rows = self.current_visible_rows();
         let cursor = cursor_logical_position(&source_rows, self.cursor.row, self.cursor.column);
         let logical_lines =
@@ -518,7 +533,7 @@ impl TerminalScreen {
             let (absolute_row, column) = physical_position_for_logical_cursor(
                 &logical_lines,
                 logical_line,
-                logical_column,
+                logical_column.saturating_add(usize::from(preserve_delayed_wrap)),
                 usize::from(size.columns),
                 self.wrap_continuation_prefix.as_deref(),
             );
@@ -528,7 +543,8 @@ impl TerminalScreen {
             self.cursor.row = self.cursor.row.min(max_row);
             self.cursor.column = self.cursor.column.min(max_column);
         }
-        self.wrap_pending = false;
+        self.wrap_pending =
+            preserve_delayed_wrap && self.autowrap_enabled && self.cursor.column == max_column;
         if let Some(cursor) = self.saved_cursor.as_mut() {
             cursor.row = cursor.row.min(max_row);
             cursor.column = cursor.column.min(max_column);

@@ -24,6 +24,51 @@ fn terminal_screen_alternate_resize_clears_pre_resize_content() {
     assert!(screen.history().is_empty());
 }
 
+/// Verifies a row-only resize preserves delayed wrap when the cursor remains
+/// on the same right-margin cell.
+#[test]
+fn terminal_screen_row_only_resize_preserves_delayed_wrap() {
+    let mut screen = TerminalScreen::new(Size::new(4, 2).unwrap(), 10).unwrap();
+    screen.feed(b"abcd");
+
+    screen.resize(Size::new(4, 3).unwrap());
+    screen.feed(b"e");
+
+    assert_eq!(screen.visible_lines(), vec!["abcd", "e", ""]);
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 1);
+}
+
+/// Verifies widening cancels delayed wrap when the restored cursor no longer
+/// occupies the right margin of the resized grid.
+#[test]
+fn terminal_screen_width_growth_recomputes_delayed_wrap() {
+    let mut screen = TerminalScreen::new(Size::new(4, 2).unwrap(), 10).unwrap();
+    screen.feed(b"abcd");
+
+    screen.resize(Size::new(6, 2).unwrap());
+    screen.feed(b"e");
+
+    assert_eq!(screen.visible_lines(), vec!["abcde", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 5);
+}
+
+/// Verifies narrowing preserves delayed wrap when reflow restores the cursor
+/// to the new right margin.
+#[test]
+fn terminal_screen_width_shrink_recomputes_delayed_wrap() {
+    let mut screen = TerminalScreen::new(Size::new(8, 3).unwrap(), 10).unwrap();
+    screen.feed(b"abcdefgh");
+
+    screen.resize(Size::new(4, 3).unwrap());
+    screen.feed(b"i");
+
+    assert_eq!(screen.visible_lines(), vec!["abcd", "efgh", "i"]);
+    assert_eq!(screen.cursor_state().row, 2);
+    assert_eq!(screen.cursor_state().column, 1);
+}
+
 /// Verifies a height resize resets DECSTBM before a line feed at the resized
 /// bottom row.
 ///

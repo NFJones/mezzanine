@@ -36,6 +36,9 @@ impl TerminalScreen {
         self.application_cursor_enabled = state.application_cursor_enabled;
         self.origin_mode_enabled = state.origin_mode_enabled;
         self.autowrap_enabled = state.autowrap_enabled;
+        if !self.autowrap_enabled {
+            self.wrap_pending = false;
+        }
         self.application_keypad_enabled = state.application_keypad_enabled;
         self.focus_events_enabled = state.focus_events_enabled;
     }
