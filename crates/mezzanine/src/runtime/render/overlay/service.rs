@@ -382,7 +382,7 @@ impl RuntimeSessionService {
                 )
                 .then(|| record_browser.pane_id.clone())
             });
-        if let Some(pane_id) = save_prompt_pane_id {
+        if let Some(ref pane_id) = save_prompt_pane_id {
             if matches!(input, b"\t" | b"\x1b[Z") {
                 let completion = self.presentation.record_browser_save_completion.take();
                 let (candidates, selected_index) = match completion {
@@ -406,7 +406,7 @@ impl RuntimeSessionService {
                     _ => {
                         let candidates = record_browser_save_path_candidates(
                             &prompt_text,
-                            self.pane_current_working_directory(&pane_id).as_deref(),
+                            self.pane_current_working_directory(pane_id).as_deref(),
                         )
                         .into_iter()
                         .map(|candidate| candidate.value)
@@ -445,6 +445,46 @@ impl RuntimeSessionService {
         } else {
             self.presentation.record_browser_save_completion = None;
         }
+        let printable_prompt_text = (!prompt_has_selector)
+            .then(|| std::str::from_utf8(input).ok())
+            .flatten()
+            .filter(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()));
+        if let Some(input) = printable_prompt_text {
+            let mut text = prompt_text;
+            text.push_str(input);
+            let save_completion = save_prompt_pane_id.as_ref().and_then(|pane_id| {
+                record_browser_save_path_candidates(
+                    &text,
+                    self.pane_current_working_directory(pane_id).as_deref(),
+                )
+                .into_iter()
+                .find_map(|candidate| candidate.value.strip_prefix(&text).map(str::to_string))
+            });
+            {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                    return Ok(false);
+                };
+                let Some(record_browser) = overlay.record_browser.as_mut() else {
+                    return Ok(false);
+                };
+                record_browser.browser.apply_action(
+                    mez_mux::record_browser::RecordBrowserAction::EditPrompt(text.clone()),
+                )?;
+            }
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(false);
+            };
+            let changed = render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            );
+            if let Some(suffix) = save_completion {
+                append_record_browser_save_completion_shadow(overlay, &text, &suffix);
+            }
+            return Ok(changed);
+        }
         let action = if prompt_has_selector {
             match selector_input_action(input) {
                 SelectorInputAction::Exit => {
@@ -480,14 +520,7 @@ impl RuntimeSessionService {
                     text.pop();
                     mez_mux::record_browser::RecordBrowserAction::EditPrompt(text)
                 }
-                OverlayInputAction::EditSearchText => {
-                    let Ok(input) = std::str::from_utf8(input) else {
-                        return Ok(false);
-                    };
-                    let mut text = prompt_text;
-                    text.push_str(input);
-                    mez_mux::record_browser::RecordBrowserAction::EditPrompt(text)
-                }
+                OverlayInputAction::EditSearchText => return Ok(false),
                 OverlayInputAction::StartSearch
                 | OverlayInputAction::SelectPrevious
                 | OverlayInputAction::SelectNext

@@ -150,6 +150,30 @@ pub(super) fn render_record_browser_overlay(
     true
 }
 
+/// Appends a muted Save-path completion suffix without changing editable input.
+pub(super) fn append_record_browser_save_completion_shadow(
+    overlay: &mut RuntimeDisplayOverlay,
+    input: &str,
+    suffix: &str,
+) {
+    let prompt_prefix = "Save to: ";
+    let prompt_line = format!("{prompt_prefix}{input}");
+    let Some(line_index) = overlay.lines.iter().position(|line| line == &prompt_line) else {
+        return;
+    };
+    let start = UnicodeWidthStr::width(prompt_line.as_str());
+    overlay.lines[line_index].push_str(suffix);
+    let rendition = GraphicRendition {
+        dim: true,
+        ..GraphicRendition::default()
+    };
+    overlay.line_style_spans[line_index].push(TerminalStyleSpan {
+        start,
+        length: UnicodeWidthStr::width(suffix),
+        rendition,
+    });
+}
+
 pub(super) fn record_browser_command_name(command: &str) -> Option<String> {
     let trimmed = command.trim_start();
     let body = trimmed.strip_prefix('/')?;

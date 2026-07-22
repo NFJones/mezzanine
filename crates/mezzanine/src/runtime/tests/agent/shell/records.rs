@@ -607,6 +607,18 @@ fn runtime_record_browser_save_prompt_completes_against_pane_directory() {
 
     apply_record_browser_input(&mut service, &primary, b"s");
     apply_record_browser_input(&mut service, &primary, b"rep");
+    let overlay = service.primary_display_overlay().unwrap();
+    let shadow_line = overlay
+        .lines
+        .iter()
+        .position(|line| line == "Save to: report.md")
+        .and_then(|index| overlay.line_style_spans.get(index))
+        .expect("save completion should render a presentation-only shadow suffix");
+    assert!(shadow_line.iter().any(|span| span.rendition.dim));
+    assert!(matches!(
+        overlay.record_browser.as_ref().and_then(|record_browser| record_browser.browser.prompt()),
+        Some(mez_mux::record_browser::RecordBrowserPrompt::Save { input }) if input == "rep"
+    ));
     apply_record_browser_input(&mut service, &primary, b"\t");
 
     assert_eq!(
@@ -650,6 +662,68 @@ fn runtime_record_browser_save_prompt_completes_against_pane_directory() {
     apply_record_browser_input(&mut service, &primary, b"\r");
     assert!(pane_root.join("report.md").is_file());
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies editable record-browser prompts treat printable pager hotkeys as
+/// literal UTF-8 text so absolute paths and project globs can be entered one
+/// terminal event at a time without closing the overlay or starting search.
+#[test]
+fn runtime_record_browser_editable_prompts_accept_pager_hotkey_characters() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![mez_mux::record_browser::RecordBrowserRecord {
+            id: "issue-1".to_string(),
+            open_command: None,
+            title: "First issue".to_string(),
+            metadata: Vec::new(),
+            markdown: "Body".to_string(),
+        }],
+        Vec::new(),
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"s");
+    for input in [b"/".as_slice(), b"q", b"/", b"a"] {
+        apply_record_browser_input(&mut service, &primary, input);
+    }
+    assert!(matches!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.prompt()),
+        Some(mez_mux::record_browser::RecordBrowserPrompt::Save { input }) if input == "/q/a"
+    ));
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b");
+    apply_record_browser_input(&mut service, &primary, b"p");
+    for input in [b"/".as_slice(), b"q", b"/", b"*"] {
+        apply_record_browser_input(&mut service, &primary, input);
+    }
+    assert!(matches!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|record_browser| record_browser.browser.prompt()),
+        Some(mez_mux::record_browser::RecordBrowserPrompt::Filter { field: mez_mux::record_browser::RecordBrowserFilterField::ProjectGlob, input }) if input == "/q/*"
+    ));
 }
 
 /// Sends one key sequence through the attached terminal into the active pager.
