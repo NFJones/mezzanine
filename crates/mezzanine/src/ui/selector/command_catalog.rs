@@ -97,7 +97,16 @@ pub(super) fn selector_candidates(
     candidates.extend(
         extra_candidates
             .iter()
-            .filter(|extra| extra.surface == surface && extra.command == command)
+            .filter(|extra| {
+                extra.surface == surface
+                    && extra.command == command
+                    && extra.preceding_option.as_deref().is_none_or(|option| {
+                        context
+                            .tokens_before
+                            .last()
+                            .is_some_and(|token| token == option)
+                    })
+            })
             .map(|extra| extra.candidate.clone()),
     );
     candidates.extend(path_candidates(surface, context, working_directory));
@@ -298,6 +307,17 @@ pub(super) fn agent_argument_candidates(
         "memory" => value_candidates(&["on", "off", "toggle", "status", "show"]),
         "issue" => value_candidates(&[
             "add", "query", "delete", "--kind", "--title", "--body", "--text", "--limit",
+        ]),
+        "show-issues" => flag_candidates(&[
+            "--project",
+            "--project-glob",
+            "--all-projects",
+            "--kind",
+            "--state",
+            "--text",
+            "--query",
+            "--limit",
+            "--save",
         ]),
         "latency" => value_candidates(&["slow", "default", "fast"]),
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),

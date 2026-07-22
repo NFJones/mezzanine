@@ -23,6 +23,8 @@ pub struct SelectorExtraCandidate {
     pub surface: SelectorSurface,
     /// Canonical command name whose argument list receives this candidate.
     pub command: String,
+    /// Required preceding option when the candidate is valid only as its value.
+    pub preceding_option: Option<String>,
     /// Candidate value and display metadata.
     pub candidate: SelectorCandidate,
 }
@@ -37,6 +39,22 @@ impl SelectorExtraCandidate {
         Self {
             surface,
             command: command.into(),
+            preceding_option: None,
+            candidate,
+        }
+    }
+
+    /// Builds a command-scoped candidate restricted to an option value slot.
+    pub fn after_option(
+        surface: SelectorSurface,
+        command: impl Into<String>,
+        option: impl Into<String>,
+        candidate: SelectorCandidate,
+    ) -> Self {
+        Self {
+            surface,
+            command: command.into(),
+            preceding_option: Some(option.into()),
             candidate,
         }
     }

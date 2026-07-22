@@ -260,7 +260,9 @@ jump to the next match; submit `/` with an empty query to repeat the last search
 wrapping to the top when no later match exists.
 
 The `/show-issues` and `/show-memories` record browsers keep that `/` in-page
-search behavior and add browser-specific keys: `k` opens a kind dropdown selector,
+search behavior. `/show-issues --project` and `--project-glob` suggest known
+project paths as Tab completions and shadow hints while retaining glob filters.
+They add browser-specific keys: `k` opens a kind dropdown selector,
 `p` opens a project/scope filter prompt, `x` opens a database-backed text filter
 prompt, `s` opens a save-to-file prompt, `Enter` opens the focused record, and
 `Esc` closes a prompt, returns from detail to the list, or exits the list view.

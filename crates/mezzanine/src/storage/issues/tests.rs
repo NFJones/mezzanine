@@ -611,3 +611,31 @@ fn absolute_configured_issue_database_path_preserves_parent_permissions() {
     }
     let _ = fs::remove_dir_all(root);
 }
+
+/// Verifies project completion values are distinct, ignore empty storage rows,
+/// and retain deterministic lexical ordering independent of issue recency.
+#[test]
+fn issue_store_lists_distinct_projects_in_lexical_order() {
+    let store = temp_store("project-completion");
+    for (project, title, timestamp) in [
+        ("/repo/z", "Newest project", 30),
+        ("/repo/a", "Oldest project", 10),
+        ("/repo/z", "Duplicate project", 20),
+    ] {
+        store
+            .add_issue(
+                project.to_string(),
+                IssueKind::Task,
+                title.to_string(),
+                None,
+                None,
+                timestamp,
+            )
+            .unwrap();
+    }
+
+    assert_eq!(
+        store.list_issue_projects().unwrap(),
+        vec!["/repo/a".to_string(), "/repo/z".to_string()]
+    );
+}

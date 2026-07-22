@@ -5638,7 +5638,9 @@ The baseline command capabilities are:
   browser while preserving a valid selection.
 - `/show-issues`: Browse local issue records in a pager-backed record browser.
   It MUST default to open issues for the active pane project, support optional
-  project glob, kind, state, full-text, and limit filters, render selectable
+  project glob, kind, state, full-text, and limit filters, and suggest known
+  project paths for the value after `--project` or `--project-glob` without
+  changing glob matching, render selectable
   Markdown rows that open issue details, allow deleting the selected issue with
   `d` only when no open issue depends on it, and allow saving the rendered raw
   Markdown view to a user-supplied file path, overwriting the destination.

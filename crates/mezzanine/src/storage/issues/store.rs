@@ -274,6 +274,18 @@ impl IssueStore {
         Ok(records)
     }
 
+    /// Lists distinct nonempty issue project keys in deterministic lexical order.
+    pub fn list_issue_projects(&self) -> Result<Vec<String>> {
+        let connection = self.open()?;
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT project FROM issues WHERE TRIM(project) <> '' ORDER BY project ASC",
+        )?;
+        statement
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(MezError::from)
+    }
+
     /// Deletes one issue by project and id.
     pub fn delete_issue(&self, project: String, id: String) -> Result<DeleteIssueResult> {
         super::validate_project_key(&project)?;

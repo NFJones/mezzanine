@@ -869,3 +869,78 @@ fn selector_shadow_hint_completes_dynamic_mcp_server_suffix() {
     assert_eq!(hint.text, "hub");
     assert_eq!(hint.kind, SelectorCandidateKind::Value);
 }
+
+/// Verifies known issue-project candidates complete only the value after a
+/// supported `/show-issues` project option and remain available to hints.
+///
+/// Project paths are dynamic values rather than general command arguments, so
+/// exposing them for an id, a flag, or another command would produce incorrect
+/// Tab replacements and misleading shadow text.
+#[test]
+fn selector_scopes_issue_project_candidates_to_project_option_values() {
+    let extra = vec![SelectorExtraCandidate::after_option(
+        SelectorSurface::AgentCommand,
+        "show-issues",
+        "--project",
+        SelectorCandidate::new("/repo/example", SelectorCandidateKind::Value, true),
+    )];
+
+    let project_plan = plan_selector_with_extra(
+        SelectorSurface::AgentCommand,
+        "/show-issues --project /repo/ex",
+        "/show-issues --project /repo/ex".len(),
+        &extra,
+    )
+    .unwrap();
+    assert_eq!(project_plan.candidates[0].value, "/repo/example");
+
+    let hint = shadow_hint_with_extra(
+        SelectorSurface::AgentCommand,
+        "/show-issues --project /repo/ex",
+        "/show-issues --project /repo/ex".len(),
+        &extra,
+    )
+    .unwrap();
+    assert_eq!(hint.text, "ample");
+
+    assert!(
+        plan_selector_with_extra(
+            SelectorSurface::AgentCommand,
+            "/show-issues issue",
+            "/show-issues issue".len(),
+            &extra,
+        )
+        .is_none()
+    );
+    assert!(
+        plan_selector_with_extra(
+            SelectorSurface::AgentCommand,
+            "/show-memories /repo/ex",
+            "/show-memories /repo/ex".len(),
+            &extra,
+        )
+        .is_none()
+    );
+}
+
+/// Verifies the `/show-issues` project-glob alias receives the same dynamic
+/// project candidates as the canonical `--project` option.
+#[test]
+fn selector_scopes_issue_project_candidates_to_project_glob_values() {
+    let extra = vec![SelectorExtraCandidate::after_option(
+        SelectorSurface::AgentCommand,
+        "show-issues",
+        "--project-glob",
+        SelectorCandidate::new("/repo/example", SelectorCandidateKind::Value, true),
+    )];
+
+    let plan = plan_selector_with_extra(
+        SelectorSurface::AgentCommand,
+        "/show-issues --project-glob /repo/ex",
+        "/show-issues --project-glob /repo/ex".len(),
+        &extra,
+    )
+    .unwrap();
+
+    assert_eq!(plan.candidates[0].value, "/repo/example");
+}

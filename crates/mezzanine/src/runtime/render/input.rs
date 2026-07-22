@@ -582,6 +582,38 @@ impl RuntimeSessionService {
                 )
             }));
         }
+        if crate::runtime::commands::runtime_issues_enabled(self)
+            && let Some(config_root) = self.integration.config_root()
+        {
+            let store = crate::storage::issues::IssueStore::from_database_path(
+                crate::runtime::commands::runtime_issue_database_path(
+                    self,
+                    &config_root.to_path_buf(),
+                ),
+            );
+            candidates.extend(
+                store
+                    .list_issue_projects()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flat_map(|project| {
+                        ["--project", "--project-glob"]
+                            .into_iter()
+                            .map(move |option| {
+                                SelectorExtraCandidate::after_option(
+                                    SelectorSurface::AgentCommand,
+                                    "show-issues",
+                                    option,
+                                    SelectorCandidate::new(
+                                        project.clone(),
+                                        SelectorCandidateKind::Value,
+                                        true,
+                                    ),
+                                )
+                            })
+                    }),
+            );
+        }
         let Some(store) = self.persistence.transcript_store() else {
             return candidates;
         };

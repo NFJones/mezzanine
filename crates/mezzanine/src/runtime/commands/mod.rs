@@ -76,6 +76,8 @@ mod show_records;
 mod slash;
 mod status;
 
+pub(crate) use issues::{runtime_issue_database_path, runtime_issues_enabled};
+
 use approval::{
     AgentProjectTrustRequest, agent_approval_summary_preview, agent_approve_control_error_message,
     agent_approve_pending_display, agent_path_preview, agent_project_trust_log_line,
