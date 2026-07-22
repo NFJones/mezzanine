@@ -271,7 +271,10 @@ async fn monitor_runtime_agent_provider_dispatch(
 ) -> Result<AsyncAgentProviderWorkerResult> {
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
-    if !handle.agent_turn_is_running(&turn_id).await? {
+    if !classify_provider_monitor_liveness(
+        handle.agent_turn_is_running(&turn_id).await,
+        &lifecycle,
+    )? {
         return Ok(None);
     }
     let worker = execute_runtime_agent_provider_dispatch(dispatch, None);
@@ -292,11 +295,37 @@ async fn monitor_runtime_agent_provider_dispatch(
             }
         }
         let lifecycle_state = *lifecycle.borrow();
-        if is_terminal_runtime_lifecycle_state(lifecycle_state)
-            || !handle.agent_turn_is_running(&turn_id).await?
-        {
+        if is_terminal_runtime_lifecycle_state(lifecycle_state) {
             return Ok(None);
         }
+        if !classify_provider_monitor_liveness(
+            handle.agent_turn_is_running(&turn_id).await,
+            &lifecycle,
+        )? {
+            return Ok(None);
+        }
+    }
+}
+
+/// Classifies provider-monitor liveness failures against actor lifecycle.
+///
+/// Actor request or reply channels can close after a monitor wakeup during
+/// normal shutdown. A closed lifecycle watch or terminal lifecycle value
+/// makes that failure ordinary cancellation; failures from a live nonterminal
+/// actor remain actionable errors.
+pub(in crate::host::async_runtime) fn classify_provider_monitor_liveness(
+    result: Result<bool>,
+    lifecycle: &watch::Receiver<RuntimeLifecycleState>,
+) -> Result<bool> {
+    match result {
+        Ok(running) => Ok(running),
+        Err(_)
+            if lifecycle.has_changed().is_err()
+                || is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
     }
 }
 

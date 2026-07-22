@@ -67,6 +67,45 @@ async fn async_agent_provider_service_uses_bounded_idle_probe() {
     assert!(exit.commands_processed >= 1);
 }
 
+/// Verifies provider monitors treat actor closure during shutdown as ordinary
+/// cancellation while preserving unexpected liveness failures from a running
+/// actor. The lifecycle watch is the authoritative distinction between those
+/// outcomes even when its final value remains `Running` after sender closure.
+#[test]
+fn async_agent_provider_monitor_classifies_actor_closure_by_lifecycle() {
+    let (closed_tx, closed_lifecycle) = tokio::sync::watch::channel(RuntimeLifecycleState::Running);
+    drop(closed_tx);
+    let closed_result = crate::host::async_runtime::client::classify_provider_monitor_liveness(
+        Err(MezError::invalid_state(
+            "async runtime session actor is closed",
+        )),
+        &closed_lifecycle,
+    )
+    .unwrap();
+    assert!(!closed_result);
+
+    let (terminal_tx, terminal_lifecycle) =
+        tokio::sync::watch::channel(RuntimeLifecycleState::Running);
+    terminal_tx.send(RuntimeLifecycleState::Stopping).unwrap();
+    let terminal_result = crate::host::async_runtime::client::classify_provider_monitor_liveness(
+        Err(MezError::invalid_state(
+            "async runtime session actor reply was dropped",
+        )),
+        &terminal_lifecycle,
+    )
+    .unwrap();
+    assert!(!terminal_result);
+
+    let (_running_tx, running_lifecycle) =
+        tokio::sync::watch::channel(RuntimeLifecycleState::Running);
+    let error = crate::host::async_runtime::client::classify_provider_monitor_liveness(
+        Err(MezError::invalid_state("unexpected liveness failure")),
+        &running_lifecycle,
+    )
+    .unwrap_err();
+    assert_eq!(error.message(), "unexpected liveness failure");
+}
+
 /// Verifies that the provider service delegates provider-poll timer ownership
 /// to the actor instead of retaining a local duplicate guard. With pending
 /// provider work and no timer worker draining the queue, multiple idle provider
