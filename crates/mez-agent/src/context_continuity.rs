@@ -492,7 +492,7 @@ fn projected_context_role(provider: &str, role: ModelMessageRole) -> &'static st
 fn context_block_is_compaction_epoch(block: &ContextBlock) -> bool {
     block.label == "conversation compaction notice"
         || (block.source == ContextSourceKind::Memory
-            && block.content.starts_with("[context compacted]"))
+            && block.label == "context compaction summary")
 }
 
 /// Returns a lower-case SHA-256 digest.
@@ -587,8 +587,8 @@ mod tests {
         let compacted = AgentContext::new(vec![block(
             ContextPlacement::ConversationAppend,
             ContextSourceKind::Memory,
-            "summary",
-            "[context compacted] durable summary",
+            "context compaction summary",
+            "model-authored durable summary",
         )])
         .unwrap();
         assert_eq!(

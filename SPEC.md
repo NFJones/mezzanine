@@ -4845,23 +4845,23 @@ sides of a barrier because already-dispatched work settled later makes both
 fragments ineligible for grouped replacement; ownership MUST NOT be used to
 move or gather either fragment across the barrier.
 
-Each summary MUST replace its selected contiguous range at the range's original
-position. It MUST NOT be moved to the start or end of the conversation or
-across a user/task barrier. Existing epochs MUST remain byte-stable during later
-provider context-limit recovery. Direct user and task instructions MUST remain
-byte-for-byte exact. Local context reduction MUST prefer compact summaries over
-partial block truncation so the model never reasons from silently incomplete
-events. `EphemeralTail` state MUST remain outside summary input and MUST be
-recomputed only after compaction completes.
+Each model-authored summary MUST replace its selected contiguous range at the
+range's original position. It MUST NOT be moved to the start or end of the
+conversation or across a user/task barrier. Existing epochs MUST remain
+byte-stable during later provider context-limit recovery. Direct user and task
+instructions MUST remain byte-for-byte exact. Mezzanine MUST NOT synthesize
+semantic summary prose locally or partially truncate blocks. `EphemeralTail`
+state MUST remain outside summary input and MUST be recomputed only after
+compaction completes.
 
-Provider-limit recovery MUST compact only events at or below the event-sequence
-high-water mark consumed by the rejected provider request. Events committed
-after that boundary, including steering, local messages, and later action
-results, MUST remain exact and raw. A semantic recovery index MUST account for
-every replaced record and preserve or classify outcomes, errors, decisions,
-artifacts, unresolved obligations, and an exact recovery route. A range whose
-required content is not safely recoverable MUST remain raw or cause typed
-unrecoverable overflow.
+Provider-limit recovery MUST plan compaction only for events at or below the
+event-sequence high-water mark consumed by the rejected provider request.
+Events committed after that boundary, including steering, local messages, and
+later action results, MUST remain exact and raw. Semantic reduction MUST come
+from a validated compactor-model response; deterministic local logic is limited
+to selection, group and barrier safety, exact-tail handling, accounting,
+validation, and bounded orchestration. A range whose required content is not
+safely recoverable MUST remain raw or cause typed unrecoverable overflow.
 
 Within each barrier-delimited segment, compaction MUST retain a bounded recent
 raw suffix of complete execution groups so exact recent references remain
@@ -4872,17 +4872,22 @@ budget by estimated replay word count.
 If the provider rejects a request because the input context exceeds a
 provider or model limit, Mezzanine MUST treat that failure as recoverable while
 the turn remains running, MUST NOT ask the provider for a failure-summary
-response with the same oversized context, and MUST locally compact eligible
-active-turn execution groups before retrying within the bounded provider retry
-policy. This recovery MUST preserve every exact user, steering, and active task
-instruction in place. If protected exact content plus the minimum required
-request state cannot fit the provider context window, Mezzanine MUST report an
-explicit unrecoverable-context overflow and MUST NOT truncate or summarize the
-protected instructions. If the provider still rejects the retried request,
-Mezzanine MUST continue provider context-limit recovery with successively
-smaller explicit compaction budgets until the provider accepts the request,
-the bounded retry policy is exhausted, or no further recoverable compaction can
-change the active-turn context.
+response with the same oversized context, and MUST queue asynchronous
+model-backed compaction before retrying within the bounded provider retry
+policy. A rejected turn MUST remain deferred until validated compactor output
+is applied or compaction fails terminally. A compaction request rejected for
+context length MUST progressively move exactly one newest selected complete
+execution group into the exact raw suffix and retry with smaller model input;
+non-context failures MUST remain terminal. If the reconstructed normal request
+is still rejected, recovery MUST model-compact the prior model-authored summary
+with further eligible complete groups into one visible summary epoch. This
+recovery MUST preserve every exact user, steering, active-task, progressively
+excluded, and post-boundary event in place. If protected exact content plus the
+minimum required request state cannot fit the provider context window,
+Mezzanine MUST report an explicit unrecoverable-context overflow and MUST NOT
+truncate or summarize the protected instructions. Recovery MUST stop when the
+bounded retry policy is exhausted or no eligible complete group remains, and
+MUST leave source context unchanged on terminal failure.
 
 Agents MUST support optional routing model sizing. When routing
 is enabled for a pane, agent, or subagent, the first provider step for each new

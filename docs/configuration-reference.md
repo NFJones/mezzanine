@@ -425,7 +425,7 @@ description.
 | `agents.default_provider` | string | `"openai"` | Provider profile used by default. |
 | `agents.default_model_profile` | string | `"default"` | Model profile used by default. |
 | `agents.shell_only` | boolean | `true` | Require local system actions to go through the pane shell. |
-| `agents.compaction_raw_retention_percent` | integer | `10` | Percent of raw context retained during manual compaction and provider context-limit recovery; 1 to 100. |
+| `agents.compaction_raw_retention_percent` | integer | `10` | Initial percent of complete raw groups retained outside model-authored summary input; provider context-limit backoff may grow the exact tail one complete group at a time; 1 to 100. |
 | `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |
 | `agents.action_failure_retry_limit` | integer | `5` | Self-correction attempts per repeated correctable action failure signature other than `apply_patch`. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |

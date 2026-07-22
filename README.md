@@ -311,7 +311,7 @@ Useful slash commands include:
 | `/stop`        | Interrupt the active turn.                            |
 | `/new`         | Start a fresh conversation for the pane.              |
 | `/resume`      | Resume one of the most recent saved conversations.    |
-| `/compact`     | Compact conversation context while opportunistically pruning expired persistent records. |
+| `/compact`     | Queue model-backed conversation compaction while opportunistically pruning expired persistent records. |
 | `/exit`        | Hide the agent shell.                                 |
 
 Normal logging shows prompts, assistant text, concise progress, approvals,

@@ -195,10 +195,18 @@ suffix is retained only in complete groups. An open group retains its exact
 assistant rationale, thought, action rationale, native replay records, and
 settled results; compaction cannot summarize only part of that causal record.
 
-Each summary contains a semantic recovery index accounting for every replaced
-record, including outcomes, errors, decisions, artifacts, unresolved
-obligations, and an exact recovery route. Content that cannot be safely
-recovered remains raw or produces typed unrecoverable overflow.
+Every semantic summary is authored by the configured compactor model and is
+applied only after its output validates against the frozen selection. Local
+logic chooses complete groups, enforces barriers, preserves exact tails and
+post-boundary events, accounts for sizing, and bounds retries; it never
+synthesizes summary prose. Content that cannot be safely recovered remains raw
+or produces typed unrecoverable overflow.
+
+A compaction request that exceeds the provider limit progressively excludes the
+newest complete selected group from model input and retains that group exactly.
+If the reconstructed normal request still exceeds the limit, another
+model-backed round rolls the prior model summary and further eligible history
+into one visible summary epoch.
 
 Repeated compaction can therefore produce:
 
