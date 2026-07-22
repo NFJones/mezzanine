@@ -731,10 +731,15 @@ fn render_markdown_internal(
         return insert_blank_lines_above_markdown_headings(rendered_lines);
     }
 
-    let mut rendered = rendered_lines.into_iter();
+    let mut rendered = rendered_lines.into_iter().peekable();
     let mut source_aligned_lines = Vec::new();
     for source_line in source_lines {
         if source_line.trim().is_empty() {
+            while let Some(rendered_line) =
+                rendered.next_if(|line| line.kind == RichTextLineKind::MarkdownTableContinuation)
+            {
+                source_aligned_lines.push(rendered_line);
+            }
             source_aligned_lines.push(RichTextLine {
                 display: String::new(),
                 style_spans: Vec::new(),
@@ -2083,6 +2088,43 @@ mod tests {
                 .any(|line| line.kind == RichTextLineKind::MarkdownTableSeparator)
         );
         assert!(lines.iter().any(|line| line.copy_text.is_some()));
+    }
+
+    /// Verifies wrapped fragments of a final table row remain contiguous when
+    /// the source table is followed by an authored blank line and prose.
+    #[test]
+    fn markdown_table_continuations_precede_following_authored_blank_line() {
+        let lines = render_markdown(
+            "| Column |\n| --- |\n| final row has several words |\n\nAfter",
+            &theme(),
+            Some(12),
+        );
+        let blank_index = lines
+            .iter()
+            .position(|line| line.display.is_empty())
+            .expect("the authored blank line should be rendered");
+        let continuation_indices = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                (line.kind == RichTextLineKind::MarkdownTableContinuation).then_some(index)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(!continuation_indices.is_empty(), "{lines:?}");
+        assert!(
+            continuation_indices
+                .iter()
+                .all(|index| *index < blank_index),
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines
+                .get(blank_index.saturating_add(1))
+                .map(|line| line.display.as_str()),
+            Some("After"),
+            "{lines:?}"
+        );
     }
 
     /// Verifies generic fenced Rust blocks hide their delimiters while retaining
