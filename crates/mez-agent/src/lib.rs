@@ -241,9 +241,11 @@ pub use context_assembly::{
     ModelRequestIdentity, assemble_model_request_from_context, role_for_context_block,
 };
 pub use context_compaction::{
-    DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, compact_model_context_for_budget,
+    DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, ModelContextCompactionPlan,
+    apply_model_context_compaction_plan, compact_model_context_for_budget,
     compact_model_context_for_budget_at_consumed_sequence,
     compact_model_context_for_budget_with_retained_tail_percent, model_context_text_word_count,
+    plan_model_context_compaction_at_consumed_sequence,
 };
 pub use context_continuity::{
     ContextBlockDiagnostics, ContextContinuityBreakReason, ContextContinuityDiagnostics,
