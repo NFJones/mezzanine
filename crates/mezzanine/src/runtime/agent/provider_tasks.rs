@@ -423,6 +423,9 @@ impl RuntimeSessionService {
                 "agent provider dispatch agent id does not match turn",
             ));
         }
+        if self.agent_is_compacting(&turn.pane_id) {
+            return Ok(None);
+        }
         if self
             .agent_turn_executions()
             .get(turn_id)
@@ -1202,6 +1205,7 @@ impl RuntimeSessionService {
             .pending_agent_provider_tasks
             .iter()
             .filter_map(|turn_id| self.runtime_agent_provider_task(turn_id))
+            .filter(|task| !self.agent_is_compacting(&task.pane_id))
             .collect()
     }
 

@@ -1567,6 +1567,49 @@ fn runtime_agent_shell_compact_rejects_overlapping_pane_compaction() {
     assert!(response.contains("already compacting"), "{response}");
 }
 
+/// Verifies pane compaction is a dispatch barrier for ordinary model work.
+///
+/// Action settlement or local messages can queue a continuation while model
+/// compaction owns the pane. That continuation must remain queued without
+/// becoming visible or claimable until compaction completion has rebuilt the
+/// running context and cleared the pane's compacting marker.
+#[test]
+fn runtime_agent_compaction_blocks_provider_dispatch_until_context_is_ready() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"compaction-dispatch-barrier","method":"agent/shell/command","params":{"idempotency_key":"compaction-dispatch-barrier","input":"continue after rebuilding context"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+
+    let pending = service.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1);
+    let task = pending[0].clone();
+    let agent_id = AgentId::opaque(task.agent_id.clone()).unwrap();
+    service.mark_agent_compacting_for_tests("%1", 1);
+
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert!(service.agent_provider_task_is_pending(&task.turn_id));
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.agent_provider_task_is_pending(&task.turn_id));
+
+    let cleared = service.fail_agent_compaction_task("%1");
+    assert!(cleared.had_task());
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+}
+
 /// Verifies compaction keeps only a bounded raw transcript tail when the active
 /// conversation is larger than the exact-reference window.
 ///
