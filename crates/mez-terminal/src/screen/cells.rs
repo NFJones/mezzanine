@@ -201,7 +201,7 @@ impl TerminalScreen {
         }
         let next_column = leading_column.saturating_add(new_width);
         if next_column > self.max_column() {
-            self.cursor.column = leading_column;
+            self.cursor.column = self.max_column();
             self.wrap_pending = true;
         } else {
             self.cursor.column = next_column;

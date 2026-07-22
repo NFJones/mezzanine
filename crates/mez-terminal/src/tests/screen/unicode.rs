@@ -121,6 +121,34 @@ fn terminal_screen_double_width_character_boundary() {
     assert_eq!(screen.history().len(), 0);
 }
 
+/// Verifies wide graphemes ending at the right margin report the final occupied
+/// column while retaining deferred-wrap behavior for the next printable glyph.
+///
+/// CPR and host cursor presentation must identify the rightmost occupied cell,
+/// rather than the wide glyph leader. Both CJK and emoji graphemes must still
+/// defer wrapping until the following printable character arrives.
+#[test]
+fn terminal_screen_reports_right_margin_wide_grapheme_cursor() {
+    for (prefix, grapheme, columns) in [("abc", "界", 5), ("ab", "⚠️", 4)] {
+        let mut screen = TerminalScreen::new(Size::new(columns, 2).unwrap(), 10).unwrap();
+
+        screen.feed(format!("{prefix}{grapheme}").as_bytes());
+        assert_eq!(screen.cursor_state().column, usize::from(columns - 1));
+
+        screen.feed(b"\x1b[6n");
+        assert_eq!(
+            screen.drain_terminal_response_bytes(),
+            format!("\x1b[1;{columns}R").as_bytes()
+        );
+
+        screen.feed(b"Q");
+        assert_eq!(screen.visible_lines()[0], format!("{prefix}{grapheme}"));
+        assert_eq!(screen.visible_lines()[1], "Q");
+        assert_eq!(screen.cursor_state().row, 1);
+        assert_eq!(screen.cursor_state().column, 1);
+    }
+}
+
 /// Verifies colored checkmark emoji are measured as two terminal cells.
 ///
 /// Some terminal font stacks render `✅` as a double-width emoji even though

@@ -63,6 +63,7 @@ impl TerminalScreen {
                 self.wrap_pending = false;
                 return;
             }
+            self.cursor.column = self.max_column();
             self.wrap_pending = true;
         } else {
             self.cursor.column = next_column;
