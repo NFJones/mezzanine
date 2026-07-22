@@ -1253,10 +1253,12 @@ impl<'a> MarkdownRenderer<'a> {
                 }) {
                     FencedCodeBlockOutcome::Rendered(lines) => {
                         self.lines.extend(lines);
+                        self.finish_code_block();
                         return;
                     }
                     FencedCodeBlockOutcome::PreserveLiteral => {
                         self.append_fenced_literal_code_block(&block);
+                        self.finish_code_block();
                         return;
                     }
                     FencedCodeBlockOutcome::NotHandled => {}
@@ -1281,6 +1283,7 @@ impl<'a> MarkdownRenderer<'a> {
                         line.kind = RichTextLineKind::MarkdownCodeBlock;
                         self.lines.push(line);
                     }
+                    self.finish_code_block();
                     return;
                 }
             }
@@ -1289,6 +1292,18 @@ impl<'a> MarkdownRenderer<'a> {
             self.append_fenced_literal_code_block(&block);
         } else {
             self.append_literal_code_block(block.body.as_str());
+        }
+        self.finish_code_block();
+    }
+
+    /// Inserts one presentation-only blank row after a rendered code block.
+    fn finish_code_block(&mut self) {
+        if self
+            .lines
+            .last()
+            .is_some_and(|line| !line.display.trim().is_empty())
+        {
+            self.lines.push(markdown_blank_line());
         }
     }
 
@@ -2187,6 +2202,20 @@ mod tests {
         assert_eq!(empty_info.len(), 1, "{empty_info:?}");
         assert_eq!(empty_info[0].display, "plain");
         assert_eq!(empty_info[0].copy_text.as_deref(), Some("```\nplain\n```"));
+
+        let followed_by_prose =
+            render_markdown("```rust\nfn main() {}\n```\nAfter", &theme(), None);
+        assert_eq!(
+            followed_by_prose
+                .iter()
+                .map(|line| line.display.as_str())
+                .collect::<Vec<_>>(),
+            ["fn main() {}", "", "After"]
+        );
+        assert_eq!(
+            followed_by_prose[1].copy_text.as_deref(),
+            Some(COPY_SKIP_LINE)
+        );
     }
 
     /// Verifies specialized fenced renderers run before generic highlighting
