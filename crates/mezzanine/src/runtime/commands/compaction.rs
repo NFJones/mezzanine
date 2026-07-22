@@ -21,10 +21,15 @@ use super::{
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api, runtime_mezzanine_error_code,
 };
-use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
+use crate::integrations::agent::provider::{
+    anthropic_provider_from_auth_store_with_provider_options,
+    provider_error_retry_class_from_parts, provider_event_error_kind,
+};
 use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
-use mez_agent::apply_model_context_compaction_plan;
+use mez_agent::{
+    DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorRetryClass, apply_model_context_compaction_plan,
+};
 
 impl RuntimeSessionService {
     /// Executes `/compact` by queuing model-backed conversation compaction.
@@ -341,6 +346,7 @@ impl RuntimeSessionService {
             target: RuntimeAgentCompactionTarget::ActiveTurn {
                 turn_id: turn.turn_id.clone(),
                 recovery_attempt,
+                compaction_backoff_attempt: 0,
                 plan: Box::new(plan),
             },
         });
@@ -477,8 +483,17 @@ impl RuntimeSessionService {
                 self.apply_agent_compaction_completed_event(&pane_id, *response)?
             }
             AgentCompactionEvent::Failed {
-                pane_id, message, ..
-            } => self.apply_agent_compaction_failed_event(&pane_id, &message)?,
+                pane_id,
+                kind,
+                message,
+                provider_failure_json,
+                ..
+            } => self.apply_agent_compaction_failed_event(
+                &pane_id,
+                &kind,
+                &message,
+                provider_failure_json.as_deref(),
+            )?,
         };
         Ok(
             self.runtime_transition_with_render(
@@ -509,6 +524,7 @@ impl RuntimeSessionService {
             if let RuntimeAgentCompactionTarget::ActiveTurn {
                 turn_id,
                 recovery_attempt,
+                compaction_backoff_attempt: _,
                 plan,
             } = &task.target
             {
@@ -628,8 +644,59 @@ impl RuntimeSessionService {
     pub fn apply_agent_compaction_failed_event(
         &mut self,
         pane_id: &str,
+        kind: &str,
         message: &str,
+        provider_failure_json: Option<&str>,
     ) -> Result<bool> {
+        if let Some(mut task) = self.finish_agent_compaction_task(pane_id) {
+            let retry_class = provider_error_retry_class_from_parts(
+                provider_event_error_kind(kind),
+                message,
+                provider_failure_json,
+            );
+            if retry_class == ProviderErrorRetryClass::ContextLimit
+                && let RuntimeAgentCompactionTarget::ActiveTurn {
+                    compaction_backoff_attempt,
+                    plan,
+                    ..
+                } = &mut task.target
+                && *compaction_backoff_attempt < DEFAULT_PROVIDER_RETRY_POLICY.max_attempts
+                && plan.exclude_newest_replacement_group()
+            {
+                *compaction_backoff_attempt = compaction_backoff_attempt.saturating_add(1);
+                let source_context = AgentContext::new_durable(plan.replacement_blocks().to_vec())
+                    .map_err(|error| MezError::invalid_state(error.message()))?;
+                task.summarized_entries = plan.replacement_blocks().len();
+                task.request = runtime_model_compaction_request(
+                    &task.model_profile,
+                    &task.pane_id,
+                    &task.conversation_id,
+                    0,
+                    &[],
+                    &source_context,
+                )?;
+                self.append_agent_status_text_to_terminal_buffer(
+                    pane_id,
+                    &format!(
+                        "agent: compaction request exceeded provider context; retrying with a larger exact tail attempt={}",
+                        compaction_backoff_attempt
+                    ),
+                )?;
+                self.queue_agent_compaction_task(task);
+                return Ok(true);
+            }
+            self.append_agent_status_text_to_terminal_buffer(
+                pane_id,
+                &format!("agent: compact failed during provider request: {message}"),
+            )?;
+            if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
+                self.fail_running_turn_after_output_limit_compaction_failure(
+                    resume_turn_id,
+                    message,
+                )?;
+            }
+            return Ok(true);
+        }
         let mut failed = self.fail_agent_compaction_task(pane_id);
         if failed.had_task() {
             self.append_agent_status_text_to_terminal_buffer(

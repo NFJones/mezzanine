@@ -398,6 +398,265 @@ context_window_tokens = 40000
     );
 }
 
+/// Verifies a compactor context-limit failure retries with one newer complete
+/// execution group moved unchanged from model input into the exact raw tail.
+///
+/// The rejected compaction request must not mutate active-turn context or
+/// dispatch the original provider turn. A successful retry then summarizes
+/// only the older group and leaves the excluded newer group byte-for-byte.
+#[test]
+fn runtime_model_compaction_context_limit_retries_with_exact_newer_group() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "model-compaction-context-limit-backoff".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "model-compaction-backoff-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.model-compaction-backoff-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"model-compaction-context-limit-backoff","input":"continue after compacting the observations"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    insert_test_context_block(
+        context,
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "older compaction input".to_string(),
+            content: format!("older-backoff-marker {}", "older ".repeat(6_000)),
+        },
+    );
+    insert_test_context_block(
+        context,
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "newer exact compaction tail".to_string(),
+            content: format!("newer-exact-marker {}", "newer ".repeat(6_000)),
+        },
+    );
+    let original = context.blocks().to_vec();
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    let transition = service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+            &error,
+        )
+        .unwrap()
+        .expect("context-limit recovery transition");
+    assert!(transition.side_effects.iter().any(|effect| matches!(
+        effect,
+        RuntimeSideEffect::DispatchAgentCompaction { pane_id } if pane_id == "%1"
+    )));
+    let initial_task = service
+        .take_pending_agent_compaction_task("%1")
+        .expect("initial compaction task");
+    let initial_source = initial_task
+        .request
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(initial_source.contains("older-backoff-marker"));
+    assert!(initial_source.contains("newer-exact-marker"));
+    service.claim_agent_compaction_task_state("%1", initial_task);
+
+    assert!(
+        service
+            .apply_agent_compaction_failed_event(
+                "%1",
+                "invalid_state",
+                "provider context length exceeded",
+                Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .agent_turn_contexts()
+            .get("turn-1")
+            .unwrap()
+            .blocks(),
+        original.as_slice()
+    );
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+    let retry_task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("backed-off compaction task");
+    let retry_source = retry_task
+        .request
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(retry_source.contains("older-backoff-marker"));
+    assert!(!retry_source.contains("newer-exact-marker"));
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        compaction_backoff_attempt,
+        plan,
+        ..
+    } = &retry_task.target
+    else {
+        panic!("expected active-turn compaction target");
+    };
+    assert_eq!(*compaction_backoff_attempt, 1);
+    assert!(
+        plan.retained_tail()
+            .iter()
+            .any(|block| block.content.contains("newer-exact-marker"))
+    );
+
+    complete_runtime_test_compaction(&mut service, "%1", "model-authored older-group summary");
+    let compacted = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks()
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(compacted.contains("model-authored older-group summary"));
+    assert!(compacted.contains("newer-exact-marker"));
+    assert!(!compacted.contains("older-backoff-marker"));
+    assert!(service.agent_provider_task_is_pending("turn-1"));
+}
+
+/// Verifies non-context compactor failures remain terminal and never move a
+/// selected execution group into the exact retained tail.
+///
+/// Progressive backoff is reserved for provider-authoritative context-limit
+/// failures. Authentication, transport, malformed output, and other failure
+/// classes must preserve the original context and fail the waiting turn.
+#[test]
+fn runtime_model_compaction_non_context_failure_does_not_back_off() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "model-compaction-terminal-failure".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "model-compaction-terminal-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.model-compaction-terminal-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"model-compaction-terminal-failure","input":"continue after compacting the observations"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    for (label, marker) in [
+        ("older compaction input", "terminal-older-marker"),
+        ("newer compaction input", "terminal-newer-marker"),
+    ] {
+        insert_test_context_block(
+            context,
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: label.to_string(),
+                content: format!("{marker} {}", "history ".repeat(6_000)),
+            },
+        );
+    }
+    let original = context.blocks().to_vec();
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
+    service
+        .schedule_agent_provider_retry_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            "turn-1",
+            mez_agent::ProviderErrorRetryClass::ContextLimit,
+            &error,
+        )
+        .unwrap()
+        .expect("context-limit recovery transition");
+    let task = service
+        .take_pending_agent_compaction_task("%1")
+        .expect("initial compaction task");
+    service.claim_agent_compaction_task_state("%1", task);
+
+    assert!(
+        service
+            .apply_agent_compaction_failed_event(
+                "%1",
+                "forbidden",
+                "provider authentication rejected the compaction request",
+                Some(r#"{"status_code":401,"error":{"code":"invalid_api_key"}}"#),
+            )
+            .unwrap()
+    );
+    assert!(service.pending_agent_compaction_tasks().is_empty());
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
+    );
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
+    assert!(
+        original
+            .iter()
+            .any(|block| block.content.contains("terminal-newer-marker"))
+    );
+}
+
 /// Verifies a second provider context-limit recovery attempt remains deferred
 /// until a model-authored summary shrinks stored active-turn context.
 ///

@@ -32,6 +32,7 @@ pub struct ModelContextCompactionPlan {
     consumed_sequence_high_water: u64,
     replacement_event_sequences: Vec<ContextEventSequence>,
     replacement_blocks: Vec<ContextBlock>,
+    replacement_group_lengths: Vec<usize>,
     retained_tail: Vec<ContextBlock>,
     summary_budget_words: usize,
     blocks: Vec<ContextBlock>,
@@ -71,6 +72,29 @@ impl ModelContextCompactionPlan {
         self.report
     }
 
+    /// Moves the newest complete selected execution group into the exact tail.
+    ///
+    /// Returns `false` when removing another group would leave no model input.
+    /// The operation preserves block bytes and chronology while shrinking only
+    /// the material submitted to the compactor model.
+    pub fn exclude_newest_replacement_group(&mut self) -> bool {
+        let Some(group_len) = self.replacement_group_lengths.last().copied() else {
+            return false;
+        };
+        if group_len == 0 || group_len >= self.replacement_blocks.len() {
+            return false;
+        }
+        let split_at = self.replacement_blocks.len().saturating_sub(group_len);
+        let excluded_blocks = self.replacement_blocks.split_off(split_at);
+        self.replacement_event_sequences.truncate(split_at);
+        self.replacement_group_lengths.pop();
+        let excluded_words = model_context_total_words(&excluded_blocks);
+        self.summary_budget_words = self.summary_budget_words.saturating_sub(excluded_words);
+        self.retained_tail.splice(0..0, excluded_blocks);
+        self.report.compacted_blocks = self.replacement_blocks.len();
+        true
+    }
+
     /// Constructs a no-op plan that preserves the supplied provider projection.
     fn unchanged(
         blocks: &[ContextBlock],
@@ -81,6 +105,7 @@ impl ModelContextCompactionPlan {
             consumed_sequence_high_water,
             replacement_event_sequences: Vec::new(),
             replacement_blocks: Vec::new(),
+            replacement_group_lengths: Vec::new(),
             retained_tail: Vec::new(),
             summary_budget_words: 0,
             blocks: blocks.to_vec(),
@@ -292,6 +317,7 @@ pub fn plan_model_context_compaction_at_consumed_sequence(
             })
             .collect(),
         replacement_blocks: replacement_blocks.clone(),
+        replacement_group_lengths: replacement_ranges.iter().map(Range::len).collect(),
         retained_tail,
         summary_budget_words,
         blocks: Vec::new(),
@@ -554,6 +580,7 @@ fn compact_model_context_blocks(
             })
             .collect(),
         replacement_blocks: compacted_blocks,
+        replacement_group_lengths: replacement_ranges.iter().map(Range::len).collect(),
         retained_tail,
         summary_budget_words,
         blocks: prepared,
@@ -1616,6 +1643,40 @@ mod tests {
         .unwrap();
         assert_eq!(compacted.chronology().len(), 2);
         assert_eq!(compacted.chronology()[1].block().content, post_boundary);
+    }
+
+    /// Verifies progressive model-request backoff moves exactly the newest
+    /// complete selected group into the exact retained suffix.
+    #[test]
+    fn model_context_compaction_plan_excludes_newest_complete_group() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock::assistant_event("older decision", "decision ".repeat(300)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "older outcome",
+                "outcome ".repeat(300),
+            ),
+            ContextBlock::assistant_event("newer decision", "newer ".repeat(300)),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "newer outcome",
+                "result ".repeat(300),
+            ),
+        ])
+        .unwrap();
+        let mut plan = plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            2_000,
+            1,
+            context.event_sequence_high_water_mark(),
+        )
+        .unwrap();
+        let original_blocks = plan.replacement_blocks().to_vec();
+
+        assert!(plan.exclude_newest_replacement_group());
+        assert_eq!(plan.replacement_blocks(), &original_blocks[..2]);
+        assert_eq!(plan.retained_tail(), &original_blocks[2..]);
+        assert!(!plan.exclude_newest_replacement_group());
     }
 
     /// Verifies a model-authored summary cannot apply after selected source

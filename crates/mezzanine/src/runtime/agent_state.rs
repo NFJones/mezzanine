@@ -351,6 +351,8 @@ pub enum RuntimeAgentCompactionTarget {
         turn_id: String,
         /// Provider retry attempt deferred while model compaction runs.
         recovery_attempt: u32,
+        /// Number of provider context-limit backoff attempts already applied.
+        compaction_backoff_attempt: u32,
         /// Deterministic selection and application contract.
         plan: Box<ModelContextCompactionPlan>,
     },
