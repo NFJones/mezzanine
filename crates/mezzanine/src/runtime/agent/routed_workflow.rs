@@ -970,10 +970,7 @@ impl RuntimeSessionService {
                 self.retain_routed_loop_completion(parent_turn_id, completion)?;
             }
         }
-        self.agent
-            .routed_workflows_by_parent_turn
-            .remove(parent_turn_id);
-        self.clear_routed_workflow_runtime_state(parent_turn_id);
+        let mut cleanup_error = None;
         if let Some(child_agent_id) = state.child_agent_id.as_deref() {
             self.remove_subagent_authority_state(child_agent_id);
             self.integration
@@ -983,10 +980,23 @@ impl RuntimeSessionService {
         }
         if let Some(child_turn_id) = state.child_turn_id.as_deref() {
             let _ = self.cancel_agent_work(child_turn_id);
-            self.cancel_live_shell_transactions_for_turn(child_turn_id)?;
+            if let Err(error) = self.cancel_live_shell_transactions_for_turn(child_turn_id) {
+                cleanup_error = Some(error);
+            }
             self.remove_pending_agent_provider_task(child_turn_id);
             self.remove_claimed_agent_provider_task(child_turn_id);
             self.clear_blocked_agent_approvals_for_turn(child_turn_id);
+            self.agent
+                .routed_workflow_by_child_turn
+                .remove(child_turn_id);
+            self.agent.subagent_task_routes.remove(child_turn_id);
+            if let Some(workflow) = self
+                .agent
+                .routed_workflows_by_parent_turn
+                .get_mut(parent_turn_id)
+            {
+                workflow.child_turn_id = None;
+            }
             if let Some(child_turn) = self
                 .agent_turn_ledger()
                 .turns()
@@ -1010,22 +1020,34 @@ impl RuntimeSessionService {
                         .and_then(|session| session.running_turn_id.as_deref())
                         == Some(child_turn_id)
                     {
-                        self.finish_agent_turn(
+                        if let Err(error) = self.finish_agent_turn(
                             &child_turn.pane_id,
                             child_turn_id,
                             AgentTurnState::Interrupted,
-                        )?;
+                        ) && cleanup_error.is_none()
+                        {
+                            cleanup_error = Some(error);
+                        }
                     } else {
-                        self.finish_agent_turn_without_shell_session(
+                        if let Err(error) = self.finish_agent_turn_without_shell_session(
                             &child_turn,
                             AgentTurnState::Interrupted,
-                        )?;
+                        ) && cleanup_error.is_none()
+                        {
+                            cleanup_error = Some(error);
+                        }
                     }
                 }
             }
-            self.agent.subagent_task_routes.remove(child_turn_id);
         }
+        self.agent
+            .routed_workflows_by_parent_turn
+            .remove(parent_turn_id);
+        self.clear_routed_workflow_runtime_state(parent_turn_id);
         self.agent.routed_presentation_turns.remove(parent_turn_id);
+        if let Some(error) = cleanup_error {
+            return Err(error);
+        }
         Ok(true)
     }
 

@@ -148,6 +148,9 @@ pub(crate) struct RuntimeProcessComponent {
     pane_exit_records: std::collections::BTreeMap<String, PaneExitRecord>,
     /// Panes whose process teardown has begun but is not yet fully reconciled.
     pane_closing: BTreeSet<String>,
+    /// Test-only one-shot failure injected while interrupting a pane shell.
+    #[cfg(test)]
+    fail_next_pane_interrupt_write: bool,
 }
 
 /// Owns terminal configuration that controls pane process and screen behavior.
@@ -534,6 +537,11 @@ impl RuntimeSessionService {
         &mut self,
     ) -> &mut std::collections::BTreeMap<String, RunningShellTransactionRef> {
         &mut self.process.running_shell_transactions
+    }
+
+    /// Injects one failure while sending Ctrl-C to a pane shell.
+    pub(crate) fn fail_next_pane_interrupt_write_for_tests(&mut self) {
+        self.process.fail_next_pane_interrupt_write = true;
     }
 
     /// Reports whether a transaction still requires a start marker.
@@ -1485,6 +1493,13 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         if input.is_empty() {
             return Err(MezError::invalid_args("pane input must not be empty"));
+        }
+        #[cfg(test)]
+        if input == b"\x03" && std::mem::take(&mut self.process.fail_next_pane_interrupt_write) {
+            return Err(MezError::new(
+                crate::error::MezErrorKind::Io,
+                "injected pane interrupt write failure",
+            ));
         }
         if self.process.pane_processes.contains_pane(pane_id) {
             return Ok(self

@@ -1675,7 +1675,32 @@ reasoning_profile = "high"
         .find(|turn| turn.turn_id == child_turn_id)
         .cloned()
         .expect("managed worker turn should exist before parent cancellation");
-    parent_service.stop_agent_turn_for_pane("%1").unwrap();
+    parent_service
+        .running_shell_transactions_mut_for_tests()
+        .insert(
+            "routed-interrupt".to_string(),
+            RunningShellTransactionRef {
+                turn_id: child_turn_id.clone(),
+                kind: RunningShellTransactionKind::AgentAction {
+                    action_id: "routed-interrupt".to_string(),
+                },
+                pane_id: child_turn.pane_id.clone(),
+                command: "sleep 60".to_string(),
+                started_at_unix_ms: 0,
+                timeout_ms: None,
+                pending_input_payload: None,
+                observed_output_bytes: 0,
+                observed_output_preview: String::new(),
+                observed_output_truncated: false,
+            },
+        );
+    parent_service.fail_next_pane_interrupt_write_for_tests();
+    let cancellation_error = parent_service.stop_agent_turn_for_pane("%1").unwrap_err();
+    assert!(
+        cancellation_error
+            .message()
+            .contains("injected pane interrupt write failure")
+    );
     assert_eq!(
         parent_service
             .agent_turn_ledger()
@@ -1697,6 +1722,11 @@ reasoning_profile = "high"
     assert!(parent_service.routed_workflow_for_tests("turn-1").is_none());
     assert_eq!(parent_service.subagent_task_parent(&child_turn_id), None);
     assert!(parent_service.pending_agent_provider_tasks().is_empty());
+    assert!(
+        parent_service
+            .running_shell_transactions_for_tests()
+            .is_empty()
+    );
     let late_execution = completed_execution(&child_turn, "late worker result");
     assert!(
         parent_service

@@ -534,7 +534,7 @@ impl RuntimeSessionService {
             turn.state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         );
-        self.cancel_routed_workflow_for_parent(&turn_id)?;
+        let routed_cleanup_error = self.cancel_routed_workflow_for_parent(&turn_id).err();
         let session = if turn_was_already_terminal {
             let running_in_shell = self
                 .agent_shell_store()
@@ -594,12 +594,16 @@ impl RuntimeSessionService {
                 interrupted_shell_transactions
             ),
         )?;
-        Ok(RuntimeAgentTurnStop {
+        let stopped = RuntimeAgentTurnStop {
             turn_id,
             scheduler_cancelled,
             interrupted_shell_transactions,
             visibility: session.visibility,
-        })
+        };
+        if let Some(error) = routed_cleanup_error {
+            return Err(error);
+        }
+        Ok(stopped)
     }
 
     /// Runs the cancel live shell transactions for turn operation for this subsystem.
