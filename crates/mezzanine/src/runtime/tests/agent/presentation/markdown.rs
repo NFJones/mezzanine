@@ -709,6 +709,12 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
         "{styled_lines:?}"
     );
     assert!(
+        styled_lines
+            .iter()
+            .all(|line| { !line.text.contains("```") && !line.text.contains("rust") }),
+        "generic fenced-code delimiters and language labels must stay presentation-only: {styled_lines:?}"
+    );
+    assert!(
         styled_lines.iter().any(|line| line.text.contains("gone")
             && line
                 .style_spans

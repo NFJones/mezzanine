@@ -43,7 +43,8 @@ pub(super) fn render_agent_mermaid_fence(
     let renderer = HeadlessAsciiRenderer::new()
         .with_strict_parsing()
         .with_ascii_options(options);
-    let Ok(Some(rendered)) = renderer.render_ascii_sync(fence.body) else {
+    let diagram_source = fence.body.trim_end_matches(['\r', '\n']);
+    let Ok(Some(rendered)) = renderer.render_ascii_sync(diagram_source) else {
         return FencedCodeBlockOutcome::PreserveLiteral;
     };
     let rows = rendered
@@ -122,6 +123,26 @@ mod tests {
                 && !line.display.contains('\u{1b}')
                 && UnicodeWidthStr::width(line.display.as_str()) <= 80
         }));
+    }
+
+    /// Verifies parser-captured Mermaid bodies retain diagram rendering at the
+    /// agent transcript width after their terminal newline is normalized.
+    #[test]
+    fn parser_captured_flowchart_renders_at_agent_body_width() {
+        let mut mermaid_fence_count = 0;
+        let outcome = render_agent_mermaid_fence(
+            FencedCodeBlock {
+                info: "mermaid",
+                body: "flowchart LR\nA[Start] --> B[Done]\n",
+            },
+            74,
+            &mut mermaid_fence_count,
+        );
+
+        assert!(
+            matches!(outcome, FencedCodeBlockOutcome::Rendered(_)),
+            "{outcome:?}"
+        );
     }
 
     /// Verifies malformed Mermaid preserves literal Markdown rather than

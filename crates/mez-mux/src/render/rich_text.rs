@@ -107,6 +107,8 @@ pub enum RichTextLineKind {
     MarkdownTableSeparator,
     /// Presentation-only diagram row that must not be soft-wrapped.
     MarkdownDiagram,
+    /// Generic fenced-code row whose copy metadata owns the complete raw fence.
+    MarkdownCodeBlock,
 }
 
 impl RichTextLineKind {
@@ -637,8 +639,10 @@ pub fn markdown_block_copy_lines(
                     .clone()
                     .unwrap_or_else(|| markdown_rendered_line_copy_text(line, display_prefix));
             }
-            if line.kind == RichTextLineKind::MarkdownDiagram
-                && let Some(copy_text) = line.copy_text.as_deref()
+            if matches!(
+                line.kind,
+                RichTextLineKind::MarkdownDiagram | RichTextLineKind::MarkdownCodeBlock
+            ) && let Some(copy_text) = line.copy_text.as_deref()
             {
                 return copy_text.to_string();
             }
@@ -847,7 +851,12 @@ pub fn prefix_rich_text_lines(
             }
             line.display = format!("{prefix}{}", line.display);
             if let Some(copy_text) = line.copy_text.take() {
-                if copy_text == COPY_SKIP_LINE || line.kind == RichTextLineKind::MarkdownDiagram {
+                if copy_text == COPY_SKIP_LINE
+                    || matches!(
+                        line.kind,
+                        RichTextLineKind::MarkdownDiagram | RichTextLineKind::MarkdownCodeBlock
+                    )
+                {
                     line.copy_text = Some(copy_text);
                 } else {
                     line.copy_text = Some(format!("{prefix}{copy_text}"));
@@ -1253,14 +1262,20 @@ impl<'a> MarkdownRenderer<'a> {
                 if let Some(mut highlighter) =
                     super::syntax_highlighter_for_fence(&block.info, &theme)
                 {
-                    self.append_fenced_code_delimiter(block.info.as_str());
-                    for source_line in block.body.split_terminator('\n') {
+                    self.start_generic_fenced_code_block();
+                    let raw_fence = Self::fenced_code_block_source(&block);
+                    for (index, source_line) in block.body.split_terminator('\n').enumerate() {
                         let mut line = self.literal_code_line(source_line);
                         let display = line.display.clone();
                         super::append_syntax_spans(&mut line, 0, &display, &mut highlighter);
+                        line.copy_text = Some(if index == 0 {
+                            raw_fence.clone()
+                        } else {
+                            COPY_SKIP_LINE.to_string()
+                        });
+                        line.kind = RichTextLineKind::MarkdownCodeBlock;
                         self.lines.push(line);
                     }
-                    self.append_fenced_code_delimiter("");
                     return;
                 }
             }
@@ -1274,15 +1289,34 @@ impl<'a> MarkdownRenderer<'a> {
 
     /// Emits a fenced block with literal source delimiters for raw-copy alignment.
     fn append_fenced_literal_code_block(&mut self, block: &MarkdownCodeBlockState) {
-        self.append_fenced_code_delimiter(block.info.as_str());
-        self.append_literal_code_block(block.body.as_str());
-        self.append_fenced_code_delimiter("");
+        self.start_generic_fenced_code_block();
+        let raw_fence = Self::fenced_code_block_source(block);
+        for (index, source_line) in block.body.split_terminator('\n').enumerate() {
+            let mut line = self.literal_code_line(source_line);
+            line.copy_text = Some(if index == 0 {
+                raw_fence.clone()
+            } else {
+                COPY_SKIP_LINE.to_string()
+            });
+            line.kind = RichTextLineKind::MarkdownCodeBlock;
+            self.lines.push(line);
+        }
     }
 
-    /// Emits one visible fenced-code delimiter with the neutral code foreground.
-    fn append_fenced_code_delimiter(&mut self, info: &str) {
-        self.lines
-            .push(self.literal_code_line(&format!("```{info}")));
+    /// Rebuilds the authored fenced Markdown retained by generic code presentation.
+    fn fenced_code_block_source(block: &MarkdownCodeBlockState) -> String {
+        format!("```{}\n{}```", block.info, block.body)
+    }
+
+    /// Inserts one presentation-only blank row before a generic fenced block.
+    fn start_generic_fenced_code_block(&mut self) {
+        if self
+            .lines
+            .last()
+            .is_some_and(|line| !line.display.trim().is_empty())
+        {
+            self.lines.push(markdown_blank_line());
+        }
     }
 
     /// Emits literal code rows with the existing neutral code foreground.
@@ -2051,25 +2085,23 @@ mod tests {
         assert!(lines.iter().any(|line| line.copy_text.is_some()));
     }
 
-    /// Verifies fenced Rust blocks use the active syntax palette without
-    /// adding a trailing presentation row for the closing fence newline.
+    /// Verifies generic fenced Rust blocks hide their delimiters while retaining
+    /// a syntax-highlighted body and the complete authored source for copy.
     #[test]
     fn fenced_rust_blocks_use_theme_syntax_spans() {
         let lines = render_markdown("```RUST title\nfn main() {}\n```", &theme(), None);
 
-        assert_eq!(lines.len(), 3, "{lines:?}");
-        assert_eq!(lines[0].display, "```RUST title");
-        assert_eq!(lines[1].display, "fn main() {}");
-        assert_eq!(lines[2].display, "```");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].display, "fn main() {}");
         assert_eq!(
             lines
                 .iter()
                 .map(|line| line.copy_text.as_deref())
                 .collect::<Vec<_>>(),
-            vec![Some("```RUST title"), Some("fn main() {}"), Some("```")]
+            vec![Some("```RUST title\nfn main() {}\n```")]
         );
         assert!(
-            lines[1].style_spans.iter().any(|span| {
+            lines[0].style_spans.iter().any(|span| {
                 matches!(
                     span.rendition.foreground,
                     Some(
@@ -2082,6 +2114,37 @@ mod tests {
             }),
             "{lines:?}"
         );
+    }
+
+    /// Verifies generic fenced blocks insert one presentation-only buffer after
+    /// prose while hiding delimiters for both recognized and literal languages.
+    #[test]
+    fn fenced_code_blocks_hide_delimiters_and_buffer_after_prose() {
+        let rust = render_markdown("Before\n```rust\nfn main() {}\n```", &theme(), None);
+        assert_eq!(
+            rust.iter()
+                .map(|line| line.display.as_str())
+                .collect::<Vec<_>>(),
+            ["Before", "", "fn main() {}"]
+        );
+        assert_eq!(rust[1].copy_text.as_deref(), Some(COPY_SKIP_LINE));
+        assert_eq!(
+            rust[2].copy_text.as_deref(),
+            Some("```rust\nfn main() {}\n```")
+        );
+
+        let literal = render_markdown("```unknown\nbody\n```", &theme(), None);
+        assert_eq!(literal.len(), 1, "{literal:?}");
+        assert_eq!(literal[0].display, "body");
+        assert_eq!(
+            literal[0].copy_text.as_deref(),
+            Some("```unknown\nbody\n```")
+        );
+
+        let empty_info = render_markdown("```\nplain\n```", &theme(), None);
+        assert_eq!(empty_info.len(), 1, "{empty_info:?}");
+        assert_eq!(empty_info[0].display, "plain");
+        assert_eq!(empty_info[0].copy_text.as_deref(), Some("```\nplain\n```"));
     }
 
     /// Verifies specialized fenced renderers run before generic highlighting
@@ -2108,10 +2171,10 @@ mod tests {
             calls.borrow().as_slice(),
             [("rust".to_string(), "fn main() {}\n".to_string())]
         );
-        assert_eq!(lines.len(), 3, "{lines:?}");
-        assert_eq!(lines[1].display, "fn main() {}");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].display, "fn main() {}");
         assert_eq!(
-            lines[1].style_spans[0].rendition.foreground,
+            lines[0].style_spans[0].rendition.foreground,
             Some(TerminalColor::Rgb(10, 11, 12))
         );
     }

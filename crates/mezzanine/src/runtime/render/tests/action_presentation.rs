@@ -660,7 +660,13 @@ fn agent_markdown_renders_mermaid_without_changing_command_markdown() {
     assert!(
         command_lines
             .iter()
-            .any(|line| line.display == "```mermaid"),
+            .any(|line| line.display == "flowchart LR"),
+        "{command_lines:?}"
+    );
+    assert!(
+        command_lines
+            .iter()
+            .all(|line| !line.display.contains("```") && !line.display.contains("mermaid")),
         "{command_lines:?}"
     );
 }
