@@ -172,27 +172,17 @@ impl TerminalScreen {
         self.resize_normal_screen_reflowing(size);
     }
 
-    /// Resizes the live alternate screen to a blank application-owned grid.
+    /// Resizes the live alternate screen without recording application content
+    /// in normal-screen history.
     ///
-    /// Full-screen alternate-buffer applications own their viewport and redraw
-    /// after `SIGWINCH`. Clearing copied pre-resize cells prevents attached
-    /// clients from replaying stale full-screen content while retaining cursor
-    /// and saved-cursor coordinates within the new bounds.
+    /// Stable-width changes preserve physical cells, while width changes reflow
+    /// the visible alternate grid using the same cursor and wrap invariants as
+    /// the normal screen. Alternate content never enters scrollback.
     pub(super) fn resize_alternate_screen(&mut self, size: Size) {
-        let new_rows = usize::from(size.rows);
-        self.size = size;
-        self.cells = blank_cells(size);
-        self.renditions = blank_renditions(size, GraphicRendition::default());
-        self.line_wraps = vec![false; new_rows];
-        self.line_copy_texts = vec![None; new_rows];
-        let max_row = self.max_row();
-        let max_column = self.max_column();
-        self.cursor.row = self.cursor.row.min(max_row);
-        self.cursor.column = self.cursor.column.min(max_column);
-        self.wrap_pending = false;
-        if let Some(cursor) = self.saved_cursor.as_mut() {
-            cursor.row = cursor.row.min(max_row);
-            cursor.column = cursor.column.min(max_column);
+        if self.size.columns == size.columns {
+            self.resize_grid_preserving_cells(size);
+        } else {
+            self.resize_detached_normal_screen(size);
         }
     }
     /// Returns whether the live normal-screen viewport is intentionally blank.

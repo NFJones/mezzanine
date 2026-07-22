@@ -5,14 +5,10 @@ use crate::{
     terminal_text_width,
 };
 
-/// Verifies alternate-screen resize clears copied application content.
-///
-/// Full-screen applications redraw after `SIGWINCH`; retaining their old grid
-/// would make the attached renderer replay stale top-of-buffer content before
-/// that redraw arrives. The resized grid must therefore be blank while normal
-/// history remains untouched.
+/// Verifies alternate-screen row-only resize preserves the visible application
+/// tail without recording alternate content in normal-screen history.
 #[test]
-fn terminal_screen_alternate_resize_clears_pre_resize_content() {
+fn terminal_screen_alternate_resize_preserves_pre_resize_content() {
     let mut screen = TerminalScreen::new(Size::new(6, 4).unwrap(), 10).unwrap();
 
     screen.feed(b"\x1b[?1049hrow0\r\nrow1\r\nrow2\r\nrow3");
@@ -20,7 +16,32 @@ fn terminal_screen_alternate_resize_clears_pre_resize_content() {
 
     assert!(screen.alternate_screen_active());
     assert_eq!(screen.size(), Size::new(6, 2).unwrap());
-    assert_eq!(screen.visible_lines(), vec!["".to_string(), "".to_string()]);
+    assert_eq!(screen.visible_lines(), vec!["row2", "row3"]);
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 4);
+    assert!(screen.history().is_empty());
+}
+
+/// Verifies alternate-screen width changes reflow wrapped application content
+/// and restore wide grapheme footprints when the pane grows again.
+#[test]
+fn terminal_screen_alternate_resize_reflows_wrapped_and_wide_content() {
+    let mut screen = TerminalScreen::new(Size::new(8, 3).unwrap(), 10).unwrap();
+
+    screen.feed("\x1b[?1049habcdef界".as_bytes());
+    screen.resize(Size::new(4, 3).unwrap());
+
+    assert!(screen.alternate_screen_active());
+    assert_eq!(screen.visible_lines(), vec!["abcd", "ef界", ""]);
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 3);
+    assert!(screen.history().is_empty());
+
+    screen.resize(Size::new(8, 3).unwrap());
+
+    assert_eq!(screen.visible_lines(), vec!["abcdef界", "", ""]);
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 7);
     assert!(screen.history().is_empty());
 }
 
