@@ -1143,6 +1143,11 @@ pub fn clip_style_spans(
 }
 
 /// Returns a display-column slice from one terminal line.
+///
+/// A viewport boundary can intersect a multi-column grapheme. Because one
+/// half of that grapheme cannot be rendered independently, the intersected
+/// cells become blanks so following cells retain their source columns. The
+/// slice does not pad beyond the source line's existing display width.
 pub fn line_slice(line: &str, start: usize, end: usize) -> String {
     let mut output = String::new();
     let mut column = 0usize;
@@ -1153,14 +1158,17 @@ pub fn line_slice(line: &str, start: usize, end: usize) -> String {
             column = next;
             continue;
         }
-        if column < start && next > start {
-            column = next;
-            continue;
-        }
-        if column >= end || next > end {
+        if column >= end {
             break;
         }
-        output.push_str(grapheme);
+        let clipped_start = column.max(start);
+        let clipped_end = next.min(end);
+        let clipped_width = clipped_end.saturating_sub(clipped_start);
+        if clipped_width == width {
+            output.push_str(grapheme);
+        } else {
+            output.push_str(&" ".repeat(clipped_width));
+        }
         column = next;
     }
     output
@@ -1370,6 +1378,9 @@ mod tests {
         assert_eq!(fitted.text, "a ");
         assert!(fitted.style_spans.is_empty());
         assert_eq!(line_slice("a界b", 1, 3), "界");
+        assert_eq!(line_slice("a界bc", 2, 5), " bc");
+        assert_eq!(line_slice("a界bc", 0, 2), "a ");
+        assert_eq!(line_slice("ab", 1, 4), "b");
     }
 
     /// Verifies a fixed-column style overlay preserves span fragments on both

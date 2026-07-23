@@ -816,6 +816,49 @@ mod tests {
         assert_eq!((view.viewport_row, view.viewport_column), (2, 4));
     }
 
+    /// Verifies a horizontal client viewport keeps exact cell geometry when
+    /// either edge intersects a two-column grapheme. The unrenderable half is
+    /// blanked rather than shifting later source cells toward the viewport edge.
+    #[test]
+    fn client_viewport_preserves_columns_across_clipped_wide_graphemes() {
+        let view = RenderedClientView {
+            role: ClientViewRole::Observer,
+            authoritative_size: Size::new(5, 2).unwrap(),
+            client_size: Size::new(3, 2).unwrap(),
+            lines: vec!["a界bc".to_owned(), "界abc".to_owned()],
+            line_style_spans: vec![Vec::new(), Vec::new()],
+            selection: None,
+            requires_client_scroll: true,
+            viewport_row: 0,
+            viewport_column: 2,
+            cursor_row: 0,
+            cursor_column: 0,
+            cursor_visible: false,
+            cursor_style: TerminalCursorStyle::Block,
+            cursor_blink: false,
+            cursor_blink_interval_ms: 500,
+            application_keypad: false,
+            bracketed_paste: false,
+            focus_events: false,
+            alternate_screen: false,
+            host_mouse_reporting: true,
+            animation_refresh_interval_ms: 0,
+            ui_theme: Default::default(),
+            agent_prompt_region: None,
+            primary_prompt_active: false,
+        };
+
+        let (lines, spans) = compose_client_viewport(&view);
+
+        assert_eq!(lines, [" bc", "abc"]);
+        assert!(
+            lines
+                .iter()
+                .all(|line| crate::render::char_count(line) == 3)
+        );
+        assert_eq!(spans, [Vec::new(), Vec::new()]);
+    }
+
     /// Verifies attached-client status composition is fully mux-owned by
     /// applying semantic prefixes, exact viewport width, and theme styling
     /// without relying on the product terminal renderer.
