@@ -132,6 +132,33 @@ fn transcript_store_compacts_presentation_tail_into_zstd_history() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies bounded projection replay keeps the newest ordered entries when
+/// the visible history crosses from compressed frames into the cleartext tail.
+#[test]
+fn transcript_store_projection_replay_tail_includes_compressed_history() {
+    let root = temp_root("presentation-projection-replay");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let first = large_presentation("conv1", 1);
+    let second = large_presentation("conv1", 2);
+    let third = presentation("conv1", 3);
+
+    store.append_presentation(&first).unwrap();
+    store.append_presentation(&second).unwrap();
+    store.append_presentation(&third).unwrap();
+
+    let replay = store.inspect_presentation_replay_tail("conv1", 2).unwrap();
+
+    assert_eq!(
+        replay,
+        vec![
+            second.normalized_for_agent_log_wrap(),
+            third.normalized_for_agent_log_wrap()
+        ]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies durable presentation appends normalize display and copy rows to the
 /// recorded pane width so replay does not depend on terminal soft wrapping.
 #[test]

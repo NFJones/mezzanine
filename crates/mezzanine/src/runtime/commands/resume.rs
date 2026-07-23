@@ -21,8 +21,6 @@ const AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;
 const AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 /// Maximum persisted presentation rows to replay when resuming an agent shell.
 const AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES: usize = 200;
-/// Maximum cleartext presentation bytes to read when resuming an agent shell.
-const AGENT_RESUME_PRESENTATION_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Returns the saved working directory from transcript context entries.
 ///
@@ -130,10 +128,9 @@ impl RuntimeSessionService {
             AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES,
             AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES,
         )?;
-        let presentation_entries = store.inspect_recent_presentation(
+        let presentation_entries = store.inspect_presentation_replay_tail(
             &conversation_id,
             AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES,
-            AGENT_RESUME_PRESENTATION_REPLAY_BYTES,
         )?;
         let resume_directory = runtime_resume_directory_from_summary(&summary)
             .or_else(|| runtime_resume_directory_from_entries(&entries));

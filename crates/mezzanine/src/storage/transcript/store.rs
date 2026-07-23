@@ -236,6 +236,25 @@ impl AgentTranscriptStore {
             .collect()
     }
 
+    /// Reads the latest ordered presentation entries across compressed history
+    /// and the active cleartext tail.
+    ///
+    /// Resume and geometry-aware projection need one coherent event sequence;
+    /// limiting only the returned entries keeps their replay window bounded
+    /// without silently ignoring persisted compressed records.
+    pub fn inspect_presentation_replay_tail(
+        &self,
+        conversation_id: &str,
+        max_entries: usize,
+    ) -> Result<Vec<AgentPresentationEntry>> {
+        if max_entries == 0 {
+            return Ok(Vec::new());
+        }
+        let entries = self.inspect_presentation(conversation_id)?;
+        let first = entries.len().saturating_sub(max_entries);
+        Ok(entries[first..].to_vec())
+    }
+
     /// Returns the next append sequence for one presentation log.
     pub fn next_presentation_sequence(&self, conversation_id: &str) -> Result<u64> {
         if let Some(sequence) = self.read_presentation_index(conversation_id)? {

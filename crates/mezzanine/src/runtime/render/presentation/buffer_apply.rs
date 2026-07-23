@@ -372,7 +372,6 @@ impl RuntimeSessionService {
         size: Size,
     ) -> Result<bool> {
         const MAX_PRESENTATION_REPLAY_ENTRIES: usize = 200;
-        const MAX_PRESENTATION_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 
         let Some(session) = self.agent_shell_store().get(pane_id) else {
             return Ok(false);
@@ -380,10 +379,9 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.transcript_store() else {
             return Ok(false);
         };
-        let entries = store.inspect_recent_presentation(
+        let entries = store.inspect_presentation_replay_tail(
             &session.session_id,
             MAX_PRESENTATION_REPLAY_ENTRIES,
-            MAX_PRESENTATION_REPLAY_BYTES,
         )?;
         if !entries.iter().any(|entry| entry.source_text.is_some()) {
             return Ok(false);
