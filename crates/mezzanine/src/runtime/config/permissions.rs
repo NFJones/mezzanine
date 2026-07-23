@@ -390,11 +390,6 @@ pub(crate) fn runtime_configured_permissions_from_config(
     let sandbox = match runtime_json_string(permissions.get("sandbox")).unwrap_or("policy-only") {
         "policy-only" => SandboxConfig::PolicyOnly,
         "bubblewrap" => {
-            if read_scopes.is_empty() && write_scopes.is_empty() {
-                return Err(MezError::config(
-                    "permissions.sandbox = bubblewrap requires explicit read_scopes or write_scopes",
-                ));
-            }
             let bubblewrap = permissions.get("bubblewrap").and_then(Value::as_object);
             let executable = bubblewrap
                 .and_then(|config| runtime_json_string(config.get("executable")))

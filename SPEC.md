@@ -2779,9 +2779,12 @@ The `permissions` table MUST support `approval_policy`, `sandbox`,
 `command_rules`, `session_command_rules`, `global_command_rules`,
 `network_policy`, `destructive_action_policy`, `bypass_mode`, and the typed
 `bubblewrap` table. `sandbox` MUST default to `policy-only`; `bubblewrap` MUST
-be opt-in and fail closed. Configured scopes define maximum resource authority,
-MUST be resolved in the pane environment, and MUST NOT be inferred from command
-patterns, approvals, presets, or trusted directories. Rule `effects` MAY declare
+be opt-in and fail closed. Configured scopes define maximum resource authority
+and MUST be resolved in the pane environment. When both configured scope arrays
+are empty, a pane within an explicitly trusted project MUST receive that project
+root as its default read-write authority; no other working directory MAY infer
+authority. Aside from that trusted-project default, scopes MUST NOT be inferred
+from command patterns, approvals, presets, or trusted directories. Rule `effects` MAY declare
 complete or unknown read, write, network, credential, and process-control
 requirements; they MAY only narrow maximum authority. Before Bubblewrap
 compilation, complete read, write, create, delete, and touch paths MUST be

@@ -443,26 +443,26 @@ impl RuntimeSessionService {
             return Ok(None);
         }
 
-        let primary_resources = self.configured_permissions().resources.clone();
-        let resolved_primary_path_scopes = if !primary_resources.read_scopes.is_empty()
-            || !primary_resources.write_scopes.is_empty()
-        {
-            let request = mez_agent::shell::PanePathResolutionRequest::new(
-                primary_resources.read_scopes,
-                primary_resources.write_scopes,
-                Vec::new(),
-            )
-            .map_err(|error| MezError::invalid_args(error.message()))?;
-            match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
-                Some(scopes) => Some(scopes),
-                None => {
-                    let _ = self.dispatch_path_resolution_to_pane(&turn.pane_id, request)?;
-                    return Ok(None);
+        let (primary_read_scopes, primary_write_scopes) =
+            self.primary_path_scope_paths(&turn.pane_id);
+        let resolved_primary_path_scopes =
+            if !primary_read_scopes.is_empty() || !primary_write_scopes.is_empty() {
+                let request = mez_agent::shell::PanePathResolutionRequest::new(
+                    primary_read_scopes,
+                    primary_write_scopes,
+                    Vec::new(),
+                )
+                .map_err(|error| MezError::invalid_args(error.message()))?;
+                match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
+                    Some(scopes) => Some(scopes),
+                    None => {
+                        let _ = self.dispatch_path_resolution_to_pane(&turn.pane_id, request)?;
+                        return Ok(None);
+                    }
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
         let resolved_subagent_path_scopes = if let Some(scope) = subagent_scope

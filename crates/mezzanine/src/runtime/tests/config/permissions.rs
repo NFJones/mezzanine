@@ -52,19 +52,17 @@ fn runtime_materializes_typed_sandbox_permissions() {
     );
 }
 
-/// Verifies Bubblewrap activation fails closed when maximum filesystem
-/// authority is absent instead of inferring access from cwd or command rules.
+/// Verifies Bubblewrap configuration permits omitted explicit scopes so a
+/// trusted project root can supply bounded runtime authority for its pane.
 #[test]
-fn runtime_rejects_bubblewrap_without_explicit_scopes() {
+fn runtime_allows_bubblewrap_without_explicit_scopes() {
     let root = serde_json::json!({"permissions": {"sandbox": "bubblewrap"}});
 
-    let error = runtime_configured_permissions_from_config(&root).unwrap_err();
+    let configured = runtime_configured_permissions_from_config(&root).unwrap();
 
-    assert!(
-        error
-            .message()
-            .contains("requires explicit read_scopes or write_scopes")
-    );
+    assert!(configured.resources.read_scopes.is_empty());
+    assert!(configured.resources.write_scopes.is_empty());
+    assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
 }
 
 /// Verifies ensure private socket directory rejects group permissions.

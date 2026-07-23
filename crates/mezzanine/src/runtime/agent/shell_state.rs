@@ -15,6 +15,7 @@ use super::{
     runtime_marker_for_action, runtime_pane_readiness_state_name,
 };
 use crate::runtime::{RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, SandboxConfig};
+use crate::security::project::TrustDecision;
 use mez_agent::permissions::{EffectCompleteness, PermissionEvaluation};
 use mez_agent::{SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch};
 
@@ -458,18 +459,51 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Returns the maximum primary authority requested for one pane.
+    ///
+    /// Explicit configured scopes take precedence. When no scopes are
+    /// configured, a pane inside a trusted project receives read-write
+    /// authority for that project root only.
+    pub(crate) fn primary_path_scope_paths(&self, pane_id: &str) -> (Vec<String>, Vec<String>) {
+        let resources = &self.configured_permissions().resources;
+        if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
+            return (
+                resources.read_scopes.clone(),
+                resources.write_scopes.clone(),
+            );
+        }
+        let Some(working_directory) = self.pane_current_working_directory(pane_id) else {
+            return (Vec::new(), Vec::new());
+        };
+        let Some(project_root) = self.integration.project_trust_store().and_then(|store| {
+            store
+                .records()
+                .filter(|record| record.state == TrustDecision::Trusted)
+                .find(|record| {
+                    crate::runtime::runtime_path_under_project_root(
+                        &working_directory,
+                        &record.project_root,
+                    )
+                })
+                .map(|record| record.project_root.clone())
+        }) else {
+            return (Vec::new(), Vec::new());
+        };
+        let project_root = project_root.to_string_lossy().into_owned();
+        (vec![project_root.clone()], vec![project_root])
+    }
+
     /// Builds the best-available `PathScopes` for a pane.
     ///
     /// Configured primary authority is returned only after the exact request was
-    /// resolved in the pane environment. Configurations without primary scopes
-    /// retain an explicit unresolved state rather than inferring authority from
-    /// the working directory.
+    /// resolved in the pane environment. When no configured authority exists,
+    /// a trusted project root is used as the bounded primary authority.
     pub(crate) fn path_scopes_for_pane(&self, pane_id: &str) -> Option<PathScopes> {
-        let resources = &self.configured_permissions().resources;
-        if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
+        let (read_scopes, write_scopes) = self.primary_path_scope_paths(pane_id);
+        if !read_scopes.is_empty() || !write_scopes.is_empty() {
             let request = mez_agent::shell::PanePathResolutionRequest::new(
-                resources.read_scopes.clone(),
-                resources.write_scopes.clone(),
+                read_scopes,
+                write_scopes,
                 Vec::new(),
             )
             .ok()?;

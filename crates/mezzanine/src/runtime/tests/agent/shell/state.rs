@@ -318,6 +318,36 @@ fn configure_path_resolution_bubblewrap(service: &mut RuntimeSessionService) {
         .replace_configured_permissions(configured);
 }
 
+/// Verifies an explicitly trusted project supplies bounded read-write primary
+/// authority when Bubblewrap has no configured filesystem scopes.
+#[test]
+fn trusted_project_defaults_primary_authority_to_project_root() {
+    let root = temp_root("runtime-trusted-project-primary-authority");
+    let project_root = root.join("project");
+    let nested_directory = project_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&nested_directory).unwrap();
+    let mut service = test_runtime_service();
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            project_root.clone(),
+            TrustDecision::Trusted,
+            Some(project_root.join(".git")),
+            1,
+        )
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_current_working_directory("%1".to_string(), nested_directory);
+
+    let (read_scopes, write_scopes) = service.primary_path_scope_paths("%1");
+    let expected = project_root.to_string_lossy().into_owned();
+
+    assert_eq!(read_scopes, vec![expected.clone()]);
+    assert_eq!(write_scopes, vec![expected]);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Builds a ready pane with Bubblewrap configured for capability-probe tests.
 fn bubblewrap_probe_service() -> RuntimeSessionService {
     let root = temp_root("runtime-bubblewrap-probe");

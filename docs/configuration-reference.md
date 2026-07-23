@@ -697,14 +697,14 @@ Provider options under a model profile:
 | `permissions.approval_policy` | string | `"ask"` | Default approval policy: `ask`, `auto-allow`, or `full-access`. |
 | `permissions.preset` | string | omitted | Optional preset, such as `read-only` or `auto`. |
 | `permissions.sandbox` | string | `"policy-only"` | Additive confinement backend: `policy-only` or `bubblewrap`. |
-| `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. |
-| `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. |
+| `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. |
+| `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. |
 | `permissions.bubblewrap.executable` | string | `"/usr/bin/bwrap"` | Absolute Bubblewrap path resolved and probed in the pane environment. |
 | `permissions.bubblewrap.unavailable` | string | `"fail"` | Never runs unsandboxed automatically. A prompt-classified action may offer one exact approval-gated fallback after Bubblewrap failure. |
 | `permissions.bubblewrap.network` | string | `"isolated"` | Private network namespace policy. |
 | `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
 | `permissions.trusted_directories` | string array | `[]` | Trusted directory roots; never converted into mounts. |
-| `permissions.trusted_projects` | string array | `[]` | Trusted project roots. |
+| `permissions.trusted_projects` | string array | `[]` | Trusted project roots for command authorization. A current project trust decision supplies default read-write authority when explicit scopes are omitted. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
 | `permissions.session_command_rules` | array | `[]` | Session-scoped command rule entries. |
 | `permissions.global_command_rules` | array | `[]` | Global command rule entries. |
@@ -747,7 +747,9 @@ protected directories are hidden by private tmpfs masks emitted after host
 binds; absent descendants are not mounted. The multi-user `/home` root and
 direct credential-directory scopes fail closed. Exact primary, subagent, and
 action requests are cached independently for the current pane environment and
-configuration generation. Bubblewrap activation requires explicit usable scopes.
+configuration generation. With no explicit scopes, a trusted current project
+provides the default read-write scope; other working directories remain
+unresolved. Bubblewrap activation requires usable scopes.
 Schema v20 migration selects `policy-only` and does not infer scopes or effects.
 
 On Linux, Mezzanine validates the configured executable inside the target pane
