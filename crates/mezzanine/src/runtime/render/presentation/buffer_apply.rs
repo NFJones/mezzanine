@@ -40,6 +40,9 @@ const AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE: &str =
 /// Content type for a raw user prompt that must be wrapped at replay geometry.
 const AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.user-prompt+text; charset=utf-8";
+/// Content type for a shell command preview rendered at replay geometry.
+const AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE: &str =
+    "application/vnd.mezzanine.agent-presentation.command-preview+text; charset=utf-8";
 
 /// Decodes one typed styled-line presentation record for geometry-aware replay.
 fn styled_agent_presentation_source_lines(
@@ -283,6 +286,10 @@ impl RuntimeSessionService {
                 ) {
                     if source_content_type == AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE {
                         self.append_agent_user_prompt_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE {
+                        self.append_agent_command_preview_to_terminal_buffer(pane_id, source_text)?;
                         continue;
                     }
                     if source_content_type == AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE
@@ -627,7 +634,7 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::Command,
             &rendered_lines,
             &copy_lines,
-            None,
+            Some((command, AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE)),
         )
     }
 
