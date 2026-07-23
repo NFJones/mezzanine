@@ -237,8 +237,18 @@ pub(super) async fn read_async_control_response_frames_or_disconnected(
 ) -> Result<Option<Vec<u8>>> {
     match read_async_control_response_frames(stream, max_content_length, expected_frames).await {
         Ok(response) => Ok(Some(response)),
-        Err(error) if control_response_socket_closed_before_complete_frame(&error) => Ok(None),
-        Err(error) if attached_terminal_output_disconnected(&error) => Ok(None),
+        Err(error) if control_response_socket_closed_before_complete_frame(&error) => {
+            Err(MezError::invalid_state(format!(
+                "attached daemon control socket disconnected while awaiting a response: {}",
+                error.message()
+            )))
+        }
+        Err(error) if attached_terminal_output_disconnected(&error) => {
+            Err(MezError::invalid_state(format!(
+                "attached daemon control socket disconnected while awaiting a response: {}",
+                error.message()
+            )))
+        }
         Err(error) => Err(error),
     }
 }

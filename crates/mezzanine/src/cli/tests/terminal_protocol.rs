@@ -1039,10 +1039,9 @@ async fn attached_runtime_event_stream_coalesces_event_burst() {
     );
 }
 
-/// Verifies interactive control-socket attachment exits cleanly when the daemon
-/// closes the socket before sending a response frame. The foreground terminal
-/// loop should treat that as detach/disconnect rather than surfacing the strict
-/// frame decoder's partial-header error.
+/// Verifies interactive control-socket attachment reports an error when the
+/// daemon closes the socket before sending a response frame, so callers do not
+/// mistake an interrupted active attachment for a successful detach.
 #[tokio::test(flavor = "current_thread")]
 async fn control_socket_primary_attach_loop_exits_on_incomplete_response_eof() {
     let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
@@ -1059,15 +1058,22 @@ async fn control_socket_primary_attach_loop_exits_on_incomplete_response_eof() {
     io.push_input(b"x".to_vec());
 
     let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
-    run_control_socket_attached_primary_client_loop_async(
+    let error = run_control_socket_attached_primary_client_loop_async(
         &mut client_stream,
         &mut io,
         primary_client_id,
         Size::new(80, 24).unwrap(),
     )
     .await
-    .unwrap();
+    .expect_err("unexpected daemon control-socket closure must fail attachment");
     server.join().unwrap();
+
+    assert!(
+        error
+            .message()
+            .contains("attached daemon control socket disconnected while awaiting a response"),
+        "{error:?}"
+    );
 
     assert_eq!(io.presentation_entries, 1);
     assert!(io.written_frames.is_empty());
