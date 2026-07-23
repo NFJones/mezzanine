@@ -1018,6 +1018,12 @@ impl RuntimeSessionService {
         let Some(descriptor) = self.find_pane_descriptor(&pane_id) else {
             return Ok(false);
         };
+        if !self
+            .persistence
+            .accept_pane_resize_completion(&pane_id, size)
+        {
+            return Ok(false);
+        }
         if !self.rebuild_agent_presentation_after_resize(&pane_id, size)?
             && let Some(screen) = self
                 .process

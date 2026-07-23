@@ -834,3 +834,73 @@ fn runtime_agent_async_resize_completion_rebuilds_source_backed_presentation() {
     assert!(!rebuilt.contains("staleasyncprojection"), "{rebuilt}");
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies a stale adapter-owned resize completion cannot overwrite the
+/// newest queued pane geometry or its source-backed agent projection.
+#[test]
+fn runtime_agent_ignores_superseded_async_resize_completion() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("agent-stale-async-resize"));
+    let primary = service
+        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let _process = service.take_running_pane_process_for_adapter("%1").unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .append_agent_assistant_text_to_terminal_buffer(
+            "%1",
+            "semantic projection survives only the newest resize completion",
+        )
+        .unwrap();
+
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(24, 12).unwrap())
+        .unwrap();
+    let stale_size = service
+        .drain_pane_io_transition()
+        .side_effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                effect: crate::runtime::PaneProcessIoEffect::Resize { size },
+                ..
+            } => Some(size),
+            _ => None,
+        })
+        .unwrap();
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(20, 12).unwrap())
+        .unwrap();
+    let newest_size = service
+        .drain_pane_io_transition()
+        .side_effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                effect: crate::runtime::PaneProcessIoEffect::Resize { size },
+                ..
+            } => Some(size),
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(stale_size, newest_size);
+    assert!(
+        !service
+            .apply_pane_resize_completion_event("%1", stale_size)
+            .unwrap()
+    );
+    assert!(
+        service
+            .apply_pane_resize_completion_event("%1", newest_size)
+            .unwrap()
+    );
+    assert_eq!(service.pane_screen("%1").unwrap().size(), newest_size);
+    service.terminate_all_pane_processes().unwrap();
+}

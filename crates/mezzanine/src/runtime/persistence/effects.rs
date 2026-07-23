@@ -1,6 +1,6 @@
 //! Deferred external-effect queue operations.
 
-use super::{RuntimePersistenceComponent, RuntimeSideEffect};
+use super::{RuntimePersistenceComponent, RuntimeSideEffect, TerminalSize};
 
 impl RuntimePersistenceComponent {
     /// Queues one pane-input effect in dispatch order.
@@ -14,8 +14,35 @@ impl RuntimePersistenceComponent {
         pane_id: impl Into<String>,
         effect: RuntimeSideEffect,
     ) {
-        self.queued_pane_resize_effects
-            .insert(pane_id.into(), effect);
+        let pane_id = pane_id.into();
+        if let RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::Resize { size },
+            ..
+        } = &effect
+        {
+            self.expected_pane_resize_sizes
+                .insert(pane_id.clone(), *size);
+        }
+        self.queued_pane_resize_effects.insert(pane_id, effect);
+    }
+
+    /// Consumes the expected async resize size when one completion arrives.
+    ///
+    /// Returns `false` only when a later queued resize has made this completion
+    /// stale; completions without a tracked adapter request remain valid.
+    pub(crate) fn accept_pane_resize_completion(
+        &mut self,
+        pane_id: &str,
+        size: TerminalSize,
+    ) -> bool {
+        let Some(expected) = self.expected_pane_resize_sizes.get(pane_id) else {
+            return true;
+        };
+        if *expected != size {
+            return false;
+        }
+        self.expected_pane_resize_sizes.remove(pane_id);
+        true
     }
 
     /// Replaces the queued termination for one pane.
@@ -54,6 +81,7 @@ impl RuntimePersistenceComponent {
                 _ => true,
             });
         self.queued_pane_resize_effects.remove(pane_id);
+        self.expected_pane_resize_sizes.remove(pane_id);
         self.queued_pane_pipe_effects
             .retain(|(queued_pane_id, _)| queued_pane_id != pane_id);
     }

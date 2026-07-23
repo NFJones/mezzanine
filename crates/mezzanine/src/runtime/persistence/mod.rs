@@ -11,6 +11,7 @@ use crate::security::audit::AuditLog;
 use crate::storage::registry::SessionRegistry;
 use crate::storage::snapshot::SnapshotRepository;
 use crate::storage::transcript::AgentTranscriptStore;
+use mez_terminal::TerminalSize;
 
 use super::RuntimeSideEffect;
 
@@ -27,6 +28,7 @@ pub(crate) struct RuntimePersistenceComponent {
     audit_log: Option<AuditLog>,
     queued_pane_input_effects: Vec<RuntimeSideEffect>,
     queued_pane_resize_effects: BTreeMap<String, RuntimeSideEffect>,
+    expected_pane_resize_sizes: BTreeMap<String, TerminalSize>,
     queued_pane_termination_effects: BTreeMap<String, RuntimeSideEffect>,
     queued_pane_pipe_effects: Vec<(String, RuntimeSideEffect)>,
     queued_audit_effects: Vec<RuntimeSideEffect>,
