@@ -7014,7 +7014,9 @@ or clarification when no terminal, web, MCP, or local mutation is needed, and
 that shell commands MUST NOT be embedded in `say` text. It MUST instruct the
 model to set an appropriate `say` content type, including at least plain text,
 Markdown, and diff content types, so rendered output can preserve user-facing
-structure.
+structure. It MUST encourage Markdown when it improves clarity, permit inline
+code and Mermaid diagrams when useful, and discourage gratuitous code or
+diagrams.
 The prompt MUST prohibit asking the user for task-local facts, identifiers,
 URLs, paths, branches, command forms, integration arguments, or other
 information needed to continue when it can be safely gathered from current
