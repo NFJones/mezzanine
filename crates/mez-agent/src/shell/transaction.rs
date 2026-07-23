@@ -221,6 +221,12 @@ pub struct ShellTransaction {
     /// in the active pane shell. Isolated action commands can encode output so
     /// terminal-control bytes stay inert until runtime result processing.
     pub output_transport: ShellTransactionOutputTransport,
+    /// Maximum raw child-output bytes retained by the encoded transport.
+    ///
+    /// Ordinary actions use the global default. Internal protocols whose
+    /// complete output is required for correctness may select a larger bounded
+    /// limit before rendering the transaction wrapper.
+    pub output_max_raw_bytes: usize,
 }
 
 /// One argument in a typed isolated-child process launch.
@@ -420,6 +426,7 @@ pub enum ShellTransactionOutputTransport {
 /// - `shell_invocation`: Shell words that invoke the materialized command file.
 fn posix_child_command_invocation_lines(
     transport: ShellTransactionOutputTransport,
+    output_max_raw_bytes: usize,
     child_env: &str,
     shell_invocation: &str,
     status_fd: Option<u8>,
@@ -492,12 +499,12 @@ fn posix_child_command_invocation_lines(
             "    MEZ_OUTPUT_BYTES=$(wc -c < \"$MEZ_OUTPUT_FILE\" 2>/dev/null || printf 0)".to_string(),
             format!(
                 "    if [ \"$MEZ_OUTPUT_BYTES\" -gt {} ] 2>/dev/null; then MEZ_OUTPUT_DROPPED=$((MEZ_OUTPUT_BYTES - {})); else MEZ_OUTPUT_DROPPED=0; fi",
-                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
-                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+                output_max_raw_bytes,
+                output_max_raw_bytes
             ),
             format!(
                 "    dd if=\"$MEZ_OUTPUT_FILE\" bs={} count=1 2>/dev/null | base64",
-                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+                output_max_raw_bytes
             ),
             "  fi".to_string(),
             format!(
@@ -564,6 +571,7 @@ fn posix_child_command_line(
 /// - `shell_invocation`: Fish words that invoke the materialized command file.
 fn fish_child_command_invocation_lines(
     transport: ShellTransactionOutputTransport,
+    output_max_raw_bytes: usize,
     noninteractive_env: &str,
     shell_invocation: &str,
     status_fd: Option<u8>,
@@ -633,18 +641,18 @@ fn fish_child_command_invocation_lines(
             "set -l MEZ_OUTPUT_BYTES (wc -c < \"$MEZ_OUTPUT_FILE\" 2>/dev/null); or set MEZ_OUTPUT_BYTES 0".to_string(),
             format!(
                 "if test \"$MEZ_OUTPUT_BYTES\" -gt {} 2>/dev/null",
-                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+                output_max_raw_bytes
             ),
             format!(
                 "set MEZ_OUTPUT_DROPPED (math \"$MEZ_OUTPUT_BYTES - {}\")",
-                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+                output_max_raw_bytes
             ),
             "else".to_string(),
             "set MEZ_OUTPUT_DROPPED 0".to_string(),
             "end".to_string(),
             format!(
                 "command dd if=\"$MEZ_OUTPUT_FILE\" bs={} count=1 2>/dev/null | base64",
-                SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+                output_max_raw_bytes
             ),
             "end".to_string(),
             format!(
@@ -751,6 +759,7 @@ impl ShellTransaction {
             command: command.into(),
             child_launch: None,
             output_transport: ShellTransactionOutputTransport::Raw,
+            output_max_raw_bytes: SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
         })
     }
 
@@ -770,6 +779,15 @@ impl ShellTransaction {
         output_transport: ShellTransactionOutputTransport,
     ) -> Self {
         self.output_transport = output_transport;
+        self
+    }
+
+    /// Selects the bounded raw-output limit used by encoded shell transport.
+    ///
+    /// A zero value is promoted to one byte so generated `dd` commands remain
+    /// valid and every transaction preserves a deterministic finite bound.
+    pub fn with_output_max_raw_bytes(mut self, output_max_raw_bytes: usize) -> Self {
+        self.output_max_raw_bytes = output_max_raw_bytes.max(1);
         self
     }
 
@@ -815,6 +833,7 @@ impl ShellTransaction {
         };
         let child_invocation = posix_child_command_invocation_lines(
             self.output_transport,
+            self.output_max_raw_bytes,
             &child_env,
             &shell_invocation,
             self.child_launch
@@ -968,6 +987,7 @@ unset -f {function_name} 2>/dev/null || :\n\
         };
         let child_invocation = fish_child_command_invocation_lines(
             self.output_transport,
+            self.output_max_raw_bytes,
             &child_env,
             &shell_invocation,
             self.child_launch

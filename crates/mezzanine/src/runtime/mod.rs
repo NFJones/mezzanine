@@ -308,7 +308,9 @@ pub(crate) use persistence::RuntimePersistenceComponent;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod processes;
-pub(crate) use processes::RuntimeProcessComponent;
+pub(crate) use processes::{
+    RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, RuntimeProcessComponent,
+};
 /// Exposes the render module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

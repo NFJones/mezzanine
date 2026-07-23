@@ -42,7 +42,7 @@ pub(super) const RUNTIME_SHELL_TRANSACTION_OBSERVATION_LIMIT_BYTES: usize = 256 
 ///
 /// The read phase carries remote file bytes that Rust must patch internally, so
 /// it needs a larger bound than ordinary model-visible shell observations.
-pub(super) const RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 /// Defines the RUNTIME SHELL WRAPPER FILTER RECENT COMMAND LIMIT const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

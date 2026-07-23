@@ -489,6 +489,28 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+#[test]
+/// Verifies apply-patch snapshot reads select the larger internal output bound.
+///
+/// A single large target can expand beyond the ordinary shell output ceiling
+/// after snapshot base64 encoding. Read phases must use the runtime snapshot
+/// ceiling, while write phases retain the ordinary action-output bound.
+fn runtime_apply_patch_read_uses_snapshot_output_ceiling() {
+    let read = mez_agent::semantic_patch_planning::apply_patch_read_plan_for_paths(
+        &["large.txt".to_string()].into_iter().collect(),
+    );
+    assert_eq!(
+        crate::runtime::agent::shell_transaction_output_max_raw_bytes(&read.command),
+        crate::runtime::RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES
+    );
+    assert_eq!(
+        crate::runtime::agent::shell_transaction_output_max_raw_bytes(
+            "# __MEZ_APPLY_PATCH_WRITE_PHASE__"
+        ),
+        mez_agent::SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+    );
+}
+
 /// Verifies `/loop` schedules another work iteration after a completed turn
 /// that emitted an `apply_patch` action.
 ///

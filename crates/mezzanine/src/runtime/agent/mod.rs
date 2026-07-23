@@ -119,6 +119,9 @@ mod subagents;
 mod trace;
 mod turn_state;
 
+#[cfg(test)]
+pub(crate) use shell_state::shell_transaction_output_max_raw_bytes;
+
 use mez_agent::ProviderRetryScheduler;
 use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
 use presentation::{

@@ -14,9 +14,21 @@ use super::{
     runtime_agent_terminal_preview, runtime_execution_ready_for_provider_continuation,
     runtime_marker_for_action, runtime_pane_readiness_state_name,
 };
-use crate::runtime::SandboxConfig;
+use crate::runtime::{RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, SandboxConfig};
 use mez_agent::permissions::{EffectCompleteness, PermissionEvaluation};
-use mez_agent::{ShellChildArgument, ShellChildLaunch};
+use mez_agent::{SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch};
+
+/// Returns the bounded raw-output ceiling for one generated shell transaction.
+///
+/// Apply-patch read phases carry complete file snapshots required by Rust-side
+/// planning. Ordinary actions retain the smaller model-visible output bound.
+pub(crate) fn shell_transaction_output_max_raw_bytes(command: &str) -> usize {
+    if apply_patch_transaction_phase(command) == Some(ApplyPatchTransactionPhase::Read) {
+        RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES
+    } else {
+        SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+    }
+}
 
 /// Builds the exact resolver request needed for complete per-action filesystem
 /// effects and protected descendants of deterministic user-home authority.
@@ -197,6 +209,8 @@ impl RuntimeSessionService {
         } else {
             ShellTransactionOutputTransport::Base64
         });
+        let transaction =
+            transaction.with_output_max_raw_bytes(shell_transaction_output_max_raw_bytes(command));
         let classification = self.shell_classification_for_pane(&turn.pane_id);
         let transaction_input = if stateful {
             None

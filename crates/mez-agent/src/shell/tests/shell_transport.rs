@@ -4,6 +4,9 @@
 //! fixtures remain in the parent module.
 
 use super::*;
+use crate::{
+    SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER, decode_shell_output_transport_with_diagnostics,
+};
 
 #[test]
 /// Verifies that the agent subshell handoff rejects unresolved shell paths.
@@ -467,6 +470,40 @@ fn posix_wrapper_streams_large_command_payload_after_receiver_start() {
     );
     assert!(stdout.contains("payloadpayload"), "{stdout:?}");
     assert!(stdout.contains("\u{1b}]133;D;0;"), "{stdout:?}");
+}
+
+#[test]
+/// Verifies internal protocols can retain output beyond the ordinary shell
+/// result ceiling without removing the transaction's finite bound.
+///
+/// `apply_patch` read snapshots contain base64-encoded file bytes and can
+/// exceed 256 KiB even when the target file is substantially smaller. The
+/// selected raw-output limit must reach the generated POSIX wrapper so a
+/// complete snapshot is emitted instead of a dropped-byte marker.
+fn posix_wrapper_honors_custom_encoded_output_limit() {
+    let output_bytes = SHELL_OUTPUT_BASE64_MAX_RAW_BYTES + 4096;
+    let command = format!("head -c {output_bytes} /dev/zero | tr '\\0' x");
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), command)
+            .unwrap()
+            .with_output_transport(ShellTransactionOutputTransport::Base64)
+            .with_output_max_raw_bytes(output_bytes + 1024);
+    let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
+
+    let output = run_sh_transaction(&input, "");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+    assert!(
+        output.status.success(),
+        "status={:?} stdout_bytes={} stderr={:?}",
+        output.status,
+        output.stdout.len(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(decoded.output.len(), output_bytes);
+    assert!(!decoded.diagnostics.output_truncated());
+    assert!(!stdout.contains(SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER));
 }
 
 #[test]

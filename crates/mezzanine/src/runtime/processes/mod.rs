@@ -58,6 +58,7 @@ use mez_agent::{
 use mez_mux::process::PaneProcess;
 use mez_terminal::TerminalStyledLine;
 
+pub(crate) use transactions::RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES;
 use transactions::{
     RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS, RUNTIME_MEZ_OSC_PREFIX,
     RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES, RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT,
