@@ -81,6 +81,64 @@ fn runtime_attached_input_submits_visible_agent_prompt_non_modally() {
     );
 }
 
+/// Verifies ordinary agent typing does not run the pane-resize pipeline while
+/// the prompt remains the same height.
+///
+/// Prompt edits still require a refreshed client frame, but issuing a PTY
+/// resize and pane-change event for every keystroke adds agent-only latency and
+/// unnecessary process work. Crossing a wrapped-row boundary remains covered
+/// by the pane-local prompt-height resize regression.
+#[test]
+fn runtime_agent_prompt_same_row_edits_do_not_resize_the_pty() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+    service.sync_tracked_pty_sizes().unwrap();
+    let resize_events_before = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::Primary)
+        .into_iter()
+        .filter(|event| event.payload.contains(r#""layout":"resized""#))
+        .count();
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"abc".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    assert!(report.view_refresh_required);
+    let resize_events_after = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::Primary)
+        .into_iter()
+        .filter(|event| event.payload.contains(r#""layout":"resized""#))
+        .count();
+    assert_eq!(resize_events_after, resize_events_before);
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a below-threshold bracketed paste retains exact multiline text.
 ///
 /// Small pastes stay directly editable rather than becoming collapsed paste

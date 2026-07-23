@@ -388,9 +388,35 @@ impl RuntimeSessionService {
             match action {
                 TerminalClientLoopAction::ForwardToPane(input) => {
                     if self.active_agent_shell_visible()? {
+                        let pane_id = self.active_pane_id()?;
+                        let resize_pane_id = self.session.active_window().and_then(|window| {
+                            window
+                                .panes()
+                                .iter()
+                                .find(|pane| pane.id.as_str() == pane_id)
+                                .map(|pane| pane.id.clone())
+                        });
+                        let previous_process_size = self
+                            .session
+                            .active_window()
+                            .and_then(|window| self.pane_process_size_for(window, &pane_id));
                         let overlay_was_open = self.presentation.primary_display_overlay.is_some();
                         if self.apply_attached_agent_prompt_input(primary_client_id, input)? {
-                            self.sync_tracked_pty_sizes()?;
+                            let current_process_size = self
+                                .session
+                                .active_window()
+                                .and_then(|window| self.pane_process_size_for(window, &pane_id));
+                            if current_process_size != previous_process_size
+                                && let Some(size) = current_process_size
+                                && let Some(resize_pane_id) = resize_pane_id
+                            {
+                                self.sync_pane_resize_effects(&[
+                                    mez_mux::session::PaneResizeEffect {
+                                        pane_id: resize_pane_id,
+                                        size,
+                                    },
+                                ])?;
+                            }
                             report.agent_prompt_inputs_applied =
                                 report.agent_prompt_inputs_applied.saturating_add(1);
                             report.view_refresh_required = true;
