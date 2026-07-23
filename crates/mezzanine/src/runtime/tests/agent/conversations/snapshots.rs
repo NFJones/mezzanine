@@ -39,10 +39,8 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
         .execute_terminal_command(&primary, "load-layout --latest")
         .unwrap();
     assert!(resume.contains(r#""command":"load-layout""#), "{resume}");
-    assert!(
-        resume.contains(r#""body":"loaded latest layout""#),
-        "{resume}"
-    );
+    assert!(resume.contains(r#""kind":"noop""#), "{resume}");
+    assert!(!resume.contains("loaded latest layout"), "{resume}");
     assert!(!resume.contains(r#"\"resumed\":true"#), "{resume}");
     assert!(!service.pane_processes().contains_pane(&old_pane_id));
     let tracked_pane_ids = service.pane_processes().tracked_pane_ids();
@@ -115,10 +113,8 @@ fn runtime_terminal_snapshot_resume_latest_uses_repository_latest_across_session
     let resume = resuming_service
         .execute_terminal_command(&resuming_primary, "load-layout --latest")
         .unwrap();
-    assert!(
-        resume.contains(r#""body":"loaded latest layout""#),
-        "{resume}"
-    );
+    assert!(resume.contains(r#""kind":"noop""#), "{resume}");
+    assert!(!resume.contains("loaded latest layout"), "{resume}");
     assert_eq!(resuming_service.session.id.to_string(), live_session_id);
 
     let _ = fs::remove_dir_all(root);
@@ -162,10 +158,8 @@ fn runtime_terminal_snapshot_resume_latest_revives_detached_snapshot_session() {
     let resume = resuming_service
         .execute_terminal_command(&resuming_primary, "load-layout --latest")
         .unwrap();
-    assert!(
-        resume.contains(r#""body":"loaded latest layout""#),
-        "{resume}"
-    );
+    assert!(resume.contains(r#""kind":"noop""#), "{resume}");
+    assert!(!resume.contains("loaded latest layout"), "{resume}");
     assert_eq!(resuming_service.session.state, SessionState::Running);
 
     let _ = fs::remove_dir_all(root);

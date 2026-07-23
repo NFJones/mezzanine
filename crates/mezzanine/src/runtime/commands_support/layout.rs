@@ -39,9 +39,8 @@ pub(super) fn resolve_runtime_layout_command_outcome(
             let Some(snapshots) = service.persistence.cloned_snapshot_repository() else {
                 return Ok(CommandOutcome::LayoutLoad { command, selector });
             };
-            let body =
-                runtime_layout_load_command(service, active_client_id, &snapshots, &selector)?;
-            Ok(CommandOutcome::Display { command, body })
+            runtime_layout_load_command(service, active_client_id, &snapshots, &selector)?;
+            Ok(CommandOutcome::Noop { command })
         }
         outcome => Ok(outcome),
     }
@@ -104,7 +103,7 @@ fn runtime_layout_load_command(
     active_client_id: &mut mez_core::ids::ClientId,
     snapshots: &SnapshotRepository,
     selector: &LayoutLoadSelector,
-) -> Result<String> {
+) -> Result<()> {
     let snapshot_id = runtime_layout_id_for_selector(snapshots, selector)?;
     let idempotency_key = format!("terminal-command:load-layout:{snapshot_id}");
     let body = format!(
@@ -113,15 +112,7 @@ fn runtime_layout_load_command(
         json_escape(&idempotency_key)
     );
     dispatch_runtime_snapshot_terminal_command(service, active_client_id, snapshots, &body)?;
-    Ok(runtime_layout_load_status_message(selector))
-}
-
-/// Formats the concise status line shown after a successful `load-layout`.
-fn runtime_layout_load_status_message(selector: &LayoutLoadSelector) -> String {
-    match selector {
-        LayoutLoadSelector::Name(name) => format!("loaded layout {name}"),
-        LayoutLoadSelector::Latest => "loaded latest layout".to_string(),
-    }
+    Ok(())
 }
 
 /// Dispatches a snapshot control request and tracks a re-bound primary client after resume.
