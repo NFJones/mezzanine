@@ -95,6 +95,8 @@ pub struct RichTextLine {
 pub enum RichTextLineKind {
     /// Ordinary rendered text with no special wrapping behavior.
     Normal,
+    /// Final rendered row of one top-level Markdown paragraph.
+    MarkdownParagraph,
     /// Synthetic frame row displayed above one rendered markdown block.
     MarkdownFrame,
     /// Markdown thematic-break row rendered as a full-width divider.
@@ -728,7 +730,9 @@ fn render_markdown_internal(
         .filter(|line| line.kind.consumes_markdown_source_line())
         .count();
     if nonblank_source_lines != rendered_source_line_count {
-        return insert_blank_lines_around_markdown_headings(rendered_lines);
+        return insert_blank_lines_after_markdown_paragraphs(
+            insert_blank_lines_around_markdown_headings(rendered_lines),
+        );
     }
 
     let mut rendered = rendered_lines.into_iter().peekable();
@@ -767,9 +771,28 @@ fn render_markdown_internal(
         }
         rendered_line
     }));
-    insert_blank_lines_after_markdown_tables(insert_blank_lines_around_markdown_headings(
-        source_aligned_lines,
+    insert_blank_lines_after_markdown_paragraphs(insert_blank_lines_after_markdown_tables(
+        insert_blank_lines_around_markdown_headings(source_aligned_lines),
     ))
+}
+
+/// Inserts one presentation-only blank row between a top-level paragraph and
+/// following visible Markdown content.
+fn insert_blank_lines_after_markdown_paragraphs(lines: Vec<RichTextLine>) -> Vec<RichTextLine> {
+    let mut spaced = Vec::with_capacity(lines.len().saturating_add(1));
+    let mut lines = lines.into_iter().peekable();
+    while let Some(line) = lines.next() {
+        let is_paragraph_end = line.kind == RichTextLineKind::MarkdownParagraph;
+        spaced.push(line);
+        if is_paragraph_end
+            && lines
+                .peek()
+                .is_some_and(|following| !following.display.trim().is_empty())
+        {
+            spaced.push(markdown_blank_line());
+        }
+    }
+    spaced
 }
 
 /// Ensures every rendered markdown heading has presentation blank lines around it.
@@ -1156,7 +1179,7 @@ impl<'a> MarkdownRenderer<'a> {
     /// Handles the end of one markdown tag.
     fn handle_end_tag(&mut self, tag: TagEnd) {
         match tag {
-            TagEnd::Paragraph => self.finish_current_line(),
+            TagEnd::Paragraph => self.finish_paragraph(),
             TagEnd::Heading(_) => {
                 self.pop_style();
                 self.finish_current_line();
@@ -1648,6 +1671,14 @@ impl<'a> MarkdownRenderer<'a> {
         );
         self.current_prefix_only = false;
         self.lines.push(line);
+    }
+
+    /// Finishes a paragraph and marks its final top-level row for spacing.
+    fn finish_paragraph(&mut self) {
+        if self.list_stack.is_empty() && !self.current.display.is_empty() {
+            self.current.kind = RichTextLineKind::MarkdownParagraph;
+        }
+        self.finish_current_line();
     }
 
     /// Removes trailing blank presentation lines after parsing completes.
@@ -2328,6 +2359,51 @@ mod tests {
             ["", "Heading", "", "After"]
         );
         assert_eq!(authored_blank[2].copy_text.as_deref(), Some(""));
+    }
+
+    /// Verifies prose paragraphs have exactly one blank presentation row
+    /// before following block content without retaining a trailing spacer.
+    ///
+    /// CommonMark requires an authored blank line between consecutive prose
+    /// paragraphs, while lists and fenced blocks can follow directly. The
+    /// presentation policy should normalize all three transitions to one
+    /// visible buffer and preserve whether that row came from source or was
+    /// synthesized only for display.
+    #[test]
+    fn markdown_paragraphs_buffer_following_blocks() {
+        for (markdown, expected, blank_copy) in [
+            ("First\n\nSecond", vec!["First", "", "Second"], ""),
+            (
+                "Before\n- item",
+                vec!["Before", "", "• item"],
+                COPY_SKIP_LINE,
+            ),
+            (
+                "Before\n```text\nbody\n```",
+                vec!["Before", "", "body"],
+                COPY_SKIP_LINE,
+            ),
+        ] {
+            let lines = render_markdown(markdown, &theme(), None);
+            assert_eq!(
+                lines
+                    .iter()
+                    .map(|line| line.display.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{lines:?}"
+            );
+            assert_eq!(lines[1].copy_text.as_deref(), Some(blank_copy));
+        }
+
+        let paragraph_only = render_markdown("Only paragraph", &theme(), None);
+        assert_eq!(
+            paragraph_only
+                .iter()
+                .map(|line| line.display.as_str())
+                .collect::<Vec<_>>(),
+            ["Only paragraph"]
+        );
     }
 
     /// Verifies generic fenced Rust blocks hide their delimiters while retaining
