@@ -37,6 +37,9 @@ use mez_mux::render::markdown_block_copy_lines;
 /// Content type for width-independent styled agent presentation records.
 const AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.styled-lines+json; charset=utf-8";
+/// Content type for a raw user prompt that must be wrapped at replay geometry.
+const AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE: &str =
+    "application/vnd.mezzanine.agent-presentation.user-prompt+text; charset=utf-8";
 
 /// Decodes one typed styled-line presentation record for geometry-aware replay.
 fn styled_agent_presentation_source_lines(
@@ -72,7 +75,7 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::UserPrompt,
             rendered_lines.as_slice(),
             &[],
-            None,
+            Some((prompt, AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE)),
         )
     }
 
@@ -278,6 +281,10 @@ impl RuntimeSessionService {
                     entry.source_text.as_deref(),
                     entry.source_content_type.as_deref(),
                 ) {
+                    if source_content_type == AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE {
+                        self.append_agent_user_prompt_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
                     if source_content_type == AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE
                         && let Some(styled_lines) =
                             styled_agent_presentation_source_lines(source_text)
