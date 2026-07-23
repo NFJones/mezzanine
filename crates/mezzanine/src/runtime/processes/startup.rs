@@ -30,9 +30,25 @@ impl RuntimeSessionService {
         &mut self,
         explicit_command: Option<&str>,
     ) -> Result<PaneProcessStart> {
+        let start_directory = std::env::current_dir().map_err(|error| {
+            MezError::invalid_state(format!("failed to determine launch directory: {error}"))
+        })?;
+        self.start_initial_pane_process_with_start_directory(explicit_command, &start_directory)
+    }
+
+    /// Starts the initial pane from the caller's explicit launch directory.
+    pub(crate) fn start_initial_pane_process_with_start_directory(
+        &mut self,
+        explicit_command: Option<&str>,
+        start_directory: &Path,
+    ) -> Result<PaneProcessStart> {
         self.require_live()?;
         let descriptor = self.initial_pane_descriptor()?;
-        let started = self.start_pane_process(descriptor, explicit_command)?;
+        let started = self.start_pane_process_with_start_directory(
+            descriptor,
+            explicit_command,
+            Some(start_directory),
+        )?;
         self.run_configured_completed_hooks(
             HookEvent::SessionStart,
             &format!(

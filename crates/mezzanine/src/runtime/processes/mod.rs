@@ -1210,19 +1210,6 @@ impl RuntimeSessionService {
         Ok(Some(update))
     }
 
-    /// Runs the start pane process operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn start_pane_process(
-        &mut self,
-        descriptor: PaneDescriptor,
-        explicit_command: Option<&str>,
-    ) -> Result<PaneProcessStart> {
-        self.start_pane_process_with_start_directory(descriptor, explicit_command, None)
-    }
-
     /// Runs the start pane process with start directory operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -210,6 +210,43 @@ fn runtime_terminal_pane_move_commands_apply_resize_effects() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies the initial pane process starts in the caller's launch directory.
+///
+/// This regression protects the detached-daemon startup handoff: the process
+/// must use the directory captured at launch rather than an incidental later
+/// working directory.
+#[test]
+fn runtime_initial_pane_process_preserves_explicit_launch_directory() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-initial-pane-launch-directory-{}",
+        std::process::id()
+    ));
+    let launch_directory = root.join("launch");
+    let output = root.join("pwd.txt");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&launch_directory).unwrap();
+
+    let mut service = test_runtime_service();
+    let command = format!("pwd > {}", output.display());
+    let started = service
+        .start_initial_pane_process_with_start_directory(Some(&command), &launch_directory)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .pane_current_working_directory(&started.pane_id)
+            .as_deref(),
+        Some(launch_directory.as_path())
+    );
+    poll_until_exit(&mut service);
+    assert_eq!(
+        fs::read_to_string(&output).unwrap().trim(),
+        launch_directory.display().to_string()
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies runtime service starts initial pane process through resolved shell.
 ///
 /// This regression scenario documents the behavior being protected so a

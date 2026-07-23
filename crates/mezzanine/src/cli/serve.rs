@@ -86,11 +86,13 @@ pub(super) async fn run_new<W: Write>(
     } else {
         Size::new(80, 24)?
     };
+    let launch_directory = std::env::current_dir()?;
     let mut session = Session::new_default(shell, size);
     if interactive && !dry_run {
         let new_socket_selection = socket_selection_for_new_session(socket_selection)?;
         let socket_path = selected_socket_path(&new_socket_selection).clone();
-        let mut daemon = spawn_background_control_daemon(socket_path.as_path(), &env)?;
+        let mut daemon =
+            spawn_background_control_daemon(socket_path.as_path(), &env, &launch_directory)?;
         wait_for_background_control_daemon(socket_path.as_path(), &mut daemon).await?;
         return super::run_attach(
             &new_socket_selection,
@@ -210,6 +212,7 @@ fn reject_active_new_session_socket(path: &std::path::Path) -> Result<()> {
 fn spawn_background_control_daemon(
     socket_path: &std::path::Path,
     env: &CliEnv,
+    launch_directory: &std::path::Path,
 ) -> Result<BackgroundControlDaemon> {
     let executable = std::env::current_exe()?;
     let mut command = Command::new(executable);
@@ -217,6 +220,7 @@ fn spawn_background_control_daemon(
         .arg("-S")
         .arg(socket_path)
         .arg("serve")
+        .current_dir(launch_directory)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
