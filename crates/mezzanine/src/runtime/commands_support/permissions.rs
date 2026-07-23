@@ -187,8 +187,33 @@ pub(crate) fn runtime_approval_command(
 pub(crate) fn runtime_permission_policy_display(service: &RuntimeSessionService) -> String {
     let policy = service.permission_policy();
     let configured = service.configured_permissions();
+    let effective = service
+        .active_pane_id()
+        .ok()
+        .map(|pane_id| service.primary_path_scope_status(&pane_id));
+    let effective_read_scopes = effective
+        .as_ref()
+        .map_or(0, |status| status.read_scopes.len());
+    let effective_write_scopes = effective
+        .as_ref()
+        .map_or(0, |status| status.write_scopes.len());
+    let effective_scope_provenance = effective
+        .as_ref()
+        .map_or("none", |status| status.provenance);
+    let trusted_project_root = effective
+        .as_ref()
+        .and_then(|status| status.trusted_project_root.as_deref())
+        .unwrap_or("none");
+    let sandbox_restrictions = if matches!(
+        configured.sandbox,
+        crate::runtime::SandboxConfig::Bubblewrap(_)
+    ) {
+        crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS.join(",")
+    } else {
+        "none".to_string()
+    };
     format!(
-        "preset={} approval_policy={} bypass={} rules={} sandbox={} network_policy={} read_scopes={} write_scopes={} source=runtime-policy",
+        "preset={} approval_policy={} bypass={} rules={} sandbox={} network_policy={} read_scopes={} write_scopes={} effective_scope_provenance={} effective_read_scopes={} effective_write_scopes={} trusted_project_root={} sandbox_restrictions={} source=runtime-policy",
         runtime_permission_preset_name(policy.preset),
         runtime_approval_policy_name(policy.approval_policy),
         policy.approval_bypass(),
@@ -196,7 +221,12 @@ pub(crate) fn runtime_permission_policy_display(service: &RuntimeSessionService)
         configured.sandbox.as_str(),
         configured.resources.network_policy.as_str(),
         configured.resources.read_scopes.len(),
-        configured.resources.write_scopes.len()
+        configured.resources.write_scopes.len(),
+        effective_scope_provenance,
+        effective_read_scopes,
+        effective_write_scopes,
+        trusted_project_root,
+        sandbox_restrictions
     )
 }
 

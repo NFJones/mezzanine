@@ -19,6 +19,19 @@ use crate::security::project::TrustDecision;
 use mez_agent::permissions::{EffectCompleteness, PermissionEvaluation};
 use mez_agent::{SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch};
 
+/// Effective primary filesystem authority and its user-visible provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePrimaryPathScopeStatus {
+    /// Effective read authority before pane-shell canonicalization.
+    pub(crate) read_scopes: Vec<String>,
+    /// Effective write authority before pane-shell canonicalization.
+    pub(crate) write_scopes: Vec<String>,
+    /// Stable provenance name: `explicit`, `trusted-project`, or `none`.
+    pub(crate) provenance: &'static str,
+    /// Selected trusted root when project trust supplied the authority.
+    pub(crate) trusted_project_root: Option<String>,
+}
+
 /// Returns the bounded raw-output ceiling for one generated shell transaction.
 ///
 /// Apply-patch read phases carry complete file snapshots required by Rust-side
@@ -471,15 +484,28 @@ impl RuntimeSessionService {
     /// configured, a pane inside one or more trusted projects receives
     /// read-write authority for the deepest matching project root only.
     pub(crate) fn primary_path_scope_paths(&self, pane_id: &str) -> (Vec<String>, Vec<String>) {
+        let status = self.primary_path_scope_status(pane_id);
+        (status.read_scopes, status.write_scopes)
+    }
+
+    /// Returns effective primary authority together with its stable provenance.
+    pub(crate) fn primary_path_scope_status(&self, pane_id: &str) -> RuntimePrimaryPathScopeStatus {
         let resources = &self.configured_permissions().resources;
         if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
-            return (
-                resources.read_scopes.clone(),
-                resources.write_scopes.clone(),
-            );
+            return RuntimePrimaryPathScopeStatus {
+                read_scopes: resources.read_scopes.clone(),
+                write_scopes: resources.write_scopes.clone(),
+                provenance: "explicit",
+                trusted_project_root: None,
+            };
         }
         let Some(working_directory) = self.pane_current_working_directory(pane_id) else {
-            return (Vec::new(), Vec::new());
+            return RuntimePrimaryPathScopeStatus {
+                read_scopes: Vec::new(),
+                write_scopes: Vec::new(),
+                provenance: "none",
+                trusted_project_root: None,
+            };
         };
         let Some(project_root) = self.integration.project_trust_store().and_then(|store| {
             store
@@ -494,10 +520,20 @@ impl RuntimeSessionService {
                 .max_by_key(|record| record.project_root.components().count())
                 .map(|record| record.project_root.clone())
         }) else {
-            return (Vec::new(), Vec::new());
+            return RuntimePrimaryPathScopeStatus {
+                read_scopes: Vec::new(),
+                write_scopes: Vec::new(),
+                provenance: "none",
+                trusted_project_root: None,
+            };
         };
         let project_root = project_root.to_string_lossy().into_owned();
-        (vec![project_root.clone()], vec![project_root])
+        RuntimePrimaryPathScopeStatus {
+            read_scopes: vec![project_root.clone()],
+            write_scopes: vec![project_root.clone()],
+            provenance: "trusted-project",
+            trusted_project_root: Some(project_root),
+        }
     }
 
     /// Builds the best-available `PathScopes` for a pane.

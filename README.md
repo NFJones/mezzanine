@@ -380,6 +380,10 @@ Current support reflects behavior implemented in the repository today.
 - Bubblewrap subagents inherit their parent's effective filesystem authority;
   omitted scopes inherit, explicit scopes may only narrow, and explicit empty
   scope arrays remain empty.
+- `/permissions` reports whether the active pane's effective Bubblewrap scopes
+  came from explicit configuration, a trusted project, or no authority. It also
+  reports stable restriction identifiers for the synthetic home, minimal PATH,
+  isolated network, authority-only mounts, and hidden host credentials.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks

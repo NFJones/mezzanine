@@ -2818,6 +2818,15 @@ and inherited environment allowlists MUST NOT be configurable. The schema v20
 to v21 migration MUST preserve policy-only behavior and MUST NOT invent scopes,
 rule identities, or effects.
 
+Permission status MUST distinguish configured scopes from the active pane's
+effective scopes and MUST report effective scope provenance as `explicit`,
+`trusted-project`, or `none`. Trusted-project provenance MUST include the
+selected trusted root. Bubblewrap status and bounded failure-assessment evidence
+MUST use stable, non-sensitive restriction identifiers for authority-only
+mounts, the synthetic home, the minimal executable path, isolated networking,
+and hidden host credentials. Diagnostics MUST NOT expose raw Bubblewrap
+arguments, environment values, or unrelated host paths.
+
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`
 with a minimal `[permissions]` table and `approval_policy = "ask"` when a
 project-scoped mutation needs a file that does not yet exist.

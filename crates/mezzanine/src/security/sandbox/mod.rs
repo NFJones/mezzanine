@@ -42,6 +42,15 @@ const MINIMAL_PATH: &str = "/usr/bin:/bin";
 const PROTECTED_CREDENTIAL_DIRECTORIES: [&str; 6] =
     [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"];
 
+/// Stable, non-sensitive restriction identifiers used by status and failure diagnostics.
+pub(crate) const BUBBLEWRAP_RESTRICTION_IDS: [&str; 5] = [
+    "authority-mounts-only",
+    "synthetic-home",
+    "minimal-path",
+    "network-isolated",
+    "host-credentials-hidden",
+];
+
 /// Inputs required to compile one authorized command into a launch plan.
 #[derive(Debug, Clone)]
 pub(crate) struct BubblewrapCompileRequest<'a> {

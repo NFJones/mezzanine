@@ -756,6 +756,14 @@ an explicit empty array remains empty, and nested children never rediscover a
 broader trusted-project root. Bubblewrap activation requires usable scopes.
 Schema v20 migration selects `policy-only` and does not infer scopes or effects.
 
+`/permissions` and session permission status distinguish configured scopes from
+the active pane's effective scopes. `effective_scope_provenance` is `explicit`,
+`trusted-project`, or `none`; trusted-project authority also reports the selected
+root. Bubblewrap status reports stable restriction identifiers:
+`authority-mounts-only`, `synthetic-home`, `minimal-path`, `network-isolated`,
+and `host-credentials-hidden`. These describe likely denial causes without
+including raw Bubblewrap arguments, environment values, or unrelated host paths.
+
 On Linux, Mezzanine validates the configured executable inside the target pane
 environment before launching a sandboxed workload. The probe requires usable
 user, mount, PID, IPC, UTS, cgroup, and network namespaces plus the fixed

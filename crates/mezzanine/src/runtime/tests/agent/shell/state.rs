@@ -769,6 +769,18 @@ fn runtime_sandbox_failure_assessment_offers_warned_fallback_approval() {
         request.interaction_kind,
         mez_agent::ModelInteractionKind::SandboxFailureAssessment
     );
+    let request_text = request
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for restriction in crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS {
+        assert!(request_text.contains(restriction), "{request_text}");
+    }
+    assert!(request_text.contains("synthetic-home"), "{request_text}");
+    assert!(request_text.contains("minimal-path"), "{request_text}");
+    assert!(request_text.contains("network-isolated"), "{request_text}");
     assert!(request.messages.iter().all(|message| {
         !message.content.contains("show the environment")
             && !message.content.contains("sandbox-fallback-shell")

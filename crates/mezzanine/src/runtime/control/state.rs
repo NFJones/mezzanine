@@ -222,8 +222,37 @@ impl RuntimeSessionService {
             })
             .unwrap_or_default();
         let configured = self.configured_permissions();
+        let effective = self
+            .session
+            .active_window()
+            .map(|window| self.primary_path_scope_status(window.active_pane().id.as_str()));
+        let effective_read_scopes = effective
+            .as_ref()
+            .map(|status| status.read_scopes.as_slice())
+            .unwrap_or_default();
+        let effective_write_scopes = effective
+            .as_ref()
+            .map(|status| status.write_scopes.as_slice())
+            .unwrap_or_default();
+        let effective_scope_provenance = effective
+            .as_ref()
+            .map_or("none", |status| status.provenance);
+        let trusted_project_root = effective
+            .as_ref()
+            .and_then(|status| status.trusted_project_root.as_deref());
+        let sandbox_restrictions = if matches!(
+            configured.sandbox,
+            crate::runtime::SandboxConfig::Bubblewrap(_)
+        ) {
+            crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         format!(
-            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"sandbox":"{}","network_policy":"{}","trusted_project":{},"trusted_directories":{},"read_scopes":{},"write_scopes":{},"command_rule_generation":{}}}"#,
+            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"sandbox":"{}","network_policy":"{}","trusted_project":{},"trusted_directories":{},"read_scopes":{},"write_scopes":{},"effective_scope_provenance":"{}","effective_read_scopes":{},"effective_write_scopes":{},"trusted_project_root":{},"sandbox_restrictions":{},"command_rule_generation":{}}}"#,
             runtime_permission_preset_name(self.permission_policy().preset),
             runtime_approval_policy_name(self.permission_policy().approval_policy),
             self.permission_policy().approval_bypass(),
@@ -233,6 +262,11 @@ impl RuntimeSessionService {
             runtime_string_array_json(&trusted_directories),
             runtime_string_array_json(&configured.resources.read_scopes),
             runtime_string_array_json(&configured.resources.write_scopes),
+            effective_scope_provenance,
+            runtime_string_array_json(effective_read_scopes),
+            runtime_string_array_json(effective_write_scopes),
+            runtime_optional_string(trusted_project_root),
+            runtime_string_array_json(&sandbox_restrictions),
             self.permission_policy().rules().len()
         )
     }

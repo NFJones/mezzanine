@@ -94,12 +94,10 @@ impl RuntimeSessionService {
             output_truncated: transaction.observed_output_truncated
                 || decoded.diagnostics.output_truncated()
                 || decoded.diagnostics.transport_incomplete(),
-            sandbox_restrictions: vec![
-                "isolated network namespace".to_string(),
-                "minimal cleared environment".to_string(),
-                "policy-derived read-only and read-write mounts".to_string(),
-                "no host credentials, process control, or privilege changes".to_string(),
-            ],
+            sandbox_restrictions: crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
         };
         let request = mez_agent::sandbox_failure_assessment_request(turn, model_profile, &evidence)
             .map_err(|error| MezError::invalid_state(error.message()))?;

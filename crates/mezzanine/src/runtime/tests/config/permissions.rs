@@ -65,6 +65,91 @@ fn runtime_allows_bubblewrap_without_explicit_scopes() {
     assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
 }
 
+/// Verifies permission status distinguishes explicit Bubblewrap scopes from
+/// their effective active-pane authority without inventing a trusted root.
+#[test]
+fn runtime_permission_status_reports_explicit_scope_provenance() {
+    let mut service = test_runtime_service();
+    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "sandbox": "bubblewrap",
+            "read_scopes": ["src"],
+            "write_scopes": ["target"]
+        }
+    }))
+    .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+
+    let status = service.primary_path_scope_status("%1");
+    let display = crate::runtime::commands_support::runtime_permission_policy_display(&service);
+
+    assert_eq!(status.provenance, "explicit");
+    assert_eq!(status.read_scopes, vec!["src"]);
+    assert_eq!(status.write_scopes, vec!["target"]);
+    assert!(status.trusted_project_root.is_none());
+    assert!(
+        display.contains("effective_scope_provenance=explicit"),
+        "{display}"
+    );
+    assert!(display.contains("trusted_project_root=none"), "{display}");
+    for restriction in crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS {
+        assert!(display.contains(restriction), "{display}");
+    }
+}
+
+/// Verifies a trusted-project default reports the selected deepest root and
+/// the same effective read/write authority surfaced to Bubblewrap.
+#[test]
+fn runtime_permission_status_reports_trusted_project_scope_provenance() {
+    let root = temp_root("runtime-permission-status-trusted-project");
+    let project_root = root.join("project");
+    let nested = project_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&nested).unwrap();
+    let mut service = test_runtime_service();
+    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {"sandbox": "bubblewrap"}
+    }))
+    .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            project_root.clone(),
+            TrustDecision::Trusted,
+            Some(project_root.join(".git")),
+            1,
+        )
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_current_working_directory("%1".to_string(), nested);
+
+    let status = service.primary_path_scope_status("%1");
+    let display = crate::runtime::commands_support::runtime_permission_policy_display(&service);
+    let expected = project_root.to_string_lossy().into_owned();
+
+    assert_eq!(status.provenance, "trusted-project");
+    assert_eq!(status.read_scopes, vec![expected.clone()]);
+    assert_eq!(status.write_scopes, vec![expected.clone()]);
+    assert_eq!(
+        status.trusted_project_root.as_deref(),
+        Some(expected.as_str())
+    );
+    assert!(
+        display.contains("effective_scope_provenance=trusted-project"),
+        "{display}"
+    );
+    assert!(
+        display.contains(&format!("trusted_project_root={expected}")),
+        "{display}"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies ensure private socket directory rejects group permissions.
 ///
 /// This regression scenario documents the behavior being protected so a
