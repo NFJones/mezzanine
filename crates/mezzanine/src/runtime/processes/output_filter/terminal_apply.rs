@@ -167,6 +167,9 @@ impl RuntimeSessionService {
         let Some(primary_pid) = self.primary_pid_for_live_pane_process(&pane_id) else {
             return Ok(false);
         };
+        if !self.session.contains_pane(&pane_id) {
+            return Ok(false);
+        }
         if let Some(current_working_directory) = current_working_directory
             && !current_working_directory.trim().is_empty()
         {

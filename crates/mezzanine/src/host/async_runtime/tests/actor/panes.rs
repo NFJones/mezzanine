@@ -682,9 +682,10 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
 }
 
 /// Verifies that pane close commands produce async termination side effects
-/// after pane process ownership has moved out of the manager. Without this
-/// bridge, `kill-pane` would close runtime layout state while leaving the
-/// worker-owned PTY process alive.
+/// after pane process ownership has moved out of the manager. A foreground
+/// process observation can race with that termination after the pane has left
+/// the layout, so current-generation metadata must become a harmless no-op
+/// rather than failing the actor with `pane not found`.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_drains_service_deferred_termination_after_pane_handoff() {
     let mut service = test_service();
@@ -694,33 +695,61 @@ async fn async_actor_drains_service_deferred_termination_after_pane_handoff() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
+    service
+        .split_pane_with_process(
+            &primary,
+            mez_mux::layout::SplitDirection::Vertical,
+            Some("cat >/dev/null"),
+        )
+        .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
 
     let client = async {
         let mut processes = handle
-            .take_running_pane_processes_for_adapter(8)
+            .take_running_pane_process_instances_for_adapter(8)
             .await
             .unwrap();
-        assert_eq!(processes.len(), 1);
-        let (pane_id, mut process) = processes.pop().unwrap();
+        assert_eq!(processes.len(), 2);
+        let removed_index = processes
+            .iter()
+            .position(|(instance, _)| instance.pane_id == "%1")
+            .unwrap();
+        let (instance, mut process) = processes.swap_remove(removed_index);
+        let (_, mut remaining_process) = processes.pop().unwrap();
         let output = handle
-            .execute_terminal_command(primary, "kill-pane --force".to_string())
+            .execute_terminal_command(primary, "kill-pane --force -t %1".to_string())
             .await
             .unwrap();
         assert!(output.contains("closed=true"));
+
+        let mut late_metadata = RuntimeEventBatch::new();
+        late_metadata.push(RuntimeEvent::PaneProcess {
+            instance: instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::ForegroundProcess {
+                pane_id: instance.pane_id.clone(),
+                process_name: "cat".to_string(),
+                process_group_id: process.primary_pid(),
+                current_working_directory: Some("/tmp/removed-pane".to_string()),
+            }),
+        });
+        let report = handle.submit_runtime_events(late_metadata).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 0);
+
         assert_eq!(
             handle
-                .drain_pane_io_side_effects(pane_id.as_str(), 8)
+                .drain_pane_io_side_effects(instance.pane_id.as_str(), 8)
                 .await
                 .unwrap(),
             vec![RuntimeSideEffect::TerminatePane {
-                pane_id,
+                pane_id: instance.pane_id,
                 force: true,
             }]
         );
         let _ = process.terminate(Duration::from_millis(10));
+        let _ = remaining_process.terminate(Duration::from_millis(10));
         let _ = handle.shutdown().await.unwrap();
     };
 

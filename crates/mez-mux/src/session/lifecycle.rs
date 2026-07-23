@@ -83,6 +83,20 @@ impl Session {
         self.windows.get(self.active_window_index)
     }
 
+    /// Returns whether the session layout currently contains a pane.
+    ///
+    /// Process supervision can temporarily retain a pane process after its
+    /// layout entry has been removed, so callers must not infer layout
+    /// membership from process ownership alone.
+    pub fn contains_pane(&self, pane_id: &str) -> bool {
+        self.windows.iter().any(|window| {
+            window
+                .panes()
+                .iter()
+                .any(|pane| pane.id.as_str() == pane_id)
+        })
+    }
+
     /// Returns whether pane input synchronization is active for the active window.
     pub fn active_window_panes_synchronized(&self) -> bool {
         self.active_window()
