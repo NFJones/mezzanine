@@ -110,7 +110,7 @@ pub(crate) fn runtime_agent_shell_display_output(
     body: &str,
     ui_theme: &UiTheme,
     terminal_width: usize,
-    configured_wrap_width: usize,
+    _configured_wrap_width: usize,
 ) -> Result<RuntimeAgentShellDisplayOutput> {
     let parsed: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_args("agent shell response is not valid JSON"))?;
@@ -145,15 +145,7 @@ pub(crate) fn runtime_agent_shell_display_output(
                 lines.truncate(200);
                 return Ok(RuntimeAgentShellDisplayOutput::Lines(lines));
             }
-            let display_width = if command
-                .as_deref()
-                .is_some_and(|command| command.starts_with("show-"))
-            {
-                terminal_width.min(configured_wrap_width)
-            } else {
-                terminal_width
-            }
-            .max(1);
+            let display_width = terminal_width.max(1);
             let content = runtime_agent_shell_markdown_overlay_content_for_layout(
                 command.clone(),
                 body,
@@ -229,6 +221,38 @@ fn show_markdown_overlay_uses_width_aware_table_layout() {
             .lines
             .iter()
             .all(|line| UnicodeWidthStr::width(line.as_str()) <= 24),
+        "{content:?}"
+    );
+}
+
+/// Verifies an initial record-list response uses the full overlay width rather
+/// than the narrower prose cap that applies only after a detail view opens.
+#[cfg(test)]
+#[test]
+fn initial_show_record_list_uses_full_overlay_width() {
+    let output = runtime_agent_shell_display_output(
+        r##"{"kind":"display","command":"show-issues","content_type":"text/markdown; charset=utf-8","body":"# Issues\n\n- very long issue title that should remain on the initial full-width record list"}"##,
+        &mez_mux::theme::deepforest_ui_theme(),
+        80,
+        32,
+    )
+    .expect("valid display response should render");
+
+    let RuntimeAgentShellDisplayOutput::Overlay(content) = output else {
+        panic!("expected a display overlay");
+    };
+    assert!(
+        content
+            .lines
+            .iter()
+            .any(|line| UnicodeWidthStr::width(line.as_str()) > 32),
+        "{content:?}"
+    );
+    assert!(
+        content
+            .lines
+            .iter()
+            .all(|line| UnicodeWidthStr::width(line.as_str()) <= 80),
         "{content:?}"
     );
 }
