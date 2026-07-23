@@ -4500,7 +4500,12 @@ Every `config_change` action MUST follow the active approval policy using the
 same approval mechanism as other privileged model actions. If the current policy
 does not allow the action immediately, the action MUST enter blocked approval
 state and require explicit primary-client approval with `/approve` before
-application. After approval or policy-based acceptance, `config_change` actions MUST
+application. Sandbox backend, Bubblewrap profile, filesystem-scope, and trust
+settings MUST NOT be exposed as model-authored `config_change` paths and MUST
+be rejected if submitted regardless of approval state. Those settings MAY be
+changed only through direct user configuration interfaces such as `mez config`
+or equivalent primary-client commands. After approval or policy-based acceptance,
+other `config_change` actions MUST
 persist to the runtime-selected user configuration target and MUST take effect
 immediately in the live session. A `config_change` that sets `theme.active` MUST
 use the same runtime behavior as `set-theme`, including selected-theme

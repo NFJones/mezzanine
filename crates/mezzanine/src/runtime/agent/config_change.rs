@@ -18,7 +18,10 @@ use super::{
 use super::{
     outcome::RuntimeTerminalActionObservations, runtime_execution_ready_for_provider_continuation,
 };
-use crate::config::{compose_effective_config, contains_secret_material};
+use crate::config::{
+    compose_effective_config, config_change_path_is_user_only_sandbox_policy,
+    contains_secret_material,
+};
 use crate::runtime::fs;
 
 /// Runs the runtime config change control request operation for this subsystem.
@@ -507,6 +510,15 @@ impl RuntimeSessionService {
                 "config_change execution requires a config_change action",
             ));
         };
+        if config_change_path_is_user_only_sandbox_policy(setting_path) {
+            return Ok(ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Denied,
+                "user_only_sandbox_policy",
+                "sandbox policy can only be changed directly by the user",
+            )?);
+        }
         let persist_path = self.ensure_agent_config_change_persist_path()?;
         let signature = match runtime_config_change_signature(action, &persist_path) {
             Ok(signature) => signature,

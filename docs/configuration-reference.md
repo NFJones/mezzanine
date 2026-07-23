@@ -888,6 +888,13 @@ developer instructions.
 The `purpose`, `usage_instructions`, and safety-classification nested scalar
 paths are also supported by the live `config_change` mutation surface.
 
+Sandbox policy is user-only. Agents cannot use `config_change` to mutate
+`permissions.sandbox`, `permissions.bubblewrap`, `permissions.read_scopes`,
+`permissions.write_scopes`, `permissions.trusted_directories`, or
+`permissions.trusted_projects`, even if the action would otherwise be approved
+or auto-allowed. Change those settings directly with `mez config set`, `mez
+config unset`, or an equivalent primary-client configuration command.
+
 For streamable HTTP servers, `mez mcp login <name>` stores OAuth tokens in the
 auth credential store rather than in `mcp_servers`. Login uses browser
 authorization-code PKCE. `mez mcp login <name> --token <TOKEN>` stores a static

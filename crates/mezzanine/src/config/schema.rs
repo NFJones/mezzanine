@@ -175,7 +175,7 @@ pub fn config_change_setting_path_annotations() -> Vec<ConfigChangePathAnnotatio
             pattern: "permissions.<key>",
             purpose: "Change high-level permission defaults and approval behavior.",
             value_type: "string or string array",
-            format: "Supported scalar permission keys; command-rule arrays are not mutable through config_change.",
+            format: "Supported scalar permission keys excluding user-only sandbox authority and command-rule arrays.",
             operations: CONFIG_CHANGE_OPERATION_NAMES,
         },
         ConfigChangePathAnnotation {
@@ -237,7 +237,7 @@ pub fn config_change_setting_path_annotations_markdown() -> String {
 /// model profile name, provider name, MCP server name, hook name, or theme alias.
 pub fn config_change_setting_path_description() -> String {
     format!(
-        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments, plus mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); terminal.<key> where key is one of [{}]; keys.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; memory.<key> where key is one of [{}]; issues.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except command rule arrays; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, and array-entry mutation paths. Schema annotations: {}",
+        "Dotted live Mezzanine config path. Use only ASCII path segments [A-Za-z0-9_-]. The live mutation planner supports scalar paths up to three segments, plus mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; inspect current config with shell_command before changing dynamic names. Supported patterns: version (integer); terminal.<key> where key is one of [{}]; keys.<key> where key is one of [{}]; frames.window.<key> where key is one of [{}]; frames.pane.<key> where key is one of [{}]; theme.active, theme.aliases.<alias>, theme.colors.<slot>; history.<key> where key is one of [{}]; memory.<key> where key is one of [{}]; issues.<key> where key is one of [{}]; agents.<key> where key is one of [{}], plus agents.auto_sizing.<key> where key is one of [{}]; model_profiles.<name>.<key> where key is one of [{}] except provider_options; providers.<name>.<key> where key is one of [{}] except options; subagents.<name>.<key> where key is one of [{}] except shell_env; personalities.<name>.<key> where key is one of [{}]; permissions.<key> where key is one of [{}] except user-only sandbox authority and command rule arrays; mcp_servers.<name>.<key> where key is one of [{}] except env/http_headers/tool_approvals/external_capability; mcp_servers.<name>.external_capability.<key> where key is one of [purpose, usage_instructions, mutates_filesystem_outside_shell, executes_processes_outside_shell, accesses_credentials_outside_shell]; auth.<key> where key is one of [{}]; instructions.<key> where key is one of [{}]; hooks.<name>.<key> where key is one of [{}] except env/match/matches; audit.<key> where key is one of [{}]. Runtime validation still rejects secrets, unsafe shell override paths, unsupported enum values, invalid colors, container targets, user-only sandbox authority, and array-entry mutation paths. Schema annotations: {}",
         TERMINAL_KEYS.join(", "),
         KEY_BINDING_KEYS.join(", "),
         WINDOW_FRAME_KEYS.join(", "),
@@ -254,6 +254,12 @@ pub fn config_change_setting_path_description() -> String {
         config_keys_except(
             PERMISSION_KEYS,
             &[
+                "sandbox",
+                "read_scopes",
+                "write_scopes",
+                "bubblewrap",
+                "trusted_directories",
+                "trusted_projects",
                 "command_rules",
                 "session_command_rules",
                 "global_command_rules",
@@ -356,6 +362,23 @@ pub(super) const COMMAND_RULE_KEYS: &[&str] = &[
 /// Defines the typed Bubblewrap configuration keys accepted by schema v21.
 pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] =
     &["executable", "unavailable", "network", "environment"];
+
+/// Reports whether a permission path controls sandbox confinement or authority.
+///
+/// These settings remain available to direct user configuration commands, but
+/// model-authored `config_change` actions must not mutate them even after an
+/// approval because doing so would let the agent redefine its own boundary.
+pub(crate) fn config_change_path_is_user_only_sandbox_policy(path: &str) -> bool {
+    matches!(
+        path,
+        "permissions.sandbox"
+            | "permissions.read_scopes"
+            | "permissions.write_scopes"
+            | "permissions.bubblewrap"
+            | "permissions.trusted_directories"
+            | "permissions.trusted_projects"
+    ) || path.starts_with("permissions.bubblewrap.")
+}
 
 /// Defines backend-neutral command-effect keys accepted by schema v21.
 pub(super) const COMMAND_RULE_EFFECT_KEYS: &[&str] = &[

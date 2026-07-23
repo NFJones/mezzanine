@@ -131,6 +131,69 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
     let _ = fs::remove_dir_all(config_root);
 }
 
+/// Verifies model-authored config changes cannot redefine sandbox authority.
+///
+/// Approval is intentionally insufficient for these paths: sandbox backend,
+/// Bubblewrap profile, filesystem scopes, and trust roots must remain under
+/// direct user control while ordinary live configuration stays agent-mutable.
+#[test]
+fn runtime_config_change_rejects_user_only_sandbox_policy() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let config_root = temp_root("runtime-agent-config-change-sandbox-policy");
+    service.set_config_root(config_root.clone());
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-config-sandbox-policy".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        initial_capability: None,
+        state: AgentTurnState::Running,
+    };
+
+    for (index, (setting_path, value)) in [
+        ("permissions.sandbox", "bubblewrap"),
+        ("permissions.bubblewrap.executable", "/tmp/bwrap"),
+        ("permissions.read_scopes", r#"[\"/\"]"#),
+        ("permissions.write_scopes", r#"[\"/\"]"#),
+        ("permissions.trusted_directories", r#"[\"/\"]"#),
+        ("permissions.trusted_projects", r#"[\"/\"]"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let action = mez_agent::AgentAction {
+            id: format!("config-sandbox-policy-{index}"),
+            rationale: String::new(),
+            payload: mez_agent::AgentActionPayload::ConfigChange {
+                setting_path: setting_path.to_string(),
+                operation: "set".to_string(),
+                value: Some(value.to_string()),
+            },
+        };
+
+        let result = service
+            .execute_config_change_action_for_turn(&turn, &action, &primary, "approved")
+            .unwrap();
+
+        assert_eq!(result.status, ActionStatus::Denied, "{setting_path}");
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code.as_str()),
+            Some("user_only_sandbox_policy")
+        );
+    }
+
+    assert!(!config_root.join("config.toml").exists());
+    let _ = fs::remove_dir_all(config_root);
+}
+
 /// Verifies agent `config_change` reset removes the explicit override.
 ///
 /// Reset is model-facing language for returning a field to its lower-precedence

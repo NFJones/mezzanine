@@ -553,6 +553,34 @@ fn openai_responses_request_body_describes_config_change_schema() {
         value_description.contains("use null"),
         "{value_description}"
     );
+    let product_path_description = request
+        .allowed_actions
+        .config_change_setting_path_description()
+        .unwrap();
+    assert!(
+        product_path_description.contains("user-only sandbox authority"),
+        "{product_path_description}"
+    );
+    let permission_paths = product_path_description
+        .split_once("permissions.<key> where key is one of [")
+        .and_then(|(_, suffix)| suffix.split_once("] except user-only sandbox authority"))
+        .map(|(paths, _)| paths)
+        .expect("config-change guidance should advertise mutable permission paths");
+    for user_only_path in [
+        "sandbox",
+        "read_scopes",
+        "write_scopes",
+        "bubblewrap",
+        "trusted_directories",
+        "trusted_projects",
+    ] {
+        assert!(
+            !permission_paths
+                .split(", ")
+                .any(|path| path == user_only_path),
+            "{permission_paths}"
+        );
+    }
     let operation_description = config_schema["properties"]["operation"]["description"]
         .as_str()
         .unwrap();
