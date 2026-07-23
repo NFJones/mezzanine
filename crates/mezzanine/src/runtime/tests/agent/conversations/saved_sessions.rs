@@ -143,6 +143,11 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         Some("latest")
     );
 
+    service
+        .pane_screen_mut("%1")
+        .unwrap()
+        .feed(b"pre-resume stale cells\r\n");
+
     let resumed = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"resume","method":"agent/shell/command","params":{"idempotency_key":"resume","input":"/resume saved"}}"#,
         &primary,
@@ -164,6 +169,10 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    assert!(
+        !resumed_pane_text.contains("pre-resume stale cells"),
+        "{resumed_pane_text}"
+    );
     assert!(
         resumed_pane_text.contains("rendered sa") && resumed_pane_text.contains("response"),
         "{resumed_pane_text}"
