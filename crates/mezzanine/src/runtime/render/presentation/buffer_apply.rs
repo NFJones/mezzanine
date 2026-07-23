@@ -79,6 +79,19 @@ fn macro_lifecycle_presentation_source(
     serde_json::from_str(source_text).ok()
 }
 
+/// Runs one terminal presentation operation while containing parser panics.
+///
+/// A contained panic still becomes an explicit runtime error so callers do not
+/// report a dropped presentation batch as successfully rendered.
+fn catch_agent_terminal_presentation_panic(context: &str, operation: impl FnOnce()) -> Result<()> {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)).is_err() {
+        return Err(MezError::invalid_state(format!(
+            "agent terminal presentation feed panicked while {context}"
+        )));
+    }
+    Ok(())
+}
+
 impl RuntimeSessionService {
     /// Runs the append agent user prompt to terminal buffer operation for this subsystem.
     ///
@@ -781,13 +794,10 @@ impl RuntimeSessionService {
     fn feed_agent_terminal_screen(
         screen: &mut TerminalScreen,
         bytes: &[u8],
-        _context: &str,
+        context: &str,
     ) -> Result<()> {
         screen.set_wrap_continuation_prefix(AGENT_TERMINAL_MESSAGE_PREFIX);
-        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| screen.feed(bytes))).is_err() {
-            return Ok(());
-        }
-        Ok(())
+        catch_agent_terminal_presentation_panic(context, || screen.feed(bytes))
     }
 
     /// Appends agent terminal lines with per-line presentation styles.
@@ -1281,7 +1291,7 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 mod tests {
-    use super::styled_agent_presentation_source_lines;
+    use super::{catch_agent_terminal_presentation_panic, styled_agent_presentation_source_lines};
 
     /// Verifies typed styled presentation source preserves valid style and text
     /// pairs while rejecting malformed payloads before replay reaches a pane.
@@ -1296,5 +1306,22 @@ mod tests {
         assert_eq!(decoded[0].1, "user> restore me");
         assert_eq!(decoded[1].1, "agent: restored");
         assert!(styled_agent_presentation_source_lines("not json").is_none());
+    }
+
+    /// Verifies a contained terminal parser panic becomes a contextual runtime
+    /// error rather than reporting the dropped presentation batch as success.
+    #[test]
+    fn contained_agent_terminal_presentation_panic_propagates_contextual_error() {
+        let error = catch_agent_terminal_presentation_panic("testing panic propagation", || {
+            panic!("controlled terminal parser panic");
+        })
+        .expect_err("contained presentation panic must return an error");
+
+        assert!(
+            error.message().contains(
+                "agent terminal presentation feed panicked while testing panic propagation"
+            ),
+            "{error:?}"
+        );
     }
 }
