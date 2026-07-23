@@ -118,10 +118,12 @@ pub(crate) fn render_agent_markdown_body_lines(
         .saturating_sub(1)
         .max(1);
     let mut mermaid_fence_count = 0;
+    let mermaid_ui_theme = ui_theme.clone();
     let mut mermaid_renderer = move |fence: mez_mux::render::FencedCodeBlock<'_>| {
         super::mermaid::render_agent_mermaid_fence(
             fence,
             table_body_display_width,
+            &mermaid_ui_theme,
             &mut mermaid_fence_count,
         )
     };

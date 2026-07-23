@@ -1762,6 +1762,7 @@ dependencies = [
  "include_dir",
  "keyring-core",
  "merman",
+ "merman-ascii",
  "mez-agent",
  "mez-core",
  "mez-mux",

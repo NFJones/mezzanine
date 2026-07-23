@@ -282,11 +282,11 @@ Agent-mode logs and rendered transcript entries wrap to the active pane width,
 capped at `terminal.agent_wrap_column_cap` display columns (120 by default), so
 persisted and replayed transcript rows remain bounded on wide terminals.
 
-Completed agent Markdown can render fenced `mermaid` flowchart and sequence
-diagrams as terminal-native Unicode rows. Unsupported, malformed, oversized,
-overwide, or excess diagrams remain literal fenced source. Copy and persisted
-transcript content always retain the original Markdown rather than rendered
-diagram glyphs.
+Completed agent Markdown can render fenced `mermaid` diagrams as compact,
+terminal-native Unicode rows whose foreground styling follows the active Mez
+theme. Unsupported, malformed, oversized, overwide, or excess diagrams remain
+literal fenced source. Copy and persisted transcript content always retain the
+original Markdown rather than rendered diagram glyphs or terminal controls.
 
 Useful slash commands include:
 

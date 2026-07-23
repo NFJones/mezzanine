@@ -655,6 +655,14 @@ fn agent_markdown_renders_mermaid_without_changing_command_markdown() {
             .all(|line| !line.display.contains("\u{1b}")),
         "{agent_lines:?}"
     );
+    assert!(
+        agent_lines
+            .iter()
+            .filter(|line| line.kind == RichTextLineKind::MarkdownDiagram)
+            .flat_map(|line| &line.style_spans)
+            .any(|span| span.rendition.foreground.is_some() && span.rendition.background.is_none()),
+        "{agent_lines:?}"
+    );
 
     let command_lines = render_command_markdown_body_lines(markdown, &ui_theme);
     assert!(

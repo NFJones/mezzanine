@@ -4250,10 +4250,12 @@ normalized. Unknown, unlabelled, and indented code blocks MUST remain literal,
 sanitized terminal text. Before generic fence highlighting, product callers MAY
 apply a specialized renderer that renders a replacement, preserves the literal
 fence, or declines handling; a declined fence continues to generic highlighting
-or literal fallback. Completed agent Markdown MAY render fenced `mermaid`
-flowchart and sequence diagrams as terminal-native Unicode rows. Such rendering
-MUST be display-only, MUST retain the original fenced Markdown for transcript
-persistence and copy operations, and MUST NOT be applied to non-agent Markdown.
+or literal fallback. Completed agent Markdown MAY render supported fenced
+`mermaid` diagrams as compact terminal-native Unicode rows with foreground-only
+styling projected from the active resolved UI theme. Such rendering MUST be
+display-only, MUST retain the original fenced Markdown for transcript
+persistence and copy operations, MUST NOT retain renderer control sequences in
+display or persisted text, and MUST NOT be applied to non-agent Markdown.
 Malformed, unsupported, over-limit, overwide, or excess Mermaid fences MUST
 remain literal source without preventing surrounding Markdown from rendering.
 Rendered diagram rows MUST NOT be soft-wrapped. Markdown table presentation
