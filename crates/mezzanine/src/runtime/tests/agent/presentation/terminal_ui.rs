@@ -512,6 +512,58 @@ fn runtime_agent_parent_prompt_persists_raw_source_for_replay() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies thinking-log body text retains the muted status rendition used by
+/// its gutter instead of resetting to the terminal's default rendition.
+///
+/// Thinking lines use the rich-line presentation path without explicit body
+/// spans, so this regression protects the base style inherited by unspanned
+/// cells after the gutter has been rendered.
+#[test]
+fn runtime_agent_thinking_renders_body_as_shadow_text() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Debug)
+        .unwrap();
+
+    service
+        .append_agent_thinking_text_to_terminal_buffer("%1", "inspect the rendering path")
+        .unwrap();
+
+    let thinking_line = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines()
+        .into_iter()
+        .find(|line| line.text.contains("thinking: inspect the rendering path"))
+        .expect("thinking log should be present in the terminal buffer");
+    let body_column = thinking_line
+        .text
+        .find("thinking:")
+        .expect("thinking log should include its label");
+    assert!(
+        thinking_line.style_spans.iter().any(|span| {
+            body_column >= span.start
+                && body_column < span.start.saturating_add(span.length)
+                && span.rendition.dim
+                && span.rendition.foreground
+                    == Some(service.ui_theme().colors.agent_transcript_status.foreground)
+        }),
+        "thinking body should retain the muted status rendition: {thinking_line:?}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies visible thinking text persists its raw source and reflows when the
 /// agent pane is rebuilt at a narrower destination geometry.
 #[test]

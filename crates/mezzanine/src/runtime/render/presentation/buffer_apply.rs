@@ -14,15 +14,16 @@ use super::style::{
     AGENT_PROMPT_TEXT_PREFIX, AGENT_TERMINAL_MESSAGE_PREFIX, AgentTerminalPresentationStyle,
 };
 use super::text::{
-    agent_say_text_is_displayed_patch_block, append_styled_agent_terminal_line,
-    append_styled_agent_terminal_rendered_line, bounded_agent_terminal_presentation_columns,
-    command_preview_terminal_rendered_lines, fit_agent_terminal_text_width,
-    render_agent_markdown_body_lines, sanitized_agent_terminal_line,
+    agent_say_text_is_displayed_patch_block, agent_terminal_label_rendition,
+    append_styled_agent_terminal_line, append_styled_agent_terminal_rendered_line,
+    bounded_agent_terminal_presentation_columns, command_preview_terminal_rendered_lines,
+    fit_agent_terminal_text_width, render_agent_markdown_body_lines, sanitized_agent_terminal_line,
     wrapped_prefixed_agent_terminal_lines,
 };
 use super::{
-    AGENT_COPY_SKIP_LINE, AgentAction, RichTextLine, UnicodeWidthStr, diff_section_path,
-    frame_markdown_lines, parse_unified_diff_sections, wrap_rich_text_lines_to_width,
+    AGENT_COPY_SKIP_LINE, AgentAction, RichTextLine, TerminalStyleSpan, UnicodeWidthStr,
+    diff_section_path, frame_markdown_lines, parse_unified_diff_sections,
+    wrap_rich_text_lines_to_width,
 };
 use crate::runtime::render::{
     ActionResult, AgentPresentationEntry, MezError, Result, RuntimeSessionService, Size,
@@ -600,13 +601,24 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         if self.agent_thinking_enabled(pane_id) {
             let columns = self.agent_terminal_presentation_columns(pane_id)?;
+            let rendition = agent_terminal_label_rendition(
+                AgentTerminalPresentationStyle::Status,
+                &self.presentation.settings.ui_theme,
+            );
             let rendered_lines = agent_thinking_display_lines_for_width(text, columns)
                 .into_iter()
-                .map(|display| RichTextLine {
-                    display,
-                    style_spans: Vec::new(),
-                    copy_text: None,
-                    kind: mez_mux::render::RichTextLineKind::Normal,
+                .map(|display| {
+                    let length = UnicodeWidthStr::width(display.as_str());
+                    RichTextLine {
+                        display,
+                        style_spans: vec![TerminalStyleSpan {
+                            start: 0,
+                            length,
+                            rendition,
+                        }],
+                        copy_text: None,
+                        kind: mez_mux::render::RichTextLineKind::Normal,
+                    }
                 })
                 .collect::<Vec<_>>();
             self.append_agent_terminal_rendered_lines_to_buffer(
