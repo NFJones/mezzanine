@@ -189,6 +189,14 @@ impl TerminalScreen {
         self.normal_viewport_detached_from_history = true;
     }
 
+    /// Returns whether a UI clear detached the normal viewport from scrollback.
+    ///
+    /// A detached viewport must remain blank through later resizes until new
+    /// terminal output arrives, while its prior rows remain available in history.
+    pub fn normal_viewport_detached_from_history(&self) -> bool {
+        self.normal_viewport_detached_from_history
+    }
+
     /// Restores plain normal-screen history and styled visible rows.
     ///
     /// Snapshot resume uses this path to rebuild a non-live pane's rendered

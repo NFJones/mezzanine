@@ -468,6 +468,12 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         const MAX_PRESENTATION_REPLAY_ENTRIES: usize = 200;
 
+        if self
+            .pane_screen(pane_id)
+            .is_some_and(TerminalScreen::normal_viewport_detached_from_history)
+        {
+            return Ok(false);
+        }
         let Some(session) = self.agent_shell_store().get(pane_id) else {
             return Ok(false);
         };

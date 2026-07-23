@@ -192,6 +192,61 @@ fn runtime_agent_status_presentation_persists_typed_source_for_replay() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies that a source-backed transcript is not replayed into a viewport
+/// cleared by the user. Resizing after Ctrl+L must retain the blank live pane
+/// while preserving the prior agent output in scrollback.
+#[test]
+fn runtime_agent_presentation_resize_preserves_cleared_viewport() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("agent-cleared-viewport"));
+    service
+        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .append_agent_assistant_content_to_terminal_buffer(
+            "%1",
+            "preserve this cleared agent viewport",
+            mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE,
+        )
+        .unwrap();
+
+    service.clear_agent_shell_terminal_view("%1").unwrap();
+
+    assert!(
+        !service
+            .rebuild_agent_presentation_after_resize("%1", Size::new(20, 12).unwrap())
+            .unwrap()
+    );
+    let screen = service.pane_screen("%1").unwrap();
+    assert!(
+        screen
+            .visible_lines()
+            .iter()
+            .all(|line| line.trim().is_empty()),
+        "{:?}",
+        screen.visible_lines()
+    );
+    let history = screen
+        .normal_content_lines()
+        .join("\n")
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>();
+    assert!(
+        history.contains("preservethisclearedagentviewport"),
+        "{history}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies user prompts persist their raw source and recompute wrapping when
 /// an agent pane is rebuilt at a narrower geometry.
 #[test]
