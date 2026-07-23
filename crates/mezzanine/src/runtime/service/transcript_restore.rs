@@ -283,6 +283,12 @@ impl RuntimeSessionService {
             .sessions()
             .filter(|session| runtime_pane_by_id(&self.session, &session.pane_id).is_ok())
             .filter(|session| {
+                session
+                    .running_turn_id
+                    .as_deref()
+                    .is_none_or(|turn_id| self.routed_parent_turn_id_for_child(turn_id).is_none())
+            })
+            .filter(|session| {
                 !session.ephemeral
                     || session
                         .ephemeral_transcript_source_conversation_id

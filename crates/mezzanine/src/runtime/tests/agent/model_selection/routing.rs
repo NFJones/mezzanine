@@ -67,6 +67,78 @@ fn selected_routed_loop(
     (service, parent_turn_id, worker_turn)
 }
 
+/// Verifies restart metadata retains only the durable routed parent and never
+/// restores its managed worker as an ordinary session on the parent transcript.
+#[test]
+fn runtime_routed_worker_checkpoint_restores_only_parent() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 inspect routed restart isolation");
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-routed-worker-checkpoint"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let mezzanine_session_id = service.session().id.as_str().to_string();
+    let parent_pane_id = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == parent_turn_id)
+        .map(|turn| turn.pane_id.clone())
+        .expect("routed parent turn should remain in the ledger");
+    let parent_conversation_id = service
+        .agent_shell_store()
+        .get(&parent_pane_id)
+        .map(|session| session.session_id.clone())
+        .expect("routed parent should retain its conversation");
+
+    service.checkpoint_agent_session_metadata().unwrap();
+
+    let metadata = transcript_store
+        .load_agent_session_metadata(&mezzanine_session_id)
+        .unwrap();
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0].pane_id, parent_pane_id);
+    assert_eq!(metadata[0].conversation_id, parent_conversation_id);
+    assert_eq!(
+        metadata[0].running_turn_id.as_deref(),
+        Some(parent_turn_id.as_str())
+    );
+    assert_eq!(
+        metadata[0].running_turn_kind.as_deref(),
+        Some("routed-workflow")
+    );
+    assert_ne!(metadata[0].pane_id, worker_turn.pane_id);
+
+    let mut restored = test_runtime_service();
+    restored.session.id = service.session().id.clone();
+    restored.set_agent_transcript_store(transcript_store);
+    let restored_count = restored
+        .restore_agent_sessions_from_transcript_store()
+        .unwrap();
+
+    assert_eq!(restored_count, 1);
+    assert_eq!(
+        restored
+            .agent_shell_store()
+            .get(&parent_pane_id)
+            .map(|session| session.session_id.as_str()),
+        Some(parent_conversation_id.as_str())
+    );
+    assert!(
+        restored
+            .agent_shell_store()
+            .get(&worker_turn.pane_id)
+            .is_none()
+    );
+    assert_eq!(
+        restored
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent_turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Interrupted)
+    );
+}
+
 /// Builds a completed routed work execution containing one successful patch.
 fn routed_patch_execution(turn: &mez_agent::AgentTurnRecord) -> mez_agent::AgentTurnExecution {
     let patch_action = mez_agent::AgentAction {
