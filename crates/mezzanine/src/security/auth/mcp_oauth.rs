@@ -594,9 +594,11 @@ fn browser_open_commands(url: &str) -> Vec<Command> {
 #[cfg(test)]
 mod tests {
     use super::{
-        McpOAuthMetadata, PkceCodes, Value, build_authorize_url, dynamic_client_registration_body,
-        optional_string_json_field, parse_callback_request, string_json_field,
+        McpOAuthMetadata, PkceCodes, Value, build_authorize_url, credential_from_token_response,
+        dynamic_client_registration_body, optional_string_json_field, parse_callback_request,
+        string_json_field,
     };
+    use crate::security::auth::{MCP_TEST_LONG_ACCESS_TOKEN, MCP_TEST_LONG_REFRESH_TOKEN};
 
     /// Verifies authorize URLs carry the PKCE, scope, and resource fields MCP
     /// servers need for OAuth authorization-code login.
@@ -654,6 +656,29 @@ mod tests {
         assert_eq!(
             metadata.registration_endpoint.as_deref(),
             Some("https://auth.example.test/register")
+        );
+    }
+
+    /// Verifies OAuth token JSON parsing preserves realistic opaque values.
+    ///
+    /// Access and refresh tokens are opaque protocol values. Parsing must not
+    /// trim, decode, normalize, or otherwise rewrite punctuation-heavy token
+    /// strings before credential storage receives them.
+    #[test]
+    fn token_response_parser_preserves_long_opaque_credentials_exactly() {
+        let value = serde_json::json!({
+            "access_token": MCP_TEST_LONG_ACCESS_TOKEN,
+            "refresh_token": MCP_TEST_LONG_REFRESH_TOKEN,
+            "token_type": "Bearer",
+            "scope": "tools.read tools.write"
+        });
+
+        let credential = credential_from_token_response(&value, &[]).unwrap();
+
+        assert_eq!(credential.access_token, MCP_TEST_LONG_ACCESS_TOKEN);
+        assert_eq!(
+            credential.refresh_token.as_deref(),
+            Some(MCP_TEST_LONG_REFRESH_TOKEN)
         );
     }
 

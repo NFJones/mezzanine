@@ -4,8 +4,9 @@ use super::{
     AuthCredentialKind, AuthCredentialState, AuthMetadata, AuthMethod, AuthPaths, AuthStore,
     CommandBackedCredentialStore, CredentialCommandOutput, CredentialCommandRunner,
     CredentialStore, CredentialStoreAvailability, CredentialStoreKind, CredentialStorePlan,
-    FileCredentialFallbackReason, McpAuthMetadata, McpCredentialKind, McpOAuthCredential,
-    OpenAiProviderCredential, PrivateFileCredentialStore, SECRET_TOOL_PROGRAM,
+    FileCredentialFallbackReason, MCP_TEST_LONG_ACCESS_TOKEN, MCP_TEST_LONG_REFRESH_TOKEN,
+    McpAuthMetadata, McpCredentialKind, McpOAuthCredential, OpenAiProviderCredential,
+    PrivateFileCredentialStore, SECRET_TOOL_PROGRAM,
 };
 use crate::error::Result;
 use secrecy::{ExposeSecret, SecretString};
@@ -955,6 +956,91 @@ fn mcp_access_token_for_url_rejects_stale_origin_and_fingerprint() {
     }
 
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies long MCP OAuth credentials survive private-file persistence.
+///
+/// Reconstructing the auth store models a new process loading credentials
+/// written by a prior login. Both opaque token values must remain byte-for-byte
+/// identical, and neither value may appear in the non-secret metadata file.
+#[test]
+fn mcp_oauth_long_tokens_round_trip_through_reconstructed_auth_store() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-mcp-long-token-round-trip-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let paths = AuthPaths::under_config_root(&root);
+    let store = AuthStore::new(paths.clone());
+    let credential_store = store.file_credential_store("demo").unwrap();
+    let metadata = McpAuthMetadata::new("demo", "https://example.invalid", "sha256:test");
+    store
+        .login_mcp_oauth_credential(
+            metadata,
+            McpOAuthCredential {
+                access_token: MCP_TEST_LONG_ACCESS_TOKEN.to_string(),
+                refresh_token: Some(MCP_TEST_LONG_REFRESH_TOKEN.to_string()),
+                token_expires_at: Some("1700000000".to_string()),
+                scopes: vec!["tools.read".to_string(), "tools.write".to_string()],
+                client_id: Some("test-client".to_string()),
+                resource: Some("https://example.invalid/v1/mcp".to_string()),
+                authorization_endpoint: Some("https://example.invalid/authorize".to_string()),
+                token_endpoint: Some("https://example.invalid/token".to_string()),
+            },
+            &credential_store,
+        )
+        .unwrap();
+
+    let reconstructed = AuthStore::new(paths);
+    assert_eq!(
+        reconstructed
+            .mcp_access_token("demo")
+            .unwrap()
+            .expose_secret(),
+        MCP_TEST_LONG_ACCESS_TOKEN
+    );
+    assert_eq!(
+        reconstructed
+            .mcp_refresh_token("demo")
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        MCP_TEST_LONG_REFRESH_TOKEN
+    );
+    let metadata_text = fs::read_to_string(reconstructed.paths().mcp_auth_file()).unwrap();
+    assert!(!metadata_text.contains(MCP_TEST_LONG_ACCESS_TOKEN));
+    assert!(!metadata_text.contains(MCP_TEST_LONG_REFRESH_TOKEN));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies command-backed secret output removes only one helper newline.
+///
+/// Credential helpers conventionally append LF or CRLF. The adapter must
+/// remove that transport terminator without trimming punctuation or an
+/// additional token-owned newline.
+#[test]
+fn credential_command_output_removes_only_one_helper_line_ending() {
+    use super::fs::secret_from_command_stdout;
+
+    for suffix in ["\n", "\r\n"] {
+        let output = format!("{MCP_TEST_LONG_ACCESS_TOKEN}{suffix}").into_bytes();
+        assert_eq!(
+            secret_from_command_stdout(output)
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            MCP_TEST_LONG_ACCESS_TOKEN
+        );
+    }
+    let token_owned_newline = format!("{MCP_TEST_LONG_ACCESS_TOKEN}\n\n").into_bytes();
+    assert_eq!(
+        secret_from_command_stdout(token_owned_newline)
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        format!("{MCP_TEST_LONG_ACCESS_TOKEN}\n")
+    );
 }
 
 /// Verifies that provider-account auth stores access and refresh material as

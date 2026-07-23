@@ -7,6 +7,7 @@ use super::{
     execute_streamable_http_exchange, initialize_streamable_http_mcp_server,
     read_bounded_protocol_line, spawn_stdio_mcp_connection,
 };
+use crate::security::auth::MCP_TEST_LONG_ACCESS_TOKEN;
 use mez_agent::mcp::{
     McpRegistry, McpServerConfig, McpServerStatus, McpToolCallPlan, McpToolCallRequest,
     McpToolEffects, build_mcp_default_initialize_request,
@@ -544,6 +545,45 @@ async fn streamable_http_exchange_prefers_env_bearer_over_stored_token() {
         "Bearer env-secret"
     ));
     assert!(!env_request.contains("stored-secret"));
+}
+
+/// Verifies a long stored OAuth token reaches the HTTP header unchanged.
+///
+/// The transport may add the required `Bearer ` scheme but must not truncate,
+/// escape, decode, or normalize any character in the opaque credential value.
+#[tokio::test]
+async fn streamable_http_exchange_preserves_long_oauth_bearer_value_exactly() {
+    let body = r#"{"jsonrpc":"2.0","id":9,"result":{"content":[],"isError":false}}"#;
+    let (url, request) = spawn_http_fixture("application/json", body, None);
+    let mut registry = McpRegistry::default();
+    registry
+        .add_server(McpServerConfig::streamable_http(
+            "http",
+            "http-fixture",
+            url,
+        ))
+        .unwrap();
+    let environment = BTreeMap::new();
+    let plan = registry.startup_plan("http", &environment, 1).unwrap();
+
+    execute_streamable_http_exchange(
+        &plan,
+        &environment,
+        r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#,
+        Some(9),
+        1000,
+        None,
+        Some(MCP_TEST_LONG_ACCESS_TOKEN),
+    )
+    .await
+    .unwrap();
+    let request = request.join().unwrap();
+
+    assert!(fixture_request_has_header(
+        &request,
+        "Authorization",
+        &format!("Bearer {MCP_TEST_LONG_ACCESS_TOKEN}")
+    ));
 }
 
 /// Verifies streamable http discovery into registry blacklists failed server.

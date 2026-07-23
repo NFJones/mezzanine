@@ -73,6 +73,14 @@ pub use types::{
     CredentialStore, CredentialStoreAvailability, CredentialStorePlan, FileCredentialFallbackReason,
 };
 
+/// Long non-secret OAuth access-token fixture shared across boundary tests.
+#[cfg(test)]
+pub(crate) const MCP_TEST_LONG_ACCESS_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsImtpZCI6Im1lei10ZXN0In0.eyJhdWQiOiJodHRwczovL21jcC5leGFtcGxlLnRlc3QvdjEvbWNwIiwic2NvcGUiOiJ0b29scy5yZWFkIHRvb2xzLndyaXRlIiwic3ViIjoidGVzdC11c2VyIn0.signature_-~.+/=:padding==";
+
+/// Long non-secret OAuth refresh-token fixture shared across boundary tests.
+#[cfg(test)]
+pub(crate) const MCP_TEST_LONG_REFRESH_TOKEN: &str = "refresh.v1.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-~.+/=:opaque-padding==";
+
 impl mez_agent::ProviderCredentialSource for AuthStore {
     type Error = crate::error::MezError;
     type Credential = secrecy::SecretString;
