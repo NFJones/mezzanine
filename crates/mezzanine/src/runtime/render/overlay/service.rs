@@ -49,11 +49,15 @@ impl RuntimeSessionService {
                         let target_command = record_browser_command_name(command)?;
                         let record_browser = overlay.record_browser.as_ref()?;
                         let mut stack = record_browser.stack.clone();
+                        let mut browser = record_browser.browser.clone();
+                        if let Some(active_index) = overlay.active_selection_index {
+                            browser.set_active_index(active_index);
+                        }
                         stack.push(
                             crate::runtime::service_state::RuntimeRecordBrowserOverlayFrame {
                                 command: record_browser.command.clone(),
                                 source: record_browser.source.clone(),
-                                browser: record_browser.browser.clone(),
+                                browser,
                                 scroll_offset: overlay.scroll_offset,
                                 active_selection_index: overlay.active_selection_index,
                             },
@@ -189,8 +193,12 @@ impl RuntimeSessionService {
         if input == b"a" {
             let source = record_browser.source.clone();
             if let Some(source) = source {
+                let active_index = overlay
+                    .active_selection_index
+                    .unwrap_or_else(|| record_browser.browser.active_index());
                 let source = self.record_browser_source_toggled_scope(&source);
-                let browser = self.refresh_record_browser_overlay_source(&source)?;
+                let mut browser = self.refresh_record_browser_overlay_source(&source)?;
+                browser.set_active_index(active_index);
                 let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(Some(false));
                 };
@@ -298,6 +306,9 @@ impl RuntimeSessionService {
                     record_browser.browser = frame.browser;
                     let scroll_offset = frame.scroll_offset;
                     let active_selection_index = frame.active_selection_index;
+                    if let Some(active_index) = active_selection_index {
+                        record_browser.browser.set_active_index(active_index);
+                    }
                     let changed = render_record_browser_overlay(
                         overlay,
                         &self.presentation.settings.ui_theme,
@@ -542,15 +553,22 @@ impl RuntimeSessionService {
         match outcome {
             mez_mux::record_browser::RecordBrowserOutcome::Ignored => Ok(false),
             mez_mux::record_browser::RecordBrowserOutcome::FilterSubmitted { field, value } => {
-                let source = self
+                let (source, active_index) = self
                     .presentation
                     .primary_display_overlay
                     .as_ref()
                     .and_then(|overlay| overlay.record_browser.as_ref())
-                    .and_then(|record_browser| record_browser.source.clone());
+                    .map(|record_browser| {
+                        (
+                            record_browser.source.clone(),
+                            record_browser.browser.active_index(),
+                        )
+                    })
+                    .unwrap_or((None, 0));
                 if let Some(source) = source {
                     let source = self.record_browser_source_with_filter(&source, field, &value)?;
-                    let browser = self.refresh_record_browser_overlay_source(&source)?;
+                    let mut browser = self.refresh_record_browser_overlay_source(&source)?;
+                    browser.set_active_index(active_index);
                     let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                         return Ok(false);
                     };

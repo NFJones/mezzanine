@@ -100,6 +100,8 @@ pub(super) fn render_record_browser_overlay(
     };
     let page = record_browser.browser.render_page();
     let prompt_selection = record_browser.browser.prompt_selection();
+    let list_active_index =
+        (!record_browser.browser.is_detail_view()).then(|| record_browser.browser.active_index());
     let content_width = if record_browser.browser.is_detail_view() {
         prose_width
     } else {
@@ -142,6 +144,9 @@ pub(super) fn render_record_browser_overlay(
                 selection
                     .active_index
                     .min(overlay.selections.len().saturating_sub(1))
+            })
+            .or_else(|| {
+                list_active_index.map(|index| index.min(overlay.selections.len().saturating_sub(1)))
             })
             .or(Some(0))
     };

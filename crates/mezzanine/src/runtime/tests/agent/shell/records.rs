@@ -420,6 +420,7 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
         .expect("restored overlay should keep record-browser state");
     assert_eq!(record_browser.browser.render_page().title, "Issues");
     assert!(record_browser.stack.is_empty());
+    assert_eq!(record_browser.browser.active_record_id(), Some("issue-2"));
     assert_eq!(overlay.active_selection_index, Some(1));
     assert!(overlay.lines.iter().any(|line| line.contains("issue-2")));
 }
@@ -469,13 +470,23 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
                 pane_id: pane_id.clone(),
                 content: "second context entry".to_string(),
             },
+            TranscriptEntry {
+                conversation_id: conversation_id.clone(),
+                sequence: 3,
+                created_at_unix_seconds: 3,
+                role: TranscriptRole::User,
+                turn_id: "turn-2".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: pane_id.clone(),
+                content: "third context entry".to_string(),
+            },
         ])
         .unwrap();
     transcript_store
         .append(&TranscriptEntry {
             conversation_id: "other-conversation".to_string(),
             sequence: 1,
-            created_at_unix_seconds: 3,
+            created_at_unix_seconds: 4,
             role: TranscriptRole::User,
             turn_id: "other-turn".to_string(),
             agent_id: "agent-%2".to_string(),
@@ -485,7 +496,7 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
         .unwrap();
     service
         .agent_shell_store_mut()
-        .record_transcript_entries(&pane_id, 2)
+        .record_transcript_entries(&pane_id, 3)
         .unwrap();
 
     let response = service
@@ -513,21 +524,29 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
             .any(|line| line.contains("other pane context"))
     );
 
-    for input in [b"\x1b[B".as_slice(), b"d".as_slice()] {
-        service
-            .apply_attached_terminal_step_plan(
-                &primary,
-                &AttachedTerminalClientStepPlan {
-                    actions: vec![TerminalClientLoopAction::ForwardToPane(input.to_vec())],
-                    output_lines: Vec::new(),
-                    output_line_style_spans: Vec::new(),
-                    input_hangup: false,
-                    output_hangup: false,
-                    error_roles: Vec::new(),
-                },
-            )
-            .unwrap();
-    }
+    apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+
+    let overlay = service.primary_display_overlay().unwrap();
+    let record_browser = overlay.record_browser.as_ref().unwrap();
+    assert_eq!(record_browser.browser.active_index(), 0);
+    assert_eq!(overlay.active_selection_index, Some(1));
+    assert_eq!(record_browser.browser.active_record_id(), Some("1"));
+
+    apply_record_browser_input(&mut service, &primary, b"d");
+
+    let overlay = service.primary_display_overlay().unwrap();
+    let record_browser = overlay.record_browser.as_ref().unwrap();
+    assert_eq!(record_browser.browser.active_index(), 1);
+    assert_eq!(overlay.active_selection_index, Some(1));
+    assert_eq!(record_browser.browser.active_record_id(), Some("2"));
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("third context entry"))
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"d");
 
     let entries = transcript_store.inspect(&conversation_id).unwrap();
     assert_eq!(entries.len(), 1);
@@ -541,6 +560,10 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
         1
     );
     let overlay = service.primary_display_overlay().unwrap();
+    let record_browser = overlay.record_browser.as_ref().unwrap();
+    assert_eq!(record_browser.browser.active_index(), 0);
+    assert_eq!(overlay.active_selection_index, Some(0));
+    assert_eq!(record_browser.browser.active_record_id(), Some("1"));
     assert!(
         overlay
             .lines
