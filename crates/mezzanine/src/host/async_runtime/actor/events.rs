@@ -287,7 +287,7 @@ impl AsyncRuntimeSessionActor {
                 if !active {
                     self.record_ignored_timer_event();
                 }
-                Ok(self.service.apply_resize_debounce_timer_transition(active))
+                self.service.apply_resize_debounce_timer_transition(active)
             }
             RuntimeTimerKind::CursorBlink => {
                 if self.timers.cursor_blink.get(timer.key.owner_id.as_str()) != Some(&timer.key) {

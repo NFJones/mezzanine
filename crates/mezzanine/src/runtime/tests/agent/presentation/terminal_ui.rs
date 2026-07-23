@@ -823,6 +823,109 @@ fn runtime_agent_resize_rebuilds_source_backed_presentation_at_new_width() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies pane-divider dragging defers expensive source-backed agent replay
+/// until the active resize debounce generation applies the final pane size.
+/// Geometry and terminal sizing must still update during the drag, while
+/// repeated movement coalesces into one pending semantic presentation rebuild.
+#[test]
+fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("agent-drag-resize-source"));
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .append_agent_assistant_text_to_terminal_buffer(
+            "%1",
+            "# Deferred rebuild\n\nsemantic source uses the final drag width",
+        )
+        .unwrap();
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+
+    let border = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap()
+        .mouse_border_cells
+        .into_iter()
+        .next()
+        .expect("vertical split should expose a draggable divider");
+    for column in [
+        border.column,
+        border.column.saturating_add(2),
+        border.column.saturating_add(4),
+    ] {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::HandleMouse(
+                        MouseAction::ResizePane {
+                            column,
+                            row: border.row,
+                        },
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    }
+
+    assert!(
+        service
+            .presentation
+            .agent_presentation_resize_is_deferred("%1")
+    );
+    let intermediate = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(!intermediate.contains("Deferred rebuild"), "{intermediate}");
+    let final_size = service.pane_screen("%1").unwrap().size();
+
+    let transition = service
+        .apply_resize_debounce_timer_transition(true)
+        .unwrap();
+
+    assert!(transition.applied);
+    assert!(
+        !service
+            .presentation
+            .agent_presentation_resize_is_deferred("%1")
+    );
+    assert_eq!(service.pane_screen("%1").unwrap().size(), final_size);
+    let rebuilt = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n")
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>();
+    assert!(rebuilt.contains("Deferredrebuild"), "{rebuilt}");
+    assert!(
+        rebuilt.contains("semanticsourceusesthefinaldragwidth"),
+        "{rebuilt}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies an asynchronous PTY resize completion rebuilds source-backed agent
 /// presentation instead of resizing the stale terminal-cell projection.
 #[test]

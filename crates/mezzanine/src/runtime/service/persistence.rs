@@ -68,9 +68,17 @@ impl RuntimeSessionService {
     ///
     /// Timer-key tracking remains adapter state, while the runtime core owns
     /// the resulting render transition for every attached terminal client.
-    pub(crate) fn apply_resize_debounce_timer_transition(&self, active: bool) -> RuntimeTransition {
+    pub(crate) fn apply_resize_debounce_timer_transition(
+        &mut self,
+        active: bool,
+    ) -> Result<RuntimeTransition> {
         if !active {
-            return RuntimeTransition::default();
+            return Ok(RuntimeTransition::default());
+        }
+        for (pane_id, size) in self.presentation.take_deferred_agent_presentation_resizes() {
+            if self.find_pane_descriptor(&pane_id).is_some() {
+                self.rebuild_agent_presentation_after_resize(&pane_id, size)?;
+            }
         }
         let side_effects = self
             .session
@@ -82,10 +90,10 @@ impl RuntimeSessionService {
                 reason: RenderInvalidationReason::Resize,
             })
             .collect::<Vec<_>>();
-        RuntimeTransition {
+        Ok(RuntimeTransition {
             applied: !side_effects.is_empty(),
             side_effects,
-        }
+        })
     }
 
     /// Reconciles the cursor-blink timer for one attached terminal client.

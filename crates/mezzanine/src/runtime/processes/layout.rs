@@ -687,10 +687,30 @@ impl RuntimeSessionService {
                 .pane_screens
                 .get(descriptor.pane_id.as_str())
                 .is_some_and(|screen| screen.size().columns != process_size.columns);
-            if pane_screen_width_changed
-                && self.rebuild_agent_presentation_after_resize(pane_id, process_size)?
-            {
-                // Source-backed agent output was atomically rebuilt at the new width.
+            let defer_agent_presentation =
+                pane_screen_width_changed && self.presentation.mouse_resize_drag_active();
+            if defer_agent_presentation {
+                self.presentation
+                    .defer_agent_presentation_resize(pane_id, process_size);
+                if let Some(screen) = self
+                    .process
+                    .pane_screens
+                    .get_mut(descriptor.pane_id.as_str())
+                {
+                    screen.resize(process_size);
+                }
+            } else if pane_screen_width_changed {
+                self.presentation
+                    .clear_deferred_agent_presentation_resize(pane_id);
+                if self.rebuild_agent_presentation_after_resize(pane_id, process_size)? {
+                    // Source-backed agent output was atomically rebuilt at the new width.
+                } else if let Some(screen) = self
+                    .process
+                    .pane_screens
+                    .get_mut(descriptor.pane_id.as_str())
+                {
+                    screen.resize(process_size);
+                }
             } else if let Some(screen) = self
                 .process
                 .pane_screens

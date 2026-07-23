@@ -233,6 +233,8 @@ pub(crate) struct RuntimePresentationComponent {
     agent_shell_output_status_lines: std::collections::BTreeMap<String, Vec<String>>,
     /// Panes replaying durable agent presentation entries.
     agent_presentation_replay_panes: std::collections::BTreeSet<String>,
+    /// Newest pane size awaiting source-backed agent presentation replay.
+    pending_agent_presentation_resize_sizes: std::collections::BTreeMap<String, Size>,
     /// Submitted command-prompt history retained across prompt openings.
     primary_command_prompt_history: Vec<String>,
     /// Active primary-client readline prompt, when one is open.
@@ -293,6 +295,36 @@ impl RuntimePresentationComponent {
     /// Clears an in-progress pane-resize gesture after layout mutation.
     pub(crate) fn clear_mouse_resize_drag_state(&mut self) {
         self.mouse_resize_drag_state = None;
+    }
+
+    /// Reports whether a pane-divider resize gesture is active.
+    pub(crate) fn mouse_resize_drag_active(&self) -> bool {
+        self.mouse_resize_drag_state.is_some()
+    }
+
+    /// Coalesces source-backed agent presentation replay to one final pane size.
+    pub(crate) fn defer_agent_presentation_resize(&mut self, pane_id: &str, size: Size) {
+        self.pending_agent_presentation_resize_sizes
+            .insert(pane_id.to_string(), size);
+    }
+
+    /// Reports whether one pane has deferred agent presentation replay.
+    #[cfg(test)]
+    pub(crate) fn agent_presentation_resize_is_deferred(&self, pane_id: &str) -> bool {
+        self.pending_agent_presentation_resize_sizes
+            .contains_key(pane_id)
+    }
+
+    /// Clears deferred agent presentation replay superseded by an immediate resize.
+    pub(crate) fn clear_deferred_agent_presentation_resize(&mut self, pane_id: &str) {
+        self.pending_agent_presentation_resize_sizes.remove(pane_id);
+    }
+
+    /// Drains the newest deferred agent presentation size for each pane.
+    pub(crate) fn take_deferred_agent_presentation_resizes(&mut self) -> Vec<(String, Size)> {
+        std::mem::take(&mut self.pending_agent_presentation_resize_sizes)
+            .into_iter()
+            .collect()
     }
 }
 
