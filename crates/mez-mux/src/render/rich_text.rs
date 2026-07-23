@@ -767,7 +767,9 @@ fn render_markdown_internal(
         }
         rendered_line
     }));
-    insert_blank_lines_around_markdown_headings(source_aligned_lines)
+    insert_blank_lines_after_markdown_tables(insert_blank_lines_around_markdown_headings(
+        source_aligned_lines,
+    ))
 }
 
 /// Ensures every rendered markdown heading has presentation blank lines around it.
@@ -788,6 +790,25 @@ pub fn insert_blank_lines_around_markdown_headings(lines: Vec<RichTextLine>) -> 
             && lines
                 .peek()
                 .is_some_and(|following| !following.display.trim().is_empty())
+        {
+            spaced.push(markdown_blank_line());
+        }
+    }
+    spaced
+}
+
+/// Inserts one presentation-only blank row between a rendered table and
+/// following visible Markdown content.
+fn insert_blank_lines_after_markdown_tables(lines: Vec<RichTextLine>) -> Vec<RichTextLine> {
+    let mut spaced = Vec::with_capacity(lines.len().saturating_add(1));
+    let mut lines = lines.into_iter().peekable();
+    while let Some(line) = lines.next() {
+        let is_table = line.kind.is_markdown_table();
+        spaced.push(line);
+        if is_table
+            && lines.peek().is_some_and(|following| {
+                !following.kind.is_markdown_table() && !following.display.trim().is_empty()
+            })
         {
             spaced.push(markdown_blank_line());
         }
@@ -2148,6 +2169,31 @@ mod tests {
                 .map(|line| line.display.as_str()),
             Some("After"),
             "{lines:?}"
+        );
+    }
+
+    /// Verifies rendered tables receive one presentation-only buffer before
+    /// immediately following prose while table-only output stays unchanged.
+    #[test]
+    fn markdown_tables_buffer_following_content() {
+        let followed = render_markdown(
+            "| Column |\n| --- |\n| value |\n\nAfter",
+            &theme(),
+            Some(24),
+        );
+        let after_index = followed
+            .iter()
+            .position(|line| line.display == "After")
+            .expect("following prose should be rendered");
+        assert!(after_index > 0, "{followed:?}");
+        assert!(followed[after_index - 1].display.is_empty(), "{followed:?}");
+        assert_eq!(followed[after_index - 1].copy_text.as_deref(), Some(""));
+
+        let table_only = render_markdown("| Column |\n| --- |\n| value |", &theme(), Some(24));
+        assert!(
+            table_only
+                .last()
+                .is_some_and(|line| !line.display.is_empty())
         );
     }
 
