@@ -17,7 +17,7 @@ use super::text::{
     agent_say_text_is_displayed_patch_block, append_styled_agent_terminal_line,
     append_styled_agent_terminal_rendered_line, bounded_agent_terminal_presentation_columns,
     command_preview_terminal_rendered_lines, fit_agent_terminal_text_width,
-    prefixed_agent_terminal_lines, render_agent_markdown_body_lines, sanitized_agent_terminal_line,
+    render_agent_markdown_body_lines, sanitized_agent_terminal_line,
     wrapped_prefixed_agent_terminal_lines,
 };
 use super::{
@@ -46,6 +46,9 @@ const AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE: &str =
 /// Content type for one action-execution header rendered at replay geometry.
 const AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.action-header+text; charset=utf-8";
+/// Content type for a parent-supplied subagent prompt rendered at replay geometry.
+const AGENT_PRESENTATION_PARENT_PROMPT_CONTENT_TYPE: &str =
+    "application/vnd.mezzanine.agent-presentation.parent-prompt+text; charset=utf-8";
 
 /// Decodes one typed styled-line presentation record for geometry-aware replay.
 fn styled_agent_presentation_source_lines(
@@ -95,11 +98,15 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
     ) -> Result<()> {
-        let lines = prefixed_agent_terminal_lines("parent> ", prompt);
-        self.append_agent_terminal_lines_to_buffer(
+        let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+        let rendered_lines =
+            wrapped_prefixed_agent_terminal_lines("parent> ", prompt, display_width);
+        self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
-            &lines,
             AgentTerminalPresentationStyle::UserPrompt,
+            rendered_lines.as_slice(),
+            &[],
+            Some((prompt, AGENT_PRESENTATION_PARENT_PROMPT_CONTENT_TYPE)),
         )
     }
 
@@ -289,6 +296,10 @@ impl RuntimeSessionService {
                 ) {
                     if source_content_type == AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE {
                         self.append_agent_user_prompt_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_PARENT_PROMPT_CONTENT_TYPE {
+                        self.append_agent_parent_prompt_to_terminal_buffer(pane_id, source_text)?;
                         continue;
                     }
                     if source_content_type == AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE {
