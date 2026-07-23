@@ -88,6 +88,218 @@ fn runtime_subagent_spawn_logs_parent_prompt_in_child_pane() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Builds a Bubblewrap runtime whose root pane is inside one trusted project.
+///
+/// The helper intentionally leaves configured scope arrays empty so subagent
+/// inheritance exercises the trusted-project default rather than explicit
+/// permission configuration.
+fn trusted_project_subagent_scope_service(
+    test_name: &str,
+) -> (
+    RuntimeSessionService,
+    mez_core::ids::ClientId,
+    PathBuf,
+    PathBuf,
+) {
+    let root = temp_root(test_name);
+    let project_root = root.join("project");
+    let working_directory = project_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service.set_pane_current_working_directory("%1".to_string(), working_directory.clone());
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {"sandbox": "bubblewrap"}
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            project_root.clone(),
+            TrustDecision::Trusted,
+            Some(project_root.join(".git")),
+            1,
+        )
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    (service, primary, root, project_root)
+}
+
+/// Spawns one idle child and returns its retained effective scope declaration.
+fn spawn_idle_subagent_scope(
+    service: &mut RuntimeSessionService,
+    primary: &mez_core::ids::ClientId,
+    spawn: SubagentSpawnRequest,
+) -> (String, mez_agent::SubagentScopeDeclaration) {
+    let spawned = service
+        .spawn_runtime_subagent(
+            primary,
+            spawn,
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let child_agent_id =
+        serde_json::from_str::<serde_json::Value>(&spawned).unwrap()["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let scope = service
+        .subagent_scope_declaration(&child_agent_id)
+        .expect("Bubblewrap child must retain effective parent authority");
+    (child_agent_id, scope)
+}
+
+/// Verifies omitted child scopes inherit the root parent's trusted-project
+/// Bubblewrap authority instead of independently deriving authority later.
+#[test]
+fn runtime_subagent_omitted_scopes_inherit_parent_bubblewrap_authority() {
+    let (mut service, primary, root, project_root) =
+        trusted_project_subagent_scope_service("runtime-subagent-inherit-bubblewrap");
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::OwnedWrite,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        task_prompt: "implement the bounded change".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+
+    let (_, scope) = spawn_idle_subagent_scope(&mut service, &primary, spawn);
+    let expected = project_root.to_string_lossy().into_owned();
+
+    assert_eq!(scope.read_scopes, vec![expected.clone()]);
+    assert_eq!(scope.write_scopes, vec![expected]);
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies explicit empty child scope arrays remain empty and therefore deny
+/// Bubblewrap filesystem authority rather than behaving like omitted fields.
+#[test]
+fn runtime_subagent_explicit_empty_scopes_do_not_inherit_parent_authority() {
+    let (mut service, primary, root, _) =
+        trusted_project_subagent_scope_service("runtime-subagent-explicit-empty-bubblewrap");
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::OwnedWrite,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: false,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: false,
+        task_prompt: "perform no filesystem work".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+
+    let (_, scope) = spawn_idle_subagent_scope(&mut service, &primary, spawn);
+
+    assert!(scope.read_scopes.is_empty());
+    assert!(scope.write_scopes.is_empty());
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies child-requested scopes may narrow inherited Bubblewrap authority
+/// but cannot add a sibling path outside the trusted parent scope.
+#[test]
+fn runtime_subagent_requested_scopes_only_narrow_parent_authority() {
+    let (mut service, primary, root, project_root) =
+        trusted_project_subagent_scope_service("runtime-subagent-narrow-bubblewrap");
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::OwnedWrite,
+        cooperation_mode_defaulted: false,
+        read_scopes: vec!["generated".to_string(), "../../outside".to_string()],
+        read_scopes_defaulted: false,
+        write_scopes: vec!["generated".to_string(), "../../outside".to_string()],
+        write_scopes_defaulted: false,
+        task_prompt: "update generated files".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+
+    let (_, scope) = spawn_idle_subagent_scope(&mut service, &primary, spawn);
+
+    assert_eq!(scope.read_scopes, vec!["generated"]);
+    assert_eq!(scope.write_scopes, vec!["generated"]);
+    assert!(
+        !scope
+            .read_scopes
+            .iter()
+            .any(|scope| scope.contains("outside"))
+    );
+    assert!(project_root.join("src").starts_with(&project_root));
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a nested child inherits its scoped parent's already narrowed
+/// authority even when its own pane remains under a broader trusted project.
+#[test]
+fn runtime_nested_subagent_cannot_rediscover_broader_trusted_authority() {
+    let (mut service, primary, root, _) =
+        trusted_project_subagent_scope_service("runtime-nested-subagent-bubblewrap");
+    let first_spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::OwnedWrite,
+        cooperation_mode_defaulted: false,
+        read_scopes: vec!["generated".to_string()],
+        read_scopes_defaulted: false,
+        write_scopes: vec!["generated".to_string()],
+        write_scopes_defaulted: false,
+        task_prompt: "own generated files".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+    let (parent_agent_id, parent_scope) =
+        spawn_idle_subagent_scope(&mut service, &primary, first_spawn);
+    let nested_spawn = SubagentSpawnRequest {
+        parent_agent_id,
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::OwnedWrite,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        task_prompt: "continue generated work".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+
+    let (_, nested_scope) = spawn_idle_subagent_scope(&mut service, &primary, nested_spawn);
+
+    assert_eq!(nested_scope.read_scopes, parent_scope.read_scopes);
+    assert_eq!(nested_scope.write_scopes, parent_scope.write_scopes);
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies runtime agent shell prompt starts live turn lifecycle.
 ///
 /// This regression scenario documents the behavior being protected so a

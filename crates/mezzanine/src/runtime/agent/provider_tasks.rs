@@ -465,27 +465,36 @@ impl RuntimeSessionService {
             };
 
         let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
-        let resolved_subagent_path_scopes = if let Some(scope) = subagent_scope
-            .as_ref()
-            .filter(|scope| !scope.read_scopes.is_empty() || !scope.write_scopes.is_empty())
-        {
-            let request = mez_agent::shell::PanePathResolutionRequest::new(
-                scope.read_scopes.clone(),
-                scope.write_scopes.clone(),
-                Vec::new(),
-            )
-            .map_err(|error| MezError::invalid_args(error.message()))?;
-            match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
-                Some(scopes) => Some(if let Some(primary) = &resolved_primary_path_scopes {
-                    primary
-                        .intersection(&scopes)
-                        .map_err(|error| MezError::invalid_state(error.message()))?
-                } else {
-                    scopes
-                }),
-                None => {
-                    let _ = self.dispatch_path_resolution_to_pane(&turn.pane_id, request)?;
-                    return Ok(None);
+        let resolved_subagent_path_scopes = if let Some(scope) = subagent_scope.as_ref() {
+            if scope.read_scopes.is_empty() && scope.write_scopes.is_empty() {
+                Some(
+                    mez_agent::permissions::PathScopes::try_shell_resolved(
+                        scope.current_directory.clone(),
+                        Vec::new(),
+                        Vec::new(),
+                        Default::default(),
+                    )
+                    .map_err(|error| MezError::invalid_state(error.message()))?,
+                )
+            } else {
+                let request = mez_agent::shell::PanePathResolutionRequest::new(
+                    scope.read_scopes.clone(),
+                    scope.write_scopes.clone(),
+                    Vec::new(),
+                )
+                .map_err(|error| MezError::invalid_args(error.message()))?;
+                match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
+                    Some(scopes) => Some(if let Some(primary) = &resolved_primary_path_scopes {
+                        primary
+                            .intersection(&scopes)
+                            .map_err(|error| MezError::invalid_state(error.message()))?
+                    } else {
+                        scopes
+                    }),
+                    None => {
+                        let _ = self.dispatch_path_resolution_to_pane(&turn.pane_id, request)?;
+                        return Ok(None);
+                    }
                 }
             }
         } else {

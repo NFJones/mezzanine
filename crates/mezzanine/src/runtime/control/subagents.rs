@@ -348,10 +348,14 @@ impl RuntimeSessionService {
         {
             spawn.cooperation_mode = mode;
         }
-        if spawn.read_scopes_defaulted || spawn.read_scopes.is_empty() {
+        let read_scopes_requested =
+            !spawn.read_scopes_defaulted || !profile.default_read_scopes.is_empty();
+        let write_scopes_requested =
+            !spawn.write_scopes_defaulted || !profile.default_write_scopes.is_empty();
+        if spawn.read_scopes_defaulted && !profile.default_read_scopes.is_empty() {
             spawn.read_scopes = profile.default_read_scopes.clone();
         }
-        if spawn.write_scopes_defaulted || spawn.write_scopes.is_empty() {
+        if spawn.write_scopes_defaulted && !profile.default_write_scopes.is_empty() {
             spawn.write_scopes = profile.default_write_scopes.clone();
         }
         if let Some(preset) = profile.permission_preset
@@ -368,11 +372,33 @@ impl RuntimeSessionService {
                 spawn.task_prompt, instructions
             );
         }
-        let inherited_scope = self.subagent_scope_declaration(&spawn.parent_agent_id);
+        let inherited_scope =
+            self.subagent_parent_effective_scope(&spawn.parent_agent_id, spawn.cooperation_mode);
         if let Some(parent_scope) = inherited_scope.as_ref() {
             spawn.cooperation_mode = parent_scope.cooperation_mode;
-            spawn.read_scopes = parent_scope.read_scopes.clone();
-            spawn.write_scopes = parent_scope.write_scopes.clone();
+            spawn.read_scopes = if read_scopes_requested {
+                narrow_subagent_scope_paths(
+                    &parent_scope.current_directory,
+                    &parent_scope.read_scopes,
+                    &spawn.read_scopes,
+                )
+            } else {
+                parent_scope.read_scopes.clone()
+            };
+            spawn.write_scopes = if write_scopes_requested {
+                narrow_subagent_scope_paths(
+                    &parent_scope.current_directory,
+                    &parent_scope.write_scopes,
+                    &spawn.write_scopes,
+                )
+            } else {
+                parent_scope.write_scopes.clone()
+            };
+            for write_scope in &spawn.write_scopes {
+                if !spawn.read_scopes.contains(write_scope) {
+                    spawn.read_scopes.push(write_scope.clone());
+                }
+            }
             if parent_scope.cooperation_mode == mez_agent::CooperationMode::Unrestricted {
                 spawn.explicit_user_approval = true;
             }
@@ -415,6 +441,8 @@ impl RuntimeSessionService {
             .unwrap_or_else(|| ".".to_string());
         let mut child_scope = inherited_scope.map(|mut declaration| {
             declaration.current_directory = current_directory.clone();
+            declaration.read_scopes = spawn.read_scopes.clone();
+            declaration.write_scopes = spawn.write_scopes.clone();
             if profile.permission_preset.is_some() {
                 declaration.permission_preset = profile.permission_preset;
             }
@@ -759,6 +787,47 @@ impl RuntimeSessionService {
         self.pane_current_working_directory(parent_pane_id.as_str())
     }
 
+    /// Returns the parent authority that may be inherited by a new child.
+    ///
+    /// Scoped parents retain their already narrowed declaration. A root parent
+    /// contributes its effective primary filesystem authority only when
+    /// Bubblewrap confinement is active, preventing the child from discovering
+    /// a different trusted-project default after it starts.
+    fn subagent_parent_effective_scope(
+        &self,
+        parent_agent_id: &str,
+        cooperation_mode: mez_agent::CooperationMode,
+    ) -> Option<SubagentScopeDeclaration> {
+        if let Some(scope) = self.subagent_scope_declaration(parent_agent_id) {
+            return Some(scope);
+        }
+        if !matches!(
+            self.configured_permissions().sandbox,
+            crate::runtime::SandboxConfig::Bubblewrap(_)
+        ) {
+            return None;
+        }
+        let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
+        let current_directory = self
+            .pane_current_working_directory(parent_pane_id.as_str())
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".".to_string());
+        let (mut read_scopes, write_scopes) =
+            self.primary_path_scope_paths(parent_pane_id.as_str());
+        for write_scope in &write_scopes {
+            if !read_scopes.contains(write_scope) {
+                read_scopes.push(write_scope.clone());
+            }
+        }
+        Some(SubagentScopeDeclaration {
+            cooperation_mode,
+            current_directory,
+            read_scopes,
+            write_scopes,
+            permission_preset: None,
+        })
+    }
+
     /// Returns the routing preference a child agent should inherit.
     pub(crate) fn inherited_routing_for_child_agent(&self, parent_agent_id: &str) -> Option<bool> {
         let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
@@ -1000,4 +1069,61 @@ impl RuntimeSessionService {
         }
         summary
     }
+}
+
+/// Intersects requested child paths with one parent authority axis.
+///
+/// This lexical pre-filter never grants a path outside the parent declaration.
+/// Pane-shell canonicalization remains the final authority boundary before
+/// Bubblewrap compilation.
+fn narrow_subagent_scope_paths(
+    current_directory: &str,
+    maximum: &[String],
+    requested: &[String],
+) -> Vec<String> {
+    let mut narrowed = Vec::new();
+    for requested_path in requested {
+        let requested_normalized =
+            normalized_subagent_scope_path(current_directory, requested_path);
+        for maximum_path in maximum {
+            let maximum_normalized =
+                normalized_subagent_scope_path(current_directory, maximum_path);
+            let selected = if requested_normalized.starts_with(&maximum_normalized) {
+                Some(requested_path)
+            } else if maximum_normalized.starts_with(&requested_normalized) {
+                Some(maximum_path)
+            } else {
+                None
+            };
+            if let Some(selected) = selected
+                && !narrowed.contains(selected)
+            {
+                narrowed.push(selected.clone());
+            }
+        }
+    }
+    narrowed
+}
+
+/// Resolves lexical scope components against the parent's observed directory.
+fn normalized_subagent_scope_path(current_directory: &str, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    let combined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        PathBuf::from(current_directory).join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in combined.components() {
+        match component {
+            std::path::Component::RootDir => normalized.push("/"),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::Prefix(_) => {}
+        }
+    }
+    normalized
 }

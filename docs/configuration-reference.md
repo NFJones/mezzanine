@@ -750,7 +750,10 @@ action requests are cached independently for the current pane environment and
 configuration generation. With no explicit scopes, a trusted current project
 provides the default read-write scope; nested trusted projects select the
 deepest matching root, and other working directories remain unresolved.
-Bubblewrap activation requires usable scopes.
+Bubblewrap subagents inherit omitted read or write scope axes from that bounded
+parent authority. Explicit child or profile scopes may only narrow the parent;
+an explicit empty array remains empty, and nested children never rediscover a
+broader trusted-project root. Bubblewrap activation requires usable scopes.
 Schema v20 migration selects `policy-only` and does not infer scopes or effects.
 
 On Linux, Mezzanine validates the configured executable inside the target pane
@@ -796,8 +799,8 @@ unsandboxed retry, and the grant is consumed exactly once.
 | `subagents.<name>.shell_env` | map | omitted | Extra shell environment for this role. |
 | `subagents.<name>.default_cooperation_mode` | string | omitted | Cooperation mode default. |
 | `subagents.<name>.default_mode` | string | omitted | Compatibility mode default. |
-| `subagents.<name>.default_read_scopes` | string array | omitted | Default readable scopes. |
-| `subagents.<name>.default_write_scopes` | string array | omitted | Default writable scopes. |
+| `subagents.<name>.default_read_scopes` | string array | omitted | Default child read-scope narrowing; Bubblewrap intersects it with inherited parent authority. |
+| `subagents.<name>.default_write_scopes` | string array | omitted | Default child write-scope narrowing; Bubblewrap intersects it with inherited parent authority. |
 
 ### `personalities.<name>`
 

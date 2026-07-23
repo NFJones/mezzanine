@@ -5113,13 +5113,14 @@ project instruction context unless the user or configuration specifies a
 different context.
 
 Spawned agents MUST inherit the effective authorization scope of their parent
-agent. Mezzanine MUST NOT use model-proposed or profile-default
-`read_scopes`/`write_scopes` to create a narrower child sandbox when the parent
-agent is not already scope-constrained. When the parent is a scoped subagent,
-the child MUST inherit the parent's cooperation mode, read scopes, and write
-scopes exactly unless the primary user explicitly approves a scope change.
-Spawn-request scopes MAY be retained as task-intent metadata, but they MUST NOT
-broaden or narrow the child's enforceable authority by themselves.
+agent. Under Bubblewrap, omitted child `read_scopes` or `write_scopes` MUST
+inherit the corresponding effective parent authority. Explicit child scopes,
+including profile defaults, MAY narrow that authority but MUST NOT broaden it.
+An explicitly supplied empty scope array MUST remain empty rather than being
+treated as omitted. A nested child MUST inherit or narrow its scoped parent's
+effective authority and MUST NOT independently infer a broader trusted-project
+default. The child MUST inherit the parent's cooperation mode unless the primary
+user explicitly approves a scope change.
 
 Spawned agents MUST be discoverable through the local message passing protocol.
 
@@ -5190,15 +5191,16 @@ best-known pane working directory and MUST update when shell integration later
 reports a more precise working directory.
 
 Spawn requests MAY include requested read scopes and write scopes so parent
-agents can describe task intent. Enforceable subagent scopes MUST be derived
-from the parent agent's current scope, not from model-emitted request fields or
-profile defaults. When enforceable write scopes exist, they MUST be paths, path
+agents can describe task intent and request narrower authority. Enforceable
+subagent scopes MUST be derived by intersecting those fields or profile defaults
+with the parent agent's current scope; they MUST NOT grant authority absent from
+the parent. When enforceable write scopes exist, they MUST be paths, path
 prefixes, or repository-relative globs with deterministic matching.
 
 Mezzanine MUST NOT reject a subagent spawn solely because model-emitted
 requested scopes overlap active write-scope metadata. If policy implements
 concurrent write coordination, it MUST coordinate inherited effective scopes and
-MUST NOT create a child restriction that the parent did not already have.
+MUST NOT create child authority outside the parent's effective scope.
 
 Subagents MUST announce their effective cooperation mode, inherited read scopes,
 and inherited write scopes through the local message passing protocol presence

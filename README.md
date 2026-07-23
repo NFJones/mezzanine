@@ -377,6 +377,9 @@ Current support reflects behavior implemented in the repository today.
   conversation context, and explicit action results.
 - Shell, network, destructive, configuration, and some MCP actions may require
   approval depending on the active runtime mode.
+- Bubblewrap subagents inherit their parent's effective filesystem authority;
+  omitted scopes inherit, explicit scopes may only narrow, and explicit empty
+  scope arrays remain empty.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks

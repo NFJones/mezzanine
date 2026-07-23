@@ -424,7 +424,13 @@ impl RuntimeSessionService {
             return Ok(primary);
         };
         if scope.read_scopes.is_empty() && scope.write_scopes.is_empty() {
-            return Ok(primary);
+            return PathScopes::try_shell_resolved(
+                scope.current_directory,
+                Vec::new(),
+                Vec::new(),
+                Default::default(),
+            )
+            .map_err(|error| MezError::invalid_state(error.message()));
         }
         let request = mez_agent::shell::PanePathResolutionRequest::new(
             scope.read_scopes,
