@@ -14,7 +14,20 @@ impl RuntimeSessionService {
     /// Requeues pending shell dispatches that have no live transaction and are
     /// waiting behind readiness state that can be safely retried.
     pub(crate) fn recover_stranded_agent_shell_dispatches(&mut self) -> Result<usize> {
-        let candidates = self.stranded_agent_shell_dispatch_recovery_candidates();
+        self.recover_stranded_agent_shell_dispatches_with_actor_progress(&BTreeSet::new())
+    }
+
+    /// Requeues stranded shell dispatches except turns that are waiting on
+    /// actor-owned progress such as a delayed provider retry timer.
+    pub(crate) fn recover_stranded_agent_shell_dispatches_with_actor_progress(
+        &mut self,
+        actor_progress_turn_ids: &BTreeSet<String>,
+    ) -> Result<usize> {
+        let candidates = self
+            .stranded_agent_shell_dispatch_recovery_candidates()
+            .into_iter()
+            .filter(|turn_id| !actor_progress_turn_ids.contains(turn_id))
+            .collect::<Vec<_>>();
         let mut recovered = 0usize;
         for turn_id in candidates {
             let Some(turn) = self

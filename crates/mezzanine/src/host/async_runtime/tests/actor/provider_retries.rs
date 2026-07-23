@@ -498,6 +498,14 @@ max_output_tokens = 4096
                 .unwrap()
                 .is_empty()
         );
+        assert!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a delayed output-limit retry must not be redispatched before its timer fires"
+        );
 
         let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
         let retry_key = timer_effects

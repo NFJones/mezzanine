@@ -583,7 +583,8 @@ impl RuntimeSessionService {
         ) {
             return Ok(0);
         }
-        let stranded_shell_recoveries = self.recover_stranded_agent_shell_dispatches()?;
+        let stranded_shell_recoveries = self
+            .recover_stranded_agent_shell_dispatches_with_actor_progress(actor_progress_turn_ids)?;
         let unreachable_turn_failures =
             self.fail_unreachable_running_agent_turns_with_actor_progress(actor_progress_turn_ids)?;
         Ok(stranded_shell_recoveries.saturating_add(unreachable_turn_failures))
