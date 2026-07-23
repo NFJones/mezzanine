@@ -49,6 +49,9 @@ const AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE: &str =
 /// Content type for a parent-supplied subagent prompt rendered at replay geometry.
 const AGENT_PRESENTATION_PARENT_PROMPT_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.parent-prompt+text; charset=utf-8";
+/// Content type for rationale text rendered at replay geometry.
+const AGENT_PRESENTATION_THINKING_CONTENT_TYPE: &str =
+    "application/vnd.mezzanine.agent-presentation.thinking+text; charset=utf-8";
 
 /// Decodes one typed styled-line presentation record for geometry-aware replay.
 fn styled_agent_presentation_source_lines(
@@ -302,6 +305,10 @@ impl RuntimeSessionService {
                         self.append_agent_parent_prompt_to_terminal_buffer(pane_id, source_text)?;
                         continue;
                     }
+                    if source_content_type == AGENT_PRESENTATION_THINKING_CONTENT_TYPE {
+                        self.append_agent_thinking_text_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
                     if source_content_type == AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE {
                         self.append_agent_command_preview_to_terminal_buffer(pane_id, source_text)?;
                         continue;
@@ -541,10 +548,21 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         if self.agent_thinking_enabled(pane_id) {
             let columns = self.agent_terminal_presentation_columns(pane_id)?;
-            self.append_agent_terminal_lines_to_buffer(
+            let rendered_lines = agent_thinking_display_lines_for_width(text, columns)
+                .into_iter()
+                .map(|display| RichTextLine {
+                    display,
+                    style_spans: Vec::new(),
+                    copy_text: None,
+                    kind: mez_mux::render::RichTextLineKind::Normal,
+                })
+                .collect::<Vec<_>>();
+            self.append_agent_terminal_rendered_lines_to_buffer(
                 pane_id,
-                &agent_thinking_display_lines_for_width(text, columns),
                 AgentTerminalPresentationStyle::Status,
+                &rendered_lines,
+                &[],
+                Some((text, AGENT_PRESENTATION_THINKING_CONTENT_TYPE)),
             )?;
         }
         Ok(())
