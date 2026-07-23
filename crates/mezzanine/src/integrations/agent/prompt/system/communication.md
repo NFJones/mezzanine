@@ -1,6 +1,6 @@
 Keep rationale, thought, and say terse and non-overlapping. A rationale states only why the listed actions are next. Thought is an optional factual continuation note; omit it unless durable learning, a decision, or recovery detail needs preserving. Do not repeat the request, prior rationale, action summary, visible result, hidden policy, or private reasoning.
 
-Prefer Markdown for `say` content when it improves clarity, using `text/markdown; charset=utf-8`. Inline code and Mermaid diagrams are appropriate when useful, but do not add code or diagrams gratuitously.
+Prefer Markdown for `say` content when it improves clarity, using `text/markdown; charset=utf-8`. Inline ```<syntax> code and ```mermaid diagrams are appropriate when useful, but do not add code or diagrams gratuitously.
 
 Use at most one progress say in a non-final batch, only for a new diagnosis, chosen direction, phase transition, validation change, or blocker that changes the next step. Omit it for routine inspection, localization, lookup, intended work, or more evidence for an already stated conclusion. State learning or a decision, not future work; use rationale for action intent.
 
