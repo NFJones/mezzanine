@@ -248,10 +248,13 @@ impl RuntimeMcpTransportSet {
                 let operation = mcp_tools_call_operation(request_id, plan)?;
                 let oauth_token = match &state.startup_plan.transport {
                     mez_agent::mcp::McpStartupTransportPlan::StreamableHttp {
+                        url,
                         bearer_token_env,
                         ..
                     } if bearer_token_env.is_none() => auth_store
-                        .map(|store| store.mcp_access_token_if_configured(&plan.server_id))
+                        .map(|store| {
+                            store.mcp_access_token_for_url_if_configured(&plan.server_id, url)
+                        })
                         .transpose()?
                         .flatten(),
                     _ => None,
@@ -280,7 +283,23 @@ impl RuntimeMcpTransportSet {
                         auth_store
                             .refresh_mcp_oauth_credential_for_server_async(&plan.server_id)
                             .await?;
-                        let refreshed_token = auth_store.mcp_access_token(&plan.server_id)?;
+                        let url = match &state.startup_plan.transport {
+                            mez_agent::mcp::McpStartupTransportPlan::StreamableHttp {
+                                url, ..
+                            } => url,
+                            _ => {
+                                return Err(MezError::invalid_state(
+                                    "MCP OAuth refresh requires an HTTP transport",
+                                ));
+                            }
+                        };
+                        let refreshed_token = auth_store
+                            .mcp_access_token_for_url_if_configured(&plan.server_id, url)?
+                            .ok_or_else(|| {
+                                MezError::invalid_state(
+                                    "MCP OAuth refresh completed without stored auth metadata",
+                                )
+                            })?;
                         execute_streamable_http_exchange(
                             &state.startup_plan,
                             environment,

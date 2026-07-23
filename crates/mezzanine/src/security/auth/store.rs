@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use secrecy::{ExposeSecret, SecretString};
+use sha2::Digest;
 
 use crate::error::{MezError, Result};
 
@@ -621,6 +622,39 @@ impl AuthStore {
         let Some(metadata) = self.read_mcp_metadata_for_server(server_id)? else {
             return Ok(None);
         };
+        let reference = metadata.credential_store_ref.as_deref().ok_or_else(|| {
+            MezError::invalid_state("MCP auth metadata has no credential reference")
+        })?;
+        self.load_secret(reference)?
+            .filter(|secret| !secret.expose_secret().trim().is_empty())
+            .ok_or_else(|| MezError::invalid_state("MCP bearer credential is unavailable"))
+            .map(Some)
+    }
+
+    /// Loads an MCP bearer token only when it matches the configured server URL.
+    ///
+    /// Missing per-server auth metadata remains an intentionally unauthenticated
+    /// configuration. A changed origin or full URL fingerprint rejects the
+    /// stored credential before secret loading so callers cannot disclose it to
+    /// a replacement endpoint that reuses the same server id.
+    pub fn mcp_access_token_for_url_if_configured(
+        &self,
+        server_id: &str,
+        configured_url: &str,
+    ) -> Result<Option<SecretString>> {
+        validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
+        let Some(metadata) = self.read_mcp_metadata_for_server(server_id)? else {
+            return Ok(None);
+        };
+        let configured_origin = mcp_http_url_origin(configured_url)?;
+        let configured_fingerprint = mcp_url_fingerprint(configured_url);
+        if metadata.url_origin != configured_origin
+            || metadata.url_fingerprint != configured_fingerprint
+        {
+            return Err(MezError::forbidden(format!(
+                "MCP server `{server_id}` stored credential is bound to a different URL; re-authentication is required"
+            )));
+        }
         let reference = metadata.credential_store_ref.as_deref().ok_or_else(|| {
             MezError::invalid_state("MCP auth metadata has no credential reference")
         })?;
@@ -1480,4 +1514,29 @@ fn mcp_access_credential_name(server_id: &str) -> String {
 /// Returns the credential-store entry name for an MCP refresh token.
 fn mcp_refresh_credential_name(server_id: &str) -> String {
     format!("mcp-{server_id}-refresh")
+}
+
+/// Computes the origin component used to bind MCP credentials to HTTP URLs.
+fn mcp_http_url_origin(url: &str) -> Result<String> {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return Err(MezError::invalid_args(
+            "MCP HTTP server URL must include a scheme",
+        ));
+    };
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|authority| !authority.is_empty())
+        .ok_or_else(|| MezError::invalid_args("MCP HTTP server URL must include a host"))?;
+    Ok(format!("{}://{}", scheme.to_ascii_lowercase(), authority))
+}
+
+/// Computes the stable non-secret full-URL fingerprint for MCP auth binding.
+fn mcp_url_fingerprint(url: &str) -> String {
+    let digest = sha2::Sha256::digest(url.as_bytes());
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("sha256:{hex}")
 }

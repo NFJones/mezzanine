@@ -258,12 +258,14 @@ impl RuntimeSessionService {
                     .insert_stdio(server_id.to_string(), connection);
             }
             McpStartupTransportPlan::StreamableHttp {
-                bearer_token_env, ..
+                url,
+                bearer_token_env,
+                ..
             } => {
                 let oauth_token = if bearer_token_env.is_none() {
                     self.integration
                         .auth_store()
-                        .map(|store| store.mcp_access_token_if_configured(server_id))
+                        .map(|store| store.mcp_access_token_for_url_if_configured(server_id, url))
                         .transpose()?
                         .flatten()
                 } else {
@@ -294,7 +296,13 @@ impl RuntimeSessionService {
                         auth_store
                             .refresh_mcp_oauth_credential_for_server_async(server_id)
                             .await?;
-                        let refreshed_token = auth_store.mcp_access_token(server_id)?;
+                        let refreshed_token = auth_store
+                            .mcp_access_token_for_url_if_configured(server_id, url)?
+                            .ok_or_else(|| {
+                                MezError::invalid_state(
+                                    "MCP OAuth refresh completed without stored auth metadata",
+                                )
+                            })?;
                         discover_streamable_http_mcp_server_with_auth_token(
                             &plan,
                             environment,

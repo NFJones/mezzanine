@@ -9,6 +9,7 @@ use super::{
 };
 use crate::error::Result;
 use secrecy::{ExposeSecret, SecretString};
+use sha2::Digest;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
@@ -898,6 +899,60 @@ fn mcp_optional_access_token_propagates_configured_secret_load_failures() {
     let error = store.mcp_access_token_if_configured("broken").unwrap_err();
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
     assert!(error.to_string().contains("regular file"), "{error}");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies runtime MCP token loading enforces the configured URL binding.
+///
+/// Reusing a server id for a different origin or path must not disclose the
+/// stored bearer credential to the replacement endpoint. An unchanged URL
+/// remains usable, while either binding mismatch requires re-authentication.
+#[test]
+fn mcp_access_token_for_url_rejects_stale_origin_and_fingerprint() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-mcp-url-binding-test-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let credential_store = store.file_credential_store("demo").unwrap();
+    let configured_url = "https://example.invalid/v1/mcp";
+    let digest = sha2::Sha256::digest(configured_url.as_bytes());
+    let fingerprint = format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let metadata = McpAuthMetadata::new("demo", "https://example.invalid", fingerprint);
+    store
+        .login_mcp_static_bearer_credential(
+            metadata,
+            "bound-token-secret".to_string(),
+            &credential_store,
+        )
+        .unwrap();
+
+    assert_eq!(
+        store
+            .mcp_access_token_for_url_if_configured("demo", configured_url)
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        "bound-token-secret"
+    );
+    for stale_url in [
+        "https://replacement.invalid/v1/mcp",
+        "https://example.invalid/v2/mcp",
+    ] {
+        let error = store
+            .mcp_access_token_for_url_if_configured("demo", stale_url)
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+        assert!(error.to_string().contains("re-authentication"), "{error}");
+    }
 
     let _ = fs::remove_dir_all(root);
 }
