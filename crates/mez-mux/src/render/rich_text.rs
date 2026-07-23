@@ -1806,6 +1806,12 @@ impl MarkdownTableState {
         if column_count == 0 {
             return Vec::new();
         }
+        if self
+            .display_width
+            .is_some_and(|width| width < column_count.saturating_mul(4).saturating_add(1))
+        {
+            return self.render_stacked_lines(column_count);
+        }
         let widths = self.column_widths(column_count);
         let mut lines = Vec::new();
         for (row_index, row) in self.rows.iter().enumerate() {
@@ -1846,6 +1852,56 @@ impl MarkdownTableState {
                     copy_text: None,
                     kind: RichTextLineKind::MarkdownTableSeparator,
                 });
+            }
+        }
+        lines
+    }
+
+    /// Renders structurally overwide tables as width-bounded header/value rows.
+    ///
+    /// Box-drawing tables require at least one content cell plus borders and
+    /// padding for every column. Below that structural width, preserving the
+    /// normal table would lose right-edge columns to terminal clipping.
+    fn render_stacked_lines(&self, column_count: usize) -> Vec<RichTextLine> {
+        let width = self.display_width.unwrap_or(1).max(1);
+        let headers = self.rows.first().cloned().unwrap_or_default();
+        let body_start = self.header_rows.min(self.rows.len());
+        let rows = if body_start == 0 {
+            self.rows.as_slice()
+        } else {
+            &self.rows[body_start..]
+        };
+        let mut lines = Vec::new();
+        for (body_index, row) in rows.iter().enumerate() {
+            for column in 0..column_count {
+                let header = headers
+                    .get(column)
+                    .filter(|header| !header.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| format!("Column {}", column.saturating_add(1)));
+                let value = row.get(column).map(String::as_str).unwrap_or_default();
+                let fragments = Self::wrap_cell(&format!("{header}: {value}"), width);
+                for (fragment_index, display) in fragments.into_iter().enumerate() {
+                    let mut line = RichTextLine {
+                        copy_text: Some(if fragment_index == 0 {
+                            display.clone()
+                        } else {
+                            COPY_SKIP_LINE.to_string()
+                        }),
+                        display,
+                        style_spans: Vec::new(),
+                        kind: if fragment_index == 0 {
+                            RichTextLineKind::MarkdownTableRow
+                        } else {
+                            RichTextLineKind::MarkdownTableContinuation
+                        },
+                    };
+                    self.apply_row_style(&mut line, body_index.saturating_add(self.header_rows));
+                    lines.push(line);
+                }
+            }
+            if body_index.saturating_add(1) < rows.len() {
+                lines.push(markdown_blank_line());
             }
         }
         lines
@@ -2133,6 +2189,48 @@ mod tests {
                 .any(|line| line.kind == RichTextLineKind::MarkdownTableSeparator)
         );
         assert!(lines.iter().any(|line| line.copy_text.is_some()));
+    }
+
+    /// Verifies tables below their box-drawing structural width fall back to
+    /// header/value rows that preserve every column without exceeding the pane.
+    #[test]
+    fn markdown_tables_stack_when_their_structural_width_exceeds_the_pane() {
+        let lines = render_markdown(
+            "| Name | City | State | Tier |\n| --- | --- | --- | --- |\n| Ada | Zürich | ready | gold |",
+            &theme(),
+            Some(14),
+        );
+        let rendered = lines
+            .iter()
+            .map(|line| line.display.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            rendered.iter().any(|line| line.contains("Name: Ada")),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|line| line.contains("City: Zürich")),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|line| line.contains("State: ready")),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.iter().any(|line| line.contains("Tier: gold")),
+            "{rendered:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| terminal_text_width(line.display.as_str()) <= 14),
+            "{rendered:?}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.display.contains('│')),
+            "{rendered:?}"
+        );
     }
 
     /// Verifies wrapped fragments of a final table row remain contiguous when
