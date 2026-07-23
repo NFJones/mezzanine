@@ -89,6 +89,7 @@ fn new_session_default_socket_allocates_fresh_socket_when_default_is_active() {
 fn new_session_daemon_startup_error_includes_child_stderr() {
     let (_env, home) = test_env("new-daemon-stderr");
     let socket_path = home.join("runtime").join("daemon.sock");
+    let diagnostic_path = home.join("runtime").join("daemon.diagnostics.log");
     let mut command = std::process::Command::new("/bin/sh");
     command
         .arg("-c")
@@ -102,7 +103,11 @@ fn new_session_daemon_startup_error_includes_child_stderr() {
         .build()
         .unwrap()
         .block_on(async {
-            let mut daemon = super::super::serve::BackgroundControlDaemon::spawn(command).unwrap();
+            let mut daemon = super::super::serve::BackgroundControlDaemon::spawn(
+                command,
+                diagnostic_path.clone(),
+            )
+            .unwrap();
             super::super::serve::wait_for_background_control_daemon(&socket_path, &mut daemon).await
         })
         .unwrap_err();
@@ -112,6 +117,12 @@ fn new_session_daemon_startup_error_includes_child_stderr() {
         error.message().contains("daemon config failed"),
         "{}",
         error.message()
+    );
+    assert!(
+        fs::read_to_string(&diagnostic_path)
+            .unwrap()
+            .contains("daemon config failed"),
+        "persistent daemon diagnostic file omitted startup stderr"
     );
     let _ = fs::remove_dir_all(home);
 }
@@ -127,6 +138,7 @@ fn new_session_daemon_startup_error_includes_child_stderr() {
 fn new_session_daemon_startup_waits_for_control_probe_response() {
     let (_env, home) = test_env("new-daemon-probe-response");
     let socket_path = home.join("runtime").join("daemon-probe.sock");
+    let diagnostic_path = home.join("runtime").join("daemon-probe.diagnostics.log");
     let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
     let server = thread::spawn(move || {
         let (mut stream, _addr) = listener.accept().unwrap();
@@ -158,7 +170,9 @@ fn new_session_daemon_startup_waits_for_control_probe_response() {
         .build()
         .unwrap()
         .block_on(async {
-            let mut daemon = super::super::serve::BackgroundControlDaemon::spawn(command).unwrap();
+            let mut daemon =
+                super::super::serve::BackgroundControlDaemon::spawn(command, diagnostic_path)
+                    .unwrap();
             super::super::serve::wait_for_background_control_daemon(&socket_path, &mut daemon)
                 .await
                 .unwrap();

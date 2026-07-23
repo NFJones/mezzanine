@@ -432,6 +432,8 @@ set, otherwise `/tmp/mez-$UID`. The default socket directory MUST be private to
 the current user and MUST NOT be world-readable, world-writable, or
 world-executable.
 
+Detached daemons MUST append stderr and panic diagnostics to a private `0600` file named `<control-socket>.diagnostics.log` beside the control socket. This file is retained after startup and daemon failure so users can inspect panic locations and backtraces; failure to persist diagnostics MUST NOT prevent shutdown.
+
 Socket directory paths MUST be absolute. If `XDG_RUNTIME_DIR` is used, it MUST
 be owned by the current user and have Unix mode `0700`, consistent with the XDG
 Base Directory runtime directory requirements. If `MEZ_TMPDIR` is used, the

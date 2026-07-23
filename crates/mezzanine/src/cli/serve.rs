@@ -27,11 +27,12 @@ use crate::{
 };
 use futures_util::StreamExt;
 use mez_core::ids::SessionId;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::AsyncWriteExt as _;
 use tokio::process::Child;
 use tokio_util::codec::Framed;
 
@@ -49,6 +50,8 @@ const BACKGROUND_DAEMON_STARTUP_PROBE_ID: &str = "cli-startup-probe";
 /// A harmless request that proves the daemon control actor is serving frames.
 const BACKGROUND_DAEMON_STARTUP_PROBE_REQUEST: &str =
     r#"{"jsonrpc":"2.0","id":"cli-startup-probe","method":"session/get","params":{}}"#;
+/// Suffix appended to a detached daemon's socket file name for diagnostics.
+const BACKGROUND_DAEMON_DIAGNOSTIC_SUFFIX: &str = ".diagnostics.log";
 
 /// Runs the run new operation for this subsystem.
 ///
@@ -215,6 +218,7 @@ fn spawn_background_control_daemon(
     launch_directory: &std::path::Path,
 ) -> Result<BackgroundControlDaemon> {
     let executable = std::env::current_exe()?;
+    let diagnostic_path = background_daemon_diagnostic_path(socket_path)?;
     let mut command = Command::new(executable);
     command
         .arg("-S")
@@ -222,8 +226,10 @@ fn spawn_background_control_daemon(
         .arg("serve")
         .current_dir(launch_directory)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::null());
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        command.env("RUST_BACKTRACE", "1");
+    }
     if let Some(home) = env.home.as_ref() {
         command.env("HOME", home);
     }
@@ -245,7 +251,19 @@ fn spawn_background_control_daemon(
     unsafe {
         command.pre_exec(|| rustix::process::setsid().map(|_| ()).map_err(Into::into));
     }
-    BackgroundControlDaemon::spawn(command)
+    BackgroundControlDaemon::spawn(command, diagnostic_path)
+}
+
+/// Returns the private persistent diagnostic path for one detached daemon.
+fn background_daemon_diagnostic_path(socket_path: &std::path::Path) -> Result<PathBuf> {
+    let file_name = socket_path
+        .file_name()
+        .ok_or_else(|| MezError::invalid_args("control socket path must name a file"))?;
+    Ok(socket_path.with_file_name(format!(
+        "{}{}",
+        file_name.to_string_lossy(),
+        BACKGROUND_DAEMON_DIAGNOSTIC_SUFFIX
+    )))
 }
 
 /// Tokio-owned handle for a background daemon while startup is being observed.
@@ -259,13 +277,25 @@ pub(super) struct BackgroundControlDaemon {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     child: Child,
+    /// Private persistent stderr and panic diagnostic path for this daemon.
+    diagnostic_path: PathBuf,
 }
 
 impl BackgroundControlDaemon {
     /// Spawns a daemon command under the caller's Tokio runtime.
-    pub(super) fn spawn(command: Command) -> Result<Self> {
+    pub(super) fn spawn(mut command: Command, diagnostic_path: PathBuf) -> Result<Self> {
+        let diagnostic_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&diagnostic_path)?;
+        #[cfg(unix)]
+        std::fs::set_permissions(&diagnostic_path, std::fs::Permissions::from_mode(0o600))?;
+        command.stderr(Stdio::from(diagnostic_file));
         let child = tokio::process::Command::from(command).spawn()?;
-        Ok(Self { child })
+        Ok(Self {
+            child,
+            diagnostic_path,
+        })
     }
 
     /// Stops the child process owned by a startup-observation test.
@@ -294,7 +324,7 @@ pub(super) async fn wait_for_background_control_daemon(
                 let retry_delay = remaining.min(StdDuration::from_millis(20));
                 tokio::select! {
                     status = daemon.child.wait() => {
-                        return Err(background_daemon_exit_error(&mut daemon.child, status?).await);
+                        return Err(background_daemon_exit_error(daemon, status?).await);
                     }
                     _ = tokio::time::sleep(retry_delay) => {}
                 }
@@ -386,8 +416,11 @@ fn validate_background_daemon_startup_probe_response(body: &str) -> Result<()> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-async fn background_daemon_exit_error(child: &mut Child, status: ExitStatus) -> MezError {
-    let detail = background_daemon_stderr(child).await;
+async fn background_daemon_exit_error(
+    daemon: &mut BackgroundControlDaemon,
+    status: ExitStatus,
+) -> MezError {
+    let detail = background_daemon_stderr(&daemon.diagnostic_path).await;
     let detail = detail.trim();
     let detail = if detail.is_empty() {
         String::new()
@@ -404,13 +437,8 @@ async fn background_daemon_exit_error(child: &mut Child, status: ExitStatus) -> 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-async fn background_daemon_stderr(child: &mut Child) -> String {
-    let Some(mut stderr) = child.stderr.take() else {
-        return String::new();
-    };
-    let mut output = String::new();
-    let _ = stderr.read_to_string(&mut output).await;
-    output
+async fn background_daemon_stderr(path: &std::path::Path) -> String {
+    tokio::fs::read_to_string(path).await.unwrap_or_default()
 }
 
 /// Carries Serve Options state for this subsystem.

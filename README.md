@@ -217,7 +217,8 @@ mez attach SESSION_ID
 
 Use `-S <socket-path>` to select an explicit control socket or `-L <name>` to
 select a named socket under the runtime directory. Add `--json` to CLI commands
-when scripting.
+when scripting. Detached daemon stderr and panic diagnostics are retained in the private
+`<control-socket>.diagnostics.log` file beside the selected control socket.
 
 ### Work in the multiplexer
 
