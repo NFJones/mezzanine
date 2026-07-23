@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use secrecy::{ExposeSecret, SecretString};
@@ -47,6 +48,8 @@ const OPENAI_PROVIDER: &str = "openai";
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const OPENAI_REFRESH_CREDENTIAL_NAME: &str = "openai-refresh";
+/// Monotonic suffix for staged MCP credential names within this process.
+static NEXT_MCP_CREDENTIAL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
 /// Defines the DEFAULT PROVIDER AUTH REFRESH LEEWAY SECONDS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -328,14 +331,10 @@ impl AuthStore {
         let mut existing = self.read_all_mcp_metadata()?;
         existing.insert(metadata.server_id.clone(), metadata.clone());
         ensure_private_dir(self.paths.root())?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(self.paths.mcp_auth_file())?;
-        file.write_all(encode_all_mcp_metadata(&existing).as_bytes())?;
-        file.sync_all()?;
-        set_private_file(self.paths.mcp_auth_file())?;
+        write_private_atomic_file(
+            self.paths.mcp_auth_file(),
+            encode_all_mcp_metadata(&existing).as_bytes(),
+        )?;
         Ok(self.paths.mcp_auth_file().to_path_buf())
     }
 
@@ -459,15 +458,32 @@ impl AuthStore {
                 "MCP OAuth access token must not be empty",
             ));
         }
+        metadata.validate_non_secret()?;
+        let previous_metadata = self.read_mcp_metadata_for_server(&metadata.server_id)?;
+        let stage_id = NEXT_MCP_CREDENTIAL_STAGE_ID.fetch_add(1, Ordering::Relaxed);
         let access_secret = SecretString::from(credential.access_token);
-        let access_name = mcp_access_credential_name(&metadata.server_id);
-        metadata.credential_store_ref =
-            Some(credential_store.store_secret(&access_name, &access_secret)?);
+        let access_name = mcp_staged_credential_name(&metadata.server_id, "access", stage_id);
+        let access_reference = credential_store.store_secret(&access_name, &access_secret)?;
+        let mut staged_references = vec![access_reference.clone()];
+        metadata.credential_store_ref = Some(access_reference);
         if let Some(refresh_token) = credential.refresh_token {
             let refresh_secret = SecretString::from(refresh_token);
-            let refresh_name = mcp_refresh_credential_name(&metadata.server_id);
-            metadata.refresh_credential_store_ref =
-                Some(credential_store.store_secret(&refresh_name, &refresh_secret)?);
+            let refresh_name = mcp_staged_credential_name(&metadata.server_id, "refresh", stage_id);
+            let refresh_reference =
+                match credential_store.store_secret(&refresh_name, &refresh_secret) {
+                    Ok(reference) => reference,
+                    Err(error) => {
+                        return Err(rollback_staged_mcp_credentials(
+                            credential_store,
+                            &staged_references,
+                            error,
+                        ));
+                    }
+                };
+            staged_references.push(refresh_reference.clone());
+            metadata.refresh_credential_store_ref = Some(refresh_reference);
+        } else {
+            metadata.refresh_credential_store_ref = None;
         }
         metadata.credential_kind = McpCredentialKind::OAuthBearer;
         metadata.token_expires_at = credential.token_expires_at;
@@ -476,7 +492,16 @@ impl AuthStore {
         metadata.resource = credential.resource;
         metadata.authorization_endpoint = credential.authorization_endpoint;
         metadata.token_endpoint = credential.token_endpoint;
-        self.write_mcp_metadata(&metadata)?;
+        if let Err(error) = self.write_mcp_metadata(&metadata) {
+            return Err(rollback_staged_mcp_credentials(
+                credential_store,
+                &staged_references,
+                error,
+            ));
+        }
+        if let Some(previous_metadata) = previous_metadata {
+            delete_replaced_mcp_credentials(credential_store, &previous_metadata, &metadata)?;
+        }
         Ok(metadata)
     }
 
@@ -1514,6 +1539,86 @@ fn mcp_access_credential_name(server_id: &str) -> String {
 /// Returns the credential-store entry name for an MCP refresh token.
 fn mcp_refresh_credential_name(server_id: &str) -> String {
     format!("mcp-{server_id}-refresh")
+}
+
+/// Returns a fresh backend-safe name for one staged MCP credential.
+fn mcp_staged_credential_name(server_id: &str, kind: &str, stage_id: u64) -> String {
+    format!(
+        "mcp-{server_id}-{kind}-stage-{}-{stage_id}",
+        std::process::id()
+    )
+}
+
+/// Deletes staged credentials after a later persistence operation fails.
+fn rollback_staged_mcp_credentials(
+    credential_store: &dyn CredentialStore,
+    references: &[String],
+    original_error: MezError,
+) -> MezError {
+    let mut cleanup_errors = Vec::new();
+    for reference in references.iter().rev() {
+        if let Err(error) = credential_store.delete_secret(reference) {
+            cleanup_errors.push(error.message().to_string());
+        }
+    }
+    if cleanup_errors.is_empty() {
+        original_error
+    } else {
+        MezError::new(
+            original_error.kind(),
+            format!(
+                "{}; MCP credential rollback also failed: {}",
+                original_error.message(),
+                cleanup_errors.join("; ")
+            ),
+        )
+    }
+}
+
+/// Removes superseded secrets after new metadata has committed successfully.
+fn delete_replaced_mcp_credentials(
+    credential_store: &dyn CredentialStore,
+    previous: &McpAuthMetadata,
+    current: &McpAuthMetadata,
+) -> Result<()> {
+    for reference in [
+        previous.credential_store_ref.as_deref(),
+        previous.refresh_credential_store_ref.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if current.credential_store_ref.as_deref() != Some(reference)
+            && current.refresh_credential_store_ref.as_deref() != Some(reference)
+        {
+            credential_store.delete_secret(reference)?;
+        }
+    }
+    Ok(())
+}
+
+/// Replaces one private metadata file atomically after syncing staged bytes.
+fn write_private_atomic_file(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    if temp_path.exists() {
+        fs::remove_file(&temp_path)?;
+    }
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        set_private_file(&temp_path)?;
+        fs::rename(&temp_path, path)?;
+        Ok(())
+    })();
+    if result.is_err() && temp_path.exists() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
 }
 
 /// Computes the origin component used to bind MCP credentials to HTTP URLs.

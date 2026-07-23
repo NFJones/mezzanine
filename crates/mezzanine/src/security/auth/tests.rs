@@ -59,6 +59,73 @@ struct FakeCredentialRunnerState {
     commands: Vec<String>,
 }
 
+/// In-memory credential store with deterministic write failure injection.
+#[derive(Clone, Default)]
+struct FailingCredentialStore {
+    state: Rc<RefCell<FailingCredentialStoreState>>,
+}
+
+/// Mutable state shared by [`FailingCredentialStore`] clones.
+#[derive(Default)]
+struct FailingCredentialStoreState {
+    secrets: BTreeMap<String, String>,
+    store_calls: usize,
+    fail_store_call: Option<usize>,
+}
+
+impl FailingCredentialStore {
+    /// Creates a store that fails on the selected one-based write call.
+    fn failing_on_store_call(call: usize) -> Self {
+        let store = Self::default();
+        store.state.borrow_mut().fail_store_call = Some(call);
+        store
+    }
+
+    /// Returns a snapshot of stored non-production test secrets.
+    fn secrets(&self) -> BTreeMap<String, String> {
+        self.state.borrow().secrets.clone()
+    }
+}
+
+impl CredentialStore for FailingCredentialStore {
+    /// Identifies the fake as a private-file-like credential backend.
+    fn kind(&self) -> CredentialStoreKind {
+        CredentialStoreKind::PrivateFileFallback
+    }
+
+    /// Stores a secret unless this is the configured failing call.
+    fn store_secret(&self, provider: &str, secret: &SecretString) -> Result<String> {
+        let mut state = self.state.borrow_mut();
+        state.store_calls = state.store_calls.saturating_add(1);
+        if state.fail_store_call == Some(state.store_calls) {
+            return Err(crate::error::MezError::invalid_state(
+                "injected credential-store write failure",
+            ));
+        }
+        let reference = format!("test:{provider}");
+        state
+            .secrets
+            .insert(reference.clone(), secret.expose_secret().to_string());
+        Ok(reference)
+    }
+
+    /// Loads one in-memory test secret.
+    fn load_secret(&self, reference: &str) -> Result<Option<SecretString>> {
+        Ok(self
+            .state
+            .borrow()
+            .secrets
+            .get(reference)
+            .cloned()
+            .map(SecretString::from))
+    }
+
+    /// Deletes one in-memory test secret.
+    fn delete_secret(&self, reference: &str) -> Result<bool> {
+        Ok(self.state.borrow_mut().secrets.remove(reference).is_some())
+    }
+}
+
 impl FakeCredentialRunner {
     /// Runs the available operation for this subsystem.
     ///
@@ -1012,6 +1079,144 @@ fn mcp_oauth_long_tokens_round_trip_through_reconstructed_auth_store() {
     assert!(!metadata_text.contains(MCP_TEST_LONG_REFRESH_TOKEN));
 
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies an access-secret write failure leaves no partial OAuth state.
+///
+/// The first credential write is the earliest mutable persistence boundary.
+/// Failure there must leave both the credential backend and MCP metadata
+/// unchanged.
+#[test]
+fn mcp_oauth_login_rolls_back_access_secret_write_failure() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-mcp-access-rollback-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let credential_store = FailingCredentialStore::failing_on_store_call(1);
+
+    let error = auth_store
+        .login_mcp_oauth_credential(
+            McpAuthMetadata::new("demo", "https://example.invalid", "sha256:test"),
+            mcp_oauth_credential_fixture("new-access", Some("new-refresh")),
+            &credential_store,
+        )
+        .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("injected credential-store write failure")
+    );
+    assert!(credential_store.secrets().is_empty());
+    assert!(
+        auth_store
+            .read_mcp_metadata_for_server("demo")
+            .unwrap()
+            .is_none()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a refresh-secret write failure removes the staged access secret.
+///
+/// Access persistence succeeds before refresh persistence. A failure on the
+/// second write must compensate the first write and leave metadata absent.
+#[test]
+fn mcp_oauth_login_rolls_back_refresh_secret_write_failure() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-mcp-refresh-rollback-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let credential_store = FailingCredentialStore::failing_on_store_call(2);
+
+    let error = auth_store
+        .login_mcp_oauth_credential(
+            McpAuthMetadata::new("demo", "https://example.invalid", "sha256:test"),
+            mcp_oauth_credential_fixture("new-access", Some("new-refresh")),
+            &credential_store,
+        )
+        .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("injected credential-store write failure")
+    );
+    assert!(credential_store.secrets().is_empty());
+    assert!(
+        auth_store
+            .read_mcp_metadata_for_server("demo")
+            .unwrap()
+            .is_none()
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies metadata failure removes staged secrets and preserves prior auth.
+///
+/// Replacement login stages fresh entries before atomically replacing metadata.
+/// If the metadata temporary path cannot be created, the prior references and
+/// secret values must remain active while every staged replacement is deleted.
+#[test]
+fn mcp_oauth_login_rolls_back_metadata_failure_and_preserves_prior_credentials() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-mcp-metadata-rollback-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let paths = AuthPaths::under_config_root(&root);
+    let auth_store = AuthStore::new(paths.clone());
+    let credential_store = FailingCredentialStore::default();
+    let previous = auth_store
+        .login_mcp_oauth_credential(
+            McpAuthMetadata::new("demo", "https://example.invalid", "sha256:old"),
+            mcp_oauth_credential_fixture("old-access", Some("old-refresh")),
+            &credential_store,
+        )
+        .unwrap();
+    let previous_secrets = credential_store.secrets();
+    let blocked_temp_path = paths
+        .mcp_auth_file()
+        .with_extension(format!("tmp-{}", std::process::id()));
+    fs::create_dir(&blocked_temp_path).unwrap();
+
+    let error = auth_store
+        .login_mcp_oauth_credential(
+            McpAuthMetadata::new("demo", "https://example.invalid", "sha256:new"),
+            mcp_oauth_credential_fixture("new-access", Some("new-refresh")),
+            &credential_store,
+        )
+        .unwrap_err();
+
+    assert_eq!(credential_store.secrets(), previous_secrets);
+    assert_eq!(
+        auth_store.read_mcp_metadata_for_server("demo").unwrap(),
+        Some(previous)
+    );
+    assert!(!error.message().contains("old-access"));
+    assert!(!error.message().contains("new-access"));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Builds a complete MCP OAuth credential for rollback tests.
+fn mcp_oauth_credential_fixture(
+    access_token: &str,
+    refresh_token: Option<&str>,
+) -> McpOAuthCredential {
+    McpOAuthCredential {
+        access_token: access_token.to_string(),
+        refresh_token: refresh_token.map(ToOwned::to_owned),
+        token_expires_at: Some("1700000000".to_string()),
+        scopes: vec!["tools.read".to_string()],
+        client_id: Some("test-client".to_string()),
+        resource: Some("https://example.invalid/v1/mcp".to_string()),
+        authorization_endpoint: Some("https://example.invalid/authorize".to_string()),
+        token_endpoint: Some("https://example.invalid/token".to_string()),
+    }
 }
 
 /// Verifies command-backed secret output removes only one helper newline.
