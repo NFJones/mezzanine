@@ -250,9 +250,10 @@ impl RuntimeMcpTransportSet {
                     mez_agent::mcp::McpStartupTransportPlan::StreamableHttp {
                         bearer_token_env,
                         ..
-                    } if bearer_token_env.is_none() => {
-                        auth_store.and_then(|store| store.mcp_access_token(&plan.server_id).ok())
-                    }
+                    } if bearer_token_env.is_none() => auth_store
+                        .map(|store| store.mcp_access_token_if_configured(&plan.server_id))
+                        .transpose()?
+                        .flatten(),
                     _ => None,
                 };
                 let response = match execute_streamable_http_exchange(
@@ -268,19 +269,14 @@ impl RuntimeMcpTransportSet {
                 {
                     Ok(response) => response,
                     Err(error)
-                        if error.kind() == MezErrorKind::Forbidden
-                            && oauth_token.is_some()
-                            && auth_store.is_some_and(|store| {
-                                store
-                                    .mcp_refresh_token(&plan.server_id)
-                                    .ok()
-                                    .flatten()
-                                    .is_some()
-                            }) =>
+                        if error.kind() == MezErrorKind::Forbidden && oauth_token.is_some() =>
                     {
-                        let auth_store = auth_store.ok_or_else(|| {
-                            MezError::invalid_state("MCP OAuth refresh requires an auth store")
-                        })?;
+                        let Some(auth_store) = auth_store else {
+                            return Err(error);
+                        };
+                        if auth_store.mcp_refresh_token(&plan.server_id)?.is_none() {
+                            return Err(error);
+                        }
                         auth_store
                             .refresh_mcp_oauth_credential_for_server_async(&plan.server_id)
                             .await?;

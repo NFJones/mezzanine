@@ -263,7 +263,9 @@ impl RuntimeSessionService {
                 let oauth_token = if bearer_token_env.is_none() {
                     self.integration
                         .auth_store()
-                        .and_then(|store| store.mcp_access_token(server_id).ok())
+                        .map(|store| store.mcp_access_token_if_configured(server_id))
+                        .transpose()?
+                        .flatten()
                 } else {
                     None
                 };
@@ -281,14 +283,14 @@ impl RuntimeSessionService {
                     Ok(discovery) => discovery,
                     Err(error)
                         if error.kind() == crate::error::MezErrorKind::Forbidden
-                            && bearer_token_env.is_none()
-                            && self.integration.auth_store().is_some_and(|store| {
-                                store.mcp_refresh_token(server_id).ok().flatten().is_some()
-                            }) =>
+                            && bearer_token_env.is_none() =>
                     {
-                        let auth_store = self.integration.auth_store().ok_or_else(|| {
-                            MezError::invalid_state("MCP OAuth refresh requires an auth store")
-                        })?;
+                        let Some(auth_store) = self.integration.auth_store() else {
+                            return Err(error);
+                        };
+                        if auth_store.mcp_refresh_token(server_id)?.is_none() {
+                            return Err(error);
+                        }
                         auth_store
                             .refresh_mcp_oauth_credential_for_server_async(server_id)
                             .await?;

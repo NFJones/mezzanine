@@ -604,18 +604,30 @@ impl AuthStore {
 
     /// Loads the stored MCP bearer access token for a configured server.
     pub fn mcp_access_token(&self, server_id: &str) -> Result<SecretString> {
-        validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
-        let metadata = self
-            .read_mcp_metadata_for_server(server_id)?
+        self.mcp_access_token_if_configured(server_id)?
             .ok_or_else(|| {
                 MezError::invalid_state(format!("MCP server `{server_id}` is not authenticated"))
-            })?;
+            })
+    }
+
+    /// Loads an MCP bearer token when auth metadata exists for the server.
+    ///
+    /// Missing per-server metadata represents an intentionally unauthenticated
+    /// server and returns `None`. Metadata, credential-reference, and secret
+    /// backend failures are propagated so callers do not issue an
+    /// unauthenticated request after a configured credential fails to load.
+    pub fn mcp_access_token_if_configured(&self, server_id: &str) -> Result<Option<SecretString>> {
+        validate_safe_name(server_id, "MCP server id is not credential-store safe")?;
+        let Some(metadata) = self.read_mcp_metadata_for_server(server_id)? else {
+            return Ok(None);
+        };
         let reference = metadata.credential_store_ref.as_deref().ok_or_else(|| {
             MezError::invalid_state("MCP auth metadata has no credential reference")
         })?;
         self.load_secret(reference)?
             .filter(|secret| !secret.expose_secret().trim().is_empty())
             .ok_or_else(|| MezError::invalid_state("MCP bearer credential is unavailable"))
+            .map(Some)
     }
 
     /// Loads the MCP OAuth refresh token for a configured server when available.

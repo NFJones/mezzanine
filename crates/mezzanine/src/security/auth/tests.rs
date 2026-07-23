@@ -863,6 +863,45 @@ fn mcp_static_bearer_login_stores_secret_and_skips_refresh() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies optional MCP token loading distinguishes absent auth from failure.
+///
+/// Streamable HTTP servers may intentionally operate without authentication
+/// even when the runtime has a global auth store. Missing per-server metadata
+/// must therefore return `None`, while configured metadata whose secret cannot
+/// be loaded must fail closed instead of allowing an unauthenticated request.
+#[test]
+fn mcp_optional_access_token_propagates_configured_secret_load_failures() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-mcp-optional-access-token-test-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+
+    assert!(
+        store
+            .mcp_access_token_if_configured("unauthenticated")
+            .unwrap()
+            .is_none()
+    );
+
+    let secret_path = store
+        .paths()
+        .secret_directory()
+        .join("broken")
+        .join("access.secret");
+    fs::create_dir_all(&secret_path).unwrap();
+    let mut metadata = McpAuthMetadata::new("broken", "https://example.invalid", "sha256:broken");
+    metadata.credential_store_ref = Some(format!("file:{}", secret_path.display()));
+    store.write_mcp_metadata(&metadata).unwrap();
+
+    let error = store.mcp_access_token_if_configured("broken").unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(error.to_string().contains("regular file"), "{error}");
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that provider-account auth stores access and refresh material as
 /// separate credential-store entries while keeping the auth metadata file
 /// non-secret. Browser and device-code login rely on this path to survive
