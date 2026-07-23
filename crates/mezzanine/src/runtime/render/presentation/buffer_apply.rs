@@ -1071,12 +1071,7 @@ impl RuntimeSessionService {
         if thinking_lines.is_empty() {
             return Ok(false);
         }
-        let columns = self.agent_terminal_presentation_columns(pane_id)?;
-        self.append_agent_terminal_lines_to_buffer(
-            pane_id,
-            &agent_thinking_display_lines_for_width(&thinking_lines.join("\n"), columns),
-            AgentTerminalPresentationStyle::Status,
-        )?;
+        self.append_agent_thinking_text_to_terminal_buffer(pane_id, &thinking_lines.join("\n"))?;
         Ok(true)
     }
 
@@ -1161,11 +1156,9 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let thinking_lines = agent_action_model_thinking_lines(action);
         if !thinking_lines.is_empty() && self.agent_thinking_enabled(pane_id) {
-            let columns = self.agent_terminal_presentation_columns(pane_id)?;
-            self.append_agent_terminal_lines_to_buffer(
+            self.append_agent_thinking_text_to_terminal_buffer(
                 pane_id,
-                &agent_thinking_display_lines_for_width(&thinking_lines.join("\n"), columns),
-                AgentTerminalPresentationStyle::Status,
+                &thinking_lines.join("\n"),
             )?;
         }
         let rendered_line =
