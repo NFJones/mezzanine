@@ -7,13 +7,12 @@
 // Command module tests.
 
 use super::{
-    AuditLog, AuthStore, CommandOutcome, LayoutLoadSelector, PaneReadinessOverrideStore,
-    PaneReadinessState, baseline_commands, execute_auth_command, execute_command,
-    execute_command_sequence, execute_config_store_command, execute_mark_pane_ready_command,
+    AuditLog, CommandOutcome, LayoutLoadSelector, PaneReadinessOverrideStore, PaneReadinessState,
+    baseline_commands, execute_command, execute_command_sequence, execute_config_store_command,
+    execute_mark_pane_ready_command,
 };
 use crate::config::ConfigPaths;
 use crate::host::shell::{ResolvedShell, ShellSource};
-use crate::security::auth::AuthPaths;
 use mez_core::ids::ClientId;
 use mez_mux::command::parse_command_sequence;
 use mez_mux::layout::Size;

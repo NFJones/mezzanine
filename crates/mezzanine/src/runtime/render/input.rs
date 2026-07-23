@@ -461,33 +461,7 @@ impl RuntimeSessionService {
 
     /// Builds dynamic primary command prompt selector candidates.
     pub(super) fn runtime_command_selector_extra_candidates(&self) -> Vec<SelectorExtraCandidate> {
-        self.mcp_registry()
-            .list_servers()
-            .into_iter()
-            .flat_map(|server| {
-                let candidate = SelectorCandidate::new(
-                    server.configured.id.clone(),
-                    SelectorCandidateKind::Value,
-                    true,
-                )
-                .with_detail(agent_shell_mcp_display_state_name(
-                    server.configured.enabled,
-                    server.status,
-                ));
-                [
-                    SelectorExtraCandidate::new(
-                        SelectorSurface::MezzanineCommand,
-                        "mcp-status",
-                        candidate.clone(),
-                    ),
-                    SelectorExtraCandidate::new(
-                        SelectorSurface::MezzanineCommand,
-                        "mcp inspect",
-                        candidate,
-                    ),
-                ]
-            })
-            .collect()
+        Vec::new()
     }
 
     /// Builds dynamic agent prompt selector candidates from saved transcripts.

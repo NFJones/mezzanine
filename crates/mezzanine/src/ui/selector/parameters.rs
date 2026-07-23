@@ -31,8 +31,6 @@ pub(super) fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
         "set-theme" => Some(" <theme>"),
         "source-file" => Some(" <path>"),
         "agent-shell" => Some(" <show|hide|toggle>"),
-        "mcp" => Some(" <list|inspect|add|remove|enable|disable|set|unset|tools|approval|retry>"),
-        "mcp-status" => Some(" <name>"),
         "save-layout" => Some(" [--name name]"),
         "load-layout" => Some(" [--name name]"),
         "capture-pane" => Some(" [-t target-pane] [--start n] [--end n]"),

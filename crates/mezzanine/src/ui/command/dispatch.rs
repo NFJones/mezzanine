@@ -5,14 +5,13 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AuditLog, AuthStore, ClientId, CommandInvocation, CommandOutcome, KeyChord, MezError,
+    AuditLog, ClientId, CommandInvocation, CommandOutcome, KeyChord, MezError,
     PaneNavigationDirection, PaneReadinessOverrideStore, PaneReadinessState, Result, Session,
     bind_key_args, capture_pane_display, choose_buffer_display, clear_history_display,
     command_help_display, command_target_pane_id, copy_mode_display, copy_selection_display,
     create_buffer_display, export_history_display, key_chord_notation, list_baseline_commands,
     list_buffers_display, list_default_key_bindings, list_default_themes, load_layout_selector,
-    mark_pane_ready_audit_record, mark_pane_ready_warning_display, mcp_server_id,
-    mcp_status_plan_display, mcp_status_store_display, mutated_pane_command_outcome,
+    mark_pane_ready_audit_record, mark_pane_ready_warning_display, mutated_pane_command_outcome,
     pane_readiness_state_name, paste_buffer_display, paste_clipboard_display, pipe_pane_display,
     save_buffer_display, save_layout_name, search_history_display, set_option_args, set_theme_arg,
     show_default_options, show_messages_display, show_metrics_display,
@@ -26,11 +25,6 @@ use super::{
 use super::{
     config_set_string, config_unset, parse_config_command_value, persist_command_config_mutation,
     persist_command_theme_config,
-};
-#[cfg(test)]
-use crate::integrations::mcp::{
-    mcp_config_command_display, mcp_config_command_from_words, mcp_config_command_report,
-    persist_mcp_config_command,
 };
 #[cfg(test)]
 use std::fs;
@@ -73,25 +67,6 @@ pub fn execute_command_sequence(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub fn execute_auth_command(
-    auth_store: &AuthStore,
-    invocation: &CommandInvocation,
-) -> Result<CommandOutcome> {
-    match invocation.name.as_str() {
-        "mcp-status" => {
-            let server_id = mcp_server_id(invocation, "mcp-status requires a server id")?;
-            Ok(CommandOutcome::Display {
-                command: invocation.name.clone(),
-                body: mcp_status_store_display(auth_store.mcp_status(server_id, None, None)?),
-            })
-        }
-        _ => Err(MezError::invalid_args(format!(
-            "command `{}` is not an auth command",
-            invocation.name
-        ))),
-    }
-}
-
 /// Runs the select pane target or alias operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -226,15 +201,6 @@ pub fn execute_config_store_command(
                     "key={notation}:config_key={config_key}:removed=true:changed={}:reload_required={}:source=config-store",
                     plan.changed, plan.reload_required
                 ),
-            })
-        }
-        "mcp" => {
-            let command = mcp_config_command_from_words(&invocation.args)?;
-            let plans = persist_mcp_config_command(paths, &command)?;
-            let report = mcp_config_command_report(&plans);
-            Ok(CommandOutcome::Display {
-                command: invocation.name.clone(),
-                body: mcp_config_command_display(&command, report),
             })
         }
         "source-file" => {
@@ -839,10 +805,6 @@ pub fn execute_command(
         }),
         "agent-shell" => Ok(CommandOutcome::Noop {
             command: invocation.name.clone(),
-        }),
-        "mcp-status" => Ok(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: mcp_status_plan_display(invocation)?,
         }),
         "mark-pane-ready" => {
             session.require_primary(primary_client_id)?;

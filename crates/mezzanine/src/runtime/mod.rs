@@ -112,7 +112,7 @@ use crate::storage::snapshot::{
 };
 use crate::storage::transcript::AgentTranscriptStore;
 use crate::ui::command::{
-    CommandOutcome, bind_key_args, binding_config_key, execute_auth_command, execute_command,
+    CommandOutcome, bind_key_args, binding_config_key, execute_command,
     execute_mark_pane_ready_command, key_chord_notation,
 };
 use crate::ui::readline::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};

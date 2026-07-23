@@ -260,7 +260,7 @@ fn prompt_overlay_presentation_places_cursor_on_prompt_row() {
 fn prompt_overlay_presentation_styles_command_shadow_hint() {
     let mut prompt =
         crate::ui::readline::ReadlinePrompt::new(crate::ui::readline::ReadlinePromptKind::Command);
-    prompt.buffer.insert_text("mcp-");
+    prompt.buffer.insert_text("agent-");
 
     let presentation = compose_prompt_overlay_presentation_with_styles(
         &[
@@ -273,17 +273,17 @@ fn prompt_overlay_presentation_styles_command_shadow_hint() {
         &UiTheme::default(),
     );
 
-    assert_eq!(presentation.lines[1], "▐ :mcp-status           ");
+    assert_eq!(presentation.lines[1], "▐ :agent-shell          ");
     assert!(
         presentation.line_style_spans[1]
             .iter()
-            .any(|span| span.start == 7 && span.length == 6 && span.rendition.dim)
+            .any(|span| span.start == 9 && span.length == 5 && span.rendition.dim)
     );
     assert!(
         presentation.line_style_spans[1]
             .iter()
-            .any(|span| span.start == 7
-                && span.length == 6
+            .any(|span| span.start == 9
+                && span.length == 5
                 && span.rendition.foreground.is_some_and(|foreground| {
                     test_color_is_grayscale(foreground)
                         && test_contrast_ratio(

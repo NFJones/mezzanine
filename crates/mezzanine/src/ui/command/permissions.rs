@@ -8,7 +8,6 @@ use super::{
     AuditActor, AuditRecord, ClientId, CommandInvocation, CredentialStoreKind, MezError,
     PaneReadinessState, Result, Session,
 };
-use crate::protocol::identifiers::is_ascii_identifier_segment;
 
 // Permission and approval-bypass command helpers.
 
@@ -127,18 +126,4 @@ pub(super) fn credential_store_kind_name(kind: CredentialStoreKind) -> &'static 
         CredentialStoreKind::OperatingSystem => "os",
         CredentialStoreKind::PrivateFileFallback => "file",
     }
-}
-
-/// Runs the validate command identifier operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn validate_command_identifier(value: &str, label: &str) -> Result<()> {
-    if !is_ascii_identifier_segment(value) {
-        return Err(MezError::invalid_args(format!(
-            "{label} must contain only ASCII letters, digits, '_' or '-'"
-        )));
-    }
-    Ok(())
 }

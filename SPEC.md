@@ -1534,8 +1534,6 @@ The command language MUST include commands equivalent to:
 - `source-file`
 - `refresh-client`
 - `agent-shell`
-- `mcp`
-- `mcp-status`
 - `save-layout`
 - `load-layout`
 - `capture-pane`
@@ -1618,8 +1616,6 @@ The baseline commands MUST have the following semantics:
 | `source-file` | Parse and apply a configuration file according to configuration trust and precedence rules. Untrusted project files MUST block until trust is decided. |
 | `refresh-client` | Redraw the invoking client and recompute client-local display state without changing pane pty sizes unless the invoking client is the primary client and its terminal size changed. |
 | `agent-shell` | Show, hide, or toggle the agent shell for the target pane. Hiding MUST request `/stop` for any in-progress pane-local agent task before the shell is hidden. |
-| `mcp` | List and inspect live MCP servers, retry one configured MCP server, and persist MCP server add/remove/enable/disable, safe scalar settings, tool allow/deny lists, and server-level approval settings through the primary configuration. MCP server login/logout remains in the CLI/auth flows because it may require OAuth and credential-store interaction. |
-| `mcp-status` | Show non-secret MCP server authentication status for the requested server. |
 | `save-layout` | Store the current window-group, window, and pane topology with user-assigned group, window, and pane names and each pane's current working directory when available. It MUST accept `--name <name>`; when omitted, the stored layout name MUST default to a generated UUID. On success it MUST report a concise single-line status message instead of dumping raw snapshot-control JSON. The layout store MUST NOT include pane process state, terminal history, client state, agent state, approvals, messages, or MCP runtime state. |
 | `load-layout` | Clear the current group, window, and pane layout and recreate the stored layout in the current session. It MUST accept `--name <name>`; when omitted, it MUST load the newest stored layout. On success it MUST report a concise single-line status message instead of dumping raw snapshot-control JSON. Each recreated pane MUST start a new shell process in the saved current working directory when that directory still exists, otherwise in `$HOME`. It MUST NOT attempt to reattach or restore previous pane processes or session runtime state. |
 | `capture-pane` | Capture visible or historical content from a target pane. History-inclusive capture MUST exclude alternate-screen content. |

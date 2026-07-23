@@ -323,50 +323,6 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
     let _ = fs::remove_dir_all(transcript_root);
 }
 
-/// Verifies MCP server ids complete in primary `:` commands that address
-/// existing MCP configuration. These ids come from the live runtime registry,
-/// not the static command table.
-#[test]
-fn runtime_primary_command_prompt_mcp_status_autocompletes_configured_server_id() {
-    let mut service = test_runtime_service();
-    service
-        .mcp_registry_mut()
-        .add_server(mez_agent::mcp::McpServerConfig::stdio(
-            "fixture",
-            "Fixture MCP",
-            "mcp-fixture",
-            Vec::new(),
-        ))
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(50, 8).unwrap(), 120)
-        .unwrap();
-    service.enter_primary_command_prompt("").unwrap();
-
-    let report = service
-        .apply_attached_terminal_step_plan(
-            &primary,
-            &AttachedTerminalClientStepPlan {
-                actions: vec![
-                    TerminalClientLoopAction::ForwardToPane(b"mcp-status fi".to_vec()),
-                    TerminalClientLoopAction::ForwardToPane(b"\t".to_vec()),
-                ],
-                output_lines: Vec::new(),
-                output_line_style_spans: Vec::new(),
-                input_hangup: false,
-                output_hangup: false,
-                error_roles: Vec::new(),
-            },
-        )
-        .unwrap();
-
-    assert_eq!(report.forwarded_bytes, 0);
-    assert_eq!(
-        service.primary_prompt_input().unwrap().prompt.buffer.line(),
-        "mcp-status fixture "
-    );
-}
-
 /// Verifies standalone Escape cancels primary command reverse search without
 /// closing the prompt itself.
 ///

@@ -4,10 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{
-    AuthStatus, CommandInvocation, KeyValueLine, MezError, Result, credential_store_kind_name,
-    validate_command_identifier,
-};
+use super::{AuthStatus, KeyValueLine, credential_store_kind_name};
 #[cfg(test)]
 use super::{
     ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue,
@@ -15,6 +12,8 @@ use super::{
     fs, parse_config_json_value, persist_config_mutation, persist_config_text,
     plan_config_mutation, resolve_ui_theme,
 };
+#[cfg(test)]
+use super::{MezError, Result};
 #[cfg(test)]
 use serde_json::Value;
 #[cfg(test)]
@@ -242,26 +241,6 @@ pub(super) fn config_unset(path: impl Into<String>) -> ConfigMutation {
     }
 }
 
-/// Runs the mcp server id operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mcp_server_id<'a>(
-    invocation: &'a CommandInvocation,
-    missing: &str,
-) -> Result<&'a str> {
-    let server_id = invocation
-        .positional_args()
-        .first()
-        .copied()
-        .ok_or_else(|| MezError::invalid_args(missing))?;
-    validate_command_identifier(server_id, "MCP server id")?;
-    Ok(server_id)
-}
-
-/// Runs the mcp transport target operation for this subsystem.
-///
 /// Runs the auth status store display operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -300,44 +279,6 @@ pub(crate) fn auth_status_store_display(status: AuthStatus) -> String {
                 .push("authenticated", false)
                 .push("provider", provider)
                 .push("profile", profile)
-                .push("state", "missing-secret")
-                .push("reference_present", reference.is_some())
-                .push("source", "auth-store")
-                .finish()
-        }
-    }
-}
-
-/// Runs the mcp status store display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mcp_status_store_display(status: crate::security::auth::McpAuthStatus) -> String {
-    match status.credential_state {
-        crate::security::auth::AuthCredentialState::Available { store, .. } => {
-            KeyValueLine::spaced()
-                .push("server", &status.server_id)
-                .push("authenticated", status.authenticated)
-                .push("metadata_present", status.metadata_present)
-                .push("stale_url", status.stale_url)
-                .push("credential_store", credential_store_kind_name(store))
-                .push("source", "auth-store")
-                .finish()
-        }
-        crate::security::auth::AuthCredentialState::LoggedOut => KeyValueLine::spaced()
-            .push("server", &status.server_id)
-            .push("authenticated", false)
-            .push("metadata_present", false)
-            .push("state", "logged-out")
-            .push("source", "auth-store")
-            .finish(),
-        crate::security::auth::AuthCredentialState::MissingSecret { reference } => {
-            KeyValueLine::spaced()
-                .push("server", &status.server_id)
-                .push("authenticated", false)
-                .push("metadata_present", status.metadata_present)
-                .push("stale_url", status.stale_url)
                 .push("state", "missing-secret")
                 .push("reference_present", reference.is_some())
                 .push("source", "auth-store")

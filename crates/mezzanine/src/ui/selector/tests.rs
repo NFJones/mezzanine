@@ -549,27 +549,6 @@ fn selector_plans_dynamic_agent_mcp_server_candidates() {
     assert_eq!(cursor, line.len());
 }
 
-/// Verifies selector applies candidate to current segment only.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn selector_applies_candidate_to_current_segment_only() {
-    let line = "list-windows; mcp-";
-    let plan = plan_selector(SelectorSurface::MezzanineCommand, line, line.len()).unwrap();
-    let candidate = plan
-        .candidates
-        .iter()
-        .find(|candidate| candidate.value == "mcp-status")
-        .unwrap();
-
-    let (line, cursor) = apply_selector_candidate(line, &plan, candidate);
-
-    assert_eq!(line, "list-windows; mcp-status ");
-    assert_eq!(cursor, line.len());
-}
-
 /// Verifies auto-completed directory candidates keep cycling sibling
 /// matches until the user explicitly types more path input.
 #[test]

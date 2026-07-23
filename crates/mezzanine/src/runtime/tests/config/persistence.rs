@@ -2,49 +2,6 @@
 
 use super::*;
 
-/// Verifies that command-prompt MCP mutation commands update the live runtime
-/// config layer and immediately refresh the in-memory MCP registry. This keeps
-/// terminal MCP management aligned with the persisted CLI/config-store path
-/// without using the removed agent-scoped `mcp-list` command.
-#[test]
-fn runtime_terminal_mcp_command_mutates_persisted_config_and_registry() {
-    let mut service = test_runtime_service();
-    let config_root = temp_root("runtime-terminal-mcp-command");
-    service.set_config_root(config_root.clone());
-    let primary = service
-        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
-        .unwrap();
-
-    let output = service
-        .execute_terminal_command(
-            &primary,
-            "mcp add fs --command mcp-fs --arg --root --arg . --disabled",
-        )
-        .unwrap();
-    assert!(output.contains(r#""command":"mcp""#), "{output}");
-    assert!(output.contains("server=fs:action=add"), "{output}");
-    assert!(output.contains("changed=true"), "{output}");
-    assert_eq!(service.mcp_registry().list_servers().len(), 1);
-    assert!(!service.mcp_registry().list_servers()[0].configured.enabled);
-
-    let output = service
-        .execute_terminal_command(&primary, "mcp tools enable fs read_file")
-        .unwrap();
-    assert!(output.contains("action=tools-enable"), "{output}");
-    assert_eq!(
-        service.mcp_registry().list_servers()[0]
-            .configured
-            .enabled_tools,
-        vec!["read_file".to_string()]
-    );
-
-    let config_text = fs::read_to_string(config_root.join("config.toml")).unwrap();
-    assert!(config_text.contains("[mcp_servers.fs]"));
-    assert!(config_text.contains("enabled_tools"));
-
-    let _ = fs::remove_dir_all(config_root);
-}
-
 /// Verifies runtime applies explicit host clipboard pipe commands from
 /// configuration. Users on systems where the default auto-detection order is
 /// wrong need deterministic copy and paste commands without replacing the

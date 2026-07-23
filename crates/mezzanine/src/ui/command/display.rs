@@ -8,7 +8,7 @@
 use super::ConfigMutationValue;
 use super::{
     CommandInvocation, CommandOutcome, KeyBindings, KeyChord, KeyCode, KeyValueLine,
-    LayoutLoadSelector, MezError, Result, baseline_commands, mcp_server_id,
+    LayoutLoadSelector, MezError, Result, baseline_commands,
 };
 
 /// Returns the user-facing command guide rendered by the in-pane `help`
@@ -90,7 +90,7 @@ fn terminal_help_command_rows() -> Vec<(&'static str, &'static str)> {
 /// Returns the help category for one terminal command.
 fn terminal_command_category(name: &str) -> &'static str {
     match name {
-        "agent-shell" | "mcp" | "mcp-status" => "agent and integrations",
+        "agent-shell" => "agent and integrations",
         "bind-key" | "list-keys" | "set-option" | "set-theme" | "show-options" | "source-file"
         | "unbind-key" | "list-themes" => "configuration",
         "capture-pane" | "choose-buffer" | "clear-history" | "copy-mode" | "copy-selection"
@@ -148,8 +148,6 @@ fn terminal_command_description(name: &str) -> &'static str {
         "list-themes" => "show built-in and configured UI themes.",
         "list-windows" => "show window identities, names, active state, and sizes.",
         "mark-pane-ready" => "temporarily mark a pane as ready after risk acknowledgement.",
-        "mcp" => "manage MCP servers, settings, tools, approvals, and retry.",
-        "mcp-status" => "show non-secret MCP server auth status.",
         "new-group" => "create a window group with one landing window.",
         "new-window" => "create a window with one pane.",
         "next-group" => "focus the next window group.",
@@ -823,19 +821,4 @@ pub(super) fn hex_digit(nibble: u8) -> char {
         10..=15 => char::from(b'a' + (nibble - 10)),
         _ => unreachable!("hex nibble is always less than 16"),
     }
-}
-
-/// Runs the mcp status plan display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn mcp_status_plan_display(invocation: &CommandInvocation) -> Result<String> {
-    let server_id = mcp_server_id(invocation, "mcp-status requires a server id")?;
-    Ok(KeyValueLine::colon_separated()
-        .push("server", server_id)
-        .push("authenticated", false)
-        .push("state", "unknown")
-        .push("reason", "auth-store-unavailable")
-        .finish())
 }

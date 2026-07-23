@@ -37,9 +37,8 @@ pub use audit::{
 };
 
 pub use config_commands::{
-    McpConfigCommand, McpConfigCommandReport, McpConfigTransport, mcp_config_command_display,
-    mcp_config_command_from_words, mcp_config_command_mutations, mcp_config_command_report,
-    mcp_config_setting_from_user, persist_mcp_config_command,
+    McpConfigCommand, McpConfigTransport, mcp_config_command_report, mcp_config_setting_from_user,
+    persist_mcp_config_command,
 };
 pub use stdio::{McpStdioConnection, spawn_stdio_mcp_connection};
 #[cfg(test)]

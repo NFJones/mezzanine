@@ -20,10 +20,9 @@ use super::{
     HookExecutionStatus, KeyChord, KeyCode, MezError, ObserverDecisionState, PaneReadinessState,
     PasteBuffer, PathBuf, Result, RuntimeSessionService, SearchDirection, Session, TerminalScreen,
     agent_shell_visibility_json_name, bind_key_args, binding_config_key, compose_effective_config,
-    current_unix_seconds, event_type_name, execute_auth_command, execute_command, fs, json_escape,
-    key_chord_input_bytes, key_chord_notation, parse_command_sequence,
-    runtime_config_apply_event_payload, runtime_hook_event_name,
-    runtime_hook_execution_status_name, runtime_pane_readiness_state_name,
+    current_unix_seconds, event_type_name, execute_command, fs, json_escape, key_chord_input_bytes,
+    key_chord_notation, parse_command_sequence, runtime_config_apply_event_payload,
+    runtime_hook_event_name, runtime_hook_execution_status_name, runtime_pane_readiness_state_name,
 };
 use crate::host::terminal::wrap_agent_log_lines;
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
@@ -42,7 +41,7 @@ use layout::{
     execute_runtime_layout_terminal_command, resolve_runtime_layout_command_outcome,
     runtime_kill_group_command, runtime_kill_pane_command, runtime_kill_window_command,
 };
-pub(super) use mcp::*;
+pub(crate) use mcp::runtime_mcp_retry_event_payload;
 pub(super) use permissions::*;
 use plan::{RuntimeTerminalCommandPlan, runtime_terminal_command_plan};
 pub(super) use status::*;
@@ -372,20 +371,6 @@ pub(super) fn execute_runtime_live_terminal_command(
                     agent_shell_visibility_json_name(visibility)
                 ),
             }))
-        }
-        "mcp" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_mcp_command(service, invocation)?,
-        })),
-        "mcp-status" => {
-            let outcome = {
-                let Some(auth_store) = service.auth_store() else {
-                    return Ok(None);
-                };
-                execute_auth_command(auth_store, invocation)?
-            };
-            runtime_append_auth_command_audit(service, invocation, &outcome)?;
-            Ok(Some(outcome))
         }
         "pipe-pane" => {
             let body = runtime_pipe_pane_command(service, invocation)?;
@@ -836,26 +821,6 @@ pub(super) fn runtime_append_observer_decision_audit(
         "succeeded",
     );
     let _ = audit_log.append(record)?;
-    Ok(())
-}
-
-/// Runs the runtime append auth command audit operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_append_auth_command_audit(
-    service: &mut RuntimeSessionService,
-    invocation: &CommandInvocation,
-    outcome: &CommandOutcome,
-) -> Result<()> {
-    let Some(audit_log) = service.persistence.audit_log_mut() else {
-        return Ok(());
-    };
-    let CommandOutcome::Display { body, .. } = outcome else {
-        return Ok(());
-    };
-    let _ = (audit_log, body, invocation);
     Ok(())
 }
 

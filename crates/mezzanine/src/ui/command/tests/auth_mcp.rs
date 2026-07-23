@@ -56,60 +56,25 @@ fn removed_terminal_auth_status_command_is_rejected() {
     assert!(logout.message().contains("unknown command"));
 }
 
-/// Verifies removed terminal auth commands cannot execute against an auth store.
+/// Verifies the removed MCP terminal commands are rejected rather than
+/// remaining available through dispatch or a command alias.
 ///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// This regression scenario protects the command surface while preserving MCP
+/// support in the dedicated CLI and agent integrations.
 #[test]
-fn removed_terminal_auth_status_is_rejected_by_auth_dispatch() {
-    let root = std::env::temp_dir().join(format!("mez-command-auth-store-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
-    let key_file = root.join("openai.key");
-    fs::write(&key_file, "sk-command-secret\n").unwrap();
-    let auth_store = AuthStore::new(AuthPaths::under_config_root(&root));
+fn removed_mcp_terminal_commands_are_rejected() {
+    let (mut session, primary) = test_session();
 
-    auth_store
-        .login_provider_api_key_with_selected_store(
-            "openai",
-            "work",
-            "sk-command-secret",
-            Some("file"),
+    for input in ["mcp", "mcp-status atlassian_rovo"] {
+        let error = execute_command(
+            &mut session,
+            &primary,
+            &parse_command_sequence(input).unwrap()[0],
         )
-        .unwrap();
-
-    let status_invocation = parse_command_sequence("auth-status").unwrap().remove(0);
-    let error = execute_auth_command(&auth_store, &status_invocation).unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
-    assert!(error.message().contains("not an auth command"));
-
-    let _ = fs::remove_dir_all(root);
-}
-
-/// Verifies MCP status executes against the auth store from the terminal
-/// command path instead of falling back to display-only placeholder text.
-#[test]
-fn mcp_status_executes_against_auth_store_without_placeholder_status() {
-    let root =
-        std::env::temp_dir().join(format!("mez-command-mcp-auth-store-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).unwrap();
-    let auth_store = AuthStore::new(AuthPaths::under_config_root(&root));
-
-    let status_invocation = parse_command_sequence("mcp-status atlassian_rovo")
-        .unwrap()
-        .remove(0);
-    let status = display_body(execute_auth_command(&auth_store, &status_invocation).unwrap());
-    assert!(status.contains("server=atlassian_rovo"), "{status}");
-    assert!(status.contains("state=logged-out"), "{status}");
-    assert!(status.contains("source=auth-store"), "{status}");
-    assert!(
-        !status.contains("reason=auth-store-unavailable"),
-        "{status}"
-    );
-
-    let _ = fs::remove_dir_all(root);
+        .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+        assert!(error.message().contains("unknown command"), "{error}");
+    }
 }
 
 /// Verifies kill commands require force for live targets.

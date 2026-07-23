@@ -211,8 +211,6 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "source-file",
     "refresh-client",
     "agent-shell",
-    "mcp",
-    "mcp-status",
     "save-layout",
     "load-layout",
     "capture-pane",
@@ -239,9 +237,9 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         "copy-mode" | "copy-selection" | "paste-clipboard" | "paste-buffer" | "create-buffer"
         | "list-buffers" | "choose-buffer" | "delete-buffer" | "capture-pane" | "save-buffer"
         | "clear-history" | "search-history" | "export-history" | "pipe-pane"
-        | "refresh-client" | "show-metrics" | "agent-shell" | "mcp" | "approve-observer"
+        | "refresh-client" | "show-metrics" | "agent-shell" | "approve-observer"
         | "reject-observer" | "revoke-observer" => BaselineCommandStatus::RuntimeRequired,
-        "bind-key" | "unbind-key" | "set-theme" | "set-option" | "source-file" | "mcp-status"
+        "bind-key" | "unbind-key" | "set-theme" | "set-option" | "source-file"
         | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
         "attach-session" | "list-sessions" | "save-layout" | "load-layout" => {
             BaselineCommandStatus::ControlRequired

@@ -30,11 +30,8 @@ use super::{
 };
 
 impl RuntimeSessionService {
-    /// Runs the config layers operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Returns the configuration layers currently applied to the runtime.
+    #[cfg(test)]
     pub fn config_layers(&self) -> &[ConfigLayer] {
         self.integration.config_layers()
     }
