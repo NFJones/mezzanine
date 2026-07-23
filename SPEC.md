@@ -4896,13 +4896,14 @@ router model. The router decision MUST select one configured size bucket
 (`small`, `medium`, or `large`) and one allowed reasoning effort. For a
 root-agent turn, Mezzanine MUST keep the parent turn bound to its normal
 user-selected model profile and MUST apply the selected model profile and
-reasoning effort to a managed routed worker with task-isolated context. The
-worker MUST receive the current delegated task exactly once and MUST NOT inherit
-prior parent user or assistant transcript entries, tool output, action results,
-loaded skills, local messages, memory, or other conversation evidence. Product,
-system, project, and turn-local integration context MUST be rebuilt for the
-child. The routed worker result MUST return to the parent for main-profile
-presentation.
+reasoning effort to a managed routed worker forked from the parent conversation.
+The worker MUST inherit durable parent conversation evidence, including prior
+user and assistant transcript entries, tool output, action results, loaded
+skills, local messages, and memory. Product, system, project, and turn-local
+integration context MUST be rebuilt for the child rather than inherited. The
+active delegated task MUST be appended exactly once, ephemeral context MUST be
+excluded, and prior routed handoffs MUST NOT leak into the new routed job. The
+routed worker result MUST return to the parent for main-profile presentation.
 For a turn owned by an existing spawned subagent, Mezzanine MUST retain that
 subagent and turn identity, apply the selected profile only to that turn, and
 redispatch it through normal provider resolution. A routed turn MUST be marked

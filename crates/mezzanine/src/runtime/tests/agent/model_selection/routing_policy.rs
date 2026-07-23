@@ -405,10 +405,10 @@ fn runtime_agent_shell_routing_policy_persists_root_policy_and_preserves_subagen
     let _ = fs::remove_dir_all(config_root);
 }
 
-/// Verifies routing applies the selected worker profile while keeping the
-/// managed child isolated from unrelated parent conversation and tool history.
+/// Verifies routing applies the selected worker profile while forking the
+/// managed child from parent conversation and tool history.
 #[test]
-fn runtime_agent_turn_routing_selects_profile_with_task_isolation() {
+fn runtime_agent_turn_routing_selects_profile_with_parent_context() {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -619,17 +619,17 @@ reasoning_profile = "high"
             .count(),
         1
     );
-    assert!(!child_context.blocks().iter().any(|block| {
+    assert!(child_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block
                 .content
                 .contains("Implement multi-file runtime auto-sizing")
     }));
-    assert!(!child_context.blocks().iter().any(|block| {
+    assert!(child_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptTool
             && block.content == "tool-only output should not reach the router"
     }));
-    assert!(!child_context.blocks().iter().any(|block| {
+    assert!(child_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block.content == "action-result sentinel must reach the routed worker"
     }));

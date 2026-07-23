@@ -364,16 +364,47 @@ pub fn routed_child_output_for_execution(execution: &AgentTurnExecution) -> Stri
     subagent_task_output_for_execution(execution)
 }
 
-/// Returns the task-isolated seed for one routed worker.
+/// Projects a parent context into the deterministic seed for one routed worker.
 ///
-/// Parent conversation history and execution evidence are intentionally not
-/// inherited. Product/system/project policy is rebuilt for the child, and the
-/// active prompt is appended by the queue adapter exactly once.
+/// Conversation, skills, messages, and execution evidence are inherited.
+/// Product/system/project policy is rebuilt for the child, the active prompt is
+/// appended by the queue adapter exactly once, and prior routed handoffs never
+/// leak into a new routed job.
 pub fn routed_worker_seed_context(
-    _parent_context: &AgentContext,
-    _original_user_prompt: &str,
+    parent_context: &AgentContext,
+    original_user_prompt: &str,
 ) -> AgentContext {
-    AgentContext::empty()
+    let blocks = parent_context
+        .blocks()
+        .iter()
+        .filter(|block| {
+            if block.placement == ContextPlacement::EphemeralTail {
+                return false;
+            }
+            if block.source == ContextSourceKind::UserInstruction
+                && block.label == "user prompt"
+                && block.content == original_user_prompt
+            {
+                return false;
+            }
+            !matches!(
+                block.source,
+                ContextSourceKind::System
+                    | ContextSourceKind::DeveloperInstruction
+                    | ContextSourceKind::Policy
+                    | ContextSourceKind::Configuration
+                    | ContextSourceKind::ProjectGuidance
+                    | ContextSourceKind::RoutedHandoff
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if blocks.is_empty() {
+        AgentContext::empty()
+    } else {
+        AgentContext::import_durable_blocks(blocks)
+            .expect("routed worker seed context remains durable")
+    }
 }
 
 /// Parses and validates one structured routed-worker handoff.
@@ -801,8 +832,8 @@ mod tests {
         assert_eq!(blocks[1].content, "invalid JSON");
     }
 
-    /// Verifies worker seed projection excludes every parent-context block so
-    /// routed workers begin with only their separately appended current task.
+    /// Verifies worker seed projection keeps conversational evidence while
+    /// removing rebuilt policy, the active prompt, and prior routed context.
     #[test]
     fn routed_worker_seed_context_has_a_deterministic_policy_boundary() {
         let parent = AgentContext::new_durable(vec![
@@ -840,8 +871,23 @@ mod tests {
         .unwrap();
 
         let seed = routed_worker_seed_context(&parent, "fix routing");
-        assert!(seed.blocks().is_empty());
-        assert!(seed.validate_durable().is_ok());
+        assert_eq!(
+            seed.blocks(),
+            vec![
+                context_block(
+                    ContextSourceKind::SkillInstruction,
+                    ContextPlacement::ConversationAppend,
+                    "loaded skill",
+                    "retain me",
+                ),
+                context_block(
+                    ContextSourceKind::TranscriptAssistant,
+                    ContextPlacement::ConversationAppend,
+                    "prior answer",
+                    "retain evidence",
+                ),
+            ]
+        );
     }
 
     /// Verifies routed output projection selects only the last successful final
