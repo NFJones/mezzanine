@@ -1018,10 +1018,11 @@ impl RuntimeSessionService {
         let Some(descriptor) = self.find_pane_descriptor(&pane_id) else {
             return Ok(false);
         };
-        if let Some(screen) = self
-            .process
-            .pane_screens
-            .get_mut(descriptor.pane_id.as_str())
+        if !self.rebuild_agent_presentation_after_resize(&pane_id, size)?
+            && let Some(screen) = self
+                .process
+                .pane_screens
+                .get_mut(descriptor.pane_id.as_str())
         {
             screen.resize(size);
         }

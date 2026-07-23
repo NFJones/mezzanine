@@ -767,3 +767,70 @@ fn runtime_agent_resize_rebuilds_source_backed_presentation_at_new_width() {
     );
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies an asynchronous PTY resize completion rebuilds source-backed agent
+/// presentation instead of resizing the stale terminal-cell projection.
+#[test]
+fn runtime_agent_async_resize_completion_rebuilds_source_backed_presentation() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("agent-async-resize-source"));
+    service
+        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id,
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            pane_id: "%1".to_string(),
+            turn_id: None,
+            terminal_width: 28,
+            style_names: vec!["assistant".to_string()],
+            display_lines: vec!["mez> stale async projection".to_string()],
+            copy_lines: vec!["stale async projection".to_string()],
+            ansi_text: None,
+            source_text: Some("# Async rebuild\n\nsource survives completion resize".to_string()),
+            source_content_type: Some("text/markdown; charset=utf-8".to_string()),
+        })
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap(),
+    );
+
+    assert!(
+        service
+            .apply_pane_resize_completion_event("%1", Size::new(20, 12).unwrap())
+            .unwrap()
+    );
+
+    let rebuilt = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n")
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>();
+    assert!(rebuilt.contains("Asyncrebuild"), "{rebuilt}");
+    assert!(
+        rebuilt.contains("sourcesurvivescompletionresize"),
+        "{rebuilt}"
+    );
+    assert!(!rebuilt.contains("staleasyncprojection"), "{rebuilt}");
+    service.terminate_all_pane_processes().unwrap();
+}
