@@ -7441,18 +7441,22 @@ The approval policy `ask` MUST prompt when an action is not already allowed by
 the active command rules and effect classification. Approval prompts MUST allow
 the user to allow once, allow forever, or deny. Allow-once decisions MUST resume
 only the blocked action. Allow-forever and persistent deny decisions MUST create
-an exact command rule for the command and arguments presented to the user.
+an exact command rule for the command and arguments presented to the user. An
+additive sandbox backend MUST NOT replace this approval gate; after approval,
+the action MUST still execute through the configured sandbox unless an explicit
+sandbox-fallback approval grants one exact unsandboxed retry.
 
 The approval policy `auto-allow` MUST allow non-whitelisted actions only after
 the model has determined that the action is reasonable for the active user
 request and has emitted a non-empty rationale for the action. Configured deny
 rules MUST still block matching actions. `auto-allow` MUST NOT be treated as
 full access; it remains subject to command rules, effect classification, scope
-checks, and subagent constraints.
+checks, subagent constraints, and any configured sandbox backend.
 
 The approval policy `full-access` MUST allow actions without whitelist approval
 unless a configured deny rule matches the exact command. Full access MUST NOT
-create whitelist rules as actions execute. In full-access mode, subagent
+create whitelist rules as actions execute, bypass a configured sandbox, or
+weaken sandbox failure behavior. In full-access mode, subagent
 requested read and write scopes MUST be treated as coordination metadata rather
 than hard command denials; configured deny rules remain authoritative. If the
 parent agent already has an inherited subagent scope, that inherited scope MAY

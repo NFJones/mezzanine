@@ -32,8 +32,8 @@ impl<'a> ProductPermissionPlanning<'a> {
         }
     }
 
-    /// Enables sandbox-first dispatch for local actions that would otherwise
-    /// require a fresh approval.
+    /// Enables sandbox-first dispatch for local actions after applying the
+    /// active approval policy's interaction requirements.
     pub fn with_sandbox_first_local_prompts(mut self, enabled: bool) -> Self {
         self.sandbox_first_local_prompts = enabled;
         self
@@ -59,6 +59,35 @@ impl PermissionPlanning for ProductPermissionPlanning<'_> {
     }
 
     fn sandbox_first_local_prompts(&self) -> bool {
-        self.sandbox_first_local_prompts
+        self.sandbox_first_local_prompts && self.policy.approval_policy != ApprovalPolicy::Ask
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies Bubblewrap cannot turn an ask-mode prompt into execution before
+    /// the user has approved the action.
+    #[test]
+    fn ask_policy_retains_fresh_approval_before_sandbox_dispatch() {
+        let policy = PermissionPolicy::default().with_approval_policy(ApprovalPolicy::Ask);
+        let approvals = SessionApprovalStore::default();
+        let planning = ProductPermissionPlanning::new(&policy, &approvals, None)
+            .with_sandbox_first_local_prompts(true);
+
+        assert!(!planning.sandbox_first_local_prompts());
+    }
+
+    /// Verifies auto-allow may proceed to Bubblewrap only after the planner's
+    /// model-rationale gate has accepted a prompting action.
+    #[test]
+    fn auto_allow_policy_retains_sandbox_dispatch_after_model_gate() {
+        let policy = PermissionPolicy::default().with_approval_policy(ApprovalPolicy::AutoAllow);
+        let approvals = SessionApprovalStore::default();
+        let planning = ProductPermissionPlanning::new(&policy, &approvals, None)
+            .with_sandbox_first_local_prompts(true);
+
+        assert!(planning.sandbox_first_local_prompts());
     }
 }

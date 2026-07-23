@@ -758,8 +758,13 @@ environment before launching a sandboxed workload. The probe requires usable
 user, mount, PID, IPC, UTS, cgroup, and network namespaces plus the fixed
 read-only runtime projection. Missing executables and unsupported namespace
 facilities never trigger an automatic unsandboxed retry. For a local action
-whose original policy decision was `prompt`, a probe/setup/pre-exec failure may
-instead create one normal approval for an exact unsandboxed retry. A failed or
+whose original policy decision was `prompt`, `ask` mode first requires the
+ordinary action approval; Bubblewrap never substitutes for that approval gate.
+`auto-allow` still requires the model-rationale gate, and `full-access` skips
+whitelist prompts, but both remain confined by Bubblewrap. A subsequent
+probe/setup/pre-exec failure may create one normal approval for an exact
+unsandboxed retry only when the retained action decision was `prompt`; sandbox
+failure never weakens `full-access` automatically. A failed or
 timed-out probe is not cached; after shell readiness recovers, a later
 independent action may probe the same identity again. Successful capabilities
 remain cached, and concurrent waiters share one in-flight probe.
