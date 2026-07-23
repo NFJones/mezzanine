@@ -721,6 +721,9 @@ struct McpLoginJson {
     url_origin: String,
     /// Stable fingerprint of the full configured MCP URL.
     url_fingerprint: String,
+    /// Selected non-secret OAuth resource indicator, when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
     /// Optional Unix-seconds access-token expiration timestamp.
     token_expires_at: Option<String>,
     /// Optional non-secret OAuth scopes attached to the credential.
@@ -750,6 +753,9 @@ struct McpStatusJson {
     url_origin: Option<String>,
     /// Stable fingerprint of the full configured URL.
     url_fingerprint: Option<String>,
+    /// Selected non-secret OAuth resource indicator, when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
     /// Optional Unix-seconds access-token expiration timestamp.
     token_expires_at: Option<String>,
     /// Optional non-secret OAuth scopes attached to the credential.
@@ -938,6 +944,7 @@ fn mcp_login_json(
         credential_store: credential_store_name.to_string(),
         url_origin: metadata.url_origin.clone(),
         url_fingerprint: metadata.url_fingerprint.clone(),
+        resource: metadata.resource.clone(),
         token_expires_at: metadata.token_expires_at.clone(),
         scopes: metadata.scopes.clone(),
     })
@@ -961,6 +968,10 @@ fn mcp_status_json(binding: &McpAuthBinding, status: &McpAuthStatus) -> Result<S
         .metadata
         .as_ref()
         .and_then(|metadata| metadata.token_expires_at.clone());
+    let resource = status
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.resource.clone());
     serialize_json(&McpStatusJson {
         server_id: binding.id.clone(),
         transport: binding.transport.to_string(),
@@ -972,6 +983,7 @@ fn mcp_status_json(binding: &McpAuthBinding, status: &McpAuthStatus) -> Result<S
         bearer_token_env: binding.bearer_token_env.clone(),
         url_origin: binding.url_origin.clone(),
         url_fingerprint: binding.url_fingerprint.clone(),
+        resource,
         token_expires_at,
         scopes,
     })
@@ -1162,7 +1174,7 @@ mod tests {
                 url_fingerprint: "sha256:abc".to_string(),
                 scopes: vec!["scope:read".to_string(), "scope:write".to_string()],
                 client_id: None,
-                resource: None,
+                resource: Some("https://example.invalid/mcp".to_string()),
                 authorization_endpoint: None,
                 token_endpoint: None,
                 credential_store_ref: Some("os-keyring:demo".to_string()),
@@ -1176,7 +1188,7 @@ mod tests {
 
         assert_eq!(
             output,
-            r#"{"server_id":"demo","transport":"streamable_http","auth_mode":"oauth","authenticated":true,"metadata_present":true,"stale_url":false,"credential_state":"available","bearer_token_env":null,"url_origin":"https://example.invalid","url_fingerprint":"sha256:abc","token_expires_at":"1700000000","scopes":["scope:read","scope:write"]}"#
+            r#"{"server_id":"demo","transport":"streamable_http","auth_mode":"oauth","authenticated":true,"metadata_present":true,"stale_url":false,"credential_state":"available","bearer_token_env":null,"url_origin":"https://example.invalid","url_fingerprint":"sha256:abc","resource":"https://example.invalid/mcp","token_expires_at":"1700000000","scopes":["scope:read","scope:write"]}"#
         );
     }
 
@@ -1191,7 +1203,7 @@ mod tests {
             url_fingerprint: "sha256:def".to_string(),
             scopes: vec!["scope:read".to_string()],
             client_id: None,
-            resource: None,
+            resource: Some("https://example.invalid/mcp".to_string()),
             authorization_endpoint: None,
             token_endpoint: None,
             credential_store_ref: Some("file:demo".to_string()),
@@ -1203,7 +1215,7 @@ mod tests {
 
         assert_eq!(
             output,
-            r#"{"server_id":"demo","auth_mode":"oauth","authenticated":true,"metadata_present":true,"credential_store":"file","url_origin":"https://example.invalid","url_fingerprint":"sha256:def","token_expires_at":null,"scopes":["scope:read"]}"#
+            r#"{"server_id":"demo","auth_mode":"oauth","authenticated":true,"metadata_present":true,"credential_store":"file","url_origin":"https://example.invalid","url_fingerprint":"sha256:def","resource":"https://example.invalid/mcp","token_expires_at":null,"scopes":["scope:read"]}"#
         );
     }
 

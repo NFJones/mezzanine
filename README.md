@@ -506,7 +506,11 @@ browser authorization-code PKCE flow. If the server advertises OAuth dynamic
 client registration and you do not pass `--client-id`, Mezzanine registers a
 public native client for the localhost callback and stores only the returned
 non-secret client id plus token references in the auth store metadata. Raw MCP
-OAuth access and refresh tokens are never written to config files.
+OAuth access and refresh tokens are never written to config files. Unless
+`--resource` is supplied, login discovers an RFC 9728 protected-resource
+identifier and otherwise falls back to the canonical configured MCP endpoint.
+The selected non-secret resource is reused for authorization, token exchange,
+persistence, diagnostics, and refresh.
 
 ## Configuration Quick Reference
 

@@ -33,7 +33,7 @@ pub async fn run_mcp_oauth_login_async(
     resource: Option<&str>,
 ) -> Result<McpOAuthCredential> {
     let metadata = discover_mcp_oauth_metadata(server_url).await?;
-    let resource = resource.map(str::trim).filter(|value| !value.is_empty());
+    let resource = resolve_mcp_oauth_resource_async(server_url, resource).await?;
     let listener = bind_browser_login_listener()?;
     let redirect_uri = format!(
         "http://127.0.0.1:{}/callback",
@@ -49,7 +49,7 @@ pub async fn run_mcp_oauth_login_async(
         &pkce,
         &state,
         scopes,
-        resource,
+        Some(&resource),
     );
     let browser_opened = open_browser(&auth_url);
     eprintln!(
@@ -64,11 +64,11 @@ pub async fn run_mcp_oauth_login_async(
         &pkce.code_verifier,
         &code,
         scopes,
-        resource,
+        Some(&resource),
     )
     .await?;
     credential.client_id = Some(client_id);
-    credential.resource = resource.map(ToOwned::to_owned);
+    credential.resource = Some(resource);
     credential.authorization_endpoint = Some(metadata.authorization_endpoint);
     credential.token_endpoint = Some(metadata.token_endpoint);
     Ok(credential)
@@ -92,13 +92,7 @@ pub async fn refresh_mcp_oauth_credential_async(
         ));
     }
     let client_id = client_id.unwrap_or(DEFAULT_CLIENT_ID);
-    let mut form = BTreeMap::new();
-    form.insert("grant_type", "refresh_token".to_string());
-    form.insert("refresh_token", refresh_token.to_string());
-    form.insert("client_id", client_id.to_string());
-    if let Some(resource) = resource.filter(|value| !value.trim().is_empty()) {
-        form.insert("resource", resource.to_string());
-    }
+    let form = refresh_token_form(refresh_token, client_id, resource);
     let tokens = post_token_form(token_endpoint, &form).await?;
     let mut credential = credential_from_token_response(&tokens, &[])?;
     credential.client_id = Some(client_id.to_string());
@@ -118,6 +112,112 @@ struct McpOAuthMetadata {
 struct PkceCodes {
     code_verifier: String,
     code_challenge: String,
+}
+
+/// Resolves the OAuth resource indicator used throughout one login flow.
+async fn resolve_mcp_oauth_resource_async(
+    server_url: &str,
+    requested_resource: Option<&str>,
+) -> Result<String> {
+    if let Some(resource) = requested_resource
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        validate_absolute_resource_uri(resource)?;
+        return Ok(resource.to_string());
+    }
+    if let Some(resource) = discover_mcp_protected_resource_async(server_url).await? {
+        return Ok(resource);
+    }
+    canonical_mcp_resource(server_url)
+}
+
+/// Discovers an RFC 9728 protected-resource identifier when metadata exists.
+async fn discover_mcp_protected_resource_async(server_url: &str) -> Result<Option<String>> {
+    let metadata_url = protected_resource_metadata_url(server_url)?;
+    let response = match async_http_client().get(&metadata_url).send().await {
+        Ok(response) => response,
+        Err(_) => return Ok(None),
+    };
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    let body = response.text().await.map_err(|error| {
+        MezError::invalid_state(format!(
+            "MCP protected-resource metadata response read failed: {error}"
+        ))
+    })?;
+    let value: Value = serde_json::from_str(&body).map_err(|error| {
+        MezError::invalid_state(format!(
+            "MCP protected-resource metadata was not JSON: {error}"
+        ))
+    })?;
+    let resource = string_json_field(&value, "resource")?;
+    validate_discovered_resource(server_url, &resource)?;
+    Ok(Some(resource))
+}
+
+/// Builds the RFC 9728 well-known metadata URL for a protected resource.
+fn protected_resource_metadata_url(server_url: &str) -> Result<String> {
+    let mut parsed = parse_http_url(server_url, "MCP HTTP server URL")?;
+    let resource_path = parsed.path().trim_end_matches('/');
+    let metadata_path = if resource_path.is_empty() {
+        "/.well-known/oauth-protected-resource".to_string()
+    } else {
+        format!("/.well-known/oauth-protected-resource{resource_path}")
+    };
+    parsed.set_path(&metadata_path);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    Ok(parsed.to_string())
+}
+
+/// Returns the canonical configured endpoint used when metadata is unavailable.
+fn canonical_mcp_resource(server_url: &str) -> Result<String> {
+    let mut parsed = parse_http_url(server_url, "MCP HTTP server URL")?;
+    parsed.set_fragment(None);
+    Ok(parsed.to_string())
+}
+
+/// Validates a metadata-derived resource against the configured MCP origin.
+fn validate_discovered_resource(server_url: &str, resource: &str) -> Result<()> {
+    let server = parse_http_url(server_url, "MCP HTTP server URL")?;
+    let resource = parse_http_url(resource, "MCP protected-resource identifier")?;
+    if resource.fragment().is_some() {
+        return Err(MezError::invalid_state(
+            "MCP protected-resource identifier must not contain a fragment",
+        ));
+    }
+    if server.origin() != resource.origin() {
+        return Err(MezError::forbidden(
+            "MCP protected-resource metadata identified an unrelated origin",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates an explicit OAuth resource as an absolute URI without a fragment.
+fn validate_absolute_resource_uri(resource: &str) -> Result<()> {
+    let parsed = reqwest::Url::parse(resource)
+        .map_err(|_| MezError::invalid_args("MCP OAuth resource must be an absolute URI"))?;
+    if parsed.cannot_be_a_base() || parsed.fragment().is_some() {
+        return Err(MezError::invalid_args(
+            "MCP OAuth resource must be an absolute URI without a fragment",
+        ));
+    }
+    Ok(())
+}
+
+/// Parses one absolute HTTP(S) URL used by MCP resource discovery.
+fn parse_http_url(url: &str, label: &str) -> Result<reqwest::Url> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| MezError::invalid_args(format!("{label} must be an absolute URL")))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(MezError::invalid_args(format!(
+            "{label} must use HTTP or HTTPS and include a host"
+        )));
+    }
+    Ok(parsed)
 }
 
 async fn discover_mcp_oauth_metadata(server_url: &str) -> Result<McpOAuthMetadata> {
@@ -236,15 +336,7 @@ async fn exchange_mcp_code_for_tokens_async(
     scopes: &[String],
     resource: Option<&str>,
 ) -> Result<McpOAuthCredential> {
-    let mut form = BTreeMap::new();
-    form.insert("grant_type", "authorization_code".to_string());
-    form.insert("client_id", client_id.to_string());
-    form.insert("redirect_uri", redirect_uri.to_string());
-    form.insert("code_verifier", code_verifier.to_string());
-    form.insert("code", code.to_string());
-    if let Some(resource) = resource.filter(|value| !value.trim().is_empty()) {
-        form.insert("resource", resource.to_string());
-    }
+    let form = authorization_code_form(client_id, redirect_uri, code_verifier, code, resource);
     let tokens = match post_token_form(token_endpoint, &form).await {
         Ok(tokens) => tokens,
         Err(error) if !scopes.is_empty() => {
@@ -257,6 +349,42 @@ async fn exchange_mcp_code_for_tokens_async(
         Err(error) => return Err(error),
     };
     credential_from_token_response(&tokens, scopes)
+}
+
+/// Builds one authorization-code token request with its resource binding.
+fn authorization_code_form(
+    client_id: &str,
+    redirect_uri: &str,
+    code_verifier: &str,
+    code: &str,
+    resource: Option<&str>,
+) -> BTreeMap<&'static str, String> {
+    let mut form = BTreeMap::new();
+    form.insert("grant_type", "authorization_code".to_string());
+    form.insert("client_id", client_id.to_string());
+    form.insert("redirect_uri", redirect_uri.to_string());
+    form.insert("code_verifier", code_verifier.to_string());
+    form.insert("code", code.to_string());
+    if let Some(resource) = resource.filter(|value| !value.trim().is_empty()) {
+        form.insert("resource", resource.to_string());
+    }
+    form
+}
+
+/// Builds one refresh-token request with its persisted resource binding.
+fn refresh_token_form(
+    refresh_token: &str,
+    client_id: &str,
+    resource: Option<&str>,
+) -> BTreeMap<&'static str, String> {
+    let mut form = BTreeMap::new();
+    form.insert("grant_type", "refresh_token".to_string());
+    form.insert("refresh_token", refresh_token.to_string());
+    form.insert("client_id", client_id.to_string());
+    if let Some(resource) = resource.filter(|value| !value.trim().is_empty()) {
+        form.insert("resource", resource.to_string());
+    }
+    form
 }
 
 async fn post_token_form(token_endpoint: &str, form: &BTreeMap<&str, String>) -> Result<Value> {
@@ -594,11 +722,14 @@ fn browser_open_commands(url: &str) -> Vec<Command> {
 #[cfg(test)]
 mod tests {
     use super::{
-        McpOAuthMetadata, PkceCodes, Value, build_authorize_url, credential_from_token_response,
-        dynamic_client_registration_body, optional_string_json_field, parse_callback_request,
-        string_json_field,
+        McpOAuthMetadata, PkceCodes, Value, authorization_code_form, build_authorize_url,
+        canonical_mcp_resource, credential_from_token_response,
+        discover_mcp_protected_resource_async, dynamic_client_registration_body,
+        optional_string_json_field, parse_callback_request, protected_resource_metadata_url,
+        refresh_token_form, string_json_field, validate_discovered_resource,
     };
     use crate::security::auth::{MCP_TEST_LONG_ACCESS_TOKEN, MCP_TEST_LONG_REFRESH_TOKEN};
+    use std::io::{Read, Write};
 
     /// Verifies authorize URLs carry the PKCE, scope, and resource fields MCP
     /// servers need for OAuth authorization-code login.
@@ -623,6 +754,97 @@ mod tests {
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("scope=tools.read%20tools.write"));
         assert!(url.contains("resource=https%3A%2F%2Fmcp.example.test"));
+    }
+
+    /// Verifies RFC 9728 discovery preserves the configured resource path.
+    #[test]
+    fn protected_resource_metadata_url_inserts_well_known_path() {
+        assert_eq!(
+            protected_resource_metadata_url("https://mcp.atlassian.com/v1/mcp?tenant=test")
+                .unwrap(),
+            "https://mcp.atlassian.com/.well-known/oauth-protected-resource/v1/mcp"
+        );
+        assert_eq!(
+            protected_resource_metadata_url("https://example.test").unwrap(),
+            "https://example.test/.well-known/oauth-protected-resource"
+        );
+    }
+
+    /// Verifies the configured endpoint is the canonical discovery fallback.
+    #[test]
+    fn canonical_resource_fallback_preserves_endpoint_and_removes_fragment() {
+        assert_eq!(
+            canonical_mcp_resource("https://mcp.atlassian.com/v1/mcp?tenant=test#fragment")
+                .unwrap(),
+            "https://mcp.atlassian.com/v1/mcp?tenant=test"
+        );
+    }
+
+    /// Verifies metadata resources cannot redirect credentials to another origin.
+    #[test]
+    fn protected_resource_metadata_requires_configured_origin() {
+        validate_discovered_resource(
+            "https://mcp.atlassian.com/v1/mcp",
+            "https://mcp.atlassian.com/v1/mcp",
+        )
+        .unwrap();
+        let error = validate_discovered_resource(
+            "https://mcp.atlassian.com/v1/mcp",
+            "https://attacker.invalid/v1/mcp",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    }
+
+    /// Verifies RFC 9728 metadata selects an Atlassian-shaped MCP resource.
+    #[tokio::test]
+    async fn protected_resource_discovery_selects_metadata_resource() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server_url = format!("{origin}/v1/mcp");
+        let resource = server_url.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 2048];
+            let count = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            assert!(
+                request.starts_with("GET /.well-known/oauth-protected-resource/v1/mcp "),
+                "{request}"
+            );
+            let body = serde_json::json!({"resource": resource}).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        assert_eq!(
+            discover_mcp_protected_resource_async(&server_url)
+                .await
+                .unwrap(),
+            Some(server_url)
+        );
+        server.join().unwrap();
+    }
+
+    /// Verifies authorization and refresh exchanges reuse one resource value.
+    #[test]
+    fn oauth_token_forms_preserve_selected_resource() {
+        let resource = "https://mcp.atlassian.com/v1/mcp";
+        let exchange = authorization_code_form(
+            "client",
+            "http://127.0.0.1:1457/callback",
+            "verifier",
+            "code",
+            Some(resource),
+        );
+        let refresh = refresh_token_form("refresh", "client", Some(resource));
+
+        assert_eq!(exchange.get("resource").map(String::as_str), Some(resource));
+        assert_eq!(refresh.get("resource").map(String::as_str), Some(resource));
     }
 
     /// Verifies dynamic client registration uses the RFC 7591 metadata fields

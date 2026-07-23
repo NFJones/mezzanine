@@ -6514,6 +6514,13 @@ and authorization-server metadata advertises an RFC 7591
 and persist the returned non-secret client id with the stored credential
 metadata for later refresh. If dynamic registration is not advertised, login
 MAY fall back to the built-in public client id for providers that accept it. A
+browser OAuth login without an explicit resource MUST attempt RFC 9728
+protected-resource metadata discovery for the configured MCP endpoint and MUST
+fall back to the canonical configured endpoint when metadata is unavailable.
+A discovered resource MUST be an absolute HTTP(S) URI on the configured MCP
+origin and MUST NOT contain a fragment. The selected resource MUST remain
+identical across authorization, authorization-code exchange, persisted
+non-secret metadata, diagnostics, and refresh. A
 configured `bearer_token_env` MUST take precedence over stored OAuth or static
 bearer credentials. Stored MCP credentials MUST be bound to the configured
 server id, URL origin, and URL fingerprint, and URL rebinding MUST make status
