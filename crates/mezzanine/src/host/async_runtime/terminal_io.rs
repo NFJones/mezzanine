@@ -44,6 +44,8 @@ const MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES: usize = 8 * 1024;
 const ATTACHED_TERMINAL_OUTPUT_WRITE_RECOVERY_FLUSHES: u8 = 3;
 /// Flush duration that indicates the current output budget is too large.
 const ATTACHED_TERMINAL_OUTPUT_SLOW_FLUSH_THRESHOLD: Duration = Duration::from_millis(25);
+/// Maximum time cleanup may wait to emit terminal presentation reset bytes.
+const ATTACHED_TERMINAL_PRESENTATION_RESTORE_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Boxed future returned by async terminal I/O trait methods.
 pub type AsyncTerminalIoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -307,6 +309,8 @@ pub struct AsyncAttachedTerminalFdLoopIo {
     previous_output_frame: Option<AttachedTerminalOutputFrameState>,
     /// Started output frame retained across bounded flush attempts.
     pending_output_frame: Option<PendingAttachedTerminalOutputFrame>,
+    /// Latest render deferred until an already-started frame completes.
+    deferred_output_frame: Option<DeferredAttachedTerminalOutputFrame>,
     /// Whether a full redraw was requested while a pending frame was still
     /// being written.
     pending_output_invalidates_next_frame: bool,
@@ -343,6 +347,7 @@ impl AsyncAttachedTerminalFdLoopIo {
             application_keypad_mode: false,
             previous_output_frame: None,
             pending_output_frame: None,
+            deferred_output_frame: None,
             pending_output_invalidates_next_frame: false,
             output_write_limit_bytes: DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
             completed_output_flushes_since_short_write: 0,
@@ -385,7 +390,6 @@ impl AsyncAttachedTerminalFdLoopIo {
         modes: AttachedTerminalOutputModes,
     ) {
         let keypad_transition = if modes.application_keypad != self.application_keypad_mode {
-            self.application_keypad_mode = modes.application_keypad;
             Some(modes.application_keypad)
         } else {
             None
@@ -403,7 +407,32 @@ impl AsyncAttachedTerminalFdLoopIo {
             bytes,
             written: 0,
             next_state,
+            next_application_keypad_mode: modes.application_keypad,
         });
+    }
+
+    /// Queues a new frame or retains it behind an already-started frame.
+    fn queue_or_defer_output_frame(
+        &mut self,
+        lines: &[String],
+        line_style_spans: &[Vec<TerminalStyleSpan>],
+        modes: AttachedTerminalOutputModes,
+    ) {
+        if self
+            .pending_output_frame
+            .as_ref()
+            .is_some_and(|pending| pending.written > 0)
+        {
+            self.deferred_output_frame = Some(DeferredAttachedTerminalOutputFrame {
+                lines: lines.to_vec(),
+                line_style_spans: line_style_spans.to_vec(),
+                modes,
+            });
+            return;
+        }
+        self.pending_output_frame = None;
+        self.deferred_output_frame = None;
+        self.queue_pending_output_frame(lines, line_style_spans, modes);
     }
 
     /// Flushes retained output bytes up to `max_bytes`.
@@ -436,7 +465,17 @@ impl AsyncAttachedTerminalFdLoopIo {
             let write_start = pending.written;
             let bytes = pending.bytes[write_start..write_end].to_vec();
             let attempted_bytes = bytes.len();
-            let count = write_some_async_fd(&self.output, &bytes).await?;
+            let Some(count) = write_some_nonblocking_fd(&self.output, &bytes)? else {
+                short_write_observed = true;
+                return Ok(AttachedTerminalOutputFlushAttempt {
+                    report: AsyncTerminalOutputWriteReport {
+                        bytes_written,
+                        completed: false,
+                        pending_bytes: self.pending_output_bytes(),
+                    },
+                    short_write_observed,
+                });
+            };
             if count < attempted_bytes {
                 short_write_observed = true;
             }
@@ -449,10 +488,12 @@ impl AsyncAttachedTerminalFdLoopIo {
             bytes_written = bytes_written.saturating_add(count);
             if pending.remaining_bytes() == 0 {
                 self.commit_completed_pending_output_frame();
-                return Ok(AttachedTerminalOutputFlushAttempt {
-                    report: AsyncTerminalOutputWriteReport::completed(bytes_written),
-                    short_write_observed,
-                });
+                if self.pending_output_frame.is_none() {
+                    return Ok(AttachedTerminalOutputFlushAttempt {
+                        report: AsyncTerminalOutputWriteReport::completed(bytes_written),
+                        short_write_observed,
+                    });
+                }
             }
         }
         Ok(AttachedTerminalOutputFlushAttempt {
@@ -497,11 +538,19 @@ impl AsyncAttachedTerminalFdLoopIo {
         let Some(pending) = self.pending_output_frame.take() else {
             return;
         };
+        self.application_keypad_mode = pending.next_application_keypad_mode;
         if self.pending_output_invalidates_next_frame {
             self.previous_output_frame = None;
             self.pending_output_invalidates_next_frame = false;
         } else {
             self.previous_output_frame = Some(pending.next_state);
+        }
+        if let Some(deferred) = self.deferred_output_frame.take() {
+            self.queue_pending_output_frame(
+                &deferred.lines,
+                &deferred.line_style_spans,
+                deferred.modes,
+            );
         }
     }
 }
@@ -570,6 +619,8 @@ struct PendingAttachedTerminalOutputFrame {
     written: usize,
     /// Differential frame state to commit only after all bytes are written.
     next_state: AttachedTerminalOutputFrameState,
+    /// Application-keypad state to commit only after all bytes are written.
+    next_application_keypad_mode: bool,
 }
 
 impl PendingAttachedTerminalOutputFrame {
@@ -579,24 +630,35 @@ impl PendingAttachedTerminalOutputFrame {
     }
 }
 
+/// Latest rendered terminal state waiting behind an already-started frame.
+#[derive(Debug)]
+struct DeferredAttachedTerminalOutputFrame {
+    /// Rendered terminal rows.
+    lines: Vec<String>,
+    /// Native terminal style spans for each rendered row.
+    line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    /// Host presentation modes for the rendered frame.
+    modes: AttachedTerminalOutputModes,
+}
+
 /// Owns foreground raw-mode and async presentation cleanup for one attached TTY.
 ///
-/// The guard keeps the async terminal endpoint before the raw-mode guard so
-/// drop-time best-effort presentation cleanup runs before termios restoration.
-/// Callers should still prefer explicit `restore` so presentation errors can be
-/// reported while raw mode is restored on every path.
+/// The guard keeps the raw-mode guard before the async terminal endpoint so
+/// both explicit and drop-time cleanup restore termios before attempting the
+/// best-effort presentation reset. Callers should still prefer explicit
+/// `restore` so cleanup errors can be reported.
 #[derive(Debug)]
 pub struct AsyncAttachedTerminalPresentationGuard {
-    /// Stores the io value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    io: AsyncAttachedTerminalFdLoopIo,
     /// Stores the raw mode value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     raw_mode: TerminalRawModeGuard,
+    /// Stores the io value for this data structure.
+    ///
+    /// The field is part of structured state exchanged across this module
+    /// boundary and should remain aligned with the owning type invariant.
+    io: AsyncAttachedTerminalFdLoopIo,
 }
 
 impl AsyncAttachedTerminalPresentationGuard {
@@ -618,11 +680,11 @@ impl AsyncAttachedTerminalPresentationGuard {
         self.io.enter_presentation().await
     }
 
-    /// Restores presentation state and raw mode, always attempting both.
+    /// Restores raw mode before bounded presentation cleanup, attempting both.
     pub async fn restore(&mut self) -> Result<()> {
-        let presentation_result = self.io.restore_presentation().await;
         let raw_result = self.raw_mode.restore();
-        match (presentation_result, raw_result) {
+        let presentation_result = self.io.restore_presentation().await;
+        match (raw_result, presentation_result) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(error), _) => Err(error),
             (Ok(()), Err(error)) => Err(error),
@@ -639,14 +701,6 @@ impl Drop for AsyncAttachedTerminalFdLoopIo {
     fn drop(&mut self) {
         if self.presentation_active {
             let output_fd = self.output.get_ref().fd;
-            if let Some((_, flags)) = self
-                .original_flags
-                .iter()
-                .find(|(fd, _)| *fd == output_fd)
-                .copied()
-            {
-                let _ = fcntl_setfl(borrow_async_raw_fd(output_fd), flags);
-            }
             let _ = write_all_raw_fd_best_effort(
                 output_fd,
                 attached_terminal_restore_presentation_frame(),
@@ -788,22 +842,14 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
         modes: AttachedTerminalOutputModes,
     ) -> AsyncTerminalIoFuture<'a, usize> {
         Box::pin(async move {
-            if self.pending_output_frame.is_some() {
-                // A complete frame write supersedes any older retained partial
-                // output. The next encoded frame must stand on its own.
-                self.pending_output_frame = None;
-                self.previous_output_frame = None;
-                self.pending_output_invalidates_next_frame = false;
-            }
-            self.queue_pending_output_frame(lines, line_style_spans, modes);
+            self.queue_or_defer_output_frame(lines, line_style_spans, modes);
             let mut bytes_written = 0usize;
             while self.pending_output_frame.is_some() {
                 let report = self.flush_pending_output_bounded(usize::MAX).await?;
                 bytes_written = bytes_written.saturating_add(report.bytes_written);
                 if report.is_partial() && report.bytes_written == 0 {
-                    return Err(MezError::invalid_state(
-                        "async attached terminal output write made no progress",
-                    ));
+                    let mut readiness = self.output.writable().await?;
+                    readiness.clear_ready();
                 }
             }
             Ok(bytes_written)
@@ -832,14 +878,7 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
         max_bytes: usize,
     ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
         Box::pin(async move {
-            if self.pending_output_frame.is_some() {
-                // A newer render frame supersedes any old frame that could not
-                // be fully written to a slow foreground terminal.
-                self.pending_output_frame = None;
-                self.previous_output_frame = None;
-                self.pending_output_invalidates_next_frame = false;
-            }
-            self.queue_pending_output_frame(lines, line_style_spans, modes);
+            self.queue_or_defer_output_frame(lines, line_style_spans, modes);
             self.flush_pending_output_bounded(max_bytes).await
         })
     }
@@ -860,9 +899,15 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
     /// on duplicated control-flow logic.
     fn invalidate_output_frame<'a>(&'a mut self) -> AsyncTerminalIoFuture<'a, ()> {
         Box::pin(async move {
-            if self.pending_output_frame.is_some() {
+            if self
+                .pending_output_frame
+                .as_ref()
+                .is_some_and(|pending| pending.written > 0)
+            {
+                self.pending_output_invalidates_next_frame = true;
+            } else if self.pending_output_frame.is_some() {
                 self.pending_output_frame = None;
-                self.pending_output_invalidates_next_frame = false;
+                self.deferred_output_frame = None;
                 self.previous_output_frame = None;
             } else {
                 self.previous_output_frame = None;
@@ -897,18 +942,16 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
             if !self.presentation_active {
                 return Ok(());
             }
-            match write_all_async_fd(&self.output, attached_terminal_restore_presentation_frame())
-                .await
-            {
-                Ok(()) => {
-                    self.presentation_active = false;
-                    Ok(())
-                }
-                Err(error) if attached_terminal_output_disconnected(&error) => {
-                    self.presentation_active = false;
-                    Ok(())
-                }
-                Err(error) => Err(error),
+            let restore = tokio::time::timeout(
+                ATTACHED_TERMINAL_PRESENTATION_RESTORE_TIMEOUT,
+                write_all_async_fd(&self.output, attached_terminal_restore_presentation_frame()),
+            )
+            .await;
+            self.presentation_active = false;
+            match restore {
+                Ok(Ok(())) | Err(_) => Ok(()),
+                Ok(Err(error)) if attached_terminal_output_disconnected(&error) => Ok(()),
+                Ok(Err(error)) => Err(error),
             }
         })
     }
@@ -1006,6 +1049,24 @@ fn write_nonblocking_fd(fd: RawFd, bytes: &[u8]) -> io::Result<usize> {
             Err(io::Error::from(io::ErrorKind::WouldBlock))
         }
         Err(error) => Err(io::Error::from(error)),
+    }
+}
+
+/// Attempts one output write without awaiting terminal writability.
+fn write_some_nonblocking_fd(
+    fd: &AsyncFd<AsyncTerminalRawFd>,
+    bytes: &[u8],
+) -> Result<Option<usize>> {
+    if bytes.is_empty() {
+        return Ok(Some(0));
+    }
+    match write_nonblocking_fd(fd.get_ref().fd, bytes) {
+        Ok(count) if count > 0 => Ok(Some(count)),
+        Ok(_) => Err(MezError::invalid_state(
+            "async attached terminal output write made no progress",
+        )),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+        Err(error) => Err(error.into()),
     }
 }
 

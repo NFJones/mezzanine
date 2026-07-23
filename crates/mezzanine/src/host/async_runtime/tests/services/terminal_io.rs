@@ -175,15 +175,16 @@ async fn async_fd_attached_terminal_io_unbounded_write_completes_large_frame() {
     assert!(output.contains("tail-marker"), "{output:?}");
 }
 
-/// Verifies that invalidating a partially written differential output frame
-/// discards the stale remainder before any pending-output flush can emit it.
+/// Verifies that invalidating a partially written output frame preserves its
+/// emitted prefix and retained tail before forcing the next frame to stand
+/// alone.
 ///
-/// A full redraw request can arrive while a bounded foreground-terminal write
-/// still has retained bytes from an older differential frame. Those retained
-/// bytes are no longer a valid basis for the next frame and must be dropped
-/// instead of being flushed before the full-redraw state reset.
+/// Once terminal bytes have been accepted, discarding the remainder can leave
+/// a mode transition or clear sequence only partly applied. Invalidation must
+/// therefore finish the started frame and make the following frame a full
+/// redraw instead of splicing a new frame onto the emitted prefix.
 #[tokio::test]
-async fn async_fd_attached_terminal_io_invalidation_discards_pending_output() {
+async fn async_fd_attached_terminal_io_invalidation_preserves_started_output() {
     let (driver, mut peer) = StdUnixStream::pair().unwrap();
     let driver_output = driver.try_clone().unwrap();
     peer.set_read_timeout(Some(Duration::from_millis(200)))
@@ -198,20 +199,127 @@ async fn async_fd_attached_terminal_io_invalidation_discards_pending_output() {
             &lines,
             &[],
             AttachedTerminalOutputModes::default(),
-            1,
+            128,
         )
         .await
         .unwrap();
 
     assert!(first.is_partial());
     assert!(io.pending_output_bytes() > 0);
+    let mut emitted_prefix = [0u8; 256];
+    let emitted_prefix_len = peer.read(&mut emitted_prefix).unwrap();
+    let emitted_prefix = &emitted_prefix[..emitted_prefix_len];
+    assert!(
+        emitted_prefix
+            .windows(b"\x1b[?1049l".len())
+            .any(|window| window == b"\x1b[?1049l"),
+        "{emitted_prefix:?}"
+    );
 
     io.invalidate_output_frame().await.unwrap();
-    assert_eq!(io.pending_output_bytes(), 0);
+    assert!(io.pending_output_bytes() > 0);
 
-    let flush = io.flush_pending_output(1024).await.unwrap();
-    assert!(flush.completed);
+    while io.pending_output_bytes() > 0 {
+        io.flush_pending_output(1024).await.unwrap();
+    }
+    io.write_styled_output_with_modes(
+        &["fresh-frame-marker".to_string()],
+        &[],
+        AttachedTerminalOutputModes::default(),
+    )
+    .await
+    .unwrap();
+
+    drop(io);
+    drop(driver_output);
+    drop(driver);
+    let mut output = emitted_prefix.to_vec();
+    peer.read_to_end(&mut output).unwrap();
+    let output = String::from_utf8_lossy(&output);
+    let retained_tail = output.find("stale-tail-marker").unwrap();
+    let fresh_frame = output.find("fresh-frame-marker").unwrap();
+    assert!(retained_tail < fresh_frame, "{output:?}");
+    assert!(
+        output.matches("\u{1b}[2J\u{1b}[H").count() >= 2,
+        "{output:?}"
+    );
+}
+
+/// Verifies that a bounded terminal flush reports backpressure immediately
+/// instead of awaiting writability inside the foreground service batch.
+///
+/// A full host output buffer is temporary flow control, not a fatal terminal
+/// error. Returning a retained partial frame lets the service continue polling
+/// input and resume output when writable readiness arrives.
+#[tokio::test]
+async fn async_fd_attached_terminal_io_bounded_flush_does_not_wait_for_writability() {
+    let (driver, _peer) = StdUnixStream::pair().unwrap();
+    let mut driver_output = driver.try_clone().unwrap();
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+    let filler = vec![b'x'; 64 * 1024];
+    loop {
+        match driver_output.write(&filler) {
+            Ok(0) => panic!("socket output made no progress while filling"),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("failed to fill socket output: {error}"),
+        }
+    }
+
+    let flush = tokio::time::timeout(
+        Duration::from_millis(20),
+        io.write_styled_output_with_modes_bounded(
+            &["blocked-frame".to_string()],
+            &[],
+            AttachedTerminalOutputModes::default(),
+            1024,
+        ),
+    )
+    .await
+    .expect("bounded output flush waited for terminal writability")
+    .unwrap();
+
+    assert!(flush.is_partial());
     assert_eq!(flush.bytes_written, 0);
+    assert!(flush.pending_bytes > 0);
+}
+
+/// Verifies that submitting a newer render while an older frame has started
+/// cannot discard the older frame's retained tail.
+///
+/// Terminal frames are byte streams rather than atomic messages. The first
+/// frame must finish before the latest coalesced frame begins, otherwise mode
+/// and cursor sequences from the two frames can be interleaved.
+#[tokio::test]
+async fn async_fd_attached_terminal_io_completes_started_frame_before_newer_frame() {
+    let (driver, mut peer) = StdUnixStream::pair().unwrap();
+    let driver_output = driver.try_clone().unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+
+    let first = io
+        .write_styled_output_with_modes_bounded(
+            &[format!("{}first-tail-marker", "x".repeat(4096))],
+            &[],
+            AttachedTerminalOutputModes::default(),
+            1,
+        )
+        .await
+        .unwrap();
+    assert!(first.is_partial());
+
+    io.write_styled_output_with_modes(
+        &["newer-frame-marker".to_string()],
+        &[],
+        AttachedTerminalOutputModes::default(),
+    )
+    .await
+    .unwrap();
 
     drop(io);
     drop(driver_output);
@@ -219,7 +327,99 @@ async fn async_fd_attached_terminal_io_invalidation_discards_pending_output() {
     let mut output = Vec::new();
     peer.read_to_end(&mut output).unwrap();
     let output = String::from_utf8_lossy(&output);
-    assert!(!output.contains("stale-tail-marker"), "{output:?}");
+    let first_tail = output.find("first-tail-marker").unwrap();
+    let newer_frame = output.find("newer-frame-marker").unwrap();
+    assert!(first_tail < newer_frame, "{output:?}");
+}
+
+/// Verifies that presentation restoration abandons a permanently blocked
+/// display reset within a fixed deadline.
+///
+/// Cleanup must not strand the foreground task on the same backpressured file
+/// descriptor that caused output delivery to stop. A best-effort reset may be
+/// dropped, while termios restoration remains independently actionable.
+#[tokio::test]
+async fn async_fd_attached_terminal_io_restore_is_bounded_by_backpressure() {
+    let (driver, mut peer) = StdUnixStream::pair().unwrap();
+    let mut driver_output = driver.try_clone().unwrap();
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+    io.enter_presentation().await.unwrap();
+
+    peer.set_nonblocking(true).unwrap();
+    let mut scratch = [0u8; 1024];
+    loop {
+        match peer.read(&mut scratch) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("failed to drain presentation entry: {error}"),
+        }
+    }
+    let filler = vec![b'x'; 64 * 1024];
+    loop {
+        match driver_output.write(&filler) {
+            Ok(0) => panic!("socket output made no progress while filling"),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("failed to fill socket output: {error}"),
+        }
+    }
+
+    let restore = tokio::time::timeout(Duration::from_millis(100), io.restore_presentation()).await;
+    if restore.is_err() {
+        std::mem::forget(io);
+        panic!("presentation restoration waited indefinitely for output writability");
+    }
+    restore.unwrap().unwrap();
+}
+
+/// Verifies that drop-time presentation cleanup stays nonblocking when the
+/// terminal output buffer is full.
+///
+/// Destructor cleanup cannot await readiness. It must attempt the reset while
+/// the descriptor is still nonblocking and then restore the original file
+/// status flags, rather than blocking the foreground thread in `write`.
+#[tokio::test]
+async fn async_fd_attached_terminal_io_drop_is_prompt_under_backpressure() {
+    let (driver, mut peer) = StdUnixStream::pair().unwrap();
+    let mut driver_output = driver.try_clone().unwrap();
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+    io.enter_presentation().await.unwrap();
+
+    peer.set_nonblocking(true).unwrap();
+    let mut scratch = [0u8; 1024];
+    loop {
+        match peer.read(&mut scratch) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("failed to drain presentation entry: {error}"),
+        }
+    }
+    let filler = vec![b'x'; 64 * 1024];
+    loop {
+        match driver_output.write(&filler) {
+            Ok(0) => panic!("socket output made no progress while filling"),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("failed to fill socket output: {error}"),
+        }
+    }
+
+    let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(io);
+        drop(driver_output);
+        drop(driver);
+        let _ = dropped_tx.send(());
+    });
+    dropped_rx
+        .recv_timeout(Duration::from_millis(100))
+        .expect("drop-time presentation cleanup blocked on terminal output");
 }
 
 /// Verifies that the native async terminal endpoint reports pending input
