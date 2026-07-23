@@ -527,6 +527,75 @@ fn runtime_agent_thinking_persists_raw_source_for_replay() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies structured macro lifecycle status persists its fields and rebuilds
+/// through the macro renderer at a narrower destination geometry.
+#[test]
+fn runtime_agent_macro_lifecycle_persists_source_for_replay() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("agent-macro-lifecycle-source"));
+    service
+        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .append_agent_macro_status_to_terminal_buffer(
+            "%1",
+            "durable macro",
+            Some(1),
+            3,
+            "waiting for child result",
+        )
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert!(
+        entries[0]
+            .source_content_type
+            .as_deref()
+            .is_some_and(|content_type| content_type.contains("macro-lifecycle+json")),
+        "{entries:?}"
+    );
+
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
+    );
+    assert!(
+        service
+            .rebuild_agent_presentation_after_resize("%1", Size::new(20, 12).unwrap())
+            .unwrap()
+    );
+    let replayed_compact = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n")
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>();
+    assert!(
+        replayed_compact.contains("macrodurablemacro"),
+        "{replayed_compact}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a geometry-aware rebuild preserves an earlier legacy snapshot
 /// before replaying a later semantic entry at the destination geometry.
 #[test]

@@ -52,6 +52,9 @@ const AGENT_PRESENTATION_PARENT_PROMPT_CONTENT_TYPE: &str =
 /// Content type for rationale text rendered at replay geometry.
 const AGENT_PRESENTATION_THINKING_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.thinking+text; charset=utf-8";
+/// Content type for structured macro lifecycle rows rendered at replay geometry.
+const AGENT_PRESENTATION_MACRO_LIFECYCLE_CONTENT_TYPE: &str =
+    "application/vnd.mezzanine.agent-presentation.macro-lifecycle+json; charset=utf-8";
 
 /// Decodes one typed styled-line presentation record for geometry-aware replay.
 fn styled_agent_presentation_source_lines(
@@ -67,6 +70,13 @@ fn styled_agent_presentation_source_lines(
             })
             .collect()
     })
+}
+
+/// Decodes one structured macro lifecycle row for geometry-aware replay.
+fn macro_lifecycle_presentation_source(
+    source_text: &str,
+) -> Option<(String, Option<usize>, usize, String, bool)> {
+    serde_json::from_str(source_text).ok()
 }
 
 impl RuntimeSessionService {
@@ -307,6 +317,29 @@ impl RuntimeSessionService {
                     }
                     if source_content_type == AGENT_PRESENTATION_THINKING_CONTENT_TYPE {
                         self.append_agent_thinking_text_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_MACRO_LIFECYCLE_CONTENT_TYPE
+                        && let Some((macro_name, step_index, total_steps, status, is_error)) =
+                            macro_lifecycle_presentation_source(source_text)
+                    {
+                        if is_error {
+                            self.append_agent_macro_error_to_terminal_buffer(
+                                pane_id,
+                                &macro_name,
+                                step_index.unwrap_or_default(),
+                                total_steps,
+                                &status,
+                            )?;
+                        } else {
+                            self.append_agent_macro_status_to_terminal_buffer(
+                                pane_id,
+                                &macro_name,
+                                step_index,
+                                total_steps,
+                                &status,
+                            )?;
+                        }
                         continue;
                     }
                     if source_content_type == AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE {
@@ -578,16 +611,31 @@ impl RuntimeSessionService {
         status: &str,
     ) -> Result<()> {
         let columns = self.agent_terminal_presentation_columns(pane_id)?;
-        self.append_agent_terminal_lines_to_buffer(
+        let rendered_lines = agent_macro_lifecycle_display_lines_for_width(
+            macro_name,
+            step_index,
+            total_steps,
+            status,
+            columns,
+        )
+        .into_iter()
+        .map(|display| RichTextLine {
+            display,
+            style_spans: Vec::new(),
+            copy_text: None,
+            kind: mez_mux::render::RichTextLineKind::Normal,
+        })
+        .collect::<Vec<_>>();
+        let source = serde_json::to_string(&(macro_name, step_index, total_steps, status, false))
+            .map_err(|error| {
+            MezError::invalid_state(format!("macro lifecycle source encoding failed: {error}"))
+        })?;
+        self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
-            &agent_macro_lifecycle_display_lines_for_width(
-                macro_name,
-                step_index,
-                total_steps,
-                status,
-                columns,
-            ),
             AgentTerminalPresentationStyle::Status,
+            &rendered_lines,
+            &[],
+            Some((&source, AGENT_PRESENTATION_MACRO_LIFECYCLE_CONTENT_TYPE)),
         )
     }
 
@@ -601,16 +649,34 @@ impl RuntimeSessionService {
         status: &str,
     ) -> Result<()> {
         let columns = self.agent_terminal_presentation_columns(pane_id)?;
-        self.append_agent_terminal_lines_to_buffer(
+        let rendered_lines = agent_macro_lifecycle_display_lines_for_width(
+            macro_name,
+            Some(step_index),
+            total_steps,
+            status,
+            columns,
+        )
+        .into_iter()
+        .map(|display| RichTextLine {
+            display,
+            style_spans: Vec::new(),
+            copy_text: None,
+            kind: mez_mux::render::RichTextLineKind::Normal,
+        })
+        .collect::<Vec<_>>();
+        let source =
+            serde_json::to_string(&(macro_name, Some(step_index), total_steps, status, true))
+                .map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "macro lifecycle source encoding failed: {error}"
+                    ))
+                })?;
+        self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
-            &agent_macro_lifecycle_display_lines_for_width(
-                macro_name,
-                Some(step_index),
-                total_steps,
-                status,
-                columns,
-            ),
             AgentTerminalPresentationStyle::Error,
+            &rendered_lines,
+            &[],
+            Some((&source, AGENT_PRESENTATION_MACRO_LIFECYCLE_CONTENT_TYPE)),
         )
     }
 
