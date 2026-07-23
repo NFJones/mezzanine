@@ -727,10 +727,17 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
         "/personality ".len(),
     )
     .unwrap();
+    let routing_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/routing ",
+        "/routing ".len(),
+    )
+    .unwrap();
 
     assert_eq!(loop_hint.text, " [--fork|--new] [--limit <int>] <prompt>");
     assert_eq!(latency_hint.text, " <slow|default|fast>");
     assert_eq!(trust_hint.text, " <project-root|latest|list|pending>");
+    assert_eq!(routing_hint.text, " <on|off|toggle|status|policy>");
     assert_eq!(
         personality_hint.text,
         " <profile|style|list|status|show|clear|default>"
