@@ -596,6 +596,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
             .history(),
         &[
             String::from("remember this"),
+            String::from("/resume saved"),
             String::from("/routing on"),
             String::from("/approval full-access"),
             String::from("/personality concise"),

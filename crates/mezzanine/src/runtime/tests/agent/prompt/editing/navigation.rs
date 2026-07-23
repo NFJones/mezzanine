@@ -2,6 +2,137 @@
 
 use super::*;
 
+/// Verifies shared prompt history remains editor-only until a recalled prompt
+/// is submitted into the currently bound conversation.
+///
+/// Loading or browsing history from another conversation must not append pane
+/// rows or presentation records. Submission records the recalled prompt once
+/// under the active conversation and never under its original conversation.
+#[test]
+fn runtime_shared_prompt_history_does_not_bleed_into_pane_logs() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("shared-prompt-no-log-bleed"));
+    transcript_store
+        .append_prompt_history("conversation-a", "prompt from a")
+        .unwrap();
+    transcript_store
+        .append_prompt_history("conversation-b", "prompt from b")
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "conversation-b", 0)
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
+    );
+    let screen_before = service.pane_screen("%1").unwrap().normal_content_lines();
+
+    service.reload_agent_prompt_history_for_pane("%1").unwrap();
+    assert_eq!(
+        service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .history(),
+        &[String::from("prompt from a"), String::from("prompt from b")]
+    );
+    assert_eq!(
+        service.pane_screen("%1").unwrap().normal_content_lines(),
+        screen_before
+    );
+    assert!(
+        !transcript_store
+            .presentation_path("conversation-a")
+            .unwrap()
+            .exists()
+    );
+    assert!(
+        !transcript_store
+            .presentation_path("conversation-b")
+            .unwrap()
+            .exists()
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1b[A".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .line(),
+        "prompt from b"
+    );
+    assert_eq!(
+        service.pane_screen("%1").unwrap().normal_content_lines(),
+        screen_before
+    );
+    assert!(
+        !transcript_store
+            .presentation_path("conversation-a")
+            .unwrap()
+            .exists()
+    );
+    assert!(
+        !transcript_store
+            .presentation_path("conversation-b")
+            .unwrap()
+            .exists()
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(
+        !transcript_store
+            .presentation_path("conversation-a")
+            .unwrap()
+            .exists()
+    );
+    let entries = transcript_store
+        .inspect_presentation("conversation-b")
+        .unwrap();
+    let submitted_prompts = entries
+        .iter()
+        .filter(|entry| entry.source_text.as_deref() == Some("prompt from b"))
+        .collect::<Vec<_>>();
+    assert_eq!(submitted_prompts.len(), 1, "{entries:?}");
+}
+
 /// Verifies Up/Down move through soft-wrapped prompt rows before history.
 ///
 /// Long single-line drafts can occupy multiple visible rows, but ordinary Up

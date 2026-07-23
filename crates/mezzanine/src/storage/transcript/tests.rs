@@ -4,10 +4,16 @@ use std::{
     collections::BTreeMap,
     fs,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
 };
 
-use super::encoding::{decode_transcript_entry, encode_transcript_entry};
+use super::encoding::{
+    decode_transcript_entry, encode_prompt_history_entry, encode_transcript_entry,
+};
 use super::{AgentPresentationEntry, AgentTranscriptStore};
 use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 
@@ -453,8 +459,8 @@ fn transcript_store_prunes_oldest_saved_sessions_when_limit_exceeded() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies that async transcript and conversation-scoped prompt-history writes
-/// use the same durable layout and decoding behavior as the synchronous API.
+/// Verifies that async transcript and shared prompt-history writes use the same
+/// durable layout and decoding behavior as the synchronous store API.
 #[tokio::test]
 async fn transcript_store_async_appends_entries_and_prompt_history() {
     let root = temp_root("async");
@@ -480,7 +486,7 @@ async fn transcript_store_async_appends_entries_and_prompt_history() {
     );
 
     let inspected = store.inspect("conv1").unwrap();
-    let history = store.prompt_history_async("conv1").await.unwrap();
+    let history = store.prompt_history("conv1").unwrap();
     let command_history = store.command_prompt_history_async().await.unwrap();
 
     assert!(bytes > 0);
@@ -488,7 +494,8 @@ async fn transcript_store_async_appends_entries_and_prompt_history() {
     assert_eq!(history, vec![String::from("inspect project")]);
     assert_eq!(command_history, vec![String::from("list-buffers")]);
     assert!(root.join("conv1").join("history.tsv").exists());
-    assert!(root.join("conv1").join("prompt-history.tsv").exists());
+    assert!(root.join("prompt-history.tsv").exists());
+    assert!(!root.join("conv1").join("prompt-history.tsv").exists());
     assert!(root.join("command-prompt-history.tsv").exists());
     let _ = fs::remove_dir_all(root);
 }
@@ -550,10 +557,10 @@ fn transcript_store_under_config_root_uses_session_directories() {
     let _ = fs::remove_dir_all(config_root);
 }
 
-/// Verifies that submitted agent prompts remain isolated to their owning
-/// conversation so unrelated ordinary or routed sessions cannot recall them.
+/// Verifies that submitted agent prompts are retained in one shared history
+/// file, survive lookup through any conversation, and are not copied by forks.
 #[test]
-fn transcript_store_isolates_prompt_history_by_conversation() {
+fn transcript_store_persists_prompt_history_in_shared_file() {
     let root = temp_root("prompt-history");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
@@ -568,26 +575,118 @@ fn transcript_store_isolates_prompt_history_by_conversation() {
     );
     assert!(store.append_prompt_history("conv2", "run tests").unwrap());
 
-    assert_eq!(
-        store.prompt_history("conv1").unwrap(),
-        vec![String::from("list files"), String::from("build project")]
-    );
-    assert_eq!(
-        store.prompt_history("conv2").unwrap(),
-        vec![String::from("run tests")]
-    );
-    assert!(!root.join("prompt-history.tsv").exists());
-    assert!(root.join("conv1").join("prompt-history.tsv").exists());
-    assert!(root.join("conv2").join("prompt-history.tsv").exists());
+    let history = vec![
+        String::from("list files"),
+        String::from("build project"),
+        String::from("run tests"),
+    ];
+    assert_eq!(store.prompt_history("conv1").unwrap(), history);
+    assert_eq!(store.prompt_history("conv2").unwrap(), history);
+    assert!(root.join("prompt-history.tsv").exists());
+    assert!(!root.join("conv1").join("prompt-history.tsv").exists());
+    assert!(!root.join("conv2").join("prompt-history.tsv").exists());
     assert_eq!(store.list().unwrap().len(), 1);
 
     let fork = store.fork("conv1", "conv3", 99).unwrap();
     assert_eq!(fork.conversation_id, "conv3");
+    assert_eq!(store.prompt_history("conv3").unwrap(), history);
+    assert!(!root.join("conv3").join("prompt-history.tsv").exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies that the temporary per-conversation history layout is imported
+/// once in deterministic path order without deleting the source files.
+#[test]
+fn transcript_store_imports_isolated_prompt_history_once() {
+    let root = temp_root("prompt-history-migration");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("conversation-b")).unwrap();
+    fs::create_dir_all(root.join("conversation-a")).unwrap();
+    fs::write(
+        root.join("prompt-history.tsv"),
+        format!("{}\n", encode_prompt_history_entry("shared first").unwrap()),
+    )
+    .unwrap();
+    fs::write(
+        root.join("conversation-a").join("prompt-history.tsv"),
+        format!("{}\n", encode_prompt_history_entry("from a").unwrap()),
+    )
+    .unwrap();
+    fs::write(
+        root.join("conversation-b").join("prompt-history.tsv"),
+        format!("{}\n", encode_prompt_history_entry("from b").unwrap()),
+    )
+    .unwrap();
+    let store = AgentTranscriptStore::new(root.clone());
+
     assert_eq!(
-        store.prompt_history("conv2").unwrap(),
-        vec![String::from("run tests")]
+        store.prompt_history("current").unwrap(),
+        vec![
+            String::from("shared first"),
+            String::from("from a"),
+            String::from("from b"),
+        ]
     );
-    assert!(store.prompt_history("conv3").unwrap().is_empty());
+    assert!(root.join(".prompt-history-shared-v1").exists());
+    assert!(
+        root.join("conversation-a")
+            .join("prompt-history.tsv")
+            .exists()
+    );
+    fs::write(
+        root.join("conversation-a").join("prompt-history.tsv"),
+        format!(
+            "{}\n",
+            encode_prompt_history_entry("late legacy row").unwrap()
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        store.prompt_history("other").unwrap(),
+        vec![
+            String::from("shared first"),
+            String::from("from a"),
+            String::from("from b"),
+        ]
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies that overlapping store handles cannot lose accepted shared prompt
+/// history entries during the read-modify-rewrite operation.
+#[test]
+fn transcript_store_serializes_shared_prompt_history_writers() {
+    let root = temp_root("prompt-history-concurrency");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    let writers = 24;
+    let barrier = Arc::new(Barrier::new(writers));
+    let handles = (0..writers)
+        .map(|index| {
+            let store = store.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                store
+                    .append_prompt_history(
+                        &format!("conversation-{index}"),
+                        &format!("prompt-{index}"),
+                    )
+                    .unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let history = store.prompt_history("reader").unwrap();
+    assert_eq!(history.len(), writers);
+    for index in 0..writers {
+        assert!(history.contains(&format!("prompt-{index}")));
+    }
 
     let _ = fs::remove_dir_all(root);
 }
@@ -616,7 +715,8 @@ fn transcript_store_persists_command_prompt_history_in_shared_file() {
         vec![String::from("agent prompt")]
     );
     assert!(root.join("command-prompt-history.tsv").exists());
-    assert!(root.join("conv1").join("prompt-history.tsv").exists());
+    assert!(root.join("prompt-history.tsv").exists());
+    assert!(!root.join("conv1").join("prompt-history.tsv").exists());
 
     let _ = fs::remove_dir_all(root);
 }
