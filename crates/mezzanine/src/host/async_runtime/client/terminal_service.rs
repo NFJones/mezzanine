@@ -265,9 +265,7 @@ fn attached_terminal_actions_include_resize(actions: &[TerminalClientLoopAction]
     actions.iter().any(|action| {
         matches!(
             action,
-            TerminalClientLoopAction::HandleMouse(
-                MouseAction::ResizePane { .. } | MouseAction::FinishResizePane
-            )
+            TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. })
         )
     })
 }

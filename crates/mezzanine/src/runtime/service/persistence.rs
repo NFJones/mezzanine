@@ -75,11 +75,10 @@ impl RuntimeSessionService {
         if !active {
             return Ok(RuntimeTransition::default());
         }
-        for (pane_id, size) in self.presentation.take_deferred_agent_presentation_resizes() {
-            if self.find_pane_descriptor(&pane_id).is_some() {
-                self.rebuild_agent_presentation_after_resize(&pane_id, size)?;
-            }
+        if self.presentation.mouse_resize_drag_active() {
+            return Ok(RuntimeTransition::default());
         }
+        self.replay_deferred_agent_presentation_resizes()?;
         let side_effects = self
             .session
             .clients()
@@ -94,6 +93,16 @@ impl RuntimeSessionService {
             applied: !side_effects.is_empty(),
             side_effects,
         })
+    }
+
+    /// Rebuilds source-backed agent presentation at each coalesced final size.
+    pub(crate) fn replay_deferred_agent_presentation_resizes(&mut self) -> Result<()> {
+        for (pane_id, size) in self.presentation.take_deferred_agent_presentation_resizes() {
+            if self.find_pane_descriptor(&pane_id).is_some() {
+                self.rebuild_agent_presentation_after_resize(&pane_id, size)?;
+            }
+        }
+        Ok(())
     }
 
     /// Reconciles the cursor-blink timer for one attached terminal client.

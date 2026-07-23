@@ -876,9 +876,11 @@ fn runtime_agent_resize_rebuilds_source_backed_presentation_at_new_width() {
 }
 
 /// Verifies pane-divider dragging defers expensive source-backed agent replay
-/// until the active resize debounce generation applies the final pane size.
-/// Geometry and terminal sizing must still update during the drag, while
-/// repeated movement coalesces into one pending semantic presentation rebuild.
+/// until the resize gesture finishes at its final pane size.
+///
+/// Geometry and terminal sizing must still update during the drag, repeated
+/// movement must coalesce into one pending semantic presentation rebuild, and
+/// a debounce firing while the pointer remains held must retain that work.
 #[test]
 fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
     let mut service = test_runtime_service();
@@ -955,7 +957,42 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
         .apply_resize_debounce_timer_transition(true)
         .unwrap();
 
-    assert!(transition.applied);
+    assert!(!transition.applied);
+    assert!(transition.side_effects.is_empty());
+    assert!(
+        service
+            .presentation
+            .agent_presentation_resize_is_deferred("%1")
+    );
+    assert_eq!(service.pane_screen("%1").unwrap().size(), final_size);
+    let still_deferred = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !still_deferred.contains("Deferred rebuild"),
+        "{still_deferred}"
+    );
+
+    let release = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::FinishResizePane,
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert!(release.view_refresh_required);
+    assert!(release.full_redraw_required);
     assert!(
         !service
             .presentation

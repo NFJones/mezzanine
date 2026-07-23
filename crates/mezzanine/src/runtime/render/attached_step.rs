@@ -649,7 +649,9 @@ impl RuntimeSessionService {
     fn mouse_action_requires_full_redraw(action: MouseAction) -> bool {
         matches!(
             action,
-            MouseAction::ResizePane { .. } | MouseAction::ReleaseWindowAction { .. }
+            MouseAction::ResizePane { .. }
+                | MouseAction::FinishResizePane
+                | MouseAction::ReleaseWindowAction { .. }
         )
     }
 }
