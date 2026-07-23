@@ -748,8 +748,9 @@ binds; absent descendants are not mounted. The multi-user `/home` root and
 direct credential-directory scopes fail closed. Exact primary, subagent, and
 action requests are cached independently for the current pane environment and
 configuration generation. With no explicit scopes, a trusted current project
-provides the default read-write scope; other working directories remain
-unresolved. Bubblewrap activation requires usable scopes.
+provides the default read-write scope; nested trusted projects select the
+deepest matching root, and other working directories remain unresolved.
+Bubblewrap activation requires usable scopes.
 Schema v20 migration selects `policy-only` and does not infer scopes or effects.
 
 On Linux, Mezzanine validates the configured executable inside the target pane

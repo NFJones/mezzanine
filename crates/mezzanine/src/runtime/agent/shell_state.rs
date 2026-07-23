@@ -462,8 +462,8 @@ impl RuntimeSessionService {
     /// Returns the maximum primary authority requested for one pane.
     ///
     /// Explicit configured scopes take precedence. When no scopes are
-    /// configured, a pane inside a trusted project receives read-write
-    /// authority for that project root only.
+    /// configured, a pane inside one or more trusted projects receives
+    /// read-write authority for the deepest matching project root only.
     pub(crate) fn primary_path_scope_paths(&self, pane_id: &str) -> (Vec<String>, Vec<String>) {
         let resources = &self.configured_permissions().resources;
         if !resources.read_scopes.is_empty() || !resources.write_scopes.is_empty() {
@@ -479,12 +479,13 @@ impl RuntimeSessionService {
             store
                 .records()
                 .filter(|record| record.state == TrustDecision::Trusted)
-                .find(|record| {
+                .filter(|record| {
                     crate::runtime::runtime_path_under_project_root(
                         &working_directory,
                         &record.project_root,
                     )
                 })
+                .max_by_key(|record| record.project_root.components().count())
                 .map(|record| record.project_root.clone())
         }) else {
             return (Vec::new(), Vec::new());

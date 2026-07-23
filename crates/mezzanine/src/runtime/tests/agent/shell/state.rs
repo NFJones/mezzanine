@@ -348,6 +348,47 @@ fn trusted_project_defaults_primary_authority_to_project_root() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies nested trusted projects default Bubblewrap authority to the
+/// deepest matching root rather than a broader trusted ancestor.
+///
+/// Trust records are stored in path order, where the parent sorts before its
+/// child. Selection must therefore compare every matching ancestor instead of
+/// accepting the first record. A sibling record also proves unrelated trusted
+/// roots do not affect the result.
+#[test]
+fn trusted_project_defaults_primary_authority_to_deepest_matching_root() {
+    let root = temp_root("runtime-nested-trusted-project-primary-authority");
+    let parent_root = root.join("project");
+    let nested_root = parent_root.join("vendor/nested");
+    let sibling_root = root.join("sibling");
+    let working_directory = nested_root.join("src");
+    for project_root in [&parent_root, &nested_root, &sibling_root] {
+        fs::create_dir_all(project_root.join(".git")).unwrap();
+    }
+    fs::create_dir_all(&working_directory).unwrap();
+    let mut service = test_runtime_service();
+    let mut trust_store = ProjectTrustStore::default();
+    for project_root in [&nested_root, &sibling_root, &parent_root] {
+        trust_store
+            .decide_at(
+                project_root.clone(),
+                TrustDecision::Trusted,
+                Some(project_root.join(".git")),
+                1,
+            )
+            .unwrap();
+    }
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+
+    let (read_scopes, write_scopes) = service.primary_path_scope_paths("%1");
+    let expected = nested_root.to_string_lossy().into_owned();
+
+    assert_eq!(read_scopes, vec![expected.clone()]);
+    assert_eq!(write_scopes, vec![expected]);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Builds a ready pane with Bubblewrap configured for capability-probe tests.
 fn bubblewrap_probe_service() -> RuntimeSessionService {
     let root = temp_root("runtime-bubblewrap-probe");

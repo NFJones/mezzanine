@@ -2782,8 +2782,10 @@ The `permissions` table MUST support `approval_policy`, `sandbox`,
 be opt-in and fail closed. Configured scopes define maximum resource authority
 and MUST be resolved in the pane environment. When both configured scope arrays
 are empty, a pane within an explicitly trusted project MUST receive that project
-root as its default read-write authority; no other working directory MAY infer
-authority. Aside from that trusted-project default, scopes MUST NOT be inferred
+root as its default read-write authority. When multiple trusted roots contain the
+pane working directory, Mezzanine MUST select the deepest matching root; no other
+working directory MAY infer authority. Aside from that trusted-project default,
+scopes MUST NOT be inferred
 from command patterns, approvals, presets, or trusted directories. Rule `effects` MAY declare
 complete or unknown read, write, network, credential, and process-control
 requirements; they MAY only narrow maximum authority. Before Bubblewrap
