@@ -1142,6 +1142,46 @@ pub fn clip_style_spans(
         .collect()
 }
 
+/// Clips style spans to a line viewport and clears partially visible graphemes.
+///
+/// [`line_slice`] replaces the visible cells of a boundary-intersected
+/// multi-column grapheme with blanks. Those synthesized cells must not retain
+/// the source grapheme's rendition, while styles for fully visible graphemes
+/// and unrelated cells remain unchanged.
+pub fn line_slice_style_spans(
+    line: &str,
+    spans: &[TerminalStyleSpan],
+    start: usize,
+    width: usize,
+) -> Vec<TerminalStyleSpan> {
+    let end = start.saturating_add(width);
+    let mut clipped = clip_style_spans(spans, start, width);
+    let mut column = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        let grapheme_width = active_grapheme_width(grapheme);
+        let next = column.saturating_add(grapheme_width);
+        if next <= start {
+            column = next;
+            continue;
+        }
+        if column >= end {
+            break;
+        }
+        let visible_start = column.max(start);
+        let visible_end = next.min(end);
+        if visible_end.saturating_sub(visible_start) != grapheme_width {
+            let blank_start = visible_start.saturating_sub(start);
+            let blank_end = visible_end.saturating_sub(start);
+            clipped = clipped
+                .into_iter()
+                .flat_map(|span| style_span_segments_outside_range(span, blank_start, blank_end))
+                .collect();
+        }
+        column = next;
+    }
+    clipped
+}
+
 /// Returns a display-column slice from one terminal line.
 ///
 /// A viewport boundary can intersect a multi-column grapheme. Because one

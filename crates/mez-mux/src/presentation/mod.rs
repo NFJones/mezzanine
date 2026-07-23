@@ -236,7 +236,15 @@ pub fn compose_client_viewport(
         .iter()
         .skip(row_offset)
         .take(target_rows)
-        .map(|spans| crate::render::clip_style_spans(spans, column_offset, target_columns))
+        .enumerate()
+        .map(|(visible_row, spans)| {
+            let line = view
+                .lines
+                .get(row_offset.saturating_add(visible_row))
+                .map(String::as_str)
+                .unwrap_or_default();
+            crate::render::line_slice_style_spans(line, spans, column_offset, target_columns)
+        })
         .collect::<Vec<_>>();
     while lines.len() < target_rows {
         lines.push(" ".repeat(target_columns));
@@ -816,17 +824,33 @@ mod tests {
         assert_eq!((view.viewport_row, view.viewport_column), (2, 4));
     }
 
-    /// Verifies a horizontal client viewport keeps exact cell geometry when
-    /// either edge intersects a two-column grapheme. The unrenderable half is
-    /// blanked rather than shifting later source cells toward the viewport edge.
+    /// Verifies a horizontal client viewport keeps exact cell geometry and
+    /// clears source styles when either edge intersects a two-column grapheme.
+    /// Selection styling is layered afterward and may still cover a blanked
+    /// placeholder cell.
     #[test]
     fn client_viewport_preserves_columns_across_clipped_wide_graphemes() {
-        let view = RenderedClientView {
+        let source_rendition = mez_terminal::GraphicRendition {
+            bold: true,
+            ..Default::default()
+        };
+        let mut view = RenderedClientView {
             role: ClientViewRole::Observer,
             authoritative_size: Size::new(5, 2).unwrap(),
             client_size: Size::new(3, 2).unwrap(),
-            lines: vec!["a界bc".to_owned(), "界abc".to_owned()],
-            line_style_spans: vec![Vec::new(), Vec::new()],
+            lines: vec!["a界bc".to_owned(), "ab界c".to_owned()],
+            line_style_spans: vec![
+                vec![TerminalStyleSpan {
+                    start: 1,
+                    length: 3,
+                    rendition: source_rendition,
+                }],
+                vec![TerminalStyleSpan {
+                    start: 1,
+                    length: 3,
+                    rendition: source_rendition,
+                }],
+            ],
             selection: None,
             requires_client_scroll: true,
             viewport_row: 0,
@@ -850,13 +874,36 @@ mod tests {
 
         let (lines, spans) = compose_client_viewport(&view);
 
-        assert_eq!(lines, [" bc", "abc"]);
+        assert_eq!(lines, [" bc", "界c"]);
         assert!(
             lines
                 .iter()
                 .all(|line| crate::render::char_count(line) == 3)
         );
-        assert_eq!(spans, [Vec::new(), Vec::new()]);
+        assert_eq!(
+            spans[0]
+                .iter()
+                .map(|span| (span.start, span.length, span.rendition))
+                .collect::<Vec<_>>(),
+            vec![(1, 1, source_rendition)]
+        );
+
+        view.viewport_column = 0;
+        view.selection = Some((
+            CopyPosition { line: 1, column: 2 },
+            CopyPosition { line: 1, column: 3 },
+        ));
+        let (lines, spans) = compose_client_viewport(&view);
+        let selection_rendition = view.ui_theme.colors.copy_selection.rendition();
+
+        assert_eq!(lines, ["a界", "ab "]);
+        assert_eq!(
+            spans[1]
+                .iter()
+                .map(|span| (span.start, span.length, span.rendition))
+                .collect::<Vec<_>>(),
+            vec![(1, 1, source_rendition), (2, 1, selection_rendition),]
+        );
     }
 
     /// Verifies attached-client status composition is fully mux-owned by
