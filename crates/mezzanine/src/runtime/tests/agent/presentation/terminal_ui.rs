@@ -904,3 +904,117 @@ fn runtime_agent_ignores_superseded_async_resize_completion() {
     assert_eq!(service.pane_screen("%1").unwrap().size(), newest_size);
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies provider-produced Markdown tables persist their semantic source and
+/// redraw through the attached client after a production resize path changes
+/// the pane geometry.
+#[test]
+fn runtime_provider_markdown_table_persists_and_reprojects_after_resize() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("provider-table-projection"));
+    let primary = service
+        .attach_primary("primary", true, Size::new(48, 16).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"provider-table","method":"agent/shell/command","params":{"idempotency_key":"provider-table","input":"render a wide table"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let table = "| Component | Durable projection detail |\n| --- | --- |\n| renderer | semantic table cells reflow at the destination pane width |\n| resume | persisted source redraws after restoring a conversation |";
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: table.to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "render the requested table".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "say-table".to_string(),
+                    rationale: String::new(),
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
+                        text: table.to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE
+                            .to_string(),
+                    },
+                }],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    assert!(
+        entries.iter().any(|entry| {
+            entry.source_text.as_deref() == Some(table)
+                && entry.source_content_type.as_deref()
+                    == Some(mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE)
+        }),
+        "{entries:?}"
+    );
+
+    let wide_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(48, 16).unwrap(),
+            &service
+                .terminal_client_loop_config(TerminalClientLoopConfig::default())
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(24, 16).unwrap())
+        .unwrap();
+    let narrow_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(24, 16).unwrap(),
+            &service
+                .terminal_client_loop_config(TerminalClientLoopConfig::default())
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        wide_view.lines, narrow_view.lines,
+        "wide={wide_view:?} narrow={narrow_view:?}"
+    );
+    assert!(
+        narrow_view.lines.iter().any(|line| line.contains('│')),
+        "{narrow_view:?}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
