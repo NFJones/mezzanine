@@ -61,6 +61,7 @@ impl RuntimeSessionService {
                 RuntimeApplyPatchBatchState {
                     remaining_paths: apply_patch_touched_paths(patch)?,
                     current_path: None,
+                    current_path_read_retries: 0,
                     current_read_transport: Vec::new(),
                     read_outputs: Vec::new(),
                 },
@@ -73,6 +74,7 @@ impl RuntimeSessionService {
             let mut paths = BTreeSet::new();
             paths.insert(path.clone());
             state.current_path = Some(path);
+            state.current_path_read_retries = 0;
             *plan = apply_patch_read_plan_for_paths(&paths);
         }
         Ok(())
@@ -1170,6 +1172,35 @@ impl RuntimeSessionService {
                 || decoded_output.diagnostics.transport_incomplete()
                 || decoded_output.diagnostics.output_truncated()
             {
+                if state.current_path.is_some() && state.current_path_read_retries == 0 {
+                    let mut paths = BTreeSet::new();
+                    paths.insert(state.current_path.clone().unwrap_or_default());
+                    state.current_path_read_retries = 1;
+                    state.current_read_transport.clear();
+                    let read_plan = apply_patch_read_plan_for_paths(&paths);
+                    self.agent.apply_patch_batch_states.insert(state_key, state);
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!(
+                            "action {} apply_patch_phase=read reason=retry_incomplete_transport",
+                            action.id
+                        ),
+                    )?;
+                    self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
+                    self.dispatch_shell_action_to_pane(
+                        turn,
+                        &action,
+                        super::shell_state::ShellActionDispatch {
+                            command: &read_plan.command,
+                            stateful: read_plan.stateful,
+                            interactive: read_plan.interactive,
+                            timeout_ms: read_plan.timeout_ms,
+                            permission_evaluation: permission_evaluation.as_deref(),
+                        },
+                    )?;
+                    return Ok(true);
+                }
                 apply_patch_error_plan(
                     "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase",
                 )
@@ -1182,6 +1213,7 @@ impl RuntimeSessionService {
                     let mut paths = BTreeSet::new();
                     paths.insert(path.clone());
                     state.current_path = Some(path);
+                    state.current_path_read_retries = 0;
                     let read_plan = apply_patch_read_plan_for_paths(&paths);
                     self.agent.apply_patch_batch_states.insert(state_key, state);
                     self.append_agent_trace_turn_event(

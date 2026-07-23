@@ -201,16 +201,16 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
     let _ = fs::remove_dir_all(target.parent().unwrap());
 }
 
-/// Verifies truncated `apply_patch` read snapshots surface a transport
-/// diagnostic instead of falling through to snapshot parsing.
+/// Verifies incomplete `apply_patch` read transport retries once from a fresh
+/// snapshot before write planning.
 ///
 /// The read phase carries base64-framed file snapshots that Rust must parse
-/// before it can generate the write phase. If the retained PTY observation is
-/// truncated or transport-incomplete, parsing the partial payload produces a
-/// misleading "missing snapshot marker" error. The runtime should dispatch a
-/// model-visible write-phase failure that names the capture boundary directly.
+/// before it can generate the write phase. A truncated first observation must
+/// not fall through to snapshot parsing or create a write transaction from
+/// partial bytes. Instead, the runtime takes one fresh snapshot of the same
+/// path and only plans the write after the retry supplies complete transport.
 #[test]
-fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
+fn runtime_apply_patch_read_phase_truncation_retries_with_fresh_snapshot() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(160, 60).unwrap(), 120)
@@ -225,7 +225,7 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
     service.permission_policy_mut().set_approval_bypass(true);
 
     let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-apply-patch-truncated-read","input":"create a note"}}"#,
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-apply-patch-truncated-read-retry","input":"create a note"}}"#,
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
@@ -289,6 +289,54 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
         .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0)
         .unwrap();
 
+    let retry_marker = service
+        .running_shell_transactions_for_tests()
+        .keys()
+        .next()
+        .cloned()
+        .expect("truncated read should dispatch one fresh read transaction");
+    let retry_transaction = service
+        .running_shell_transactions_for_tests()
+        .get(&retry_marker)
+        .expect("fresh read transaction should remain running");
+    assert!(
+        retry_transaction
+            .command
+            .contains("__MEZ_APPLY_PATCH_READ_PHASE__"),
+        "{}",
+        retry_transaction.command
+    );
+    assert!(
+        !retry_transaction
+            .command
+            .contains("__MEZ_APPLY_PATCH_WRITE_PHASE__"),
+        "{}",
+        retry_transaction.command
+    );
+    let snapshot = concat!(
+        "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\n",
+        "X19NRVpfQVBQTFlfUEFUQ0hfUkVBRF9CRUdJTl9fCl9fTUVaX0FQUExZX1BBVENIX0ZJTEVfQkVHSU5fXwpQQVRIX0I2\n",
+        "NCBkR0Z5WjJWMEwzUnlkVzVqWVhSbFpDMXlaV0ZrTFc1dmRHVXVkSGgwClJFU09MVkVEX0I2NCBMMmh2YldVdmJtVnBi\n",
+        "QzlFYjJOMWJXVnVkSE12Y21Wd2IzTXZiV1Y2ZW1GdWFXNWxMM1JoY21kbGRDOTBjblZ1WTJGMFpXUXRjbVZoWkMxdWIz\n",
+        "UmxMblI0ZEE9PQpTVEFUVVMgbWlzc2luZwpfX01FWl9BUFBMWV9QQVRDSF9GSUxFX0VORF9fCl9fTUVaX0FQUExZX1BB\n",
+        "VENIX1JFQURfRU5EX18K\n",
+        "__MEZ_SHELL_OUTPUT_BASE64_END__\n",
+    );
+    let retry_transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&retry_marker)
+        .unwrap();
+    retry_transaction.observed_output_preview = "partial apply_patch read transport".to_string();
+    retry_transaction.observed_output_bytes = snapshot.len();
+    retry_transaction.observed_output_truncated = true;
+    let state_key = RuntimeSessionService::apply_patch_batch_state_key("turn-1", "patch-1");
+    service.append_apply_patch_batch_transport(&state_key, snapshot.as_bytes());
+    service
+        .observe_agent_shell_transaction_start("%1", &retry_marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &retry_marker, "turn-1", "agent-%1", "%1", 0)
+        .unwrap();
     let write_transaction = service
         .running_shell_transactions_for_tests()
         .values()
@@ -297,40 +345,18 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
                 transaction.kind,
                 RunningShellTransactionKind::AgentAction { ref action_id }
                     if action_id == "patch-1"
-            )
+            ) && transaction
+                .command
+                .contains("__MEZ_APPLY_PATCH_WRITE_PHASE__")
         })
-        .expect("truncated read should dispatch an apply_patch error write phase");
+        .expect("complete retry transport should dispatch the verified write phase");
     assert!(
-        write_transaction.command.contains(
+        !write_transaction.command.contains(
             "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase"
         ),
         "{}",
         write_transaction.command
     );
-    assert!(
-        !write_transaction
-            .command
-            .contains("read phase did not emit a snapshot"),
-        "{}",
-        write_transaction.command
-    );
-    let write_marker = service
-        .running_shell_transactions_for_tests()
-        .keys()
-        .find(|candidate| *candidate != &marker)
-        .cloned()
-        .expect("write-phase error transaction should have a marker");
-    service
-        .observe_agent_shell_transaction_start("%1", &write_marker, "turn-1", "agent-%1", "%1")
-        .unwrap();
-    service
-        .observe_agent_shell_transaction_end("%1", &write_marker, "turn-1", "agent-%1", "%1", 1)
-        .unwrap();
-    assert!(!service.agent_turn_executions().contains_key("turn-1"));
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks().iter().all(|block| {
-        block.source != ContextSourceKind::RuntimeHint || block.label != "action failure feedback"
-    }));
     service.terminate_all_pane_processes().unwrap();
 }
 

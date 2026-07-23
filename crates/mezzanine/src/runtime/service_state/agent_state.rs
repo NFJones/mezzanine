@@ -266,6 +266,8 @@ pub(crate) struct RuntimeApplyPatchBatchState {
     pub(crate) remaining_paths: Vec<String>,
     /// Path owned by the currently running one-file read transaction.
     pub(crate) current_path: Option<String>,
+    /// Number of clean snapshot retries already dispatched for the current path.
+    pub(crate) current_path_read_retries: u8,
     /// Full transport bytes captured for the currently running read-phase batch.
     ///
     /// Pane previews stay size-bounded for display, but write-phase planning
