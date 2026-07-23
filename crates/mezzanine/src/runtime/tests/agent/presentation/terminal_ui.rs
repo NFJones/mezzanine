@@ -1016,5 +1016,29 @@ fn runtime_provider_markdown_table_persists_and_reprojects_after_resize() {
         narrow_view.lines.iter().any(|line| line.contains('│')),
         "{narrow_view:?}"
     );
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(48, 16).unwrap())
+        .unwrap();
+    let widened_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(48, 16).unwrap(),
+            &service
+                .terminal_client_loop_config(TerminalClientLoopConfig::default())
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        narrow_view.lines, widened_view.lines,
+        "narrow={narrow_view:?} widened={widened_view:?}"
+    );
+    assert_eq!(
+        transcript_store
+            .inspect_presentation(&conversation_id)
+            .unwrap()
+            .len(),
+        entries.len()
+    );
     service.terminate_all_pane_processes().unwrap();
 }
