@@ -34,6 +34,26 @@ use mez_agent::{
 };
 use mez_mux::render::markdown_block_copy_lines;
 
+/// Content type for width-independent styled agent presentation records.
+const AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE: &str =
+    "application/vnd.mezzanine.agent-presentation.styled-lines+json; charset=utf-8";
+
+/// Decodes one typed styled-line presentation record for geometry-aware replay.
+fn styled_agent_presentation_source_lines(
+    source_text: &str,
+) -> Option<Vec<(AgentTerminalPresentationStyle, String)>> {
+    let encoded = serde_json::from_str::<Vec<(String, String)>>(source_text).ok()?;
+    (!encoded.is_empty()).then(|| {
+        encoded
+            .into_iter()
+            .filter_map(|(style, text)| {
+                AgentTerminalPresentationStyle::from_persistence_name(&style)
+                    .map(|style| (style, text))
+            })
+            .collect()
+    })
+}
+
 impl RuntimeSessionService {
     /// Runs the append agent user prompt to terminal buffer operation for this subsystem.
     ///
@@ -258,6 +278,14 @@ impl RuntimeSessionService {
                     entry.source_text.as_deref(),
                     entry.source_content_type.as_deref(),
                 ) {
+                    if source_content_type == AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE
+                        && let Some(styled_lines) =
+                            styled_agent_presentation_source_lines(source_text)
+                        && !styled_lines.is_empty()
+                    {
+                        self.append_agent_terminal_styled_lines_to_buffer(pane_id, &styled_lines)?;
+                        continue;
+                    }
                     self.append_agent_assistant_content_to_terminal_buffer(
                         pane_id,
                         source_text,
@@ -708,7 +736,15 @@ impl RuntimeSessionService {
                 .map(|(_style, line)| line.clone())
                 .collect(),
             ansi_text,
-            None,
+            serde_json::to_string(
+                &styled_lines
+                    .iter()
+                    .map(|(style, line)| (style.persistence_name(), line))
+                    .collect::<Vec<_>>(),
+            )
+            .ok()
+            .as_deref()
+            .map(|source| (source, AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE)),
         );
         Ok(())
     }
@@ -1123,5 +1159,25 @@ impl RuntimeSessionService {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::styled_agent_presentation_source_lines;
+
+    /// Verifies typed styled presentation source preserves valid style and text
+    /// pairs while rejecting malformed payloads before replay reaches a pane.
+    #[test]
+    fn styled_agent_presentation_source_lines_decodes_valid_typed_records() {
+        let decoded = styled_agent_presentation_source_lines(
+            r#"[["user-prompt","user> restore me"],["status","agent: restored"]]"#,
+        )
+        .expect("valid typed styled presentation source should decode");
+
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].1, "user> restore me");
+        assert_eq!(decoded[1].1, "agent: restored");
+        assert!(styled_agent_presentation_source_lines("not json").is_none());
     }
 }

@@ -128,6 +128,70 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
     assert!(pane_text.contains("▐      delta epsilon"), "{pane_text}");
 }
 
+/// Verifies user-visible status rows persist typed source and replay through
+/// their original presentation style after a geometry-aware rebuild.
+#[test]
+fn runtime_agent_status_presentation_persists_typed_source_for_replay() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("agent-status-source"));
+    service
+        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "agent: restoring durable status")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert!(
+        entries[0]
+            .source_content_type
+            .as_deref()
+            .is_some_and(|content_type| content_type.contains("styled-lines+json")),
+        "{entries:?}"
+    );
+
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
+    );
+    assert!(
+        service
+            .rebuild_agent_presentation_after_resize("%1", Size::new(20, 12).unwrap())
+            .unwrap()
+    );
+    let replayed = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let replayed_compact = replayed
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect::<String>();
+    assert!(
+        replayed_compact.contains("agentrestoringdurablestatus"),
+        "{replayed}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a live width change rebuilds a source-backed agent screen instead
 /// of reflowing its stale cached terminal rows. This keeps Markdown rendering
 /// semantic across pane geometry changes while preserving legacy resize
