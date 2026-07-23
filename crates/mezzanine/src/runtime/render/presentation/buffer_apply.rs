@@ -43,6 +43,9 @@ const AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE: &str =
 /// Content type for a shell command preview rendered at replay geometry.
 const AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.command-preview+text; charset=utf-8";
+/// Content type for one action-execution header rendered at replay geometry.
+const AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE: &str =
+    "application/vnd.mezzanine.agent-presentation.action-header+text; charset=utf-8";
 
 /// Decodes one typed styled-line presentation record for geometry-aware replay.
 fn styled_agent_presentation_source_lines(
@@ -290,6 +293,20 @@ impl RuntimeSessionService {
                     }
                     if source_content_type == AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE {
                         self.append_agent_command_preview_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
+                    if source_content_type == AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE {
+                        let rendered_line = agent_action_execution_rendered_line(
+                            source_text,
+                            &self.presentation.settings.ui_theme,
+                        );
+                        self.append_agent_terminal_rendered_lines_to_buffer(
+                            pane_id,
+                            AgentTerminalPresentationStyle::Status,
+                            &[rendered_line],
+                            &[],
+                            Some((source_text, source_content_type)),
+                        )?;
                         continue;
                     }
                     if source_content_type == AGENT_PRESENTATION_STYLED_LINES_CONTENT_TYPE
@@ -1063,7 +1080,7 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::Status,
             &[rendered_line],
             &[],
-            None,
+            Some((header, AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE)),
         )?;
         Ok(())
     }
