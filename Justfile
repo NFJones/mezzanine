@@ -16,7 +16,7 @@ install:
 
 # Run (release by default)
 run *args:
-    cargo run -p mezzanine --release -- {{args}}
+    RUST_BACKTRACE=1 cargo run -p mezzanine --release -- {{args}}
 
 # Type-check without building artifacts
 check:
