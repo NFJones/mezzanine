@@ -24,6 +24,35 @@ use super::{
 };
 use crate::runtime::RuntimeSandboxFallbackAudit;
 
+/// Describes why an `apply_patch` snapshot cannot safely reach write planning.
+///
+/// The message retains the generic safety boundary while naming the observed
+/// transport fault so the terminal action result can guide a bounded retry or
+/// subsequent manual recovery.
+fn apply_patch_read_transport_failure_message(
+    diagnostics: &mez_agent::ShellTransportDiagnostics,
+    observed_output_truncated: bool,
+) -> String {
+    let cause = if diagnostics.missing_frame {
+        "the transport frame was missing"
+    } else if diagnostics.missing_end_marker {
+        "the transport end marker was missing"
+    } else if diagnostics.invalid_base64_blocks > 0 {
+        "the transport contained invalid base64"
+    } else if diagnostics.partial_base64_bytes_dropped > 0 {
+        "the transport ended with a partial base64 block"
+    } else if diagnostics.output_bytes_dropped > 0 {
+        "the transport exceeded its output retention limit"
+    } else if observed_output_truncated {
+        "pane observation capture was truncated"
+    } else {
+        "the transport was incomplete"
+    };
+    format!(
+        "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase: {cause}"
+    )
+}
+
 impl RuntimeSessionService {
     /// Appends one transported read chunk to an active apply-patch batch.
     pub(crate) fn append_apply_patch_batch_transport(
@@ -1201,9 +1230,10 @@ impl RuntimeSessionService {
                     )?;
                     return Ok(true);
                 }
-                apply_patch_error_plan(
-                    "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase",
-                )
+                apply_patch_error_plan(&apply_patch_read_transport_failure_message(
+                    &decoded_output.diagnostics,
+                    transaction.observed_output_truncated,
+                ))
             } else {
                 state.read_outputs.push(decoded_output.output);
                 state.current_read_transport.clear();
@@ -1249,9 +1279,10 @@ impl RuntimeSessionService {
                 || decoded_output.diagnostics.transport_incomplete()
                 || decoded_output.diagnostics.output_truncated()
             {
-                apply_patch_error_plan(
-                    "apply_patch read phase output was truncated or transport-incomplete before Rust could build the write phase",
-                )
+                apply_patch_error_plan(&apply_patch_read_transport_failure_message(
+                    &decoded_output.diagnostics,
+                    transaction.observed_output_truncated,
+                ))
             } else {
                 apply_patch_write_plan_from_read_output(patch, &decoded_output.output)
                     .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
@@ -1349,5 +1380,45 @@ impl RuntimeSessionService {
         );
         let _ = self.append_agent_shell_command_audit(turn, action, command, None, None, "failed");
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_patch_read_transport_failure_message;
+    use mez_agent::ShellTransportDiagnostics;
+
+    /// Verifies terminal patch-read failures retain a specific decoded
+    /// transport cause instead of collapsing it into generic truncation.
+    #[test]
+    fn apply_patch_read_transport_failure_message_prefers_detected_cause() {
+        let diagnostics = ShellTransportDiagnostics {
+            missing_end_marker: true,
+            ..Default::default()
+        };
+
+        let message = apply_patch_read_transport_failure_message(&diagnostics, true);
+
+        assert!(
+            message.contains("transport end marker was missing"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("pane observation capture was truncated"),
+            "{message}"
+        );
+    }
+
+    /// Verifies a capture-boundary failure remains actionable when decoding
+    /// cannot identify a more specific transport fault.
+    #[test]
+    fn apply_patch_read_transport_failure_message_reports_capture_truncation() {
+        let message =
+            apply_patch_read_transport_failure_message(&ShellTransportDiagnostics::default(), true);
+
+        assert!(
+            message.contains("pane observation capture was truncated"),
+            "{message}"
+        );
     }
 }
