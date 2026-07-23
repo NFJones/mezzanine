@@ -459,7 +459,9 @@ async fn async_actor_defers_agent_prompt_history_to_persistence_worker() {
         .unwrap()
         .session_id
         .clone();
-    let prompt_history_path = transcript_store.prompt_history_file();
+    let prompt_history_path = transcript_store
+        .prompt_history_file(&conversation_id)
+        .unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();

@@ -1004,9 +1004,10 @@ impl RuntimeSessionService {
             return Ok(());
         };
         if queue_for_adapter {
+            let path = store.prompt_history_file(&session.session_id)?;
             self.persistence
                 .queue_transcript(RuntimeSideEffect::PersistPromptHistory {
-                    path: store.prompt_history_file(),
+                    path,
                     store,
                     conversation_id: session.session_id.clone(),
                     prompt: input.to_string(),

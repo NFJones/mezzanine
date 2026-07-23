@@ -54,11 +54,11 @@ const SESSION_PRESENTATION_INDEX_FILE_NAME: &str = "presentation-index.tsv";
 /// The file is append-only and may contain any number of concatenated zstd
 /// frames. The active cleartext tail remains in `presentation.tsv`.
 const SESSION_PRESENTATION_COMPRESSED_FILE_NAME: &str = "presentation.tsv.zst";
-/// Defines the SHARED PROMPT HISTORY FILE NAME const used by this subsystem.
+/// Defines the AGENT PROMPT HISTORY FILE NAME const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const SHARED_PROMPT_HISTORY_FILE_NAME: &str = "prompt-history.tsv";
+const AGENT_PROMPT_HISTORY_FILE_NAME: &str = "prompt-history.tsv";
 /// Defines the SHARED COMMAND PROMPT HISTORY FILE NAME const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -596,7 +596,7 @@ impl AgentTranscriptStore {
             } else if matches!(
                 file_name,
                 Some(
-                    SHARED_PROMPT_HISTORY_FILE_NAME
+                    AGENT_PROMPT_HISTORY_FILE_NAME
                         | SHARED_COMMAND_PROMPT_HISTORY_FILE_NAME
                         | ACTIVE_AGENT_SESSION_METADATA_FILE_NAME
                 )
@@ -782,7 +782,7 @@ impl AgentTranscriptStore {
             .ok_or_else(|| MezError::invalid_state("forked conversation summary missing"))
     }
 
-    /// Appends one submitted agent prompt to the bounded shared history file.
+    /// Appends one submitted agent prompt to its conversation's bounded history file.
     pub fn append_prompt_history(&self, conversation_id: &str, prompt: &str) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
         if prompt.trim().is_empty() {
@@ -793,7 +793,7 @@ impl AgentTranscriptStore {
         while prompts.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
             prompts.remove(0);
         }
-        self.write_prompt_history(prompts)?;
+        self.write_prompt_history(conversation_id, prompts)?;
         Ok(true)
     }
 
@@ -827,7 +827,8 @@ impl AgentTranscriptStore {
         while prompts.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
             prompts.remove(0);
         }
-        self.write_prompt_history_async(prompts).await?;
+        self.write_prompt_history_async(conversation_id, prompts)
+            .await?;
         Ok(true)
     }
 
@@ -846,10 +847,10 @@ impl AgentTranscriptStore {
         Ok(true)
     }
 
-    /// Reads bounded submitted prompt history shared by all agent sessions.
+    /// Reads bounded submitted prompt history for one conversation.
     pub fn prompt_history(&self, conversation_id: &str) -> Result<Vec<String>> {
         validate_conversation_id(conversation_id)?;
-        let path = self.prompt_history_path();
+        let path = self.prompt_history_path(conversation_id)?;
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -885,10 +886,10 @@ impl AgentTranscriptStore {
         Ok(commands)
     }
 
-    /// Reads bounded shared prompt history through Tokio filesystem I/O.
+    /// Reads bounded conversation prompt history through Tokio filesystem I/O.
     pub async fn prompt_history_async(&self, conversation_id: &str) -> Result<Vec<String>> {
         validate_conversation_id(conversation_id)?;
-        let path = self.prompt_history_path();
+        let path = self.prompt_history_path(conversation_id)?;
         let mut data = String::new();
         match tokio_fs::File::open(path).await {
             Ok(mut file) => {
@@ -935,9 +936,9 @@ impl AgentTranscriptStore {
         Ok(commands)
     }
 
-    /// Returns the shared prompt-history file path.
-    pub fn prompt_history_file(&self) -> PathBuf {
-        self.prompt_history_path()
+    /// Returns one conversation's prompt-history file path.
+    pub fn prompt_history_file(&self, conversation_id: &str) -> Result<PathBuf> {
+        self.prompt_history_path(conversation_id)
     }
 
     /// Returns the shared primary command prompt history file path.
@@ -979,9 +980,13 @@ impl AgentTranscriptStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn write_prompt_history(&self, prompts: impl IntoIterator<Item = String>) -> Result<()> {
-        self.ensure_store_dir()?;
-        let path = self.prompt_history_path();
+    fn write_prompt_history(
+        &self,
+        conversation_id: &str,
+        prompts: impl IntoIterator<Item = String>,
+    ) -> Result<()> {
+        self.ensure_session_dir(conversation_id)?;
+        let path = self.prompt_history_path(conversation_id)?;
         let mut file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -1225,10 +1230,11 @@ impl AgentTranscriptStore {
     /// on duplicated control-flow logic.
     async fn write_prompt_history_async(
         &self,
+        conversation_id: &str,
         prompts: impl IntoIterator<Item = String>,
     ) -> Result<()> {
-        self.ensure_store_dir_async().await?;
-        let path = self.prompt_history_path();
+        self.ensure_session_dir_async(conversation_id).await?;
+        let path = self.prompt_history_path(conversation_id)?;
         let mut file = TokioOpenOptions::new()
             .create(true)
             .write(true)
@@ -1403,8 +1409,10 @@ impl AgentTranscriptStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn prompt_history_path(&self) -> PathBuf {
-        self.root.join(SHARED_PROMPT_HISTORY_FILE_NAME)
+    fn prompt_history_path(&self, conversation_id: &str) -> Result<PathBuf> {
+        Ok(self
+            .session_dir_for(conversation_id)?
+            .join(AGENT_PROMPT_HISTORY_FILE_NAME))
     }
 
     /// Runs the command prompt history path operation for this subsystem.

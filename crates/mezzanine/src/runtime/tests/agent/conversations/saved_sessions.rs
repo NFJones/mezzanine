@@ -4,7 +4,7 @@ use super::*;
 
 /// Verifies that saved agent conversations can be listed, resumed into the
 /// current pane, exposed to prompt context, and forked while keeping readline
-/// prompt history available through the shared prompt-history file.
+/// prompt history isolated to the resumed conversation.
 #[test]
 fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     let mut service = test_runtime_service();
@@ -208,12 +208,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
             .prompt
             .buffer
             .history(),
-        &[
-            String::from("find files"),
-            String::from("/resume"),
-            String::from("/resume --latest"),
-            String::from("/resume saved")
-        ]
+        &[String::from("find files")]
     );
     let context = service
         .agent_context_for_pane_prompt("%1", "continue", 0)
@@ -275,15 +270,11 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         .map(|session| session.pane_id.clone())
         .expect("forked conversation should be bound to a pane");
     assert_ne!(forked_pane, "%1");
-    assert_eq!(
-        transcript_store.prompt_history("saved-fork").unwrap(),
-        vec![
-            String::from("find files"),
-            String::from("/resume"),
-            String::from("/resume --latest"),
-            String::from("/resume saved"),
-            String::from("/fork saved-fork")
-        ]
+    assert!(
+        transcript_store
+            .prompt_history("saved-fork")
+            .unwrap()
+            .is_empty()
     );
     assert_eq!(
         service
@@ -307,7 +298,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
             .prompt
             .buffer
             .line(),
-        "/resume saved"
+        "find files"
     );
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(cwd);

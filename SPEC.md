@@ -2103,10 +2103,10 @@ case-insensitive substring matching as the primary command
 prompt, including the same accept and cancel bindings.
 `Ctrl+L`
 MUST scroll the active pane's used visible rows into retained history and clear
-the live viewport without closing the prompt. Prompt history MUST be shared
-across all agent sessions in one bounded history file and MUST be
-loaded whenever an agent prompt is shown or `/resume` binds a saved conversation
-into the pane.
+the live viewport without closing the prompt. Agent prompt history MUST be
+bounded and isolated by conversation identity. It MUST be loaded only after an
+agent prompt is bound to its owning conversation, including when `/resume` binds
+a saved conversation into the pane.
 
 The agent shell MUST support inserting literal newlines into the current prompt
 with `Ctrl+J`; Enter MUST remain the normal prompt submission key.
@@ -7962,9 +7962,12 @@ transcript excerpts. If a checkpoint records an active turn that cannot be
 reconnected after restart, Mezzanine MUST restore the conversation binding but
 MUST mark the turn as interrupted and require a fresh user action to retry.
 
-The parent agent-session directory MUST contain one bounded command-prompt
-history file shared by the primary Mezzanine command prompt for readline
-navigation. This file MUST remain separate from the agent prompt-history file.
+Each saved conversation directory MUST contain its own bounded agent
+prompt-history file for readline navigation. Agent prompt history MUST NOT be
+loaded across conversation identities. The parent agent-session directory MUST
+contain one bounded command-prompt history file shared by the primary Mezzanine
+command prompt. This file MUST remain separate from every conversation-scoped
+agent prompt-history file.
 
 The user MUST be able to list, inspect, fork, resume, and delete saved agent
 conversations.
@@ -7980,8 +7983,8 @@ When `/resume <session-uuid>` is invoked, Mezzanine MUST load the saved
 conversation transcript into subsequent model context, MUST replay saved
 presentation log entries into the current pane buffer when they are available,
 MUST fall back to a bounded human-readable transcript/log summary when no
-presentation log exists, and MUST reload the shared prompt history into the
-current pane's agent prompt.
+presentation log exists, and MUST reload only that conversation's prompt history
+into the current pane's agent prompt.
 
 The `/fork` command MUST clone the current conversation into a new thread with
 a fresh identity while preserving the original transcript and any presentation
@@ -7989,8 +7992,9 @@ log associated with that transcript. It MUST bind the forked conversation to a
 new agent-mode pane in the same window instead of rebinding or mutating the
 source pane's active conversation. The new pane's agent prompt MUST be seeded
 with the last submitted prompt before the `/fork` command when such a prompt is
-available, so users can edit and rerun the fork point. Prompt history MUST
-remain shared rather than being copied into the forked conversation directory.
+available, so users can edit and rerun the fork point. The forked conversation
+MUST start with an empty prompt history rather than copying the source
+conversation history.
 
 ## 20. Hooks
 
