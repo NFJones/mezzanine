@@ -102,36 +102,39 @@ fn compact_mermaid_options(ui_theme: &UiTheme) -> AsciiRenderOptions {
     options
 }
 
-/// Projects semantic Mez foreground colors onto Mermaid renderer roles.
+/// Projects neutral content and restrained structural accents onto Mermaid roles.
 fn mermaid_color_theme(ui_theme: &UiTheme) -> AsciiColorTheme {
     let text = terminal_color_to_ascii_rgb(ui_theme.colors.syntax_plain.foreground);
-    let muted = terminal_color_to_ascii_rgb(ui_theme.colors.agent_transcript_status.foreground);
     let structural =
         terminal_color_to_ascii_rgb(super::text::markdown_structural_foreground(ui_theme));
-    let accent = terminal_color_to_ascii_rgb(ui_theme.colors.agent_transcript_user.foreground);
-    let series = [
-        ui_theme.colors.syntax_keyword.foreground,
-        ui_theme.colors.syntax_string.foreground,
-        ui_theme.colors.syntax_number.foreground,
-        ui_theme.colors.syntax_function.foreground,
-        ui_theme.colors.syntax_type.foreground,
-        ui_theme.colors.syntax_operator.foreground,
+    let accents = [
         ui_theme.colors.agent_transcript_user.foreground,
-        ui_theme.colors.agent_transcript_error.foreground,
+        ui_theme.colors.agent_transcript_command.foreground,
+        ui_theme.colors.syntax_string.foreground,
+    ];
+    let series = [
+        accents[0], accents[1], accents[2], accents[0], accents[1], accents[2], accents[0],
+        accents[1],
     ];
     let mut theme = AsciiColorTheme::default_dark()
         .with_role(AsciiColorRole::Text, text)
-        .with_role(AsciiColorRole::MutedText, muted)
+        .with_role(AsciiColorRole::MutedText, text)
         .with_role(AsciiColorRole::NodeBorder, structural)
         .with_role(AsciiColorRole::GroupBorder, structural)
-        .with_role(AsciiColorRole::EdgeLine, muted)
-        .with_role(AsciiColorRole::EdgeArrow, accent)
+        .with_role(AsciiColorRole::EdgeLine, structural)
+        .with_role(
+            AsciiColorRole::EdgeArrow,
+            terminal_color_to_ascii_rgb(accents[0]),
+        )
         .with_role(AsciiColorRole::EdgeLabel, text)
-        .with_role(AsciiColorRole::Junction, muted)
-        .with_role(AsciiColorRole::SequenceLifeline, muted)
-        .with_role(AsciiColorRole::SequenceActivation, accent)
+        .with_role(AsciiColorRole::Junction, structural)
+        .with_role(AsciiColorRole::SequenceLifeline, structural)
+        .with_role(
+            AsciiColorRole::SequenceActivation,
+            terminal_color_to_ascii_rgb(accents[0]),
+        )
         .with_role(AsciiColorRole::SequenceFrame, structural)
-        .with_role(AsciiColorRole::ChartAxis, muted);
+        .with_role(AsciiColorRole::ChartAxis, structural);
     for (index, color) in series.into_iter().enumerate() {
         theme = theme.with_role(
             AsciiColorRole::ChartSeries(index),
@@ -334,6 +337,79 @@ mod tests {
         assert!(!options.sequence_mirror_actors);
         assert_eq!(options.max_grid_cells, MAX_MERMAID_GRID_CELLS);
         assert_eq!(options.color_mode, AsciiColorMode::TrueColor);
+    }
+
+    /// Verifies readable Mermaid labels remain on the neutral content
+    /// foreground while structures and chart data use a compact active-theme
+    /// accent set on both dark and light surfaces.
+    #[test]
+    fn mermaid_palette_separates_neutral_labels_from_compact_accents() {
+        let mut dark_definition =
+            mez_mux::theme::builtin_ui_theme_definition("deepforest").unwrap();
+        for (slot, value) in [
+            ("syntax_plain_fg", "#010203"),
+            ("agent_transcript_status_fg", "#040506"),
+            ("agent_transcript_user_fg", "#070809"),
+            ("agent_transcript_command_fg", "#0a0b0c"),
+            ("syntax_string_fg", "#0d0e0f"),
+        ] {
+            dark_definition
+                .colors
+                .insert(slot.to_string(), value.to_string());
+        }
+        let dark = mez_mux::theme::resolve_ui_theme("mermaid-dark-palette", dark_definition)
+            .expect("custom dark Mermaid theme should resolve");
+        let dark_palette = mermaid_color_theme(&dark);
+        let neutral = terminal_color_to_ascii_rgb(dark.colors.syntax_plain.foreground);
+        let structural =
+            terminal_color_to_ascii_rgb(super::super::text::markdown_structural_foreground(&dark));
+        let user = terminal_color_to_ascii_rgb(dark.colors.agent_transcript_user.foreground);
+        let command = terminal_color_to_ascii_rgb(dark.colors.agent_transcript_command.foreground);
+        let string = terminal_color_to_ascii_rgb(dark.colors.syntax_string.foreground);
+        for role in [
+            AsciiColorRole::Text,
+            AsciiColorRole::MutedText,
+            AsciiColorRole::EdgeLabel,
+        ] {
+            assert_eq!(dark_palette.color_for(role), neutral);
+        }
+        for role in [
+            AsciiColorRole::NodeBorder,
+            AsciiColorRole::GroupBorder,
+            AsciiColorRole::EdgeLine,
+            AsciiColorRole::Junction,
+            AsciiColorRole::SequenceLifeline,
+            AsciiColorRole::SequenceFrame,
+            AsciiColorRole::ChartAxis,
+        ] {
+            assert_eq!(dark_palette.color_for(role), structural);
+        }
+        assert_eq!(dark_palette.color_for(AsciiColorRole::ChartSeries(0)), user);
+        assert_eq!(
+            dark_palette.color_for(AsciiColorRole::ChartSeries(1)),
+            command
+        );
+        assert_eq!(
+            dark_palette.color_for(AsciiColorRole::ChartSeries(2)),
+            string
+        );
+        assert_eq!(dark_palette.color_for(AsciiColorRole::ChartSeries(3)), user);
+
+        let light_definition =
+            mez_mux::theme::builtin_ui_theme_definition("gruvbox_light").unwrap();
+        let light = mez_mux::theme::resolve_ui_theme("mermaid-light-palette", light_definition)
+            .expect("custom light Mermaid theme should resolve");
+        let light_palette = mermaid_color_theme(&light);
+        let light_neutral = terminal_color_to_ascii_rgb(light.colors.syntax_plain.foreground);
+        assert_eq!(light_palette.color_for(AsciiColorRole::Text), light_neutral);
+        assert_eq!(
+            light_palette.color_for(AsciiColorRole::MutedText),
+            light_neutral
+        );
+        assert_eq!(
+            light_palette.color_for(AsciiColorRole::EdgeLabel),
+            light_neutral
+        );
     }
 
     /// Verifies active themes preserve diagram geometry while changing only
