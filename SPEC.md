@@ -795,7 +795,10 @@ default pane title. When the host exposes foreground process-group metadata,
 automatically derived pane titles SHOULD reflect the active non-shell foreground
 program name when no user-defined title is pinned. Explicit pane titles assigned
 by a user or agent command MUST remain stable until another explicit pane-title
-assignment replaces them. A window title MAY be derived from the active pane
+assignment replaces them. Terminal-originated title changes MUST require a fresh
+OSC title event in the current output transaction; retained terminal parser title
+state MUST NOT override a title restored after the emitting foreground process
+exits. A window title MAY be derived from the active pane
 title while the window uses a generated or default name; an explicit non-default
 window name MUST remain stable until a later user or agent rename replaces it.
 Mouse clicks on a rendered group bar, window frame, or status bar MUST be

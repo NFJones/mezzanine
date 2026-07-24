@@ -168,7 +168,6 @@ impl RuntimeSessionService {
                 &transaction_bytes,
             )?;
         let (
-            title,
             activity_events,
             bell_events,
             previous_render_alternate_active,
@@ -193,7 +192,6 @@ impl RuntimeSessionService {
             let _ = screen.drain_osc_events();
             let terminal_response_bytes = screen.drain_terminal_response_bytes();
             (
-                screen.title().map(ToOwned::to_owned),
                 screen
                     .activity_events()
                     .saturating_sub(previous_activity_events),
@@ -258,9 +256,6 @@ impl RuntimeSessionService {
                 title,
                 foreground_group,
             )?
-        } else if let Some(title) = title {
-            self.session
-                .set_pane_title_from_terminal(output.pane_id.as_str(), title)?
         } else {
             false
         };

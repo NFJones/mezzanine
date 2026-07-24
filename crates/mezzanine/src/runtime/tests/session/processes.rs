@@ -930,6 +930,58 @@ fn runtime_pane_program_title_stays_sticky_until_foreground_process_changes() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies ordinary output cannot reapply a retained OSC title after its
+/// foreground program exits.
+///
+/// A terminal parser retains the most recent OSC title, but that retained state
+/// is not a new title mutation. After foreground metadata restores the shell
+/// title, prompt output must therefore leave that restored title unchanged.
+#[test]
+fn runtime_pane_title_does_not_reapply_stale_osc_title_after_foreground_exit() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+
+    service
+        .apply_pane_foreground_process_event("%1", "ssh", 4242, None)
+        .unwrap();
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid,
+                bytes: b"\x1b]2;remote-host\x07".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid,
+                bytes: b"shell$ ".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .session()
+            .active_window()
+            .unwrap()
+            .active_pane()
+            .title,
+        "shell"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies async pane write failures settle shell-backed file actions.
 ///
 /// File mutations are sent through the pane shell as generated transactions. If
