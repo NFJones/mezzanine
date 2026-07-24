@@ -11,7 +11,16 @@ use mez_mux::layout::{Size, SplitDirection, Window};
 use mez_mux::presentation::ClientViewRole;
 use mez_mux::presentation::TerminalFramePosition;
 use mez_mux::theme::{BUILTIN_UI_THEME_NAMES, builtin_ui_theme_definition, resolve_ui_theme};
-use mez_terminal::TerminalColor;
+use mez_terminal::{TerminalColor, TerminalStyleSpan};
+
+/// Returns whether additive style composition makes one rendered column bold.
+fn rendered_column_is_bold(spans: &[TerminalStyleSpan], column: usize) -> bool {
+    spans.iter().any(|span| {
+        span.rendition.bold
+            && column >= span.start
+            && column < span.start.saturating_add(span.length)
+    })
+}
 
 /// Verifies that the built-in pane frame shows agent model, reasoning, and
 /// state status on the right side only while the pane is in agent mode.
@@ -451,6 +460,77 @@ fn render_reduced_motion_agent_status_uses_static_running_style() {
         unique_backgrounds,
         vec![config.ui_theme.colors.agent_status_running.background]
     );
+}
+
+/// Verifies agent status pills merged into a focused neighbor's divider do not
+/// inherit the divider's bold emphasis. Both static and animated status styles
+/// must own their cells while adjacent divider glyphs remain emphasized.
+#[test]
+fn render_merged_agent_status_pills_do_not_inherit_active_divider_bold() {
+    for reduced_motion in [true, false] {
+        let mut ids = IdFactory::default();
+        let mut window = Window::new(&mut ids, 0, "main", Size::new(64, 9).unwrap());
+        window
+            .split_active(&mut ids, SplitDirection::Horizontal)
+            .unwrap();
+        window
+            .split_active(&mut ids, SplitDirection::Horizontal)
+            .unwrap();
+        let mut frame_context = TerminalFrameContext {
+            reduced_motion,
+            animation_tick_ms: 720,
+            ..TerminalFrameContext::default()
+        };
+        for pane in window.panes() {
+            frame_context.panes.insert(
+                pane.id.to_string(),
+                TerminalPaneFrameContext {
+                    mode: Some("agent".to_string()),
+                    agent_status: Some("running".to_string()),
+                    ..TerminalPaneFrameContext::default()
+                },
+            );
+        }
+        let config = TerminalClientLoopConfig {
+            frame_context,
+            window_frames_enabled: false,
+            pane_frame_template: DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+            ..TerminalClientLoopConfig::default()
+        };
+
+        for (focused_pane, affected_pane) in [("0", "1"), ("1", "2")] {
+            window.select_pane(focused_pane).unwrap();
+            let view = render_attached_client_view(
+                ClientViewRole::Primary,
+                &window,
+                &BTreeMap::new(),
+                &config,
+                window.size,
+            )
+            .unwrap()
+            .unwrap();
+            let frame_prefix = format!(" {affected_pane} shell");
+            let row = view
+                .lines
+                .iter()
+                .position(|line| line.contains(&frame_prefix) && line.contains("running"))
+                .expect("affected pane frame should merge into the active divider");
+            let status_column = display_column_for_fragment(&view.lines[row], "running");
+            assert!(
+                !rendered_column_is_bold(&view.line_style_spans[row], status_column),
+                "merged status inherited active-divider bold with reduced_motion={reduced_motion}: {:?}",
+                view.line_style_spans[row]
+            );
+            let divider_column = view.lines[row]
+                .chars()
+                .position(|ch| ch == '\u{2500}')
+                .expect("merged frame should retain divider fill outside its pills");
+            assert!(
+                rendered_column_is_bold(&view.line_style_spans[row], divider_column),
+                "active divider outside the status pill should remain bold"
+            );
+        }
+    }
 }
 
 /// Verifies that a parent agent waiting on joined child agents renders an

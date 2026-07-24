@@ -753,9 +753,12 @@ attached-terminal output MUST NOT apply a background color to horizontal
 divider fill cells or divider junction cells; those cells MUST remain
 foreground-only. Pane title, working-directory, model, reasoning, status, and
 other pill regions embedded in a merged divider row MAY retain their themed
-foreground/background styling. When right-aligned pane-frame status content is
-present, the renderer MUST reserve the rightmost available cell for horizontal
-border fill whenever the pane frame is wider than one cell.
+foreground/background styling. Semantic status pills embedded in a merged
+divider row MUST own all rendition attributes in their cells and MUST NOT
+inherit bold or other structural emphasis from the underlying divider. When
+right-aligned pane-frame status content is present, the renderer MUST reserve
+the rightmost available cell for horizontal border fill whenever the pane frame
+is wider than one cell.
 Vertical separator glyphs MUST remain foreground-only unless they are part of a
 distinct interactive pill or status region rather than a divider cell.
 

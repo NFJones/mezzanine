@@ -213,6 +213,13 @@ pub(in crate::host::terminal::render) fn write_styled_merged_pane_frames_on_divi
                     rendition: pane_frame_rendition(pane, pane_frame.style, ui_theme),
                 });
             }
+            for segment in &layout.right_status_segments {
+                mask_style_spans_in_range(
+                    spans,
+                    placement.column_start.saturating_add(segment.start),
+                    segment.width,
+                );
+            }
             spans.extend(pane_frame_right_status_style_spans(
                 &layout,
                 placement.column_start,
@@ -228,6 +235,40 @@ pub(in crate::host::terminal::render) fn write_styled_merged_pane_frames_on_divi
             ));
         }
     }
+}
+
+/// Removes existing style contributions beneath a semantic frame segment.
+///
+/// Merged pane frames share rows with structural dividers. Semantic status
+/// pills own every rendition attribute in their cells, so divider emphasis
+/// must be clipped around those cells before the pill styles are overlaid.
+fn mask_style_spans_in_range(spans: &mut Vec<TerminalStyleSpan>, start: usize, length: usize) {
+    if length == 0 {
+        return;
+    }
+    let end = start.saturating_add(length);
+    let mut masked = Vec::with_capacity(spans.len().saturating_add(1));
+    for span in spans.drain(..) {
+        let span_end = span.start.saturating_add(span.length);
+        if span_end <= start || span.start >= end {
+            masked.push(span);
+            continue;
+        }
+        if span.start < start {
+            masked.push(TerminalStyleSpan {
+                length: start.saturating_sub(span.start),
+                ..span
+            });
+        }
+        if span_end > end {
+            masked.push(TerminalStyleSpan {
+                start: end,
+                length: span_end.saturating_sub(end),
+                ..span
+            });
+        }
+    }
+    *spans = masked;
 }
 
 /// Writes a pane frame into a divider row as a complete status-bar region.
