@@ -32,7 +32,7 @@ clippy:
 
 # Run tests
 test:
-    cargo test --workspace --all-targets --all-features
+    cargo test --workspace --all-targets --all-features --no-fail-fast --quiet
 
 # Clean build artifacts
 clean:
