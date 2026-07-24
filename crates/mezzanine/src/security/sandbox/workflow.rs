@@ -55,7 +55,7 @@ pub(crate) enum SandboxDiagnosticSeverity {
 pub(crate) struct SandboxWorkflowDiagnostic {
     /// Stable diagnostic identity.
     pub(crate) id: &'static str,
-    /// Diagnostic severity used by doctor exit semantics.
+    /// Diagnostic severity reported in sandbox status output.
     pub(crate) severity: SandboxDiagnosticSeverity,
     /// Short user-facing description.
     pub(crate) summary: String,
@@ -147,7 +147,7 @@ pub(crate) struct SandboxProjectState {
 /// Confirmation data shared with future mutating workflows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SandboxWorkflowConfirmation {
-    /// Read-only status and doctor plans never require confirmation.
+    /// Read-only status plans never require confirmation.
     pub(crate) required: bool,
     /// Human-readable confirmation reason for future mutations.
     pub(crate) reason: Option<String>,
@@ -172,27 +172,6 @@ pub(crate) struct SandboxWorkflowPlan {
     pub(crate) diagnostics: Vec<SandboxWorkflowDiagnostic>,
 }
 
-impl SandboxWorkflowPlan {
-    /// Returns doctor exit semantics: 0 healthy, 1 warning, or 2 error.
-    pub(crate) fn doctor_exit_code(&self) -> u8 {
-        if self
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == SandboxDiagnosticSeverity::Error)
-        {
-            2
-        } else if self
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.severity == SandboxDiagnosticSeverity::Warning)
-        {
-            1
-        } else {
-            0
-        }
-    }
-}
-
 /// Returns the stable effective execution boundary after approval policy is
 /// applied to the configured sandbox backend.
 pub(crate) fn effective_sandbox_boundary(
@@ -206,7 +185,7 @@ pub(crate) fn effective_sandbox_boundary(
     }
 }
 
-/// Builds one read-only status/doctor plan from already-loaded local state.
+/// Builds one read-only status plan from already-loaded local state.
 pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> SandboxWorkflowPlan {
     let configured_sandbox = request.permissions.sandbox.as_str().to_string();
     let approval_policy = request.permissions.authorization.approval_policy;
@@ -528,7 +507,6 @@ mod tests {
         assert!(!plan.effective.managed_home_active);
         assert!(plan.configured.toolchains.is_empty());
         assert_eq!(plan.effective.toolchain_state, "not-configured");
-        assert_eq!(plan.doctor_exit_code(), 0);
         assert!(!config_root.exists());
         let _ = fs::remove_dir_all(root);
     }
@@ -589,7 +567,7 @@ mod tests {
     }
 
     /// Verifies host access remains visibly distinct from configured
-    /// Bubblewrap and produces warning-level doctor status.
+    /// Bubblewrap and reports the policy-bypass diagnostic.
     #[test]
     fn host_access_reports_effective_host_boundary() {
         let root = std::env::temp_dir();
@@ -629,7 +607,6 @@ mod tests {
 
         assert_eq!(plan.configured.sandbox, "bubblewrap");
         assert_eq!(plan.effective.sandbox, "host");
-        assert_eq!(plan.doctor_exit_code(), 1);
         assert!(
             plan.diagnostics
                 .iter()

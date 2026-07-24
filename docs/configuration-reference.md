@@ -768,13 +768,12 @@ and `host-credentials-hidden`. These describe likely denial causes without
 including raw Bubblewrap arguments, environment values, or unrelated host paths.
 
 Use `mez sandbox status [PATH] [--verbose]` for a standalone configured/effective
-projection and `mez sandbox doctor [PATH]` for stable readiness diagnostics.
-Global `--json` emits the versioned structured projection. Doctor exits 0 when
-healthy, 1 for warnings, and 2 for errors. These commands are intentionally
-read-only: they inspect but do not migrate configuration, change project trust,
-create managed homes, or run/cache the pane-specific Bubblewrap probe. Only a
-direct user may apply policy changes; diagnostics never broaden authority or
-select host execution automatically.
+projection with stable readiness diagnostics. Global `--json` emits the
+versioned structured projection. This command is intentionally read-only: it
+inspects but does not migrate configuration, change project trust, create
+managed homes, or run/cache the pane-specific Bubblewrap probe. Only a direct
+user may apply policy changes; diagnostics never broaden authority or select
+host execution automatically.
 
 Managed-home usage and lifecycle are available through `mez sandbox cache`.
 `cache status [PATH]` is read-only and reports existence, regular-file bytes,

@@ -390,11 +390,9 @@ Current support reflects behavior implemented in the repository today.
   isolated network, authority-only mounts, and hidden host credentials.
 - `mez sandbox status [PATH] [--verbose]` reports configured and effective
   sandbox state, project discovery and trust provenance, local executable and
-  managed-home readiness, and pane-specific probe freshness. `mez sandbox
-  doctor [PATH]` emits the same projection with stable diagnostics and exits 0
-  for healthy state, 1 for warnings, or 2 for errors. Both commands are
-  strictly read-only: they do not migrate configuration, mutate trust, create
-  managed homes, or populate capability-probe caches.
+  managed-home readiness, pane-specific probe freshness, and stable
+  diagnostics. It is strictly read-only: it does not migrate configuration,
+  mutate trust, create managed homes, or populate capability-probe caches.
 - `mez sandbox plan`, `enable`, `preset apply`, `disable`, and
   `trust-current-project` provide direct-user guided setup. Plans and
   `--dry-run` never write; mutations require confirmation and noninteractive

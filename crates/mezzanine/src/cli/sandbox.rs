@@ -1,4 +1,4 @@
-//! Direct-user sandbox status and diagnostic commands.
+//! Direct-user sandbox status and setup commands.
 //!
 //! These commands assemble the same typed sandbox workflow projection used by
 //! future setup operations while remaining strictly read-only. They do not
@@ -39,7 +39,7 @@ pub(super) struct SandboxCliArgs {
     command: Option<SandboxCliCommand>,
 }
 
-/// Read-only sandbox workflow commands.
+/// Sandbox workflow commands.
 #[derive(Debug, Clone, Subcommand)]
 enum SandboxCliCommand {
     /// Reports configured and effective sandbox state.
@@ -49,11 +49,6 @@ enum SandboxCliCommand {
         /// Includes stable diagnostics and remedies in plain output.
         #[arg(long)]
         verbose: bool,
-    },
-    /// Diagnoses sandbox readiness without changing local state.
-    Doctor {
-        /// Project path to inspect instead of the current directory.
-        path: Option<PathBuf>,
     },
     /// Previews a code-owned sandbox preset without changing local state.
     Plan(SandboxSetupArgs),
@@ -270,7 +265,7 @@ pub(super) fn run_sandbox<W: Write>(
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<u8> {
-    let (path, input_source, doctor, verbose) = match args.command {
+    let (path, input_source, verbose) = match args.command {
         Some(SandboxCliCommand::Cache { command }) => {
             return run_sandbox_cache(command, env, output_format, stdout);
         }
@@ -331,24 +326,13 @@ pub(super) fn run_sandbox<W: Write>(
             std::env::current_dir()?,
             ProjectRootInputSource::CurrentDirectory,
             false,
-            false,
         ),
         Some(SandboxCliCommand::Status { path, verbose }) => match path {
-            Some(path) => (path, ProjectRootInputSource::ExplicitPath, false, verbose),
+            Some(path) => (path, ProjectRootInputSource::ExplicitPath, verbose),
             None => (
                 std::env::current_dir()?,
                 ProjectRootInputSource::CurrentDirectory,
-                false,
                 verbose,
-            ),
-        },
-        Some(SandboxCliCommand::Doctor { path }) => match path {
-            Some(path) => (path, ProjectRootInputSource::ExplicitPath, true, true),
-            None => (
-                std::env::current_dir()?,
-                ProjectRootInputSource::CurrentDirectory,
-                true,
-                true,
             ),
         },
     };
@@ -398,7 +382,7 @@ pub(super) fn run_sandbox<W: Write>(
     } else {
         write!(stdout, "{}", sandbox_plan_plain_text(&plan, verbose))?;
     }
-    Ok(if doctor { plan.doctor_exit_code() } else { 0 })
+    Ok(0)
 }
 
 /// Runs one read-only or explicitly confirmed managed-home cache workflow.

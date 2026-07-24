@@ -2835,19 +2835,16 @@ mounts, the synthetic home, the minimal executable path, isolated networking,
 and hidden host credentials. Diagnostics MUST NOT expose raw Bubblewrap
 arguments, environment values, or unrelated host paths.
 
-`mez sandbox status [PATH] [--verbose]` and `mez sandbox doctor [PATH]` MUST
-build one deterministic, read-only workflow projection containing configured
-and effective sandbox boundaries, approval policy, canonical project-root
-discovery and source, trust state, scope provenance, Bubblewrap executable and
-pane-probe state, managed-home readiness, byte usage and active state, network
-isolation, reload freshness, and stable diagnostics. Inspection MUST NOT migrate
-or persist configuration, mutate trust, create managed homes, or populate probe
-caches. Doctor diagnostics
-MUST contain stable `id`, `severity`, `summary`, `details`, `remedy`,
-`affected_path`, and `source` fields and MUST use process status 0 for healthy
-state, 1 when warnings are present, and 2 when errors are present. Remedies MUST
-remain direct-user actions and MUST NOT suggest automatic authority broadening
-or host fallback.
+`mez sandbox status [PATH] [--verbose]` MUST build one deterministic, read-only
+workflow projection containing configured and effective sandbox boundaries,
+approval policy, canonical project-root discovery and source, trust state, scope
+provenance, Bubblewrap executable and pane-probe state, managed-home readiness,
+byte usage and active state, network isolation, reload freshness, and stable
+diagnostics. Inspection MUST NOT migrate or persist configuration, mutate trust,
+create managed homes, or populate probe caches. Diagnostics MUST contain stable
+`id`, `severity`, `summary`, `details`, `remedy`, `affected_path`, and `source`
+fields. Remedies MUST remain direct-user actions and MUST NOT suggest automatic
+authority broadening or host fallback.
 
 `mez sandbox cache status [PATH]` MUST inspect the selected project/profile home
 without creating it. `mez sandbox cache clear [PATH]` and `mez sandbox cache

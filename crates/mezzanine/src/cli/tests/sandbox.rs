@@ -1,6 +1,6 @@
-//! Regression coverage for read-only sandbox workflow commands.
+//! Regression coverage for sandbox workflow commands.
 //!
-//! These tests protect the status/doctor output contract and, critically, the
+//! These tests protect the status output contract and, critically, the
 //! invariant that inspection never migrates configuration, creates runtime
 //! directories, writes trust state, prepares managed homes, or probes Bubblewrap.
 
@@ -55,89 +55,6 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     assert!(!home.join("runtime/mez-0").exists());
 
     let _ = fs::remove_dir_all(home);
-}
-
-/// Verifies doctor returns the documented warning and error statuses while
-/// retaining stable diagnostic identifiers in machine-readable output.
-#[test]
-fn sandbox_doctor_uses_stable_zero_one_two_exit_semantics() {
-    let (warning_env, warning_home) = test_env("sandbox-doctor-warning");
-    let warning_project = warning_home.join("project");
-    fs::create_dir_all(&warning_project).unwrap();
-    let mut warning_stdout = Vec::new();
-    let mut warning_stderr = Vec::new();
-
-    let warning_code = block_on_cli_code(crate::cli::run_with(
-        with_json_output(vec![
-            "mez".to_string(),
-            "sandbox".to_string(),
-            "doctor".to_string(),
-            warning_project.to_string_lossy().into_owned(),
-        ]),
-        warning_env,
-        false,
-        &mut warning_stdout,
-        &mut warning_stderr,
-    ))
-    .unwrap();
-
-    assert_eq!(warning_code, 1);
-    let warning: serde_json::Value = serde_json::from_slice(&warning_stdout).unwrap();
-    assert!(
-        warning["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| {
-                diagnostic["id"] == "sandbox.project-root-fallback"
-                    && diagnostic["severity"] == "warning"
-            })
-    );
-    assert!(warning_stderr.is_empty());
-
-    let (error_env, error_home) = test_env("sandbox-doctor-error");
-    let config_root = error_home.join(".config/mezzanine");
-    fs::create_dir_all(&config_root).unwrap();
-    fs::write(
-        config_root.join("config.toml"),
-        "version = 25\n[permissions]\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\n[permissions.bubblewrap]\nexecutable = \"/definitely/missing/bwrap\"\n",
-    )
-    .unwrap();
-    let error_project = error_home.join("project");
-    fs::create_dir_all(error_project.join(".git")).unwrap();
-    let mut error_stdout = Vec::new();
-    let mut error_stderr = Vec::new();
-
-    let error_code = block_on_cli_code(crate::cli::run_with(
-        with_json_output(vec![
-            "mez".to_string(),
-            "sandbox".to_string(),
-            "doctor".to_string(),
-            error_project.to_string_lossy().into_owned(),
-        ]),
-        error_env,
-        false,
-        &mut error_stdout,
-        &mut error_stderr,
-    ))
-    .unwrap();
-
-    assert_eq!(error_code, 2);
-    let error: serde_json::Value = serde_json::from_slice(&error_stdout).unwrap();
-    assert!(
-        error["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| {
-                diagnostic["id"] == "sandbox.bubblewrap-executable-unavailable"
-                    && diagnostic["severity"] == "error"
-            })
-    );
-    assert!(error_stderr.is_empty());
-
-    let _ = fs::remove_dir_all(warning_home);
-    let _ = fs::remove_dir_all(error_home);
 }
 
 /// Toolchain detection reports canonical roots without creating or mutating
