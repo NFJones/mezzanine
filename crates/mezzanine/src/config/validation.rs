@@ -379,14 +379,26 @@ pub fn validate_config_text(
             diagnostics.push(ConfigDiagnostic { path, message });
         } else if let Some(message) = validate_theme_value(&path, &value) {
             diagnostics.push(ConfigDiagnostic { path, message });
-        } else if is_approval_policy_value_path(&path)
-            && !matches!(value.as_str(), "ask" | "auto-allow" | "full-access")
-        {
-            diagnostics.push(ConfigDiagnostic {
-                path,
-                message: "unsupported approval policy; use ask, auto-allow, or full-access"
-                    .to_string(),
-            });
+        } else if is_approval_policy_value_path(&path) {
+            if value == "host-access"
+                && (scope == ConfigScope::ProjectOverlay
+                    || is_model_profile_approval_policy_path(&path))
+            {
+                diagnostics.push(ConfigDiagnostic {
+                    path,
+                    message: "user_only_host_access: host-access is allowed only as the primary user approval policy"
+                        .to_string(),
+                });
+            } else if !matches!(
+                value.as_str(),
+                "ask" | "auto-allow" | "full-access" | "host-access"
+            ) {
+                diagnostics.push(ConfigDiagnostic {
+                    path,
+                    message: "unsupported approval policy; use ask, auto-allow, full-access, or host-access"
+                        .to_string(),
+                });
+            }
         } else if path == "agents.subagent_wait_policy"
             && !matches!(
                 value.as_str(),
@@ -447,10 +459,14 @@ pub fn validate_config_text(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn is_approval_policy_value_path(path: &str) -> bool {
-    path == "permissions.approval_policy"
-        || (path.starts_with("model_profiles.")
-            && path.ends_with(".approval_policy")
-            && path.split('.').count() == 3)
+    path == "permissions.approval_policy" || is_model_profile_approval_policy_path(path)
+}
+
+/// Reports whether a path is one model profile's approval policy.
+fn is_model_profile_approval_policy_path(path: &str) -> bool {
+    path.starts_with("model_profiles.")
+        && path.ends_with(".approval_policy")
+        && path.split('.').count() == 3
 }
 
 /// Runs the validate positive usize value operation for this subsystem.

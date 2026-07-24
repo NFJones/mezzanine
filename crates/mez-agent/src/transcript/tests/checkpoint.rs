@@ -41,6 +41,13 @@ fn agent_session_checkpoint_rejects_unknown_policy_values() {
     let mut checkpoint = valid_checkpoint();
     checkpoint.validate().unwrap();
 
+    checkpoint.approval_policy = Some("host-access".to_string());
+    checkpoint.validate().unwrap();
+
+    checkpoint.approval_policy = Some("host-everything".to_string());
+    assert!(checkpoint.validate().is_err());
+
+    checkpoint.approval_policy = Some("ask".to_string());
     checkpoint.log_level = "unknown".to_string();
     assert!(checkpoint.validate().is_err());
 }

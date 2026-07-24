@@ -191,6 +191,14 @@ fn permission_authority_comparison_classifies_broadening_and_narrowing() {
         PermissionAuthorityChange::Broadening
     );
     assert_eq!(
+        compare_approval_policy_authority(ApprovalPolicy::FullAccess, ApprovalPolicy::HostAccess),
+        PermissionAuthorityChange::Broadening
+    );
+    assert_eq!(
+        compare_approval_policy_authority(ApprovalPolicy::HostAccess, ApprovalPolicy::FullAccess),
+        PermissionAuthorityChange::Narrowing
+    );
+    assert_eq!(
         compare_approval_policy_authority(ApprovalPolicy::AutoAllow, ApprovalPolicy::Ask),
         PermissionAuthorityChange::Narrowing
     );
@@ -362,6 +370,27 @@ fn session_approvals_do_not_override_configured_denies() {
     assert_eq!(
         policy.evaluate_shell_command_with_approvals("rm -rf target", &approvals),
         RuleDecision::Forbid
+    );
+}
+
+/// Verifies host access bypasses ordinary prompts without overriding an
+/// explicit configured deny or converting it into host execution authority.
+#[test]
+fn host_access_keeps_explicit_command_denies_terminal() {
+    let mut policy = PermissionPolicy::default().with_approval_policy(ApprovalPolicy::HostAccess);
+    policy.add_rule(
+        CommandRule::new(["rm"], RuleDecision::Forbid, RuleMatch::Prefix)
+            .unwrap()
+            .with_scope(CommandRuleScope::Project),
+    );
+
+    assert_eq!(
+        policy.evaluate_shell_command("rm -rf target"),
+        RuleDecision::Forbid
+    );
+    assert_eq!(
+        policy.evaluate_shell_command("echo $(pwd)"),
+        RuleDecision::Allow
     );
 }
 

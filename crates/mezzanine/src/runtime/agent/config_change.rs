@@ -138,6 +138,26 @@ fn runtime_config_change_mutation_from_action(action: &AgentAction) -> Result<Co
     })
 }
 
+/// Reports whether a model-authored mutation attempts to select the
+/// primary-user-only host execution policy.
+fn runtime_config_change_requests_host_access(
+    setting_path: &str,
+    operation: &str,
+    value: Option<&str>,
+) -> bool {
+    let approval_policy_path = setting_path == "permissions.approval_policy"
+        || (setting_path.starts_with("model_profiles.")
+            && setting_path.ends_with(".approval_policy")
+            && setting_path.split('.').count() == 3);
+    approval_policy_path
+        && mez_agent::normalize_config_change_operation(operation)
+            .is_ok_and(mez_agent::ConfigChangeOperation::sets_value)
+        && matches!(
+            mez_agent::parse_config_change_value(value),
+            Ok(mez_agent::ConfigChangeValue::String(requested)) if requested == "host-access"
+        )
+}
+
 /// Converts one model-authored config-change value into a scalar config value.
 fn runtime_config_change_mutation_value(value: Option<&str>) -> Result<ConfigMutationValue> {
     match mez_agent::parse_config_change_value(value)? {
@@ -517,6 +537,15 @@ impl RuntimeSessionService {
                 ActionStatus::Denied,
                 "user_only_sandbox_policy",
                 "sandbox policy can only be changed directly by the user",
+            )?);
+        }
+        if runtime_config_change_requests_host_access(setting_path, operation, value.as_deref()) {
+            return Ok(ActionResult::failed(
+                turn,
+                action,
+                ActionStatus::Denied,
+                "user_only_host_access",
+                "host-access can only be selected directly by the primary user",
             )?);
         }
         let persist_path = self.ensure_agent_config_change_persist_path()?;

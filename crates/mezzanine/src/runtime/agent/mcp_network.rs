@@ -70,8 +70,7 @@ impl RuntimeSessionService {
                     &action,
                     mez_agent::ActionPlanningInput::default(),
                 );
-            let policy_allowed =
-                permission_policy.approval_policy == mez_agent::ApprovalPolicy::FullAccess;
+            let policy_allowed = permission_policy.approval_policy.bypasses_prompts();
             execution.action_results[index] =
                 self.execute_mcp_action_for_turn(turn, &action, auto_allowed || policy_allowed)?;
             executed = executed.saturating_add(1);
@@ -144,8 +143,7 @@ impl RuntimeSessionService {
                     &action,
                     mez_agent::ActionPlanningInput::default(),
                 );
-            let policy_allowed =
-                permission_policy.approval_policy == mez_agent::ApprovalPolicy::FullAccess;
+            let policy_allowed = permission_policy.approval_policy.bypasses_prompts();
             execution.action_results[index] = self
                 .execute_mcp_action_for_turn_async(turn, &action, auto_allowed || policy_allowed)
                 .await?;

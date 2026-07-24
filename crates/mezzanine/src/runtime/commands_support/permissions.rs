@@ -545,7 +545,7 @@ pub(crate) fn runtime_append_permission_audit(
     let Some(audit_log) = service.persistence.audit_log_mut() else {
         return Ok(());
     };
-    let record = AuditRecord::permission_decision(
+    let mut record = AuditRecord::permission_decision(
         service.session.id.to_string(),
         AuditActor {
             kind: "client".to_string(),
@@ -557,6 +557,9 @@ pub(crate) fn runtime_append_permission_audit(
         policy_mode,
         outcome.to_string(),
     );
+    if decision == ApprovalPolicy::HostAccess.as_str() {
+        record = record.with_metadata("authority_source", "primary-user");
+    }
     let _ = audit_log.append(record)?;
     Ok(())
 }
@@ -620,6 +623,7 @@ pub(crate) fn runtime_parse_approval_policy(
         "ask" => Ok(ApprovalPolicy::Ask),
         "auto-allow" | "auto_allow" => Ok(ApprovalPolicy::AutoAllow),
         "full-access" | "full_access" => Ok(ApprovalPolicy::FullAccess),
+        "host-access" | "host_access" => Ok(ApprovalPolicy::HostAccess),
         _ => Err(()),
     }
 }
@@ -646,6 +650,7 @@ pub(crate) fn runtime_approval_policy_name(policy: ApprovalPolicy) -> &'static s
         ApprovalPolicy::Ask => "ask",
         ApprovalPolicy::AutoAllow => "auto-allow",
         ApprovalPolicy::FullAccess => "full-access",
+        ApprovalPolicy::HostAccess => "host-access",
     }
 }
 

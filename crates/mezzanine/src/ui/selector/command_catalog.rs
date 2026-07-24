@@ -342,7 +342,8 @@ pub(super) fn agent_argument_candidates(
         "latency" => value_candidates(&["slow", "default", "fast"]),
         "log-level" => value_candidates(&["normal", "verbose", "debug", "trace"]),
         "approval" | "permissions" => {
-            let mut candidates = value_candidates(&["ask", "auto-allow", "full-access"]);
+            let mut candidates =
+                value_candidates(&["ask", "auto-allow", "full-access", "host-access"]);
             candidates.extend(value_candidates(&[
                 "add", "remove", "list", "rules", "allow", "deny", "prompt", "bypass",
             ]));

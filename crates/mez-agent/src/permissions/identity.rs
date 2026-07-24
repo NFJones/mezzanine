@@ -32,6 +32,9 @@ pub enum ApprovalPolicy {
     AutoAllow,
     /// Treats prompting actions as allowed without interaction.
     FullAccess,
+    /// Treats prompts as allowed and authorizes local shell execution outside
+    /// a configured product sandbox when the primary user selected this mode.
+    HostAccess,
 }
 
 impl ApprovalPolicy {
@@ -41,7 +44,19 @@ impl ApprovalPolicy {
             Self::Ask => "ask",
             Self::AutoAllow => "auto-allow",
             Self::FullAccess => "full-access",
+            Self::HostAccess => "host-access",
         }
+    }
+
+    /// Returns whether this policy bypasses ordinary fresh approval prompts.
+    pub const fn bypasses_prompts(self) -> bool {
+        matches!(self, Self::FullAccess | Self::HostAccess)
+    }
+
+    /// Returns whether this primary-user policy authorizes bypassing a
+    /// configured sandbox for local shell execution.
+    pub const fn bypasses_sandbox(self) -> bool {
+        matches!(self, Self::HostAccess)
     }
 }
 
@@ -118,6 +133,13 @@ mod tests {
         assert_eq!(ApprovalPolicy::Ask.as_str(), "ask");
         assert_eq!(ApprovalPolicy::AutoAllow.as_str(), "auto-allow");
         assert_eq!(ApprovalPolicy::FullAccess.as_str(), "full-access");
+        assert_eq!(ApprovalPolicy::HostAccess.as_str(), "host-access");
+        assert!(!ApprovalPolicy::Ask.bypasses_prompts());
+        assert!(!ApprovalPolicy::AutoAllow.bypasses_prompts());
+        assert!(ApprovalPolicy::FullAccess.bypasses_prompts());
+        assert!(ApprovalPolicy::HostAccess.bypasses_prompts());
+        assert!(!ApprovalPolicy::FullAccess.bypasses_sandbox());
+        assert!(ApprovalPolicy::HostAccess.bypasses_sandbox());
     }
 
     /// Verifies permission decisions retain their restrictive ordering because

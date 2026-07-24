@@ -709,9 +709,10 @@ impl PermissionPolicy {
         decision: RuleDecision,
         _cwd_trusted: bool,
     ) -> RuleDecision {
-        match (self.approval_policy, decision) {
-            (ApprovalPolicy::FullAccess, RuleDecision::Prompt) => RuleDecision::Allow,
-            _ => decision,
+        if self.approval_policy.bypasses_prompts() && decision == RuleDecision::Prompt {
+            RuleDecision::Allow
+        } else {
+            decision
         }
     }
 
@@ -993,5 +994,6 @@ pub(super) fn approval_policy_authority_rank(policy: ApprovalPolicy) -> u8 {
         ApprovalPolicy::Ask => 0,
         ApprovalPolicy::AutoAllow => 1,
         ApprovalPolicy::FullAccess => 2,
+        ApprovalPolicy::HostAccess => 3,
     }
 }

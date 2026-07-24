@@ -601,8 +601,9 @@ pub(super) fn runtime_config_approval_policy(value: &str) -> Result<ApprovalPoli
         "ask" => Ok(ApprovalPolicy::Ask),
         "auto-allow" | "auto_allow" => Ok(ApprovalPolicy::AutoAllow),
         "full-access" | "full_access" => Ok(ApprovalPolicy::FullAccess),
+        "host-access" | "host_access" => Ok(ApprovalPolicy::HostAccess),
         _ => Err(MezError::config(
-            "unsupported approval policy; use ask, auto-allow, or full-access",
+            "unsupported approval policy; use ask, auto-allow, full-access, or host-access",
         )),
     }
 }

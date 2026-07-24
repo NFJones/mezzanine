@@ -810,6 +810,7 @@ impl RuntimeSessionService {
                     "ask".to_string(),
                     "auto-allow".to_string(),
                     "full-access".to_string(),
+                    "host-access".to_string(),
                 ]
             }
             PaneAgentStatusField::Latency => {

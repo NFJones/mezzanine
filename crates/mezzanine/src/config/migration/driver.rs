@@ -11,12 +11,13 @@ use super::v13_v19::{
 };
 use super::v20_v21::migrate_v20_to_v21;
 use super::v21_v22::migrate_v21_to_v22;
+use super::v22_v23::migrate_v22_to_v23;
 use super::{
     ConfigFormat, MezError, Path, Result, extract_config_values, fs, write_private_config_file,
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 22;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 23;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +146,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             21 => {
                 current_text = migrate_v21_to_v22(format, &current_text)?;
                 current_version = 22;
+            }
+            22 => {
+                current_text = migrate_v22_to_v23(format, &current_text)?;
+                current_version = 23;
             }
             unsupported => {
                 return Err(MezError::config(format!(

@@ -57,7 +57,7 @@ pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "permissions" => {
             Some(" <status|preset|approval-policy|list|allow|deny|prompt|remove|bypass>")
         }
-        "approval" => Some(" <ask|auto-allow|full-access>"),
+        "approval" => Some(" <ask|auto-allow|full-access|host-access>"),
         "approve" => Some(" <approval-id|latest> [once|session|project|global]"),
         "trust" => Some(" <project-root|latest|list|pending>"),
         "model" => Some(" [--routing] <list|model> [reasoning]"),

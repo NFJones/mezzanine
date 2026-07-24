@@ -497,6 +497,40 @@ fn runtime_agent_shell_approval_command_mutates_live_policy() {
     );
 }
 
+/// Verifies only the attached primary user's runtime command path can select
+/// host access and that the canonical policy is retained as a live override.
+#[test]
+fn runtime_agent_shell_approval_command_selects_host_access() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-host-access","method":"agent/shell/command","params":{"idempotency_key":"agent-host-access","input":"/approval host-access"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""kind":"mutated""#), "{response}");
+    assert!(response.contains("requested=host-access"), "{response}");
+    assert!(
+        response.contains("authority_change=broadening"),
+        "{response}"
+    );
+    assert!(
+        response.contains("approved_by=primary-command"),
+        "{response}"
+    );
+    assert_eq!(
+        service.permission_policy().approval_policy,
+        ApprovalPolicy::HostAccess
+    );
+}
+
 /// Verifies terse slash-command display output uses transient status feedback.
 ///
 /// One-line status acknowledgements should stay out of the durable agent pane

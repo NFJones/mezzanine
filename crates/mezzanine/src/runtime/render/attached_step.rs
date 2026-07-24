@@ -30,6 +30,7 @@ impl RuntimeSessionService {
             mez_agent::ApprovalPolicy::Ask => "ask",
             mez_agent::ApprovalPolicy::AutoAllow => "auto-allow",
             mez_agent::ApprovalPolicy::FullAccess => "full-access",
+            mez_agent::ApprovalPolicy::HostAccess => "host-access",
         }
     }
 

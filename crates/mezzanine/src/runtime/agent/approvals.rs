@@ -409,7 +409,7 @@ impl RuntimeSessionService {
             })?;
         let permission_policy = self.permission_policy_for_turn(turn);
         if permission_policy.approval_bypass()
-            || permission_policy.approval_policy == mez_agent::ApprovalPolicy::FullAccess
+            || permission_policy.approval_policy.bypasses_prompts()
         {
             return Ok(true);
         }

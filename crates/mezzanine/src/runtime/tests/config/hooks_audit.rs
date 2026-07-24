@@ -125,13 +125,18 @@ fn runtime_applies_audit_log_from_config_layers() {
         .enter_or_resume("%1")
         .unwrap();
     let output = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"audit-approval","method":"agent/shell/command","params":{"idempotency_key":"audit-approval","input":"/approval full-access"}}"#,
+        r#"{"jsonrpc":"2.0","id":"audit-approval","method":"agent/shell/command","params":{"idempotency_key":"audit-approval","input":"/approval host-access"}}"#,
         &primary,
     );
 
     assert!(output.contains("changed=true"), "{output}");
     let audit = fs::read_to_string(&audit_path).unwrap();
     assert!(audit.contains(r#""event_type":"permission""#), "{audit}");
+    assert!(audit.contains(r#""decision":"host-access""#), "{audit}");
+    assert!(
+        audit.contains(r#""authority_source":"primary-user""#),
+        "{audit}"
+    );
     assert!(audit.contains(r#""hash":"#), "{audit}");
     assert!(!audit.contains(r#""action":"old""#), "{audit}");
     let _ = fs::remove_dir_all(root);

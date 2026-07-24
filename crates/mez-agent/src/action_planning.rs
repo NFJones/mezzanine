@@ -514,7 +514,7 @@ pub fn action_auto_allow_reason(action: &AgentAction, input: ActionPlanningInput
 }
 
 fn prompt_gate_satisfied_by_policy(input: ActionPlanningInput<'_>) -> bool {
-    input.approval_bypass || input.approval_policy == ApprovalPolicy::FullAccess
+    input.approval_bypass || input.approval_policy.bypasses_prompts()
 }
 
 fn policy_approval_json(

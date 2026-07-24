@@ -134,7 +134,7 @@ fn validate_log_level(value: &str) -> Result<(), TranscriptContractError> {
 
 fn validate_agent_approval_policy(value: &str) -> Result<(), TranscriptContractError> {
     match value {
-        "ask" | "auto-allow" | "full-access" => Ok(()),
+        "ask" | "auto-allow" | "full-access" | "host-access" => Ok(()),
         _ => Err(TranscriptContractError::new(
             "unknown persisted approval policy",
         )),

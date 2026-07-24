@@ -194,6 +194,61 @@ fn runtime_config_change_rejects_user_only_sandbox_policy() {
     let _ = fs::remove_dir_all(config_root);
 }
 
+/// Verifies model-authored mutations cannot select host access through either
+/// the global approval policy or a model-profile policy, even when approved.
+#[test]
+fn runtime_config_change_rejects_user_only_host_access() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let config_root = temp_root("runtime-agent-config-change-host-access");
+    service.set_config_root(config_root.clone());
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-config-host-access".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        initial_capability: None,
+        state: AgentTurnState::Running,
+    };
+
+    for (index, setting_path) in [
+        "permissions.approval_policy",
+        "model_profiles.default.approval_policy",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let action = mez_agent::AgentAction {
+            id: format!("config-host-access-{index}"),
+            rationale: String::new(),
+            payload: mez_agent::AgentActionPayload::ConfigChange {
+                setting_path: setting_path.to_string(),
+                operation: "set".to_string(),
+                value: Some("host-access".to_string()),
+            },
+        };
+        let result = service
+            .execute_config_change_action_for_turn(&turn, &action, &primary, "approved")
+            .unwrap();
+
+        assert_eq!(result.status, ActionStatus::Denied, "{setting_path}");
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code.as_str()),
+            Some("user_only_host_access")
+        );
+    }
+
+    assert!(!config_root.join("config.toml").exists());
+    let _ = fs::remove_dir_all(config_root);
+}
+
 /// Verifies agent `config_change` reset removes the explicit override.
 ///
 /// Reset is model-facing language for returning a field to its lower-precedence

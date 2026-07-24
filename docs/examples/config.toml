@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 22
+version = 23
 
 [terminal]
 profile = "xterm-compatible"

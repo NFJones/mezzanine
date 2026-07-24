@@ -96,7 +96,7 @@ fn validates_named_model_profile_schema() {
             .any(|diagnostic| {
                 diagnostic.path == "model_profiles.default.approval_policy"
                     && diagnostic.message
-                        == "unsupported approval policy; use ask, auto-allow, or full-access"
+                        == "unsupported approval policy; use ask, auto-allow, full-access, or host-access"
             })
     );
 
@@ -344,6 +344,40 @@ fn rejects_unsupported_permission_modes() {
             .iter()
             .any(|diagnostic| diagnostic.path == "permissions.preset")
     );
+}
+
+/// Verifies host access is accepted only as a primary user permission and is
+/// rejected from project overlays and model profiles with a stable diagnostic.
+#[test]
+fn host_access_is_user_only_primary_policy() {
+    let primary = validate_config_text(
+        ConfigFormat::Toml,
+        "[permissions]\napproval_policy = \"host-access\"\n",
+        ConfigScope::Primary,
+    );
+    let overlay = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\napproval_policy = \"host-access\"\n"
+        ),
+        ConfigScope::ProjectOverlay,
+    );
+    let profile = validate_config_text(
+        ConfigFormat::Toml,
+        "[model_profiles.unsafe]\napproval_policy = \"host-access\"\n",
+        ConfigScope::Primary,
+    );
+
+    assert!(primary.valid, "{:?}", primary.diagnostics);
+    for validation in [overlay, profile] {
+        assert!(!validation.valid);
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.message.starts_with("user_only_host_access:") })
+        );
+    }
 }
 
 /// Verifies that configuration cannot directly enter the explicit approval
