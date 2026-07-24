@@ -4457,6 +4457,10 @@ diagnostic MUST explain that the named operation is a MAAP action, not a shell
 command, and MUST instruct the model to emit that action instead. This
 restriction MUST NOT prohibit using those words as ordinary quoted or unquoted
 arguments to real shell tools such as `rg apply_patch`.
+The validation MUST recursively inspect bounded nested executable contexts,
+including command substitutions, backticks, groups, process substitutions, and
+statically supplied shell `-c` payloads. Malformed or over-limit executable
+nesting MUST fail closed without invoking a parser executable.
 
 A `shell_command` action MAY include:
 

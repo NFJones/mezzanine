@@ -270,4 +270,83 @@ mod tests {
             AgentShellValidationErrorKind::InvalidArgs
         );
     }
+
+    /// Verifies semantic MAAP actions cannot be hidden in nested executable
+    /// shell contexts that still run through a model-authored shell command.
+    #[test]
+    fn agent_shell_validation_rejects_nested_semantic_action_invocations() {
+        for command in [
+            "value=$(apply_patch --help)",
+            "value=$(printf '%s' $(apply_patch --help))",
+            "value=`apply_patch --help`",
+            "(apply_patch --help)",
+            "{ apply_patch --help; }",
+            "cat <(apply_patch --help)",
+            "printf '%s' ok | apply_patch --help",
+            "true && apply_patch --help",
+        ] {
+            let error = validate_agent_authored_shell_command(command)
+                .expect_err("nested semantic action invocation must be rejected");
+            assert_eq!(error.kind(), AgentShellValidationErrorKind::InvalidArgs);
+            assert!(
+                error.message().contains("apply_patch"),
+                "{command}: {error:?}"
+            );
+        }
+    }
+
+    /// Verifies statically supplied shell program payloads are recursively
+    /// inspected instead of becoming an alternate semantic-action transport.
+    #[test]
+    fn agent_shell_validation_rejects_semantic_actions_in_static_shell_payloads() {
+        for command in [
+            "sh -c 'apply_patch --help'",
+            "bash -c \"apply_patch --help\"",
+            "env FOO=bar zsh -c 'true && apply_patch --help'",
+            "fish -c 'apply_patch --help'",
+        ] {
+            let error = validate_agent_authored_shell_command(command)
+                .expect_err("static shell payload must be inspected");
+            assert!(
+                error.message().contains("apply_patch"),
+                "{command}: {error:?}"
+            );
+        }
+    }
+
+    /// Verifies semantic action names remain valid inert data when passed as
+    /// arguments to ordinary tools or included in quoted documentation text.
+    #[test]
+    fn agent_shell_validation_allows_semantic_action_names_as_data() {
+        for command in [
+            "rg apply_patch",
+            "printf '%s' apply_patch",
+            "printf '%s' 'run apply_patch through MAAP'",
+            "rg 'apply_patch' crates/mez-agent",
+            "value='apply_patch'; printf '%s' \"$value\"",
+        ] {
+            validate_agent_authored_shell_command(command)
+                .unwrap_or_else(|error| panic!("{command}: {error:?}"));
+        }
+    }
+
+    /// Verifies malformed or excessive executable nesting fails closed rather
+    /// than bypassing semantic-action validation or consuming unbounded stack.
+    #[test]
+    fn agent_shell_validation_fails_closed_on_invalid_nested_syntax() {
+        for command in [
+            "value=$(apply_patch --help",
+            "value=`apply_patch --help",
+            "sh -c",
+            &format!("{}apply_patch{}", "$(".repeat(17), ")".repeat(17)),
+        ] {
+            let error = validate_agent_authored_shell_command(command)
+                .expect_err("invalid executable nesting must fail closed");
+            assert_eq!(error.kind(), AgentShellValidationErrorKind::InvalidArgs);
+            assert!(
+                error.message().contains("apply_patch"),
+                "{command}: {error:?}"
+            );
+        }
+    }
 }

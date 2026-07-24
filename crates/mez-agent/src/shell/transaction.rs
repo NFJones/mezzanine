@@ -1568,6 +1568,9 @@ pub fn shell_command_contains_unquoted_heredoc(command: &str) -> bool {
 /// arguments, so commands like `rg apply_patch` remain valid while
 /// `printf ... | apply_patch` is rejected before it can reach the pane shell.
 pub fn shell_command_invokes_semantic_action(command: &str) -> Option<&'static str> {
+    const MAX_SCAN_CHARS: usize = 256 * 1024;
+    const MAX_SCAN_DEPTH: usize = 16;
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ScanState {
         Normal,
@@ -1594,98 +1597,241 @@ pub fn shell_command_invokes_semantic_action(command: &str) -> Option<&'static s
             })
     }
 
-    fn keeps_command_position(token: &str) -> bool {
-        matches!(token, "command" | "builtin" | "env")
-            || token.starts_with('-')
-            || is_assignment_word(token)
+    fn shell_program_name(token: &str) -> Option<&str> {
+        let name = token.rsplit('/').next().unwrap_or(token);
+        matches!(name, "sh" | "bash" | "zsh" | "fish").then_some(name)
     }
 
-    let mut state = ScanState::Normal;
-    let mut token = String::new();
-    let mut command_position = true;
-    let mut chars = command.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        match state {
-            ScanState::Normal => match ch {
-                '\\' => {
-                    if let Some(next) = chars.next() {
-                        token.push(next);
-                    }
-                }
-                '\'' => state = ScanState::SingleQuoted,
-                '"' => state = ScanState::DoubleQuoted,
-                '#' => {
-                    if !token.is_empty() {
-                        if command_position
-                            && let Some(action) = semantic_action_name(token.as_str())
-                        {
-                            return Some(action);
-                        }
-                        command_position = command_position && keeps_command_position(&token);
-                        token.clear();
-                    }
-                    for comment_ch in chars.by_ref() {
-                        if comment_ch == '\n' {
-                            command_position = true;
-                            break;
-                        }
-                    }
-                }
-                '\n' | ';' | '|' | '&' => {
-                    if !token.is_empty() {
-                        if command_position
-                            && let Some(action) = semantic_action_name(token.as_str())
-                        {
-                            return Some(action);
-                        }
-                        token.clear();
-                    }
-                    command_position = true;
-                    if ch == '&' && chars.peek() == Some(&'&') {
-                        let _ = chars.next();
-                    }
-                    if ch == '|' && chars.peek() == Some(&'|') {
-                        let _ = chars.next();
-                    }
-                }
-                ch if ch.is_whitespace() => {
-                    if !token.is_empty() {
-                        if command_position
-                            && let Some(action) = semantic_action_name(token.as_str())
-                        {
-                            return Some(action);
-                        }
-                        command_position = command_position && keeps_command_position(&token);
-                        token.clear();
-                    }
-                }
-                _ => token.push(ch),
-            },
-            ScanState::SingleQuoted => {
-                if ch == '\'' {
-                    state = ScanState::Normal;
-                } else {
-                    token.push(ch);
-                }
+    fn inspect_command_words(words: &[String], depth: usize) -> Result<Option<&'static str>, ()> {
+        let mut index = 0usize;
+        loop {
+            while words
+                .get(index)
+                .is_some_and(|word| is_assignment_word(word))
+            {
+                index += 1;
             }
-            ScanState::DoubleQuoted => match ch {
-                '\\' => {
-                    if let Some(next) = chars.next() {
-                        token.push(next);
+            match words.get(index).map(String::as_str) {
+                Some("command" | "builtin") => {
+                    index += 1;
+                    while words.get(index).is_some_and(|word| word.starts_with('-')) {
+                        index += 1;
                     }
                 }
-                '"' => state = ScanState::Normal,
-                _ => token.push(ch),
-            },
+                Some("env") => {
+                    index += 1;
+                    while words
+                        .get(index)
+                        .is_some_and(|word| word.starts_with('-') || is_assignment_word(word))
+                    {
+                        index += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let Some(executable) = words.get(index) else {
+            return Ok(None);
+        };
+        if let Some(action) = semantic_action_name(executable) {
+            return Ok(Some(action));
+        }
+        if shell_program_name(executable).is_some() {
+            let arguments = &words[index + 1..];
+            if let Some(command_index) = arguments.iter().position(|argument| argument == "-c") {
+                let payload = arguments.get(command_index + 1).ok_or(())?;
+                return scan_script(payload, depth + 1);
+            }
+        }
+        Ok(None)
+    }
+
+    fn finish_word(token: &mut String, words: &mut Vec<String>) {
+        if !token.is_empty() {
+            words.push(std::mem::take(token));
         }
     }
 
-    if command_position {
-        semantic_action_name(token.as_str())
-    } else {
-        None
+    fn finish_command(
+        token: &mut String,
+        words: &mut Vec<String>,
+        depth: usize,
+    ) -> Result<Option<&'static str>, ()> {
+        finish_word(token, words);
+        let result = inspect_command_words(words, depth)?;
+        words.clear();
+        Ok(result)
     }
+
+    fn matching_parenthesis(chars: &[char], open: usize) -> Result<usize, ()> {
+        let mut state = ScanState::Normal;
+        let mut states = Vec::new();
+        let mut depth = 1usize;
+        let mut index = open + 1;
+        while index < chars.len() {
+            match state {
+                ScanState::Normal => match chars[index] {
+                    '\\' => index = index.saturating_add(1),
+                    '\'' => state = ScanState::SingleQuoted,
+                    '"' => state = ScanState::DoubleQuoted,
+                    '(' => {
+                        states.push(state);
+                        depth += 1;
+                    }
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Ok(index);
+                        }
+                        state = states.pop().unwrap_or(ScanState::Normal);
+                    }
+                    _ => {}
+                },
+                ScanState::SingleQuoted => {
+                    if chars[index] == '\'' {
+                        state = ScanState::Normal;
+                    }
+                }
+                ScanState::DoubleQuoted => match chars[index] {
+                    '\\' => index = index.saturating_add(1),
+                    '"' => state = ScanState::Normal,
+                    '$' if chars.get(index + 1) == Some(&'(') => {
+                        states.push(state);
+                        state = ScanState::Normal;
+                        depth += 1;
+                        index += 1;
+                    }
+                    _ => {}
+                },
+            }
+            index += 1;
+        }
+        Err(())
+    }
+
+    fn matching_backtick(chars: &[char], open: usize) -> Result<usize, ()> {
+        let mut index = open + 1;
+        while index < chars.len() {
+            match chars[index] {
+                '\\' => index = index.saturating_add(1),
+                '`' => return Ok(index),
+                _ => {}
+            }
+            index += 1;
+        }
+        Err(())
+    }
+
+    fn scan_script(command: &str, depth: usize) -> Result<Option<&'static str>, ()> {
+        if depth > MAX_SCAN_DEPTH || command.chars().count() > MAX_SCAN_CHARS {
+            return Err(());
+        }
+        let chars = command.chars().collect::<Vec<_>>();
+        let mut state = ScanState::Normal;
+        let mut token = String::new();
+        let mut words = Vec::new();
+        let mut index = 0usize;
+        while index < chars.len() {
+            let ch = chars[index];
+            match state {
+                ScanState::Normal => match ch {
+                    '\\' => {
+                        index += 1;
+                        token.push(*chars.get(index).ok_or(())?);
+                    }
+                    '\'' => state = ScanState::SingleQuoted,
+                    '"' => state = ScanState::DoubleQuoted,
+                    '`' => {
+                        let close = matching_backtick(&chars, index)?;
+                        let nested = chars[index + 1..close].iter().collect::<String>();
+                        if let Some(action) = scan_script(&nested, depth + 1)? {
+                            return Ok(Some(action));
+                        }
+                        token.push_str("__mez_substitution__");
+                        index = close;
+                    }
+                    '$' | '<' | '>' if chars.get(index + 1) == Some(&'(') => {
+                        let close = matching_parenthesis(&chars, index + 1)?;
+                        let nested = chars[index + 2..close].iter().collect::<String>();
+                        if let Some(action) = scan_script(&nested, depth + 1)? {
+                            return Ok(Some(action));
+                        }
+                        token.push_str("__mez_substitution__");
+                        index = close;
+                    }
+                    '(' => {
+                        if let Some(action) = finish_command(&mut token, &mut words, depth)? {
+                            return Ok(Some(action));
+                        }
+                        let close = matching_parenthesis(&chars, index)?;
+                        let nested = chars[index + 1..close].iter().collect::<String>();
+                        if let Some(action) = scan_script(&nested, depth + 1)? {
+                            return Ok(Some(action));
+                        }
+                        index = close;
+                    }
+                    '{' | '}' | '\n' | ';' | '|' | '&' => {
+                        if let Some(action) = finish_command(&mut token, &mut words, depth)? {
+                            return Ok(Some(action));
+                        }
+                        if matches!(ch, '|' | '&') && chars.get(index + 1) == Some(&ch) {
+                            index += 1;
+                        }
+                    }
+                    '#' if token.is_empty() => {
+                        if let Some(action) = finish_command(&mut token, &mut words, depth)? {
+                            return Ok(Some(action));
+                        }
+                        while chars.get(index).is_some_and(|comment| *comment != '\n') {
+                            index += 1;
+                        }
+                    }
+                    ch if ch.is_whitespace() => finish_word(&mut token, &mut words),
+                    _ => token.push(ch),
+                },
+                ScanState::SingleQuoted => {
+                    if ch == '\'' {
+                        state = ScanState::Normal;
+                    } else {
+                        token.push(ch);
+                    }
+                }
+                ScanState::DoubleQuoted => match ch {
+                    '\\' => {
+                        index += 1;
+                        token.push(*chars.get(index).ok_or(())?);
+                    }
+                    '"' => state = ScanState::Normal,
+                    '`' => {
+                        let close = matching_backtick(&chars, index)?;
+                        let nested = chars[index + 1..close].iter().collect::<String>();
+                        if let Some(action) = scan_script(&nested, depth + 1)? {
+                            return Ok(Some(action));
+                        }
+                        token.push_str("__mez_substitution__");
+                        index = close;
+                    }
+                    '$' if chars.get(index + 1) == Some(&'(') => {
+                        let close = matching_parenthesis(&chars, index + 1)?;
+                        let nested = chars[index + 2..close].iter().collect::<String>();
+                        if let Some(action) = scan_script(&nested, depth + 1)? {
+                            return Ok(Some(action));
+                        }
+                        token.push_str("__mez_substitution__");
+                        index = close;
+                    }
+                    _ => token.push(ch),
+                },
+            }
+            index += 1;
+        }
+        if state != ScanState::Normal {
+            return Err(());
+        }
+        finish_command(&mut token, &mut words, depth)
+    }
+
+    scan_script(command, 0).unwrap_or(Some("apply_patch"))
 }
 
 /// Runs the fish quote operation for this subsystem.
