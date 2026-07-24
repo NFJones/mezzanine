@@ -17,7 +17,11 @@ use super::{
 };
 use crate::runtime::{RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, SandboxConfig};
 use crate::security::project::TrustDecision;
-use mez_agent::permissions::{EffectCompleteness, PermissionEvaluation};
+use mez_agent::PermissionPreset;
+use mez_agent::permissions::{
+    EffectCompleteness, PermissionAuthorityChange, PermissionEvaluation,
+    compare_permission_preset_authority,
+};
 use mez_agent::{SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch};
 use std::path::PathBuf;
 
@@ -783,16 +787,57 @@ impl RuntimeSessionService {
         Some(declaration)
     }
 
-    /// Runs the permission policy for turn operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(crate) fn permission_policy_for_turn(&self, turn: &AgentTurnRecord) -> PermissionPolicy {
+    /// Resolves the effective policy for one pane through active delegation lineage.
+    pub(crate) fn permission_policy_for_pane(&self, pane_id: &str) -> PermissionPolicy {
+        self.permission_policy_for_agent(&format!("agent-{pane_id}"))
+    }
+
+    /// Resolves sparse overrides from the target agent toward its root.
+    pub(crate) fn permission_policy_for_agent(&self, agent_id: &str) -> PermissionPolicy {
         let mut policy = self.permission_policy().clone();
+        let mut preset = None;
+        let mut approval_policy = None;
+        let mut current_agent_id = agent_id.to_string();
+        let mut visited = std::collections::BTreeSet::new();
+        loop {
+            if !visited.insert(current_agent_id.clone()) {
+                policy.preset = PermissionPreset::ReadOnly;
+                policy.approval_policy = mez_agent::ApprovalPolicy::Ask;
+                return policy;
+            }
+            let Some(pane_id) = current_agent_id.strip_prefix("agent-") else {
+                policy.preset = PermissionPreset::ReadOnly;
+                policy.approval_policy = mez_agent::ApprovalPolicy::Ask;
+                return policy;
+            };
+            if let Some(override_fields) = self.integration.pane_permission_override(pane_id) {
+                preset = preset.or(override_fields.preset);
+                approval_policy = approval_policy.or(override_fields.approval_policy);
+            }
+            let Some(lineage) = self.subagent_lineage(&current_agent_id) else {
+                break;
+            };
+            current_agent_id = lineage.parent_agent_id.clone();
+        }
+        if let Some(preset) = preset {
+            policy.preset = preset;
+        }
+        if let Some(approval_policy) = approval_policy {
+            policy.approval_policy = approval_policy;
+        }
+        policy
+    }
+
+    /// Resolves one turn's pane-subtree policy and profile restriction.
+    pub(crate) fn permission_policy_for_turn(&self, turn: &AgentTurnRecord) -> PermissionPolicy {
+        let mut policy = self.permission_policy_for_agent(&turn.agent_id);
         if let Some(preset) = self
             .subagent_scope_declaration_for_turn(turn)
             .and_then(|declaration| declaration.permission_preset)
+            && !matches!(
+                compare_permission_preset_authority(policy.preset, preset),
+                PermissionAuthorityChange::Broadening
+            )
         {
             policy.preset = preset;
         }

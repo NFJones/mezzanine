@@ -11,8 +11,18 @@ use super::super::{
     PermissionPolicy, PermissionPreset, Result, RuleDecision, RuleMatch, RuntimeSessionService,
     compare_approval_policy_authority, compare_permission_preset_authority,
 };
-use super::mcp::runtime_apply_permission_live_override;
 use super::{runtime_flag_value, runtime_positional_args};
+
+/// Re-evaluates only approvals owned by the changed pane delegation subtree.
+fn runtime_reconcile_pane_permission_change(
+    service: &mut RuntimeSessionService,
+    pane_id: &str,
+    source: &str,
+) -> Result<()> {
+    let _ =
+        service.reconcile_pending_agent_approvals_after_pane_permission_change(pane_id, source)?;
+    Ok(())
+}
 
 /// Runs the runtime permissions command operation for this subsystem.
 ///
@@ -21,29 +31,50 @@ use super::{runtime_flag_value, runtime_positional_args};
 /// on duplicated control-flow logic.
 pub(crate) fn runtime_permissions_command(
     service: &mut RuntimeSessionService,
+    pane_id: &str,
     invocation: &CommandInvocation,
 ) -> Result<String> {
     let args = runtime_positional_args(invocation);
     if args.is_empty() || matches!(args.as_slice(), ["status"] | ["show"]) {
-        return Ok(runtime_permission_policy_display(service));
+        return Ok(runtime_permission_policy_display(service, pane_id));
     }
 
     let body = match args.as_slice() {
+        ["preset", "inherit" | "clear" | "default"]
+        | ["set-preset", "inherit" | "clear" | "default"] => {
+            let current = service.permission_policy_for_pane(pane_id).preset;
+            service.set_pane_permission_preset_override(pane_id, None);
+            let inherited = service.permission_policy_for_pane(pane_id).preset;
+            let change = compare_permission_preset_authority(current, inherited);
+            runtime_append_permission_audit(
+                service,
+                "permissions.preset",
+                "permission_change",
+                runtime_permission_preset_name(inherited),
+                "inherited",
+            )?;
+            runtime_reconcile_pane_permission_change(
+                service,
+                pane_id,
+                "terminal/command:permissions",
+            )?;
+            runtime_permission_change_display(
+                "preset",
+                runtime_permission_preset_name(current),
+                runtime_permission_preset_name(inherited),
+                change,
+                true,
+            )
+        }
         ["preset", requested] | ["set-preset", requested] => {
             let Ok(requested) = runtime_parse_permission_preset(requested) else {
                 return Ok(format!(
                     "field=preset:requested={requested}:changed=false:reason=unsupported-permission-preset:source=runtime-policy"
                 ));
             };
-            let current = service.permission_policy().preset;
+            let current = service.permission_policy_for_pane(pane_id).preset;
             let change = compare_permission_preset_authority(current, requested);
-            runtime_apply_permission_live_override(
-                service,
-                None,
-                "permissions.preset",
-                runtime_permission_preset_name(requested),
-                "terminal/command:permissions",
-            )?;
+            service.set_pane_permission_preset_override(pane_id, Some(requested));
             runtime_append_permission_audit(
                 service,
                 "permissions.preset",
@@ -51,10 +82,41 @@ pub(crate) fn runtime_permissions_command(
                 runtime_permission_preset_name(requested),
                 "changed",
             )?;
+            runtime_reconcile_pane_permission_change(
+                service,
+                pane_id,
+                "terminal/command:permissions",
+            )?;
             runtime_permission_change_display(
                 "preset",
                 runtime_permission_preset_name(current),
                 runtime_permission_preset_name(requested),
+                change,
+                true,
+            )
+        }
+        ["approval-policy", "inherit" | "clear" | "default"]
+        | ["approval_policy", "inherit" | "clear" | "default"] => {
+            let current = service.permission_policy_for_pane(pane_id).approval_policy;
+            service.set_pane_approval_policy_override(pane_id, None);
+            let inherited = service.permission_policy_for_pane(pane_id).approval_policy;
+            let change = compare_approval_policy_authority(current, inherited);
+            runtime_append_permission_audit(
+                service,
+                "permissions.approval_policy",
+                "permission_change",
+                runtime_approval_policy_name(inherited),
+                "inherited",
+            )?;
+            runtime_reconcile_pane_permission_change(
+                service,
+                pane_id,
+                "terminal/command:permissions",
+            )?;
+            runtime_permission_change_display(
+                "approval_policy",
+                runtime_approval_policy_name(current),
+                runtime_approval_policy_name(inherited),
                 change,
                 true,
             )
@@ -65,21 +127,20 @@ pub(crate) fn runtime_permissions_command(
                     "field=approval_policy:requested={requested}:changed=false:reason=unsupported-approval-policy:source=runtime-policy"
                 ));
             };
-            let current = service.permission_policy().approval_policy;
+            let current = service.permission_policy_for_pane(pane_id).approval_policy;
             let change = compare_approval_policy_authority(current, requested);
-            runtime_apply_permission_live_override(
-                service,
-                None,
-                "permissions.approval_policy",
-                runtime_approval_policy_name(requested),
-                "terminal/command:permissions",
-            )?;
+            service.set_pane_approval_policy_override(pane_id, Some(requested));
             runtime_append_permission_audit(
                 service,
                 "permissions.approval_policy",
                 "permission_change",
                 runtime_approval_policy_name(requested),
                 "changed",
+            )?;
+            runtime_reconcile_pane_permission_change(
+                service,
+                pane_id,
+                "terminal/command:permissions",
             )?;
             runtime_permission_change_display(
                 "approval_policy",
@@ -91,21 +152,20 @@ pub(crate) fn runtime_permissions_command(
         }
         [requested] => match runtime_parse_permission_preset(requested) {
             Ok(requested) => {
-                let current = service.permission_policy().preset;
+                let current = service.permission_policy_for_pane(pane_id).preset;
                 let change = compare_permission_preset_authority(current, requested);
-                runtime_apply_permission_live_override(
-                    service,
-                    None,
-                    "permissions.preset",
-                    runtime_permission_preset_name(requested),
-                    "terminal/command:permissions",
-                )?;
+                service.set_pane_permission_preset_override(pane_id, Some(requested));
                 runtime_append_permission_audit(
                     service,
                     "permissions.preset",
                     "permission_change",
                     runtime_permission_preset_name(requested),
                     "changed",
+                )?;
+                runtime_reconcile_pane_permission_change(
+                    service,
+                    pane_id,
+                    "terminal/command:permissions",
                 )?;
                 runtime_permission_change_display(
                     "preset",
@@ -135,13 +195,16 @@ pub(crate) fn runtime_permissions_command(
 /// on duplicated control-flow logic.
 pub(crate) fn runtime_approval_command(
     service: &mut RuntimeSessionService,
+    pane_id: &str,
     invocation: &CommandInvocation,
 ) -> Result<String> {
     let args = runtime_positional_args(invocation);
     if args.is_empty() || matches!(args.as_slice(), ["status"] | ["show"]) {
         return Ok(format!(
             "approval_policy={} source=runtime-policy",
-            runtime_approval_policy_name(service.permission_policy().approval_policy)
+            runtime_approval_policy_name(
+                service.permission_policy_for_pane(pane_id).approval_policy
+            )
         ));
     }
     let [requested] = args.as_slice() else {
@@ -149,20 +212,35 @@ pub(crate) fn runtime_approval_command(
             "changed=false:reason=unsupported-approval-command:source=runtime-policy".to_string(),
         );
     };
+    if matches!(*requested, "inherit" | "clear" | "default") {
+        let current = service.permission_policy_for_pane(pane_id).approval_policy;
+        service.set_pane_approval_policy_override(pane_id, None);
+        let inherited = service.permission_policy_for_pane(pane_id).approval_policy;
+        let change = compare_approval_policy_authority(current, inherited);
+        runtime_append_permission_audit(
+            service,
+            "permissions.approval_policy",
+            "permission_change",
+            runtime_approval_policy_name(inherited),
+            "inherited",
+        )?;
+        runtime_reconcile_pane_permission_change(service, pane_id, "terminal/command:approval")?;
+        return Ok(runtime_permission_change_display(
+            "approval_policy",
+            runtime_approval_policy_name(current),
+            runtime_approval_policy_name(inherited),
+            change,
+            true,
+        ));
+    }
     let Ok(requested) = runtime_parse_approval_policy(requested) else {
         return Ok(format!(
             "field=approval_policy:requested={requested}:changed=false:reason=unsupported-approval-policy:source=runtime-policy"
         ));
     };
-    let current = service.permission_policy().approval_policy;
+    let current = service.permission_policy_for_pane(pane_id).approval_policy;
     let change = compare_approval_policy_authority(current, requested);
-    runtime_apply_permission_live_override(
-        service,
-        None,
-        "permissions.approval_policy",
-        runtime_approval_policy_name(requested),
-        "terminal/command:approval",
-    )?;
+    service.set_pane_approval_policy_override(pane_id, Some(requested));
     runtime_append_permission_audit(
         service,
         "permissions.approval_policy",
@@ -170,6 +248,7 @@ pub(crate) fn runtime_approval_command(
         runtime_approval_policy_name(requested),
         "changed",
     )?;
+    runtime_reconcile_pane_permission_change(service, pane_id, "terminal/command:approval")?;
     Ok(runtime_permission_change_display(
         "approval_policy",
         runtime_approval_policy_name(current),
@@ -184,13 +263,13 @@ pub(crate) fn runtime_approval_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(crate) fn runtime_permission_policy_display(service: &RuntimeSessionService) -> String {
-    let policy = service.permission_policy();
+pub(crate) fn runtime_permission_policy_display(
+    service: &RuntimeSessionService,
+    pane_id: &str,
+) -> String {
+    let policy = service.permission_policy_for_pane(pane_id);
     let configured = service.configured_permissions();
-    let effective = service
-        .active_pane_id()
-        .ok()
-        .map(|pane_id| service.primary_path_scope_status(&pane_id));
+    let effective = Some(service.primary_path_scope_status(pane_id));
     let effective_read_scopes = effective
         .as_ref()
         .map_or(0, |status| status.read_scopes.len());

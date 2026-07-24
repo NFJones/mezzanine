@@ -547,10 +547,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         Some(&saved_token_usage)
     );
     assert_eq!(saved_metadata[0].routing_enabled, Some(true));
-    assert_eq!(
-        saved_metadata[0].approval_policy.as_deref(),
-        Some("full-access")
-    );
+    assert_eq!(saved_metadata[0].approval_policy, None);
 
     let mut restored = test_runtime_service();
     restored.session.id = service.session().id.clone();
@@ -575,7 +572,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     assert_eq!(restored.agent_routing_override("%1"), Some(true));
     assert_eq!(
         restored.permission_policy().approval_policy,
-        ApprovalPolicy::FullAccess
+        ApprovalPolicy::Ask
     );
     assert_eq!(
         restored.pane_current_working_directory("%1").as_deref(),

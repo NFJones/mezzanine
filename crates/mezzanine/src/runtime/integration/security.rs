@@ -1,15 +1,34 @@
 //! Session-scoped permission, approval, and memory authority state.
 
-use mez_agent::ApprovalPolicy;
+use std::collections::BTreeMap;
+
 use mez_agent::memory::SessionMemoryStore;
 use mez_agent::permissions::{BlockedApprovalQueue, PermissionPolicy, SessionApprovalStore};
+use mez_agent::{ApprovalPolicy, PermissionPreset};
 
 use crate::runtime::config::ConfiguredPermissions;
+
+/// Sparse live permission fields explicitly owned by one pane.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PanePermissionOverride {
+    /// Optional pane-subtree permission preset override.
+    pub(crate) preset: Option<PermissionPreset>,
+    /// Optional pane-subtree approval-policy override.
+    pub(crate) approval_policy: Option<ApprovalPolicy>,
+}
+
+impl PanePermissionOverride {
+    /// Returns whether neither pane-subtree field is overridden.
+    fn is_empty(self) -> bool {
+        self.preset.is_none() && self.approval_policy.is_none()
+    }
+}
 
 /// Owns authority-bearing state that must change as one serialized session.
 #[derive(Debug, Default)]
 pub(super) struct RuntimeSecurityState {
     configured_permissions: ConfiguredPermissions,
+    pane_permission_overrides: BTreeMap<String, PanePermissionOverride>,
     live_approval_bypass_override: Option<bool>,
     live_approval_policy_override: Option<ApprovalPolicy>,
     blocked_approvals: BlockedApprovalQueue,
@@ -32,6 +51,40 @@ impl RuntimeSecurityState {
 
     pub(super) fn replace_configured_permissions(&mut self, permissions: ConfiguredPermissions) {
         self.configured_permissions = permissions;
+    }
+
+    pub(super) fn pane_permission_override(&self, pane_id: &str) -> Option<PanePermissionOverride> {
+        self.pane_permission_overrides.get(pane_id).copied()
+    }
+
+    pub(super) fn set_pane_permission_preset_override(
+        &mut self,
+        pane_id: &str,
+        value: Option<PermissionPreset>,
+    ) {
+        let entry = self
+            .pane_permission_overrides
+            .entry(pane_id.to_string())
+            .or_default();
+        entry.preset = value;
+        if entry.is_empty() {
+            self.pane_permission_overrides.remove(pane_id);
+        }
+    }
+
+    pub(super) fn set_pane_approval_policy_override(
+        &mut self,
+        pane_id: &str,
+        value: Option<ApprovalPolicy>,
+    ) {
+        let entry = self
+            .pane_permission_overrides
+            .entry(pane_id.to_string())
+            .or_default();
+        entry.approval_policy = value;
+        if entry.is_empty() {
+            self.pane_permission_overrides.remove(pane_id);
+        }
     }
 
     pub(super) fn live_approval_bypass_override(&self) -> Option<bool> {

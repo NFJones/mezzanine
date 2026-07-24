@@ -369,6 +369,90 @@ impl RuntimeSessionService {
         Ok(resumed)
     }
 
+    /// Reconciles pending approvals owned by one pane delegation subtree.
+    pub(crate) fn reconcile_pending_agent_approvals_after_pane_permission_change(
+        &mut self,
+        pane_id: &str,
+        source: &str,
+    ) -> Result<usize> {
+        let root_agent_id = format!("agent-{pane_id}");
+        let pending_ids = self
+            .blocked_approvals()
+            .pending()
+            .into_iter()
+            .filter_map(|approval| {
+                let approval_ref = self.agent.blocked_agent_approval_refs.get(&approval.id)?;
+                let turn = self
+                    .agent_turn_ledger()
+                    .turns()
+                    .iter()
+                    .find(|turn| turn.turn_id == approval_ref.turn_id)?;
+                self.agent_is_in_permission_subtree(&turn.agent_id, &root_agent_id)
+                    .then(|| approval.id.clone())
+            })
+            .collect::<Vec<_>>();
+        let mut resumed = 0usize;
+        for approval_id in pending_ids {
+            let Some(approval) = self.blocked_approvals().get(&approval_id).cloned() else {
+                continue;
+            };
+            if !self
+                .pending_agent_approval_is_satisfied_by_current_policy(&approval_id, &approval)?
+            {
+                continue;
+            }
+            let controller = self.session.primary_client_id().cloned().ok_or_else(|| {
+                MezError::invalid_state(
+                    "policy-resolved blocked approval requires an attached primary client",
+                )
+            })?;
+            let decided = self
+                .integration
+                .blocked_approvals_mut()
+                .decide_with_client_at(
+                    &approval_id,
+                    mez_agent::permissions::ApprovalDecision::Approve,
+                    None,
+                    Some(controller.to_string()),
+                    current_unix_seconds(),
+                )?
+                .clone();
+            let count = self
+                .resume_approved_blocked_agent_action(&approval_id, &decided, &controller)?
+                .unwrap_or(0);
+            resumed = resumed.saturating_add(count);
+            self.append_primary_lifecycle_event(
+                EventKind::ApprovalChanged,
+                format!(
+                    r#"{{"approval_id":"{}","decision":"approve","state":"decided","source":"{}","scope":"pane-subtree","pane_id":"{}","agent_actions_resumed":{}}}"#,
+                    json_escape(&approval_id),
+                    json_escape(source),
+                    json_escape(pane_id),
+                    count
+                ),
+            )?;
+        }
+        Ok(resumed)
+    }
+
+    /// Reports whether an agent belongs to one active delegation subtree.
+    fn agent_is_in_permission_subtree(&self, agent_id: &str, root_agent_id: &str) -> bool {
+        let mut current = agent_id;
+        let mut visited = std::collections::BTreeSet::new();
+        loop {
+            if current == root_agent_id {
+                return true;
+            }
+            if !visited.insert(current.to_string()) {
+                return false;
+            }
+            let Some(lineage) = self.subagent_lineage(current) else {
+                return false;
+            };
+            current = &lineage.parent_agent_id;
+        }
+    }
+
     /// Reports whether a pending blocked approval is now satisfied by policy.
     ///
     /// # Parameters

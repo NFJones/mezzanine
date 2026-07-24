@@ -147,6 +147,26 @@ impl RuntimeSessionService {
         self.integration.permission_policy_mut()
     }
 
+    /// Sets or clears the preset override explicitly owned by one pane.
+    pub(crate) fn set_pane_permission_preset_override(
+        &mut self,
+        pane_id: &str,
+        value: Option<mez_agent::PermissionPreset>,
+    ) {
+        self.integration
+            .set_pane_permission_preset_override(pane_id, value);
+    }
+
+    /// Sets or clears the approval-policy override explicitly owned by one pane.
+    pub(crate) fn set_pane_approval_policy_override(
+        &mut self,
+        pane_id: &str,
+        value: Option<mez_agent::ApprovalPolicy>,
+    ) {
+        self.integration
+            .set_pane_approval_policy_override(pane_id, value);
+    }
+
     /// Applies an explicit user-selected approval-bypass state.
     ///
     /// # Parameters

@@ -172,7 +172,8 @@ fn runtime_permission_status_reports_explicit_scope_provenance() {
         .replace_configured_permissions(configured);
 
     let status = service.primary_path_scope_status("%1");
-    let display = crate::runtime::commands_support::runtime_permission_policy_display(&service);
+    let display =
+        crate::runtime::commands_support::runtime_permission_policy_display(&service, "%1");
 
     assert_eq!(status.provenance, "explicit");
     assert_eq!(status.read_scopes, vec!["src"]);
@@ -222,7 +223,8 @@ fn runtime_permission_status_reports_trusted_project_scope_provenance() {
     service.set_pane_current_working_directory("%1".to_string(), nested);
 
     let status = service.primary_path_scope_status("%1");
-    let display = crate::runtime::commands_support::runtime_permission_policy_display(&service);
+    let display =
+        crate::runtime::commands_support::runtime_permission_policy_display(&service, "%1");
     let expected = project_root.to_string_lossy().into_owned();
 
     assert_eq!(status.provenance, "trusted-project");
@@ -1241,6 +1243,10 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
     assert!(service.pane_agent_status_selector().is_none());
     assert_eq!(
         service.permission_policy().approval_policy,
+        ApprovalPolicy::Ask
+    );
+    assert_eq!(
+        service.permission_policy_for_pane("%1").approval_policy,
         ApprovalPolicy::FullAccess
     );
     let config = service

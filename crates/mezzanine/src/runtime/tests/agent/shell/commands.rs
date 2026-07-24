@@ -466,9 +466,8 @@ fn runtime_agent_shell_logout_uses_attached_auth_store() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies that `/approval` arguments are applied through the live runtime
-/// approval-mode command path. The no-argument slash command already displays
-/// policy state; this covers mutation through the agent shell surface.
+/// Verifies `/approval` changes only the issuing pane while preserving the
+/// configured session policy as the baseline for unrelated panes.
 #[test]
 fn runtime_agent_shell_approval_command_mutates_live_policy() {
     let mut service = test_runtime_service();
@@ -493,12 +492,256 @@ fn runtime_agent_shell_approval_command_mutates_live_policy() {
     assert!(!response.contains("requires_runtime"), "{response}");
     assert_eq!(
         service.permission_policy().approval_policy,
+        ApprovalPolicy::Ask
+    );
+    assert_eq!(
+        service.permission_policy_for_pane("%1").approval_policy,
         ApprovalPolicy::FullAccess
     );
 }
 
-/// Verifies only the attached primary user's runtime command path can select
-/// host access and that the canonical policy is retained as a live override.
+/// Verifies pane-local permission commands do not leak preset or approval
+/// changes into an unrelated root pane or the configured session baseline.
+#[test]
+fn runtime_agent_shell_permission_commands_isolate_root_panes() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let second_pane = service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .unwrap()
+        .pane_id;
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(second_pane.as_str())
+        .unwrap();
+    service.session.select_pane(&primary, "%1").unwrap();
+
+    let approval = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"pane-approval","method":"agent/shell/command","params":{"idempotency_key":"pane-approval","input":"/approval full-access"}}"#,
+        &primary,
+    );
+    let preset = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"pane-preset","method":"agent/shell/command","params":{"idempotency_key":"pane-preset","input":"/permissions preset auto"}}"#,
+        &primary,
+    );
+
+    assert!(approval.contains("changed=true"), "{approval}");
+    assert!(preset.contains("changed=true"), "{preset}");
+    assert_eq!(
+        service.permission_policy_for_pane("%1").approval_policy,
+        ApprovalPolicy::FullAccess
+    );
+    assert_eq!(
+        service.permission_policy_for_pane("%1").preset,
+        mez_agent::PermissionPreset::Auto
+    );
+    assert_eq!(
+        service
+            .permission_policy_for_pane(second_pane.as_str())
+            .approval_policy,
+        ApprovalPolicy::Ask
+    );
+    assert_eq!(
+        service
+            .permission_policy_for_pane(second_pane.as_str())
+            .preset,
+        mez_agent::PermissionPreset::ReadOnly
+    );
+    assert_eq!(
+        service.permission_policy().approval_policy,
+        ApprovalPolicy::Ask
+    );
+    assert_eq!(
+        service.permission_policy().preset,
+        mez_agent::PermissionPreset::ReadOnly
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies active descendants resolve parent changes dynamically, child
+/// field overrides shadow only their subtree, and clearing restores inheritance.
+#[test]
+fn runtime_pane_permission_overrides_inherit_and_shadow_by_field() {
+    let mut service = test_runtime_service();
+    service.set_subagent_lineage(
+        "agent-%2",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%1".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 1,
+            display_name: "child".to_string(),
+        },
+    );
+    service.set_subagent_lineage(
+        "agent-%3",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%2".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 2,
+            display_name: "grandchild".to_string(),
+        },
+    );
+
+    service.set_pane_permission_preset_override("%1", Some(mez_agent::PermissionPreset::Auto));
+    service.set_pane_approval_policy_override("%1", Some(ApprovalPolicy::FullAccess));
+    assert_eq!(
+        service.permission_policy_for_agent("agent-%3").preset,
+        mez_agent::PermissionPreset::Auto
+    );
+    assert_eq!(
+        service
+            .permission_policy_for_agent("agent-%3")
+            .approval_policy,
+        ApprovalPolicy::FullAccess
+    );
+
+    service.set_pane_approval_policy_override("%2", Some(ApprovalPolicy::Ask));
+    let child = service.permission_policy_for_agent("agent-%2");
+    let grandchild = service.permission_policy_for_agent("agent-%3");
+    assert_eq!(child.preset, mez_agent::PermissionPreset::Auto);
+    assert_eq!(child.approval_policy, ApprovalPolicy::Ask);
+    assert_eq!(grandchild.preset, mez_agent::PermissionPreset::Auto);
+    assert_eq!(grandchild.approval_policy, ApprovalPolicy::Ask);
+    assert_eq!(
+        service.permission_policy_for_pane("%1").approval_policy,
+        ApprovalPolicy::FullAccess
+    );
+
+    service.set_pane_approval_policy_override("%2", None);
+    assert_eq!(
+        service
+            .permission_policy_for_agent("agent-%3")
+            .approval_policy,
+        ApprovalPolicy::FullAccess
+    );
+    service.set_pane_permission_preset_override("%1", None);
+    assert_eq!(
+        service.permission_policy_for_agent("agent-%3").preset,
+        mez_agent::PermissionPreset::ReadOnly
+    );
+}
+
+/// Verifies pane permission slash commands can clear explicit fields and
+/// restore dynamic inheritance from the configured session baseline.
+#[test]
+fn runtime_agent_shell_permission_commands_clear_to_inherit() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    for (id, input) in [
+        ("set-approval", "/approval full-access"),
+        ("set-preset", "/permissions preset auto"),
+        ("clear-approval", "/approval inherit"),
+        ("clear-preset", "/permissions preset clear"),
+    ] {
+        let response = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"{id}","method":"agent/shell/command","params":{{"idempotency_key":"{id}","input":"{input}"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(response.contains("changed=true"), "{response}");
+    }
+
+    let policy = service.permission_policy_for_pane("%1");
+    assert_eq!(policy.approval_policy, ApprovalPolicy::Ask);
+    assert_eq!(policy.preset, mez_agent::PermissionPreset::ReadOnly);
+}
+
+/// Verifies a configured subagent profile preset remains a non-broadenable
+/// restriction after pane-subtree policy composition.
+#[test]
+fn runtime_subagent_profile_preset_restricts_pane_override() {
+    let mut service = test_runtime_service();
+    service.set_subagent_lineage(
+        "agent-%2",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%1".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 1,
+            display_name: "child".to_string(),
+        },
+    );
+    service.set_subagent_scope_declaration(
+        "agent-%2",
+        mez_agent::SubagentScopeDeclaration {
+            cooperation_mode: CooperationMode::ExploreOnly,
+            current_directory: "/repo".to_string(),
+            read_scopes: vec!["/repo".to_string()],
+            write_scopes: Vec::new(),
+            permission_preset: Some(mez_agent::PermissionPreset::ReadOnly),
+        },
+    );
+    service.set_pane_permission_preset_override("%1", Some(mez_agent::PermissionPreset::Auto));
+    service.set_pane_permission_preset_override("%2", Some(mez_agent::PermissionPreset::Auto));
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "profile-restriction".to_string(),
+        agent_id: "agent-%2".to_string(),
+        pane_id: "%2".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: mez_agent::AgentTurnState::Running,
+        cooperation_mode: Some("explore-only".to_string()),
+        initial_capability: None,
+    };
+
+    assert_eq!(
+        service.permission_policy_for_turn(&turn).preset,
+        mez_agent::PermissionPreset::ReadOnly
+    );
+}
+
+/// Verifies malformed cyclic delegation lineage fails closed instead of
+/// looping or retaining a broader pane override.
+#[test]
+fn runtime_pane_permission_override_cycle_fails_closed() {
+    let mut service = test_runtime_service();
+    service.set_pane_permission_preset_override("%1", Some(mez_agent::PermissionPreset::Auto));
+    service.set_pane_approval_policy_override("%1", Some(ApprovalPolicy::HostAccess));
+    service.set_subagent_lineage(
+        "agent-%1",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%2".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 1,
+            display_name: "first".to_string(),
+        },
+    );
+    service.set_subagent_lineage(
+        "agent-%2",
+        RuntimeSubagentLineage {
+            parent_agent_id: "agent-%1".to_string(),
+            root_agent_id: "agent-%1".to_string(),
+            depth: 2,
+            display_name: "second".to_string(),
+        },
+    );
+
+    let policy = service.permission_policy_for_agent("agent-%2");
+    assert_eq!(policy.preset, mez_agent::PermissionPreset::ReadOnly);
+    assert_eq!(policy.approval_policy, ApprovalPolicy::Ask);
+}
+
+/// Verifies only the attached primary user's pane command can select host
+/// access without broadening the configured session baseline.
 #[test]
 fn runtime_agent_shell_approval_command_selects_host_access() {
     let mut service = test_runtime_service();
@@ -527,6 +770,10 @@ fn runtime_agent_shell_approval_command_selects_host_access() {
     );
     assert_eq!(
         service.permission_policy().approval_policy,
+        ApprovalPolicy::Ask
+    );
+    assert_eq!(
+        service.permission_policy_for_pane("%1").approval_policy,
         ApprovalPolicy::HostAccess
     );
 }
@@ -580,8 +827,8 @@ fn runtime_agent_shell_single_line_display_uses_transient_status_without_overlay
     assert!(!pane_text.contains("source: runtime-policy"), "{pane_text}");
 }
 
-/// Verifies an explicit `/approval` choice is stored as a live override and
-/// therefore survives unrelated configuration reloads from disk.
+/// Verifies an explicit pane `/approval` choice survives unrelated configured
+/// baseline reloads without becoming a session-global override.
 ///
 /// This protects full-access mode from being silently reset when a config
 /// reload reapplies an older `permissions.approval_policy` value.
@@ -621,6 +868,10 @@ fn runtime_agent_shell_approval_command_survives_config_reload() {
     assert!(response.contains("requested=full-access"), "{response}");
     assert_eq!(
         service.permission_policy().approval_policy,
+        ApprovalPolicy::Ask
+    );
+    assert_eq!(
+        service.permission_policy_for_pane("%1").approval_policy,
         ApprovalPolicy::FullAccess
     );
 
@@ -638,6 +889,10 @@ fn runtime_agent_shell_approval_command_survives_config_reload() {
     assert_eq!(service.terminal_history_limit(), 11);
     assert_eq!(
         service.permission_policy().approval_policy,
+        ApprovalPolicy::Ask
+    );
+    assert_eq!(
+        service.permission_policy_for_pane("%1").approval_policy,
         ApprovalPolicy::FullAccess
     );
     let _ = fs::remove_dir_all(root);

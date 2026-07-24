@@ -37,7 +37,7 @@ mod security;
 use bindings::RuntimeBindingsState;
 use credentials::RuntimeCredentialState;
 use hooks::RuntimeHookState;
-use security::RuntimeSecurityState;
+use security::{PanePermissionOverride, RuntimeSecurityState};
 
 /// Owns concrete application integration bindings for one runtime session.
 #[derive(Debug)]
@@ -133,6 +133,31 @@ impl RuntimeIntegrationComponent {
     /// Atomically replaces configured permission and confinement state.
     pub(crate) fn replace_configured_permissions(&mut self, permissions: ConfiguredPermissions) {
         self.security.replace_configured_permissions(permissions);
+    }
+
+    /// Returns one pane's explicit sparse permission override.
+    pub(crate) fn pane_permission_override(&self, pane_id: &str) -> Option<PanePermissionOverride> {
+        self.security.pane_permission_override(pane_id)
+    }
+
+    /// Sets or clears one pane's explicit permission-preset override.
+    pub(crate) fn set_pane_permission_preset_override(
+        &mut self,
+        pane_id: &str,
+        value: Option<mez_agent::PermissionPreset>,
+    ) {
+        self.security
+            .set_pane_permission_preset_override(pane_id, value);
+    }
+
+    /// Sets or clears one pane's explicit approval-policy override.
+    pub(crate) fn set_pane_approval_policy_override(
+        &mut self,
+        pane_id: &str,
+        value: Option<ApprovalPolicy>,
+    ) {
+        self.security
+            .set_pane_approval_policy_override(pane_id, value);
     }
 
     /// Returns the explicit live approval-bypass override.

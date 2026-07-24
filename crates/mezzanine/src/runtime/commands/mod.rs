@@ -288,7 +288,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_args("permissions command must be a slash command"))?;
         let invocation = runtime_single_permissions_invocation(&slash.args)?;
         let body = match invocation.name.as_str() {
-            "permissions" => runtime_permissions_command(self, &invocation)?,
+            "permissions" => runtime_permissions_command(self, pane_id, &invocation)?,
             "list-command-rules" => runtime_list_command_rules_display(self.permission_policy()),
             "allow-command" | "deny-command" | "prompt-command" => {
                 runtime_add_command_rule(self, &invocation)?
@@ -335,7 +335,7 @@ impl RuntimeSessionService {
         let slash = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("approval command must be a slash command"))?;
         let invocation = runtime_single_approval_invocation(&slash.args)?;
-        let body = runtime_approval_command(self, &invocation)?;
+        let body = runtime_approval_command(self, pane_id, &invocation)?;
         if body.contains("changed=true") {
             Ok(AgentShellCommandOutcome::Mutated {
                 command: "approval".to_string(),
