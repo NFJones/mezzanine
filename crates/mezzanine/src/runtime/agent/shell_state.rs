@@ -10,9 +10,10 @@ use super::{
     MezError, PaneReadinessState, PathScopes, PermissionPolicy, ReadinessOverrideRevocation,
     Result, RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
     ShellTransaction, ShellTransactionOutputTransport, SubagentScopeDeclaration,
-    apply_patch_transaction_phase, current_unix_millis, runtime_agent_shell_status,
-    runtime_agent_terminal_preview, runtime_execution_ready_for_provider_continuation,
-    runtime_marker_for_action, runtime_pane_readiness_state_name,
+    apply_patch_transaction_phase, current_unix_millis, local_action_plan,
+    runtime_agent_shell_status, runtime_agent_terminal_preview,
+    runtime_execution_ready_for_provider_continuation, runtime_marker_for_action,
+    runtime_pane_readiness_state_name,
 };
 use crate::runtime::{RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, SandboxConfig};
 use crate::security::project::TrustDecision;
@@ -127,6 +128,65 @@ impl RuntimeSessionService {
             timeout_ms,
             permission_evaluation,
         } = dispatch;
+        let permission_policy = self.permission_policy_for_turn(turn);
+        let policy_command = local_action_plan(action)?
+            .ok_or_else(|| MezError::invalid_state("shell dispatch requires a local action plan"))?
+            .policy_command;
+        let subagent_scope = self.subagent_scope_declaration_for_turn(turn);
+        if let Some(scope) = subagent_scope.as_ref()
+            && let Some(message) = mez_agent::subagent_action_scope_violation(
+                &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+                scope,
+                action,
+                &policy_command,
+            )
+            .map_err(MezError::invalid_args)?
+        {
+            return Err(MezError::forbidden(message));
+        }
+        let path_scopes = if subagent_scope.is_some() {
+            None
+        } else {
+            self.path_scopes_for_pane(&turn.pane_id)
+        };
+        let current_permission_evaluation = permission_policy
+            .evaluate_shell_command_structured_with_approvals_scoped(
+                &policy_command,
+                self.session_approvals(),
+                path_scopes.as_ref(),
+            );
+        match current_permission_evaluation.decision {
+            mez_agent::permissions::RuleDecision::Forbid => {
+                return Err(MezError::forbidden(
+                    "shell action is forbidden by current permission policy at pane dispatch",
+                ));
+            }
+            mez_agent::permissions::RuleDecision::Prompt
+                if permission_evaluation.is_some_and(|evaluation| {
+                    evaluation.decision == mez_agent::permissions::RuleDecision::Allow
+                }) =>
+            {
+                return Err(MezError::conflict(
+                    "shell action requires fresh approval after authority narrowed before pane dispatch",
+                ));
+            }
+            mez_agent::permissions::RuleDecision::Prompt if permission_evaluation.is_none() => {
+                return Err(MezError::conflict(
+                    "shell action requires current approval evidence at pane dispatch",
+                ));
+            }
+            mez_agent::permissions::RuleDecision::Allow
+            | mez_agent::permissions::RuleDecision::Prompt => {}
+        }
+        if self.configured_permissions().resources.network_policy
+            == crate::runtime::NetworkPolicy::Deny
+            && current_permission_evaluation.effects.network
+        {
+            return Err(MezError::forbidden(
+                "network access is denied by current permission policy at pane dispatch",
+            ));
+        }
+        let permission_evaluation = Some(&current_permission_evaluation);
         self.require_pane_ready_for_agent_command(&turn.pane_id)?;
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
         let marker = runtime_marker_for_action(turn, &action.id)?;
@@ -141,7 +201,6 @@ impl RuntimeSessionService {
         )?;
         let mut sandbox_audit_summary = None;
         let mut managed_home_activity_lock = None;
-        let permission_policy = self.permission_policy_for_turn(turn);
         let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
             &self.configured_permissions().sandbox,
             &permission_policy,

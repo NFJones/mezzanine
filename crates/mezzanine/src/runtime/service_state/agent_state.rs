@@ -2,6 +2,7 @@
 
 use super::{ActionStatus, HookExecutionPlan, PaneId, RuntimeHookPipelineBlock, Size, WindowId};
 use crate::host::terminal::PaneAgentStatusField;
+use mez_agent::LocalActionPlan;
 use std::collections::BTreeMap;
 
 /// Describes whether a parent turn waits for spawned subagents before it can
@@ -278,6 +279,18 @@ pub(crate) struct RuntimeApplyPatchBatchState {
     pub(crate) read_outputs: Vec<String>,
 }
 
+/// Retains one generated `apply_patch` phase while a pre-shell hook runs.
+///
+/// Generated read retries and write phases are concrete pane-shell commands.
+/// Retaining their exact plan ensures hook completion resumes that command
+/// through the ordinary final authorization boundary rather than rebuilding or
+/// bypassing the phase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePendingApplyPatchPhase {
+    /// Exact generated plan awaiting the pre-shell hook or final dispatch.
+    pub(crate) plan: LocalActionPlan,
+}
+
 /// Carries Running Shell Transaction Kind state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -416,6 +429,8 @@ pub(crate) struct PendingFocusedShellHookContinuation {
     pub(crate) turn_id: String,
     /// Action to resume or deny after the hook result is known.
     pub(crate) action_id: String,
+    /// Digest of the exact concrete shell phase guarded by the hook.
+    pub(crate) phase_command_sha256: String,
 }
 
 /// Completed pre-shell hook identity for a running action.
@@ -425,6 +440,8 @@ pub(crate) struct RuntimeAgentPreShellHookCompletion {
     pub(crate) turn_id: String,
     /// Shell action guarded by the hook.
     pub(crate) action_id: String,
+    /// Digest of the exact concrete shell phase guarded by the hook.
+    pub(crate) phase_command_sha256: String,
     /// Hook that has already completed for this action.
     pub(crate) hook_id: String,
 }

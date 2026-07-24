@@ -8,14 +8,16 @@
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, ApplyPatchTransactionPhase, BTreeSet, EventKind, HookEvent,
-    MezError, PaneReadinessState, PendingFocusedShellHookContinuation, Result,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeApplyPatchBatchState,
-    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeSessionService,
+    AgentTurnRecord, AgentTurnState, ApplyPatchTransactionPhase, BTreeSet,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, EventKind, HookEvent, MezError, PaneReadinessState,
+    PendingFocusedShellHookContinuation, Result, RunningShellTransactionKind,
+    RunningShellTransactionRef, RuntimeApplyPatchBatchState, RuntimeHookPipelineBlock,
+    RuntimeHookPipelineDecision, RuntimePendingApplyPatchPhase, RuntimeSessionService,
     apply_patch_error_plan, apply_patch_read_plan_for_paths, apply_patch_touched_paths,
     apply_patch_transaction_phase, apply_patch_write_plan_from_read_output,
     apply_patch_write_plan_from_read_outputs, decode_shell_output_transport_with_diagnostics,
-    json_escape, local_action_plan, runtime_action_result_is_suppressed_duplicate_file_mutation,
+    exact_command_sha256, json_escape, local_action_plan,
+    runtime_action_result_is_suppressed_duplicate_file_mutation,
     runtime_agent_action_rejects_duplicate_success, runtime_agent_context_command,
     runtime_agent_execution_prompt_display_lines, runtime_agent_terminal_preview,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
@@ -106,6 +108,26 @@ impl RuntimeSessionService {
             state.current_path_read_retries = 0;
             *plan = apply_patch_read_plan_for_paths(&paths);
         }
+        Ok(())
+    }
+
+    /// Queues one generated apply-patch phase for ordinary shell dispatch.
+    ///
+    /// Generated read retries and write plans must re-enter the same hook and
+    /// authorization path as provider-authored shell actions. The retained
+    /// plan prevents the dispatcher from rebuilding the initial read phase.
+    fn dispatch_generated_apply_patch_phase(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        plan: mez_agent::LocalActionPlan,
+    ) -> Result<()> {
+        self.agent.pending_apply_patch_phases.insert(
+            Self::apply_patch_batch_state_key(&turn.turn_id, &action.id),
+            RuntimePendingApplyPatchPhase { plan },
+        );
+        self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
+        let _ = self.dispatch_stored_running_shell_actions(&turn.turn_id)?;
         Ok(())
     }
 
@@ -509,26 +531,38 @@ impl RuntimeSessionService {
             {
                 state.emitted_apply_patch = true;
             }
-            let mut plan = match local_action_plan(action) {
-                Ok(Some(plan)) => plan,
-                Ok(None) => continue,
-                Err(error) => {
-                    let error = MezError::from(error);
-                    let command = match &action.payload {
-                        AgentActionPayload::ShellCommand { command, .. } => command.as_str(),
-                        _ => "",
-                    };
-                    execution.action_results[index] = self.shell_action_runtime_error_result(
-                        turn,
-                        action,
-                        command,
-                        "local_action_plan",
-                        &error,
-                    )?;
-                    continue;
-                }
+            let apply_patch_state_key =
+                Self::apply_patch_batch_state_key(&turn.turn_id, &action.id);
+            let pending_apply_patch_phase = self
+                .agent
+                .pending_apply_patch_phases
+                .remove(&apply_patch_state_key);
+            let has_pending_apply_patch_phase = pending_apply_patch_phase.is_some();
+            let mut plan = match pending_apply_patch_phase {
+                Some(pending) => pending.plan,
+                None => match local_action_plan(action) {
+                    Ok(Some(plan)) => plan,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        let error = MezError::from(error);
+                        let command = match &action.payload {
+                            AgentActionPayload::ShellCommand { command, .. } => command.as_str(),
+                            _ => "",
+                        };
+                        execution.action_results[index] = self.shell_action_runtime_error_result(
+                            turn,
+                            action,
+                            command,
+                            "local_action_plan",
+                            &error,
+                        )?;
+                        continue;
+                    }
+                },
             };
-            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                && !has_pending_apply_patch_phase
+            {
                 self.prepare_apply_patch_batched_read_plan(turn, action, &mut plan)?;
             }
             let command = plan.command.as_str();
@@ -888,11 +922,21 @@ impl RuntimeSessionService {
                 Some(PendingFocusedShellHookContinuation {
                     turn_id: turn.turn_id.clone(),
                     action_id: action.id.clone(),
+                    phase_command_sha256: exact_command_sha256(
+                        DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+                        command,
+                    ),
                 }),
             )?;
             match hook_decision {
                 RuntimeHookPipelineDecision::Continue => {}
                 RuntimeHookPipelineDecision::Pending => {
+                    if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+                        self.agent.pending_apply_patch_phases.insert(
+                            apply_patch_state_key.clone(),
+                            RuntimePendingApplyPatchPhase { plan: plan.clone() },
+                        );
+                    }
                     execution.action_results[index].structured_content_json =
                         Some(mez_agent::shell_action_structured_content_json(
                             action,
@@ -1202,11 +1246,6 @@ impl RuntimeSessionService {
             .find(|action| action.id == action_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("shell transaction does not match an action"))?;
-        let permission_evaluation = execution
-            .action_results
-            .iter()
-            .find(|result| result.action_id == action_id)
-            .and_then(|result| result.permission_evaluation.clone());
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(false);
         };
@@ -1240,18 +1279,7 @@ impl RuntimeSessionService {
                             action.id
                         ),
                     )?;
-                    self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
-                    self.dispatch_shell_action_to_pane(
-                        turn,
-                        &action,
-                        super::shell_state::ShellActionDispatch {
-                            command: &read_plan.command,
-                            stateful: read_plan.stateful,
-                            interactive: read_plan.interactive,
-                            timeout_ms: read_plan.timeout_ms,
-                            permission_evaluation: permission_evaluation.as_deref(),
-                        },
-                    )?;
+                    self.dispatch_generated_apply_patch_phase(turn, &action, read_plan)?;
                     return Ok(true);
                 }
                 apply_patch_error_plan(&apply_patch_read_transport_failure_message(
@@ -1278,18 +1306,7 @@ impl RuntimeSessionService {
                             action.id
                         ),
                     )?;
-                    self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
-                    self.dispatch_shell_action_to_pane(
-                        turn,
-                        &action,
-                        super::shell_state::ShellActionDispatch {
-                            command: &read_plan.command,
-                            stateful: read_plan.stateful,
-                            interactive: read_plan.interactive,
-                            timeout_ms: read_plan.timeout_ms,
-                            permission_evaluation: permission_evaluation.as_deref(),
-                        },
-                    )?;
+                    self.dispatch_generated_apply_patch_phase(turn, &action, read_plan)?;
                     return Ok(true);
                 }
                 apply_patch_write_plan_from_read_outputs(patch, &state.read_outputs)
@@ -1321,18 +1338,7 @@ impl RuntimeSessionService {
                 action.id
             ),
         )?;
-        self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
-        self.dispatch_shell_action_to_pane(
-            turn,
-            &action,
-            super::shell_state::ShellActionDispatch {
-                command: &write_plan.command,
-                stateful: write_plan.stateful,
-                interactive: write_plan.interactive,
-                timeout_ms: write_plan.timeout_ms,
-                permission_evaluation: permission_evaluation.as_deref(),
-            },
-        )?;
+        self.dispatch_generated_apply_patch_phase(turn, &action, write_plan)?;
         Ok(true)
     }
 

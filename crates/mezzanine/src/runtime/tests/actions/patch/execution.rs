@@ -360,6 +360,115 @@ fn runtime_apply_patch_read_phase_truncation_retries_with_fresh_snapshot() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a generated apply-patch write phase rechecks the live policy after
+/// its read phase completes.
+///
+/// A semantic patch begins with a pane-shell snapshot read and only then
+/// constructs the concrete write command. Tightening the policy during that
+/// interval must prevent the generated write from reaching the pane, rather
+/// than reusing the initial read action's authorization result.
+#[test]
+fn runtime_apply_patch_generated_write_rechecks_narrowed_policy() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(160, 60).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-apply-patch-policy-narrowing","input":"create a note"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "maap semantic response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test action batch rationale".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "patch-1".to_string(),
+                    rationale: "create a file".to_string(),
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
+                        patch: "*** Begin Patch\n*** Add File: target/policy-narrowed-note.txt\n+alpha\n*** End Patch"
+                            .to_string(),
+                        strip: None,
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    service.remove_pending_agent_provider_task("turn-1");
+    service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    let marker = service
+        .running_shell_transactions_for_tests()
+        .keys()
+        .next()
+        .cloned()
+        .expect("apply-patch read transaction should be running");
+    let snapshot = concat!(
+        "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\n",
+        "X19NRVpfQVBQTFlfUEFUQ0hfUkVBRF9CRUdJTl9fCl9fTUVaX0FQUExZX1BBVENIX0ZJTEVfQkVHSU5fXwpQQVRIX0I2\n",
+        "NCBkR0Z5WjJWMEwzUnlkVzVqWVhSbFpDMXlaV0ZrTFc1dmRHVXVkSGgwClJFU09MVkVEX0I2NCBMMmh2YldVdmJtVnBi\n",
+        "QzlFYjJOMWJXVnVkSE12Y21Wd2IzTXZiV1Y2ZW1GdWFXNWxMM1JoY21kbGRDOTBjblZ1WTJGMFpXUXRjbVZoWkMxdWIz\n",
+        "UmxMblI0ZEE9PQpTVEFUVVMgbWlzc2luZwpfX01FWl9BUFBMWV9QQVRDSF9GSUxFX0VORF9fCl9fTUVaX0FQUExZX1BB\n",
+        "VENIX1JFQURfRU5EX18K\n",
+        "__MEZ_SHELL_OUTPUT_BASE64_END__\n",
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_preview = "partial apply_patch read transport".to_string();
+    transaction.observed_output_bytes = snapshot.len();
+    transaction.observed_output_truncated = true;
+    let state_key = RuntimeSessionService::apply_patch_batch_state_key("turn-1", "patch-1");
+    service.append_apply_patch_batch_transport(&state_key, snapshot.as_bytes());
+    service.permission_policy_mut().add_rule(
+        mez_agent::permissions::CommandRule::new(
+            ["apply_patch"],
+            RuleDecision::Forbid,
+            RuleMatch::Exact,
+        )
+        .unwrap(),
+    );
+
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, "turn-1", "agent-%1", "%1", 0)
+        .unwrap();
+
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert!(service.agent_turn_executions().get("turn-1").is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a pane-shell `apply_patch` action does not switch execution mode after dispatch.
 ///
 /// Shell-backed `apply_patch` runs as a read transaction followed by a verified

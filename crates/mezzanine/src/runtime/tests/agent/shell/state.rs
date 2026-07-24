@@ -515,6 +515,36 @@ fn runtime_host_access_dispatches_unwrapped_without_consuming_fallback() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies the final pane-transaction boundary reauthorizes the exact command
+/// against current policy instead of trusting a planning-time allow decision.
+#[test]
+fn runtime_shell_dispatch_rejects_authority_narrowed_after_planning() {
+    let mut service = bubblewrap_probe_service();
+    let turn = path_resolution_turn();
+    let mut action = sandbox_audit_action();
+    let mez_agent::AgentActionPayload::ShellCommand { command, .. } = &mut action.payload else {
+        unreachable!();
+    };
+    *command = "pwd".to_string();
+    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+    let retained = service
+        .permission_policy_for_turn(&turn)
+        .evaluate_shell_command_structured("pwd");
+    assert_eq!(retained.decision, RuleDecision::Allow);
+
+    service.permission_policy_mut().add_rule(
+        mez_agent::permissions::CommandRule::new(["pwd"], RuleDecision::Forbid, RuleMatch::Exact)
+            .unwrap(),
+    );
+
+    let error = service
+        .dispatch_shell_action_to_pane_for_tests(&turn, &action, "pwd", Some(&retained))
+        .unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies host access does not bypass the backend-independent network deny
 /// policy or convert it into an unsandboxed pane-shell transaction.
 #[test]

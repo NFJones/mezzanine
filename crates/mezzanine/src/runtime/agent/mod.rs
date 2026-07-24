@@ -10,7 +10,9 @@ use super::agent_state::{
 use super::commands::RuntimeModelCatalog;
 #[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
-use super::service_state::{RuntimeAgentPatchRecord, RuntimeApplyPatchBatchState};
+use super::service_state::{
+    RuntimeAgentPatchRecord, RuntimeApplyPatchBatchState, RuntimePendingApplyPatchPhase,
+};
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentScheduler,
     AgentShellSession, AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
@@ -344,6 +346,8 @@ pub(crate) struct RuntimeAgentComponent {
         BTreeMap<String, Vec<mez_agent::instructions::DiscoveredInstructionFile>>,
     /// Batched semantic apply-patch read state keyed by turn/action.
     apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
+    /// Generated apply-patch phases retained while their pre-shell hooks run.
+    pending_apply_patch_phases: BTreeMap<String, RuntimePendingApplyPatchPhase>,
     /// Pane-scoped agent shell sessions and conversation bindings.
     agent_shell_store: AgentShellStore,
     /// Canonical queued, running, blocked, and terminal agent turns.
@@ -1461,6 +1465,9 @@ impl RuntimeSessionService {
         self.agent
             .agent_pre_shell_hook_completions
             .retain(|completion| completion.turn_id != turn_id);
+        self.agent
+            .pending_apply_patch_phases
+            .retain(|state_key, _| !state_key.starts_with(&format!("{turn_id}/")));
     }
 
     /// Clears all action bookkeeping when the live session is replaced.
@@ -1480,6 +1487,7 @@ impl RuntimeSessionService {
         self.agent.agent_turn_network_action_history.clear();
         self.agent.agent_turn_config_change_successes.clear();
         self.agent.agent_pre_shell_hook_completions.clear();
+        self.agent.pending_apply_patch_phases.clear();
     }
 
     /// Records one idle-recovery observation of an undispatched shell action
@@ -1554,6 +1562,7 @@ impl RuntimeSessionService {
             .contains(&RuntimeAgentPreShellHookCompletion {
                 turn_id: continuation.turn_id.clone(),
                 action_id: continuation.action_id.clone(),
+                phase_command_sha256: continuation.phase_command_sha256.clone(),
                 hook_id: hook_id.to_string(),
             })
     }
@@ -1569,6 +1578,7 @@ impl RuntimeSessionService {
             .insert(RuntimeAgentPreShellHookCompletion {
                 turn_id: continuation.turn_id.clone(),
                 action_id: continuation.action_id.clone(),
+                phase_command_sha256: continuation.phase_command_sha256.clone(),
                 hook_id: hook_id.to_string(),
             });
     }

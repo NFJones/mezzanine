@@ -4515,6 +4515,12 @@ large-input chunks. A failed chunk MUST NOT cause previously accepted bytes to
 be sent again.
 Mezzanine MUST register shell transaction identity, strict marker ownership,
 and busy readiness before delivering any transaction wrapper bytes to the pane.
+Immediately before that registration and delivery boundary, every executable
+agent-shell phase MUST be re-evaluated against the current effective
+permission policy, approvals, path and subagent scopes, network policy, and
+pre-shell hooks. A stale planning-time authorization MUST NOT permit delivery.
+Generated `apply_patch` read retries and write phases are executable phases and
+MUST use the same boundary with their exact retained command.
 Delivery failure after registration MUST settle the transaction fail closed and
 MUST NOT retry a possibly delivered wrapper. Transaction output retention and
 private output-frame rendering MUST preserve bounded incremental state across
