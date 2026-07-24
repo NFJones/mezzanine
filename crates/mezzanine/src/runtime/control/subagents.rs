@@ -358,8 +358,9 @@ impl RuntimeSessionService {
         if spawn.write_scopes_defaulted && !profile.default_write_scopes.is_empty() {
             spawn.write_scopes = profile.default_write_scopes.clone();
         }
+        let parent_permission_policy = self.permission_policy_for_agent(&spawn.parent_agent_id);
         if let Some(preset) = profile.permission_preset
-            && compare_permission_preset_authority(self.permission_policy().preset, preset)
+            && compare_permission_preset_authority(parent_permission_policy.preset, preset)
                 == mez_agent::permissions::PermissionAuthorityChange::Broadening
         {
             return Err(MezError::forbidden(
@@ -803,7 +804,7 @@ impl RuntimeSessionService {
         }
         if !crate::runtime::config::bubblewrap_applies_to_policy(
             &self.configured_permissions().sandbox,
-            self.permission_policy(),
+            &self.permission_policy_for_agent(parent_agent_id),
         ) {
             return None;
         }

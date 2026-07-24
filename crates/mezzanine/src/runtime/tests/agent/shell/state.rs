@@ -141,7 +141,7 @@ fn runtime_host_access_shell_audit_records_distinct_policy_bypass() {
     let audit_path = root.join("audit.jsonl");
     let mut service = test_runtime_service();
     configure_path_resolution_bubblewrap(&mut service);
-    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+    service.set_pane_approval_policy_override("%1", Some(ApprovalPolicy::HostAccess));
     service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),

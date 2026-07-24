@@ -284,9 +284,12 @@ impl FocusedShellExecutor for RuntimeFocusedShellPaneExecutor<'_> {
             .shell_command
             .as_deref()
             .ok_or_else(|| MezError::invalid_args("focused-shell hook plan is missing command"))?;
-        match self
-            .service
-            .permission_policy()
+        let permission_policy = plan
+            .target_pane_id
+            .as_deref()
+            .map(|pane_id| self.service.permission_policy_for_pane(pane_id))
+            .unwrap_or_else(|| self.service.permission_policy().clone());
+        match permission_policy
             .evaluate_shell_command_with_approvals(shell_command, self.service.session_approvals())
         {
             RuleDecision::Allow => {}

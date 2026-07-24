@@ -196,6 +196,7 @@ impl RuntimeSessionService {
             .model_profile_thinking_enabled(&model_profile)
             .map(|enabled| if enabled { "enabled" } else { "disabled" })
             .unwrap_or("unsupported");
+        let permission_policy = self.permission_policy_for_pane(pane_id);
         let rows = vec![
             vec!["Pane".to_string(), session.pane_id.clone()],
             vec!["Session".to_string(), session.session_id.clone()],
@@ -241,14 +242,14 @@ impl RuntimeSessionService {
                 "Permissions".to_string(),
                 format!(
                     "preset {}, approval {}, bypass {}",
-                    runtime_permission_preset_name(self.permission_policy().preset),
-                    runtime_approval_policy_name(self.permission_policy().approval_policy),
-                    self.permission_policy().approval_bypass()
+                    runtime_permission_preset_name(permission_policy.preset),
+                    runtime_approval_policy_name(permission_policy.approval_policy),
+                    permission_policy.approval_bypass()
                 ),
             ],
             vec![
                 "Command rules".to_string(),
-                self.permission_policy().rules().len().to_string(),
+                permission_policy.rules().len().to_string(),
             ],
             vec![
                 "Writable roots".to_string(),

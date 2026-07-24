@@ -175,7 +175,9 @@ impl RuntimeSessionService {
             )?));
         }
         let mcp_summary = self.mcp_registry().agent_shell_summary();
-        let permission_summary = self.permission_policy().agent_shell_summary();
+        let permission_summary = self
+            .permission_policy_for_pane(child_pane_id)
+            .agent_shell_summary();
         let parsed_command = execute_agent_shell_command_with_context(
             self.agent_shell_store_mut(),
             child_pane_id,

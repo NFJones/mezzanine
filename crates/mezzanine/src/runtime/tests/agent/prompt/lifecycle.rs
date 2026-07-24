@@ -196,7 +196,7 @@ fn runtime_subagent_omitted_scopes_inherit_parent_bubblewrap_authority() {
 fn runtime_host_access_subagent_does_not_inherit_bubblewrap_scope() {
     let (mut service, primary, root, _) =
         trusted_project_subagent_scope_service("runtime-subagent-host-access");
-    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+    service.set_pane_approval_policy_override("%1", Some(ApprovalPolicy::HostAccess));
     let spawn = SubagentSpawnRequest {
         parent_agent_id: "agent-%1".to_string(),
         requested_role: "worker".to_string(),

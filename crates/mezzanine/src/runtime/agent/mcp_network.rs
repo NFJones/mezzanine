@@ -487,15 +487,16 @@ impl RuntimeSessionService {
             result.structured_content_json = Some(block.structured_json());
             return Ok(result);
         }
+        let permission_policy = self.permission_policy_for_turn(turn);
         let request = McpToolCallRequest {
             server_id: server.clone(),
             tool_name: tool.clone(),
             arguments_json: arguments_json.clone(),
             timeout_ms: None,
-            approval_bypass: self.permission_policy().approval_bypass(),
+            approval_bypass: permission_policy.approval_bypass(),
         };
         let plan = self.mcp_registry().plan_tool_call(&request)?;
-        if plan.approval_required && !approved && !self.permission_policy().approval_bypass() {
+        if plan.approval_required && !approved && !permission_policy.approval_bypass() {
             return Ok(ActionResult::blocked(
                 turn,
                 action,
@@ -590,15 +591,16 @@ impl RuntimeSessionService {
             result.structured_content_json = Some(block.structured_json());
             return Ok(result);
         }
+        let permission_policy = self.permission_policy_for_turn(turn);
         let request = McpToolCallRequest {
             server_id: server.clone(),
             tool_name: tool.clone(),
             arguments_json: arguments_json.clone(),
             timeout_ms: None,
-            approval_bypass: self.permission_policy().approval_bypass(),
+            approval_bypass: permission_policy.approval_bypass(),
         };
         let plan = self.mcp_registry().plan_tool_call(&request)?;
-        if plan.approval_required && !approved && !self.permission_policy().approval_bypass() {
+        if plan.approval_required && !approved && !permission_policy.approval_bypass() {
             return Ok(ActionResult::blocked(
                 turn,
                 action,

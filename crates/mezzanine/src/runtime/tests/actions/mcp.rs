@@ -657,7 +657,6 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
 #[tokio::test]
 async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
     let mut service = test_runtime_service();
-    service.permission_policy_mut().approval_policy = ApprovalPolicy::FullAccess;
     let script = runtime_mcp_fixture_script(false);
     service
         .replace_config_layers_async(vec![ConfigLayer {
@@ -673,7 +672,7 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
         }])
         .await
         .unwrap();
-    service.permission_policy_mut().approval_policy = ApprovalPolicy::FullAccess;
+    service.set_pane_approval_policy_override("%1", Some(ApprovalPolicy::FullAccess));
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();

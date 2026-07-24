@@ -35,11 +35,8 @@ impl RuntimeSessionService {
             .get(&(turn.turn_id.clone(), action.id.clone()))
             .cloned();
         let configured_sandbox = self.configured_permissions().sandbox.as_str().to_string();
-        let host_policy_bypass = self
-            .integration
-            .permission_policy()
-            .approval_policy
-            .bypasses_sandbox();
+        let permission_policy = self.permission_policy_for_turn(turn);
+        let host_policy_bypass = permission_policy.approval_policy.bypasses_sandbox();
         let fallback_bypass = !host_policy_bypass
             && fallback_audit.is_some()
             && self.sandbox_bypass_active_for_action(&turn.turn_id, &action.id);
@@ -150,8 +147,7 @@ impl RuntimeSessionService {
         } else {
             record.approval_state = "not_required_or_preapproved".to_string();
         }
-        record.policy_mode =
-            runtime_permission_preset_name(self.integration.permission_policy().preset).to_string();
+        record.policy_mode = runtime_permission_preset_name(permission_policy.preset).to_string();
         record.outcome = outcome.to_string();
         let _ = audit_log.append(record.sanitized())?;
         Ok(())
@@ -216,6 +212,7 @@ impl RuntimeSessionService {
         action: &AgentAction,
         outcome: &str,
     ) -> Result<()> {
+        let permission_policy = self.permission_policy_for_turn(turn);
         let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
@@ -251,8 +248,7 @@ impl RuntimeSessionService {
             }
             _ => {}
         }
-        record.policy_mode =
-            runtime_permission_preset_name(self.integration.permission_policy().preset).to_string();
+        record.policy_mode = runtime_permission_preset_name(permission_policy.preset).to_string();
         record.approval_state = "not_required_or_preapproved".to_string();
         record.outcome = outcome.to_string();
         let _ = audit_log.append(record.sanitized())?;
@@ -270,6 +266,7 @@ impl RuntimeSessionService {
         action: &AgentAction,
         outcome: &str,
     ) -> Result<()> {
+        let permission_policy = self.permission_policy_for_turn(turn);
         let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
@@ -326,8 +323,7 @@ impl RuntimeSessionService {
             }
             _ => {}
         }
-        record.policy_mode =
-            runtime_permission_preset_name(self.integration.permission_policy().preset).to_string();
+        record.policy_mode = runtime_permission_preset_name(permission_policy.preset).to_string();
         record.approval_state = "not_required_or_preapproved".to_string();
         record.outcome = outcome.to_string();
         let _ = audit_log.append(record.sanitized())?;
