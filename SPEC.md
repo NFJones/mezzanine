@@ -2855,6 +2855,17 @@ project overlays, macros, and skills; explicit-scope mode MUST NOT change trust.
 The `off` preset MUST retain trust, scopes, approval policy, and managed caches.
 Agents MUST NOT apply these policy mutations through `config_change`.
 
+Sandbox profile export MUST emit a deterministic versioned recipe containing
+only a code-owned preset, an authority strategy, and allowlisted typed
+toolchains. It MUST exclude host paths, trust records, Bubblewrap executable
+paths, credentials, environment values, command rules, hooks, provider or MCP
+state, arbitrary mounts, and `host-access`. Profile import MUST reject unknown
+or unsupported fields, independently resolve the local project, preview the
+normal guided setup transaction, and require direct-user confirmation with
+`--yes` for noninteractive or JSON mutation. Repository-provided profiles MUST
+never auto-apply, including for trusted projects, and agents MUST NOT import,
+export, or mutate profiles through `config_change`.
+
 Bubblewrap MUST disable host system and global Git configuration. The typed
 Bubblewrap configuration MAY contain a paired non-secret Git author name and
 email; both values MUST be present together and MUST be printable. When

@@ -510,3 +510,168 @@ fn sandbox_setup_rolls_back_config_when_trust_persistence_fails() {
 
     let _ = fs::remove_dir_all(home);
 }
+
+/// Profile export emits only the versioned allowlisted recipe fields and
+/// excludes host paths, identity, executable, and unrelated configuration.
+#[test]
+fn sandbox_profile_export_is_deterministic_and_sanitized() {
+    let (env, home) = test_env("sandbox-profile-export");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(
+        config_root.join("config.toml"),
+        "version = 25\n[permissions]\nsandbox = \"bubblewrap\"\napproval_policy = \"auto-allow\"\nread_scopes = [\"/private/host/path\"]\n[permissions.bubblewrap]\nexecutable = \"/private/bwrap\"\ngit_user_name = \"Private Author\"\ngit_user_email = \"private@example.invalid\"\ntoolchains = [\"rust\"]\n",
+    )
+    .unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "profile".to_string(),
+            "export".to_string(),
+            "--path".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let recipe: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(
+        recipe,
+        serde_json::json!({
+            "version": 1,
+            "preset": "project-read-only",
+            "authority": "explicit-scope",
+            "toolchains": ["rust"]
+        })
+    );
+    let rendered = String::from_utf8(stdout).unwrap();
+    for excluded in [
+        "/private",
+        "Private Author",
+        "private@example.invalid",
+        "bwrap",
+    ] {
+        assert!(!rendered.contains(excluded), "{rendered}");
+    }
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Profile import rejects unknown or unsafe recipe fields before creating any
+/// configuration state.
+#[test]
+fn sandbox_profile_import_rejects_unknown_and_unsafe_fields() {
+    let (env, home) = test_env("sandbox-profile-reject");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let recipe = home.join("unsafe.json");
+    fs::write(
+        &recipe,
+        r#"{"version":1,"preset":"project-safe","authority":"explicit-scope","toolchains":[],"host_path":"/private"}"#,
+    )
+    .unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "profile".to_string(),
+            "import".to_string(),
+            recipe.to_string_lossy().into_owned(),
+            "--path".to_string(),
+            project.to_string_lossy().into_owned(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.message().contains("unknown field"), "{error}");
+    assert!(!home.join(".config/mezzanine").exists());
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Import previews without confirmation, then applies only the reviewed
+/// recipe selections to the independently resolved local project.
+#[test]
+fn sandbox_profile_import_requires_confirmation_and_uses_local_root() {
+    let (env, home) = test_env("sandbox-profile-import");
+    let project = home.join("local-project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let recipe = home.join("profile.json");
+    fs::write(
+        &recipe,
+        r#"{"version":1,"preset":"project-read-only","authority":"explicit-scope","toolchains":["rust"]}"#,
+    )
+    .unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let base = vec![
+        "mez".to_string(),
+        "sandbox".to_string(),
+        "profile".to_string(),
+        "import".to_string(),
+        recipe.to_string_lossy().into_owned(),
+        "--path".to_string(),
+        project.to_string_lossy().into_owned(),
+    ];
+
+    let preview_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(base.clone()),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(preview_code, 1);
+    assert!(!config_path.exists());
+
+    stdout.clear();
+    let mut confirmed = base;
+    confirmed.push("--yes".to_string());
+    let applied_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(confirmed),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(applied_code, 0);
+    let config = fs::read_to_string(&config_path).unwrap();
+    let local_root = project
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(config.contains(&local_root), "{config}");
+    assert!(config.contains("write_scopes = []"), "{config}");
+    assert!(config.contains("toolchains = [\"rust\"]"), "{config}");
+    assert!(!home.join(".config/mezzanine/project-trust.tsv").exists());
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}

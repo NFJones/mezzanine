@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use rustix::fs::{FlockOperation, flock};
+use serde::Deserialize;
 
 use super::{CliEnv, CliOutputFormat, MezError, Result, Serialize, serialize_json};
 use crate::config::{
@@ -61,6 +62,12 @@ enum SandboxCliCommand {
         /// Preset workflow to run.
         #[command(subcommand)]
         command: SandboxPresetCommand,
+    },
+    /// Imports or exports a sanitized, versioned sandbox setup recipe.
+    Profile {
+        /// Profile workflow to run.
+        #[command(subcommand)]
+        command: SandboxProfileCommand,
     },
     /// Selects policy-only execution while retaining other sandbox settings.
     Disable(SandboxMutationArgs),
@@ -112,6 +119,46 @@ enum SandboxPresetCommand {
     Apply(SandboxSetupArgs),
 }
 
+/// Sanitized sandbox setup profile commands.
+#[derive(Debug, Clone, Subcommand)]
+enum SandboxProfileCommand {
+    /// Exports the effective safe preset fields as deterministic JSON.
+    Export {
+        /// Project path to inspect instead of the current directory.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+    /// Previews or imports one strict JSON recipe.
+    Import {
+        /// Recipe file to review and import.
+        file: PathBuf,
+        /// Local project path resolved independently from recipe contents.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Builds the complete local plan without persistence.
+        #[arg(long)]
+        dry_run: bool,
+        /// Confirms the local policy mutation.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// Portable recipe containing only allowlisted sandbox setup selections.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SandboxProfileRecipe {
+    /// Recipe contract version.
+    version: u32,
+    /// Code-owned preset name.
+    preset: String,
+    /// Local authority strategy, never a host path.
+    authority: String,
+    /// Allowlisted typed toolchain kinds.
+    #[serde(default)]
+    toolchains: Vec<String>,
+}
+
 /// Normalized guided setup operation dispatched to the transactional owner.
 #[derive(Debug, Clone)]
 enum SandboxSetupCommand {
@@ -123,6 +170,8 @@ enum SandboxSetupCommand {
     Disable(SandboxMutationArgs),
     /// Trusts the independently discovered current project.
     TrustCurrentProject(SandboxMutationArgs),
+    /// Imports one reviewed sanitized profile.
+    ProfileImport(SandboxSetupArgs, Vec<String>),
 }
 
 /// Stable preview and application result for guided sandbox setup.
@@ -170,6 +219,9 @@ pub(super) fn run_sandbox<W: Write>(
     let (path, input_source, doctor, verbose) = match args.command {
         Some(SandboxCliCommand::Toolchains { command }) => {
             return run_sandbox_toolchains(command, env, interactive, output_format, stdout);
+        }
+        Some(SandboxCliCommand::Profile { command }) => {
+            return run_sandbox_profile(command, env, interactive, output_format, stdout);
         }
         Some(SandboxCliCommand::Plan(args)) => {
             return run_sandbox_setup(
@@ -338,6 +390,125 @@ fn load_read_only_config_layers(
     Ok(layers)
 }
 
+/// Runs strict sanitized profile import and export workflows.
+fn run_sandbox_profile<W: Write>(
+    command: SandboxProfileCommand,
+    env: CliEnv,
+    interactive: bool,
+    output_format: CliOutputFormat,
+    stdout: &mut W,
+) -> Result<u8> {
+    match command {
+        SandboxProfileCommand::Export { path } => {
+            let path = path.unwrap_or(std::env::current_dir()?);
+            let paths = env.config_paths()?;
+            let discovery =
+                discover_project_root_with_metadata(&path, ProjectRootInputSource::ExplicitPath)?;
+            let layers = load_read_only_config_layers(
+                &paths,
+                &discovery.canonical_root,
+                &discovery.canonical_start,
+                false,
+            )?;
+            let structured = runtime_effective_config_value(&layers)?;
+            let permissions = runtime_configured_permissions_from_config(&structured)?;
+            let (preset, authority, toolchains) = match permissions.sandbox {
+                crate::runtime::SandboxConfig::PolicyOnly => ("off", "explicit-scope", Vec::new()),
+                crate::runtime::SandboxConfig::Bubblewrap(config) => {
+                    let preset = if permissions.resources.write_scopes.is_empty()
+                        && !permissions.resources.read_scopes.is_empty()
+                    {
+                        "project-read-only"
+                    } else if permissions.authorization.approval_policy
+                        == mez_agent::ApprovalPolicy::AutoAllow
+                    {
+                        "project-auto"
+                    } else {
+                        "project-safe"
+                    };
+                    let authority = if permissions.resources.read_scopes.is_empty()
+                        && permissions.resources.write_scopes.is_empty()
+                    {
+                        "trusted-project"
+                    } else {
+                        "explicit-scope"
+                    };
+                    let toolchains = config
+                        .toolchains
+                        .iter()
+                        .map(|kind| kind.as_str().to_string())
+                        .collect();
+                    (preset, authority, toolchains)
+                }
+            };
+            let recipe = SandboxProfileRecipe {
+                version: 1,
+                preset: preset.to_string(),
+                authority: authority.to_string(),
+                toolchains,
+            };
+            writeln!(stdout, "{}", serialize_json(&recipe)?)?;
+            Ok(0)
+        }
+        SandboxProfileCommand::Import {
+            file,
+            path,
+            dry_run,
+            yes,
+        } => {
+            let text = fs::read_to_string(&file)?;
+            let recipe: SandboxProfileRecipe = serde_json::from_str(&text).map_err(|error| {
+                MezError::invalid_args(format!("invalid sandbox profile recipe: {error}"))
+            })?;
+            validate_sandbox_profile_recipe(&recipe)?;
+            run_sandbox_setup(
+                SandboxSetupCommand::ProfileImport(
+                    SandboxSetupArgs {
+                        preset: recipe.preset,
+                        authority: Some(recipe.authority),
+                        path,
+                        dry_run,
+                        yes,
+                    },
+                    recipe.toolchains,
+                ),
+                env,
+                interactive,
+                output_format,
+                stdout,
+            )
+        }
+    }
+}
+
+fn validate_sandbox_profile_recipe(recipe: &SandboxProfileRecipe) -> Result<()> {
+    if recipe.version != 1 {
+        return Err(MezError::invalid_args("sandbox profile version must be 1"));
+    }
+    if !matches!(
+        recipe.preset.as_str(),
+        "project-safe" | "project-auto" | "project-read-only" | "off"
+    ) {
+        return Err(MezError::invalid_args(
+            "sandbox profile contains an unsupported preset",
+        ));
+    }
+    if !matches!(
+        recipe.authority.as_str(),
+        "trusted-project" | "explicit-scope"
+    ) {
+        return Err(MezError::invalid_args(
+            "sandbox profile contains an unsupported authority",
+        ));
+    }
+    if recipe.toolchains.iter().any(|kind| kind != "rust") || recipe.toolchains.len() > 1 {
+        return Err(MezError::invalid_args(
+            "sandbox profile toolchains support only one rust selection",
+        ));
+    }
+    Ok(())
+}
+
 /// Plans or applies one code-owned guided sandbox setup transaction.
 fn run_sandbox_setup<W: Write>(
     command: SandboxSetupCommand,
@@ -346,44 +517,59 @@ fn run_sandbox_setup<W: Write>(
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<u8> {
-    let (preset, authority, path, dry_run, yes, force_read_only, trust_only) = match command {
-        SandboxSetupCommand::Plan(args) => (
-            args.preset,
-            args.authority,
-            args.path,
-            true,
-            false,
-            true,
-            false,
-        ),
-        SandboxSetupCommand::Enable(args) => (
-            args.preset,
-            args.authority,
-            args.path,
-            args.dry_run,
-            args.yes,
-            false,
-            false,
-        ),
-        SandboxSetupCommand::Disable(args) => (
-            "off".to_string(),
-            Some("retained".to_string()),
-            None,
-            args.dry_run,
-            args.yes,
-            false,
-            false,
-        ),
-        SandboxSetupCommand::TrustCurrentProject(args) => (
-            "trust-current-project".to_string(),
-            Some("trusted-project".to_string()),
-            None,
-            args.dry_run,
-            args.yes,
-            false,
-            true,
-        ),
-    };
+    let (preset, authority, path, dry_run, yes, force_read_only, trust_only, profile_toolchains) =
+        match command {
+            SandboxSetupCommand::Plan(args) => (
+                args.preset,
+                args.authority,
+                args.path,
+                true,
+                false,
+                true,
+                false,
+                None,
+            ),
+            SandboxSetupCommand::Enable(args) => (
+                args.preset,
+                args.authority,
+                args.path,
+                args.dry_run,
+                args.yes,
+                false,
+                false,
+                None,
+            ),
+            SandboxSetupCommand::Disable(args) => (
+                "off".to_string(),
+                Some("retained".to_string()),
+                None,
+                args.dry_run,
+                args.yes,
+                false,
+                false,
+                None,
+            ),
+            SandboxSetupCommand::TrustCurrentProject(args) => (
+                "trust-current-project".to_string(),
+                Some("trusted-project".to_string()),
+                None,
+                args.dry_run,
+                args.yes,
+                false,
+                true,
+                None,
+            ),
+            SandboxSetupCommand::ProfileImport(args, toolchains) => (
+                args.preset,
+                args.authority,
+                args.path,
+                args.dry_run,
+                args.yes,
+                false,
+                false,
+                Some(toolchains),
+            ),
+        };
     let path = path.unwrap_or(std::env::current_dir()?);
     let discovery = discover_project_root_with_metadata(
         &path,
@@ -404,11 +590,17 @@ fn run_sandbox_setup<W: Write>(
     };
     let project = discovery.canonical_root.to_string_lossy().into_owned();
     let mut trust_current_project = trust_only;
-    let mutations = if trust_only {
+    let mut mutations = if trust_only {
         Vec::new()
     } else {
         sandbox_setup_mutations(&preset, &authority, &project, &mut trust_current_project)?
     };
+    if let Some(toolchains) = profile_toolchains {
+        mutations.push(ConfigMutation {
+            path: "permissions.bubblewrap.toolchains".to_string(),
+            operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(toolchains)),
+        });
+    }
     let paths = env.config_paths()?;
     let config_path = paths
         .select_primary_file()?

@@ -787,6 +787,17 @@ choose `trusted-project` or `explicit-scope` authority. Trusted-project mode
 can activate applicable project overlays, macros, and skills, while
 explicit-scope mode does not change project trust.
 
+`mez sandbox profile export [--path PATH]` emits a deterministic JSON recipe
+with exactly `version`, `preset`, `authority`, and `toolchains`. Export derives
+only safe preset-equivalent state; it omits host paths, trust records,
+Bubblewrap executable and identity fields, environment values, command rules,
+hooks, provider/MCP state, arbitrary mounts, credentials, and `host-access`.
+`mez sandbox profile import FILE [--path PATH] [--dry-run] [--yes]` strictly
+rejects unknown or unsupported fields, independently discovers the local
+project, and uses the same atomic guided-setup transaction. Import previews by
+default and never auto-applies a repository profile, even when that repository
+is already trusted.
+
 Bubblewrap disables system and global Git configuration. When both sanitized
 identity fields are configured, Mezzanine projects only `user.name` and
 `user.email` through Git command-scope configuration, which takes precedence

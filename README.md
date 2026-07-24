@@ -400,6 +400,11 @@ Current support reflects behavior implemented in the repository today.
   `--dry-run` never write; mutations require confirmation and noninteractive
   use requires `--yes`. Code-owned presets provide safe, automatic,
   read-only, and off modes without exposing these policy changes to agents.
+- `mez sandbox profile export` emits a deterministic versioned JSON recipe
+  containing only a code-owned preset, authority strategy, and allowlisted
+  toolchains. `profile import FILE` previews against an independently resolved
+  local project and requires `--yes`; recipes never carry host paths, trust,
+  credentials, execution controls, arbitrary mounts, or provider state.
 - Trusted-project Bubblewrap runs reuse a private Mezzanine-managed home with
   persistent XDG cache, config, data, and state directories. Homes are isolated
   by project and sandbox profile, never copy the real user home, and are removed
