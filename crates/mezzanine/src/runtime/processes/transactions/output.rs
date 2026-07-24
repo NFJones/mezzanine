@@ -3,9 +3,62 @@
 use super::{
     ApplyPatchTransactionPhase, RunningShellTransactionKind, RuntimeSessionService,
     agent_shell_transaction_bytes_before_end_marker, agent_shell_transaction_observation_bytes,
-    apply_patch_transaction_phase, latest_agent_shell_transaction_output_lines,
-    runtime_shell_transaction_observation_limit,
+    apply_patch_transaction_phase, find_byte_subsequence,
+    latest_agent_shell_transaction_output_lines, runtime_shell_transaction_observation_limit,
 };
+
+/// Maximum bytes retained while waiting for one mandatory OSC start boundary.
+const SHELL_TRANSACTION_START_BOUNDARY_LIMIT_BYTES: usize = 4096;
+
+/// Returns bytes after a complete matching OSC start marker.
+///
+/// Bytes before the boundary are wrapper echo or pane noise and are discarded.
+/// An incomplete matching boundary is retained across PTY reads up to the
+/// protocol marker limit.
+fn shell_transaction_bytes_after_start_marker(
+    pending: &mut Vec<u8>,
+    bytes: &[u8],
+    marker: &str,
+) -> Option<Vec<u8>> {
+    pending.extend_from_slice(bytes);
+    let marker_prefix = format!("\x1b]133;C;mez_marker={marker};");
+    if let Some(start) = find_byte_subsequence(pending, marker_prefix.as_bytes()) {
+        let terminator_search_start = start + marker_prefix.len();
+        let terminator = pending[terminator_search_start..]
+            .iter()
+            .enumerate()
+            .find_map(|(offset, byte)| match *byte {
+                0x07 => Some(terminator_search_start + offset + 1),
+                0x1b if pending.get(terminator_search_start + offset + 1) == Some(&b'\\') => {
+                    Some(terminator_search_start + offset + 2)
+                }
+                _ => None,
+            });
+        if let Some(end) = terminator {
+            let transaction_bytes = pending[end..].to_vec();
+            pending.clear();
+            return Some(transaction_bytes);
+        }
+        if start > 0 {
+            pending.drain(..start);
+        }
+    } else {
+        let max_prefix_len = marker_prefix.len().saturating_sub(1).min(pending.len());
+        let retained_len = (1..=max_prefix_len)
+            .rev()
+            .find(|length| pending[pending.len() - length..] == marker_prefix.as_bytes()[..*length])
+            .unwrap_or(0);
+        if retained_len == 0 {
+            pending.clear();
+        } else {
+            pending.drain(..pending.len() - retained_len);
+        }
+    }
+    if pending.len() > SHELL_TRANSACTION_START_BOUNDARY_LIMIT_BYTES {
+        pending.clear();
+    }
+    None
+}
 
 /// Returns complete UTF-8 bytes while retaining only an incomplete trailing scalar.
 fn complete_transaction_utf8_bytes(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<u8> {
@@ -25,8 +78,31 @@ impl RuntimeSessionService {
         let mut status_line_updates = Vec::new();
         for (marker, transaction) in self.process.running_shell_transactions.iter_mut() {
             if transaction.pane_id == pane_id {
+                let requires_unobserved_start = self
+                    .process
+                    .shell_transaction_require_start_markers
+                    .contains(marker)
+                    && !self
+                        .process
+                        .shell_transaction_started_markers
+                        .contains(marker);
+                let boundary_bytes = if requires_unobserved_start {
+                    let Some(boundary_bytes) = shell_transaction_bytes_after_start_marker(
+                        self.process
+                            .shell_transaction_start_boundary_pending
+                            .entry(marker.clone())
+                            .or_default(),
+                        bytes,
+                        marker,
+                    ) else {
+                        continue;
+                    };
+                    boundary_bytes
+                } else {
+                    bytes.to_vec()
+                };
                 let transaction_bytes =
-                    agent_shell_transaction_bytes_before_end_marker(bytes, marker);
+                    agent_shell_transaction_bytes_before_end_marker(&boundary_bytes, marker);
                 let complete_bytes = complete_transaction_utf8_bytes(
                     self.process
                         .shell_transaction_output_utf8_pending

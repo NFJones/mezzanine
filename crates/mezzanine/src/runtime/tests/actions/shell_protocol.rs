@@ -99,6 +99,99 @@ fn runtime_shell_transaction_observation_preserves_split_utf8() {
     assert!(!transaction.observed_output_truncated);
 }
 
+/// Registers one raw-output transaction whose capture must begin at its OSC
+/// start marker. Readiness probes preserve bytes exactly, which keeps boundary
+/// assertions independent from agent-action output cleanup.
+fn register_required_start_capture(service: &mut RuntimeSessionService) {
+    service.register_running_shell_transaction(
+        "marker-1".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::ReadinessProbe,
+            pane_id: "%1".to_string(),
+            command: "printf sentinel".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+        true,
+    );
+}
+
+/// Verifies wrapper echo before a mandatory start marker is excluded while
+/// output after that marker is retained from the same PTY read.
+#[test]
+fn runtime_shell_transaction_capture_starts_after_osc_boundary() {
+    let mut service = test_runtime_service();
+    register_required_start_capture(&mut service);
+
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"\x1b[?2004l\rMEZ_STTY_STATE=\r\n\x1b]133;C;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\mez-bubblewrap-capability-v1\n",
+    );
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
+    assert_eq!(
+        transaction.observed_output_preview,
+        "mez-bubblewrap-capability-v1\n"
+    );
+    assert_eq!(
+        transaction.observed_output_bytes,
+        "mez-bubblewrap-capability-v1\n".len()
+    );
+}
+
+/// Verifies a mandatory OSC start marker split across PTY reads is retained
+/// only as framing state and does not leak pre-start shell bytes into output.
+#[test]
+fn runtime_shell_transaction_capture_preserves_split_start_boundary() {
+    let mut service = test_runtime_service();
+    register_required_start_capture(&mut service);
+
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"wrapper echo\r\n\x1b]133;C;mez_marker=marker-1;mez_turn=turn-1;",
+    );
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"mez_agent=agent-%1;mez_pane=%1\x1b\\sentinel\n",
+    );
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
+    assert_eq!(transaction.observed_output_preview, "sentinel\n");
+    assert_eq!(transaction.observed_output_bytes, 9);
+}
+
+/// Verifies output capture still fails closed semantically: bytes after the
+/// trusted start boundary remain evidence, while prompt bytes after the
+/// matching end marker are excluded.
+#[test]
+fn runtime_shell_transaction_capture_retains_contamination_before_end_only() {
+    let mut service = test_runtime_service();
+    register_required_start_capture(&mut service);
+
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"ignored\r\n\x1b]133;C;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\sentinel\npollution\n\x1b]133;D;0;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\prompt > ",
+    );
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
+    assert_eq!(transaction.observed_output_preview, "sentinel\npollution\n");
+    assert_eq!(transaction.observed_output_bytes, 19);
+}
+
 /// Verifies visible transaction rendering retains a Base64 frame split across
 /// PTY reads and emits only its decoded payload after the matching end marker.
 #[test]

@@ -120,6 +120,8 @@ pub(crate) struct RuntimeProcessComponent {
     shell_transaction_require_start_markers: BTreeSet<String>,
     /// Markers whose mandatory wrapper start event has been observed.
     shell_transaction_started_markers: BTreeSet<String>,
+    /// Incomplete mandatory start-marker bytes retained across PTY reads.
+    shell_transaction_start_boundary_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Incomplete UTF-8 suffixes retained per shell transaction across PTY reads.
     shell_transaction_output_utf8_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Agent-action markers whose child launch uses the Bubblewrap backend.
@@ -304,6 +306,9 @@ impl RuntimeSessionService {
         self.process
             .shell_transaction_output_utf8_pending
             .remove(marker);
+        self.process
+            .shell_transaction_start_boundary_pending
+            .remove(marker);
         self.process.running_shell_transactions.remove(marker)
     }
 
@@ -312,6 +317,9 @@ impl RuntimeSessionService {
         self.process.running_shell_transactions.clear();
         self.process.shell_transaction_require_start_markers.clear();
         self.process.shell_transaction_started_markers.clear();
+        self.process
+            .shell_transaction_start_boundary_pending
+            .clear();
         self.process.shell_transaction_output_utf8_pending.clear();
         self.process.managed_home_activity_locks.clear();
     }

@@ -17,7 +17,7 @@ use super::{
     TerminalClipboardOperation, TerminalClipboardRequest, TerminalOscEvent,
     agent_shell_transaction_bytes_before_end_marker, agent_shell_transaction_observation_bytes,
     apply_patch_transaction_phase, bootstrap_script_for_classification, current_unix_millis,
-    current_unix_seconds, decode_shell_output_transport_with_diagnostics,
+    current_unix_seconds, decode_shell_output_transport_with_diagnostics, find_byte_subsequence,
     focused_shell_pre_action_timeout_result, hook_execution_audit_record, json_escape,
     latest_agent_shell_transaction_output_lines, local_action_plan, parse_bootstrap_env_output,
     plan_terminal_clipboard_request, postprocess_shell_action_success_output,
