@@ -826,6 +826,13 @@ pub(super) fn validate_permission_value(path: &str, value: &str) -> Option<Strin
     if path == "permissions.bubblewrap.environment" && value != "minimal" {
         return Some("Bubblewrap environment policy must be minimal".to_string());
     }
+    if matches!(
+        path,
+        "permissions.bubblewrap.git_user_name" | "permissions.bubblewrap.git_user_email"
+    ) && (value.trim().is_empty() || value.chars().any(char::is_control))
+    {
+        return Some("Bubblewrap Git identity must be non-empty printable text".to_string());
+    }
     if command_rule_field(path, "effects.completeness") && !matches!(value, "unknown" | "complete")
     {
         return Some("command rule effect completeness must be unknown or complete".to_string());

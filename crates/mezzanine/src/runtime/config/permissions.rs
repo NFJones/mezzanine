@@ -128,6 +128,10 @@ pub(crate) struct BubblewrapConfig {
     pub(crate) network: BubblewrapNetworkMode,
     /// Environment reconstruction policy.
     pub(crate) environment: SandboxEnvironmentPolicy,
+    /// Optional non-secret Git author name projected without host Git config.
+    pub(crate) git_user_name: Option<String>,
+    /// Optional non-secret Git author email projected without host Git config.
+    pub(crate) git_user_email: Option<String>,
 }
 
 /// Behavior when the configured sandbox backend is unavailable.
@@ -445,11 +449,36 @@ pub(crate) fn runtime_configured_permissions_from_config(
                     ));
                 }
             };
+            let git_user_name = bubblewrap
+                .and_then(|config| runtime_json_string(config.get("git_user_name")))
+                .map(str::to_string);
+            let git_user_email = bubblewrap
+                .and_then(|config| runtime_json_string(config.get("git_user_email")))
+                .map(str::to_string);
+            if git_user_name.is_some() != git_user_email.is_some() {
+                return Err(MezError::config(
+                    "permissions.bubblewrap.git_user_name and git_user_email must be configured together",
+                ));
+            }
+            for (field, value) in [
+                ("git_user_name", git_user_name.as_deref()),
+                ("git_user_email", git_user_email.as_deref()),
+            ] {
+                if value.is_some_and(|value| {
+                    value.trim().is_empty() || value.chars().any(char::is_control)
+                }) {
+                    return Err(MezError::config(format!(
+                        "permissions.bubblewrap.{field} must be non-empty printable text"
+                    )));
+                }
+            }
             SandboxConfig::Bubblewrap(BubblewrapConfig {
                 executable,
                 unavailable,
                 network,
                 environment,
+                git_user_name,
+                git_user_email,
             })
         }
         _ => return Err(MezError::config("unsupported permissions.sandbox backend")),

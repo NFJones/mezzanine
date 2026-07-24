@@ -14,7 +14,7 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     let config_root = home.join(".config/mezzanine");
     fs::create_dir_all(&config_root).unwrap();
     let config_path = config_root.join("config.toml");
-    let config_text = "version = 23\n[permissions]\napproval_policy = \"full-access\"\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\nwrite_scopes = []\n[permissions.bubblewrap]\nexecutable = \"/bin/sh\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n";
+    let config_text = "version = 24\n[permissions]\napproval_policy = \"full-access\"\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\nwrite_scopes = []\n[permissions.bubblewrap]\nexecutable = \"/bin/sh\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n";
     fs::write(&config_path, config_text).unwrap();
     let project = home.join("project");
     fs::create_dir_all(project.join(".git")).unwrap();
@@ -100,7 +100,7 @@ fn sandbox_doctor_uses_stable_zero_one_two_exit_semantics() {
     fs::create_dir_all(&config_root).unwrap();
     fs::write(
         config_root.join("config.toml"),
-        "version = 23\n[permissions]\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\n[permissions.bubblewrap]\nexecutable = \"/definitely/missing/bwrap\"\n",
+        "version = 24\n[permissions]\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\n[permissions.bubblewrap]\nexecutable = \"/definitely/missing/bwrap\"\n",
     )
     .unwrap();
     let error_project = error_home.join("project");

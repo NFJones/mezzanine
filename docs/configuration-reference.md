@@ -703,6 +703,8 @@ Provider options under a model profile:
 | `permissions.bubblewrap.unavailable` | string | `"fail"` | Never runs unsandboxed automatically. A prompt-classified action may offer one exact approval-gated fallback after Bubblewrap failure. |
 | `permissions.bubblewrap.network` | string | `"isolated"` | Private network namespace policy. |
 | `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
+| `permissions.bubblewrap.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; projected only through Git command-scope configuration. |
+| `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
 | `permissions.trusted_directories` | string array | `[]` | Trusted directory roots; never converted into mounts. |
 | `permissions.trusted_projects` | string array | `[]` | Trusted project roots for command authorization. A current project trust decision supplies default read-write authority when explicit scopes are omitted. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
@@ -772,6 +774,13 @@ read-only: they inspect but do not migrate configuration, change project trust,
 create managed homes, or run/cache the pane-specific Bubblewrap probe. Only a
 direct user may apply policy changes; diagnostics never broaden authority or
 select host execution automatically.
+
+Bubblewrap disables system and global Git configuration. When both sanitized
+identity fields are configured, Mezzanine projects only `user.name` and
+`user.email` through Git command-scope configuration, which takes precedence
+over repository-local identity. It never imports credential helpers, signing
+keys, includes, URL rewrites, hooks, or arbitrary host Git settings. When the
+fields are omitted, repository-local Git identity may still apply.
 
 For a trusted project, Bubblewrap uses a persistent managed home below
 `<config-root>/sandbox/cache-homes/<project-profile-key>/home`. The key hashes

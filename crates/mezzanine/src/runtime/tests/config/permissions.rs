@@ -53,6 +53,40 @@ fn runtime_materializes_typed_sandbox_permissions() {
     );
 }
 
+/// Verifies Bubblewrap Git identity is accepted only as one complete,
+/// printable pair and remains separate from every other Git configuration.
+#[test]
+fn runtime_materializes_only_paired_sanitized_git_identity() {
+    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "sandbox": "bubblewrap",
+            "bubblewrap": {
+                "git_user_name": "Sandbox Author",
+                "git_user_email": "sandbox@example.invalid"
+            }
+        }
+    }))
+    .unwrap();
+    let SandboxConfig::Bubblewrap(bubblewrap) = configured.sandbox else {
+        panic!("expected Bubblewrap configuration");
+    };
+
+    assert_eq!(bubblewrap.git_user_name.as_deref(), Some("Sandbox Author"));
+    assert_eq!(
+        bubblewrap.git_user_email.as_deref(),
+        Some("sandbox@example.invalid")
+    );
+
+    let error = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "sandbox": "bubblewrap",
+            "bubblewrap": {"git_user_name": "Incomplete Author"}
+        }
+    }))
+    .unwrap_err();
+    assert!(error.message().contains("must be configured together"));
+}
+
 /// Verifies configured Bubblewrap remains active for full access but becomes
 /// ineffective only while the primary-user host-access policy is selected.
 #[test]
@@ -632,7 +666,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 23\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 24\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     let trust_path = root.join("trust.tsv");
@@ -827,7 +861,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 23\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 24\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);

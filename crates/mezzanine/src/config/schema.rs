@@ -359,9 +359,15 @@ pub(super) const COMMAND_RULE_KEYS: &[&str] = &[
     "effects",
 ];
 
-/// Defines the typed Bubblewrap configuration keys accepted by schema v21.
-pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] =
-    &["executable", "unavailable", "network", "environment"];
+/// Defines the typed Bubblewrap configuration keys accepted by schema v24.
+pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] = &[
+    "executable",
+    "unavailable",
+    "network",
+    "environment",
+    "git_user_name",
+    "git_user_email",
+];
 
 /// Reports whether a permission path controls sandbox confinement or authority.
 ///

@@ -449,6 +449,8 @@ mod tests {
             unavailable: SandboxUnavailablePolicy::Fail,
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
+            git_user_name: None,
+            git_user_email: None,
         });
         let discovery = ProjectRootDiscovery {
             canonical_start: project.clone(),
@@ -490,6 +492,8 @@ mod tests {
             unavailable: SandboxUnavailablePolicy::Fail,
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
+            git_user_name: None,
+            git_user_email: None,
         });
         let discovery = ProjectRootDiscovery {
             canonical_start: root.to_path_buf(),

@@ -2841,6 +2841,17 @@ state, 1 when warnings are present, and 2 when errors are present. Remedies MUST
 remain direct-user actions and MUST NOT suggest automatic authority broadening
 or host fallback.
 
+Bubblewrap MUST disable host system and global Git configuration. The typed
+Bubblewrap configuration MAY contain a paired non-secret Git author name and
+email; both values MUST be present together and MUST be printable. When
+configured, Mezzanine MUST project only `user.name` and `user.email` through
+Git command-scope configuration, with precedence over repository-local
+identity. It MUST NOT import credential helpers, signing keys, includes, URL
+rewrites, hooks, arbitrary Git settings, or the host user's Git configuration.
+When the pair is omitted, repository-local identity MAY remain effective.
+Schema v23 to v24 migration MUST preserve omission and MUST NOT discover or
+invent identity values.
+
 When Bubblewrap authority comes from a trusted project and a private Mezzanine
 configuration root is available, Mezzanine MUST create or reuse a private
 managed home keyed by the canonical project root and sandbox runtime profile.

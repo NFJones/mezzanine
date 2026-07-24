@@ -259,6 +259,16 @@ pub fn validate_config_text(
     };
     let values = extract_config_values(format, text);
 
+    let git_user_name = values.get("permissions.bubblewrap.git_user_name");
+    let git_user_email = values.get("permissions.bubblewrap.git_user_email");
+    if git_user_name.is_some() != git_user_email.is_some() {
+        diagnostics.push(ConfigDiagnostic {
+            path: "permissions.bubblewrap".to_string(),
+            message: "Bubblewrap git_user_name and git_user_email must be configured together"
+                .to_string(),
+        });
+    }
+
     let raw_schema_version = values.get("version").map(String::as_str);
     match parse_config_schema_version(raw_schema_version) {
         Ok(version)

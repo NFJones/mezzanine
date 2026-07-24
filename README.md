@@ -399,6 +399,10 @@ Current support reflects behavior implemented in the repository today.
   persistent XDG cache, config, data, and state directories. Homes are isolated
   by project and sandbox profile, never copy the real user home, and are removed
   when project trust is revoked.
+- Bubblewrap disables host system/global Git configuration. Users may configure
+  a paired sanitized Git name and email; only those identity values are
+  projected, while credential helpers, signing keys, includes, URL rewrites,
+  hooks, and other host Git settings remain excluded.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks

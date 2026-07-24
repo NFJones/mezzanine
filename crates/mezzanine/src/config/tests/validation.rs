@@ -818,3 +818,35 @@ fn validates_root_auto_sizing_routing_policy() {
             && diagnostic.message == "unsupported root routing policy; use subagent or in-place"
     }));
 }
+
+/// Verifies Bubblewrap accepts only a complete printable Git identity pair so
+/// validation cannot admit a partial or empty author projection.
+#[test]
+fn validates_paired_sanitized_bubblewrap_git_identity() {
+    let valid = validate_config_text(
+        ConfigFormat::Toml,
+        "version = 24\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngit_user_name = \"Sandbox Author\"\ngit_user_email = \"sandbox@example.invalid\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(valid.valid, "{:?}", valid.diagnostics);
+
+    let incomplete = validate_config_text(
+        ConfigFormat::Toml,
+        "version = 24\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngit_user_name = \"Sandbox Author\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(incomplete.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "permissions.bubblewrap"
+            && diagnostic.message.contains("must be configured together")
+    }));
+
+    let blank = validate_config_text(
+        ConfigFormat::Toml,
+        "version = 24\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngit_user_name = \"   \"\ngit_user_email = \"sandbox@example.invalid\"\n",
+        ConfigScope::Primary,
+    );
+    assert!(blank.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "permissions.bubblewrap.git_user_name"
+            && diagnostic.message == "Bubblewrap Git identity must be non-empty printable text"
+    }));
+}

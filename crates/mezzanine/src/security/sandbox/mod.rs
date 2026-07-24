@@ -1025,6 +1025,43 @@ fn bubblewrap_arguments(
     }
     arguments.extend(
         [
+            "--setenv",
+            "GIT_CONFIG_NOSYSTEM",
+            "1",
+            "--setenv",
+            "GIT_CONFIG_GLOBAL",
+            "/dev/null",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
+    if let (Some(name), Some(email)) = (
+        request.config.git_user_name.as_deref(),
+        request.config.git_user_email.as_deref(),
+    ) {
+        for (key, value) in [("user.name", name), ("user.email", email)] {
+            let index = if key == "user.name" { "0" } else { "1" };
+            arguments.extend(
+                [
+                    "--setenv",
+                    &format!("GIT_CONFIG_KEY_{index}"),
+                    key,
+                    "--setenv",
+                    &format!("GIT_CONFIG_VALUE_{index}"),
+                    value,
+                ]
+                .into_iter()
+                .map(str::to_string),
+            );
+        }
+        arguments.extend(
+            ["--setenv", "GIT_CONFIG_COUNT", "2"]
+                .into_iter()
+                .map(str::to_string),
+        );
+    }
+    arguments.extend(
+        [
             "--chdir",
             policy.working_directory.as_str(),
             "--setenv",

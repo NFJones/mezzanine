@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 23
+version = 24
 
 [terminal]
 profile = "xterm-compatible"
@@ -465,6 +465,11 @@ allowed_reasoning_efforts = ["high"]
 # local shell actions on the host outside the configured sandbox.
 approval_policy = "ask"
 sandbox = "policy-only"
+# Optional sanitized Git identity for Bubblewrap commits. Configure both fields;
+# Mezzanine never imports the host global Git configuration.
+# [permissions.bubblewrap]
+# git_user_name = "Your Name"
+# git_user_email = "you@example.invalid"
 trusted_directories = []
 trusted_projects = []
 command_rules = []

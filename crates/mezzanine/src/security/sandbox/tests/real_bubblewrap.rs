@@ -306,6 +306,58 @@ fn real_bubblewrap_enforces_maximum_authority_and_isolation() {
 }
 
 #[test]
+/// Proves a real sandboxed Git commit uses only the configured identity pair,
+/// overriding repository-local identity without importing host-global Git
+/// configuration or any credential/signing settings.
+fn real_bubblewrap_projects_sanitized_git_identity() {
+    let mut config = config();
+    config.git_user_name = Some("Sandbox Author".to_string());
+    config.git_user_email = Some("sandbox@example.invalid".to_string());
+    let Some(capability) = verified_capability(&config) else {
+        return;
+    };
+    if !Path::new("/usr/bin/git").is_file() {
+        eprintln!("skipping real Bubblewrap Git identity test: /usr/bin/git is unavailable");
+        return;
+    }
+    let fixture = RealBubblewrapFixture::new("git-identity");
+    fs::write(
+        fixture.host_home.join(".gitconfig"),
+        "[credential]\n\thelper = host-secret-helper\n[user]\n\tname = Host Author\n",
+    )
+    .unwrap();
+    let mut unknown = effects();
+    unknown.unknown = true;
+    let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
+    let plan = real_plan(&config, capability, &fixture.authority(), &evaluation);
+    let output = execute_plan(
+        plan,
+        "set -eu\n\
+         mkdir -p target/repo\n\
+         cd target/repo\n\
+         git init -q\n\
+         git config user.name 'Repository Author'\n\
+         git config user.email 'repository@example.invalid'\n\
+         printf tracked > tracked.txt\n\
+         git add tracked.txt\n\
+         git commit -q -m identity\n\
+         test \"$(git log -1 --format=%an)\" = 'Sandbox Author'\n\
+         test \"$(git log -1 --format=%ae)\" = 'sandbox@example.invalid'\n\
+         test \"$(git config user.name)\" = 'Sandbox Author'\n\
+         test -z \"$(git config --global --get credential.helper || true)\"\n\
+         test -z \"$(git config --global --get user.signingkey || true)\"\n\
+         printf '%s\\n' REAL_BWRAP_GIT_IDENTITY_OK",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("REAL_BWRAP_GIT_IDENTITY_OK"),
+        "status={:?} stdout={stdout:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 /// Proves a broad host-backed authority keeps ordinary direct children visible
 /// while replacing a credential descendant with an empty private tmpfs.
 fn real_bubblewrap_masks_credential_descendants_of_broad_authority() {

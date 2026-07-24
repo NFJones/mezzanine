@@ -18,6 +18,8 @@ fn config() -> BubblewrapConfig {
         unavailable: SandboxUnavailablePolicy::Fail,
         network: BubblewrapNetworkMode::Isolated,
         environment: SandboxEnvironmentPolicy::Minimal,
+        git_user_name: None,
+        git_user_email: None,
     }
 }
 
@@ -588,4 +590,62 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
             "missing {name}={value}"
         );
     }
+}
+
+/// A configured sanitized Git identity uses command-scope Git configuration
+/// while disabling all host system and global configuration discovery.
+#[test]
+fn git_identity_projection_is_sanitized_and_explicit() {
+    let mut config = config();
+    config.git_user_name = Some("Mez Test".to_string());
+    config.git_user_email = Some("mez@example.invalid".to_string());
+    let authority = authority();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+
+    let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
+
+    for (name, value) in [
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_COUNT", "2"),
+        ("GIT_CONFIG_KEY_0", "user.name"),
+        ("GIT_CONFIG_VALUE_0", "Mez Test"),
+        ("GIT_CONFIG_KEY_1", "user.email"),
+        ("GIT_CONFIG_VALUE_1", "mez@example.invalid"),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--setenv", name, value]),
+            "missing sanitized Git setting {name}={value}"
+        );
+    }
+    assert!(!plan.arguments.iter().any(|argument| {
+        argument.contains("credential")
+            || argument.contains("signing")
+            || argument.contains("include")
+            || argument.contains("insteadOf")
+    }));
+}
+
+/// Omitted Git identity still disables host configuration and does not invent
+/// author values, leaving repository-local identity available to Git.
+#[test]
+fn omitted_git_identity_does_not_invent_author_values() {
+    let config = config();
+    let authority = authority();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+
+    let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
+
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| { args == ["--setenv", "GIT_CONFIG_GLOBAL", "/dev/null"] })
+    );
+    assert!(!plan.arguments.iter().any(|argument| {
+        argument == "GIT_CONFIG_COUNT"
+            || argument == "GIT_CONFIG_KEY_0"
+            || argument == "GIT_CONFIG_VALUE_0"
+    }));
 }
