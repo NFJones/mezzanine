@@ -48,6 +48,7 @@ subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
 
 ## Build, Test, and Development Commands
 - Always wrap tests in a 60 second `timeout` or greater to check for hangs.
+- Always run `cargo test` qith the `--quiet` opt to reduce output volume.
 - `just`: build all targets and features in release mode.
 - `just build`: build all targets and features in debug mode.
 - `just build-release`: build all targets and features in release mode.
