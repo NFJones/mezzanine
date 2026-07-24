@@ -151,9 +151,19 @@ impl RuntimeSessionService {
             Some(raw_text) => format!("{raw_text}\nprovider_error: {error}"),
             None => format!("provider_error: {error}"),
         };
-        let safe_fallbacks = self
-            .provider_registry()
-            .safe_fallback_profiles(&turn.model_profile)?;
+        let safe_fallbacks = match self
+            .agent
+            .agent_turn_configured_model_profiles
+            .get(&turn.turn_id)
+        {
+            Some(profile_name) => self
+                .provider_registry()
+                .safe_fallback_profiles(profile_name)?,
+            None if turn.model_profile.starts_with("routed:") => Vec::new(),
+            None => self
+                .provider_registry()
+                .safe_fallback_profiles(&turn.model_profile)?,
+        };
         if !safe_fallbacks.is_empty() {
             raw_text.push_str("\nsafe_fallback_profiles: ");
             raw_text.push_str(&safe_fallbacks.join(","));

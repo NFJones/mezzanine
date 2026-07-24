@@ -287,6 +287,7 @@ fn runtime_agent_macro_routed_loop_resolves_after_in_place_execution() {
             &routed_parent_turn_id,
             AutoSizingRoutingSelection {
                 selected_profile: worker_profile,
+                selected_profile_name: "default".to_string(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 decision_summary: None,
                 fallback: None,

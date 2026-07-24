@@ -47,6 +47,7 @@ fn selected_routed_loop(
             &parent_turn_id,
             AutoSizingRoutingSelection {
                 selected_profile: worker_profile,
+                selected_profile_name: "default".to_string(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 decision_summary: None,
                 fallback: None,
@@ -221,6 +222,7 @@ fn runtime_subagent_routing_applies_selected_profile_in_place_once() {
     };
     let selection = AutoSizingRoutingSelection {
         selected_profile: selected_profile.clone(),
+        selected_profile_name: "default".to_string(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: Some("high reasoning on routed-child-model".to_string()),
         fallback: None,
@@ -299,6 +301,7 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
         .clone();
     let selection = AutoSizingRoutingSelection {
         selected_profile: parent_profile,
+        selected_profile_name: "default".to_string(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: Some("large/high".to_string()),
         fallback: None,
@@ -423,6 +426,7 @@ fn runtime_routed_selection_setup_failure_recovers_once() {
         .expect("removing the test prompt should preserve context validity");
     let selection = AutoSizingRoutingSelection {
         selected_profile: parent_profile,
+        selected_profile_name: "default".to_string(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: Some("large/high".to_string()),
         fallback: None,
@@ -515,6 +519,7 @@ fn runtime_routed_selection_post_spawn_failure_removes_worker() {
     service.fail_next_routed_worker_after_spawn_for_tests();
     let selection = AutoSizingRoutingSelection {
         selected_profile: parent_profile,
+        selected_profile_name: "default".to_string(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: Some("large/high".to_string()),
         fallback: None,
@@ -580,6 +585,7 @@ fn runtime_routed_selection_keeps_enqueued_child_owned_after_trace_failure() {
             "turn-1",
             AutoSizingRoutingSelection {
                 selected_profile: parent_profile,
+                selected_profile_name: "default".to_string(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 decision_summary: None,
                 fallback: None,
@@ -639,6 +645,7 @@ fn runtime_routed_loop_transfers_work_turn_ownership_to_selected_worker() {
         .clone();
     let selection = AutoSizingRoutingSelection {
         selected_profile: parent_profile.clone(),
+        selected_profile_name: "default".to_string(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: None,
         fallback: None,
@@ -707,6 +714,7 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
             &parent_turn_id,
             AutoSizingRoutingSelection {
                 selected_profile: parent_profile,
+                selected_profile_name: "default".to_string(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 decision_summary: None,
                 fallback: None,
@@ -1329,6 +1337,64 @@ fn runtime_routed_loop_worker_provider_failure_terminates_controller() {
     );
 }
 
+/// Verifies a routed worker uses its configured profile identity for safe
+/// fallback reporting instead of its synthetic ledger display label.
+///
+/// Routed workers display `routed:<model>` in their turn ledger, which is not
+/// a configured provider profile. A provider failure must retain the original
+/// error, settle through the routed workflow, and report only the configured
+/// safe fallback rather than attempting to resolve that display label.
+#[test]
+fn runtime_routed_worker_provider_failure_uses_configured_fallback_profile() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 recover configured routed fallback");
+    let primary_profile = service
+        .provider_registry()
+        .resolve_profile("default")
+        .unwrap();
+    let safe_profile = primary_profile.clone();
+    service
+        .integration
+        .provider_registry_mut()
+        .profiles
+        .insert("safe".to_string(), safe_profile);
+    service
+        .integration
+        .provider_registry_mut()
+        .fallback_profiles
+        .insert("default".to_string(), vec!["safe".to_string()]);
+
+    let error = MezError::invalid_state("routed provider outage");
+    service
+        .fail_agent_turn_for_provider_error(
+            &worker_turn,
+            &primary_profile.provider,
+            &primary_profile,
+            &error,
+        )
+        .unwrap();
+
+    let context = service.agent_turn_contexts().get(&parent_turn_id).unwrap();
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| { block.content.contains("routed provider outage") })
+    );
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| { block.content.contains("safe_fallback_profiles: safe") })
+    );
+    assert!(
+        service
+            .agent_turn_executions()
+            .get(&worker_turn.turn_id)
+            .is_none()
+    );
+}
+
 /// Verifies a routed worker whose shell action is denied after a persistent
 /// foreground-process block releases its parent for bounded error explanation.
 #[test]
@@ -1510,6 +1576,7 @@ fn runtime_routed_selection_missing_parent_context_fails_cleanly() {
     service.agent_turn_contexts_mut().remove("turn-1");
     let selection = AutoSizingRoutingSelection {
         selected_profile: parent_profile,
+        selected_profile_name: "default".to_string(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: Some("large/high".to_string()),
         fallback: None,

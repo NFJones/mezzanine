@@ -29,6 +29,7 @@ struct RoutedChildTurnRequest<'a> {
     child_pane_id: &'a str,
     prompt: &'a str,
     model_profile: mez_agent::ModelProfile,
+    configured_model_profile_name: String,
     seed_context: Option<AgentContext>,
     initial_capability: Option<mez_agent::AgentCapability>,
     reason: &'a str,
@@ -324,6 +325,7 @@ impl RuntimeSessionService {
                 child_pane_id: &child_pane_id,
                 prompt: &original_user_prompt,
                 model_profile: selection.selected_profile.clone(),
+                configured_model_profile_name: selection.selected_profile_name.clone(),
                 seed_context: Some(worker_seed_context),
                 initial_capability: None,
                 reason: "routed_worker_execute",
@@ -343,6 +345,10 @@ impl RuntimeSessionService {
             self.agent
                 .routed_child_profiles_by_parent_turn
                 .insert(turn.turn_id.clone(), selection.selected_profile.clone());
+            self.agent.routed_child_profile_names_by_parent_turn.insert(
+                turn.turn_id.clone(),
+                selection.selected_profile_name.clone(),
+            );
             self.agent.routed_workflows_by_parent_turn.insert(
                 turn.turn_id.clone(),
                 RoutedWorkflowState {
@@ -468,6 +474,16 @@ impl RuntimeSessionService {
         ) else {
             return Ok(());
         };
+        let configured_model_profile_name = self
+            .agent
+            .routed_child_profile_names_by_parent_turn
+            .get(parent_turn_id)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "routed worker configured profile provenance is unavailable",
+                )
+            })?;
         let parent_agent_id = self
             .agent_turn_ledger()
             .turns()
@@ -478,6 +494,9 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_model_profiles
             .insert(turn.turn_id.clone(), worker_profile.clone());
+        self.agent
+            .agent_turn_configured_model_profiles
+            .insert(turn.turn_id.clone(), configured_model_profile_name);
         self.agent
             .routed_workflow_by_child_turn
             .insert(turn.turn_id.clone(), parent_turn_id.to_string());
@@ -727,6 +746,16 @@ impl RuntimeSessionService {
                     child_pane_id: &child_pane_id,
                     prompt,
                     model_profile: child_profile,
+                    configured_model_profile_name: self
+                        .agent
+                        .routed_child_profile_names_by_parent_turn
+                        .get(&parent_turn_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "routed worker configured profile provenance is unavailable",
+                            )
+                        })?,
                     seed_context: Some(handoff_context),
                     initial_capability: Some(mez_agent::AgentCapability::RespondOnly),
                     reason: "routed_worker_handoff",
@@ -800,6 +829,16 @@ impl RuntimeSessionService {
                     child_pane_id: &child_pane_id,
                     prompt,
                     model_profile: child_profile,
+                    configured_model_profile_name: self
+                        .agent
+                        .routed_child_profile_names_by_parent_turn
+                        .get(&parent_turn_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "routed worker configured profile provenance is unavailable",
+                            )
+                        })?,
                     seed_context: Some(repair_context),
                     initial_capability: Some(mez_agent::AgentCapability::RespondOnly),
                     reason: "routed_worker_handoff_repair",
@@ -1364,6 +1403,9 @@ impl RuntimeSessionService {
         self.agent
             .routed_child_profiles_by_parent_turn
             .remove(turn_id);
+        self.agent
+            .routed_child_profile_names_by_parent_turn
+            .remove(turn_id);
     }
 
     /// Queues one managed routed-child prompt through the ordinary agent path.
@@ -1377,6 +1419,7 @@ impl RuntimeSessionService {
             child_pane_id,
             prompt,
             model_profile,
+            configured_model_profile_name,
             seed_context,
             initial_capability,
             reason,
@@ -1444,6 +1487,9 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_model_profiles
             .insert(turn_id.clone(), model_profile);
+        self.agent
+            .agent_turn_configured_model_profiles
+            .insert(turn_id.clone(), configured_model_profile_name);
         self.mark_agent_turn_routing_applied(turn_id.clone());
         self.agent
             .subagent_task_routes

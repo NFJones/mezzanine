@@ -224,6 +224,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_pre_shell_hook_completions: BTreeSet<RuntimeAgentPreShellHookCompletion>,
     /// Effective provider model profile retained for each active turn.
     agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
+    /// Configured profile identities retained separately from display labels.
+    agent_turn_configured_model_profiles: BTreeMap<String, String>,
     /// Turns whose automatic routing decision has already been applied.
     agent_turn_routing_applied: BTreeSet<String>,
     /// Provider turns queued for worker dispatch.
@@ -301,6 +303,8 @@ pub(crate) struct RuntimeAgentComponent {
     routed_child_contexts_by_parent_turn: BTreeMap<String, AgentContext>,
     /// Durable managed-child model profiles keyed by routed parent turn id.
     routed_child_profiles_by_parent_turn: BTreeMap<String, ModelProfile>,
+    /// Configured profile identities for durable routed-child profile snapshots.
+    routed_child_profile_names_by_parent_turn: BTreeMap<String, String>,
     /// Parent turns whose next provider request is respond-only presentation.
     routed_presentation_turns: BTreeSet<String>,
     /// Macro-loop completions retained until routed parent presentation settles.
@@ -1410,12 +1414,16 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Option<ModelProfile> {
         self.agent.agent_turn_routing_applied.remove(turn_id);
+        self.agent
+            .agent_turn_configured_model_profiles
+            .remove(turn_id);
         self.agent.agent_turn_model_profiles.remove(turn_id)
     }
 
     /// Clears all retained turn model profiles for session replacement.
     pub(crate) fn clear_agent_turn_model_profiles(&mut self) {
         self.agent.agent_turn_model_profiles.clear();
+        self.agent.agent_turn_configured_model_profiles.clear();
         self.agent.agent_turn_routing_applied.clear();
     }
 

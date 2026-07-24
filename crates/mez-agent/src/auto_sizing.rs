@@ -172,6 +172,8 @@ pub struct AutoSizingDecision {
 pub struct AutoSizingSelection {
     /// Effective profile selected for the user-visible provider turn.
     pub selected_profile: ModelProfile,
+    /// Configured profile identity that supplied the selected profile.
+    pub selected_profile_name: String,
     /// Parsed router decision when the response was valid.
     pub decision: Option<AutoSizingDecision>,
     /// Fallback diagnostic when the default profile was selected.
@@ -188,6 +190,8 @@ pub struct AutoSizingSelection {
 pub struct AutoSizingExecution {
     /// Effective profile selected for the user-visible provider turn.
     pub selected_profile: ModelProfile,
+    /// Configured profile identity that supplied the selected profile.
+    pub selected_profile_name: String,
     /// Parsed router decision when the router returned valid JSON.
     pub decision: Option<AutoSizingDecision>,
     /// Fallback reason when routing could not select a valid target.
@@ -207,6 +211,7 @@ impl AutoSizingExecution {
     ) -> Self {
         Self {
             selected_profile: selection.selected_profile,
+            selected_profile_name: selection.selected_profile_name,
             decision: selection.decision,
             fallback: selection.fallback,
             router_token_usage_key: ModelTokenUsageKey::new(
@@ -236,6 +241,7 @@ impl AutoSizingExecution {
         });
         AutoSizingRoutingSelection {
             selected_profile: self.selected_profile,
+            selected_profile_name: self.selected_profile_name,
             routing_token_usage_by_model,
             decision_summary,
             fallback: self.fallback,
@@ -277,6 +283,8 @@ impl AutoSizingRoutingPolicy {
 pub struct AutoSizingRoutingSelection {
     /// Model and reasoning profile selected for routed execution.
     pub selected_profile: ModelProfile,
+    /// Configured profile identity that supplied the selected profile.
+    pub selected_profile_name: String,
     /// Router token usage retained for parent-turn accounting.
     pub routing_token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     /// Bounded user-visible routing decision summary when classification succeeded.
@@ -711,6 +719,7 @@ fn auto_sizing_profile_from_response(
     profile.reasoning_profile = Some(decision.reasoning_effort.clone());
     Ok(AutoSizingSelection {
         selected_profile: profile,
+        selected_profile_name: target.profile_name.clone(),
         decision: Some(decision),
         fallback: None,
     })
@@ -790,6 +799,7 @@ pub fn auto_sizing_fallback_selection(
     match auto_sizing.fallback_policy {
         AutoSizingFallbackPolicy::UseDefaultProfile => AutoSizingSelection {
             selected_profile: auto_sizing.default_profile.clone(),
+            selected_profile_name: auto_sizing.default_profile_name.clone(),
             decision: None,
             fallback: Some(message.into()),
         },
