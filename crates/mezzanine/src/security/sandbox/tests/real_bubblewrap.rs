@@ -123,6 +123,25 @@ impl RealBubblewrapFixture {
         )
         .unwrap()
     }
+
+    /// Extends the fixture's pane-resolved maximum read authority with
+    /// canonical roots explicitly authenticated by the owning test.
+    fn authority_with_additional_reads(&self, additional_reads: &[&Path]) -> PathScopes {
+        let authority = self.authority();
+        let mut read_scopes = authority.read_scopes;
+        read_scopes.extend(
+            additional_reads
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned()),
+        );
+        PathScopes::try_shell_resolved_with_evidence(
+            authority.current_directory,
+            read_scopes,
+            authority.write_scopes,
+            authority.path_evidence,
+        )
+        .unwrap()
+    }
 }
 
 impl Drop for RealBubblewrapFixture {
@@ -342,12 +361,14 @@ fn real_bubblewrap_projects_read_only_rust_toolchain() {
         cargo_bin,
         rustup_home,
     };
+    let authority = fixture
+        .authority_with_additional_reads(&[roots.cargo_bin.as_path(), roots.rustup_home.as_path()]);
     let plan = compile_bubblewrap_launch_plan(BubblewrapCompileRequest {
         config: &config,
         capability,
         pane_environment_signature: "real-linux-pane-environment",
         network_policy: NetworkPolicy::Prompt,
-        maximum_authority: &fixture.authority(),
+        maximum_authority: &authority,
         permission_evaluation: &evaluation,
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,

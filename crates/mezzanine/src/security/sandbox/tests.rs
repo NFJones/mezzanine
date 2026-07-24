@@ -658,7 +658,7 @@ fn omitted_git_identity_does_not_invent_author_values() {
 fn rust_toolchain_projection_is_read_only_and_deterministic() {
     let mut config = config();
     config.toolchains = vec![SandboxToolchainKind::Rust];
-    let authority = authority();
+    let authority = home_authority("/home/alice");
     let evaluation = evaluation(EffectCompleteness::Unknown, effects());
     let roots = BubblewrapRustToolchainRoots {
         cargo_bin: PathBuf::from("/home/alice/.cargo/bin"),
@@ -699,6 +699,41 @@ fn rust_toolchain_projection_is_read_only_and_deterministic() {
                 .any(|args| args == ["--setenv", name, value]),
             "missing {name}={value}"
         );
+    }
+}
+
+/// Toolchain convenience must not project either bootstrap-derived root from
+/// outside the pane-resolved maximum read authority.
+#[test]
+fn rust_toolchain_projection_rejects_roots_outside_maximum_authority() {
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Rust];
+    let authority = authority();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+
+    for roots in [
+        BubblewrapRustToolchainRoots {
+            cargo_bin: PathBuf::from("/outside/.cargo/bin"),
+            rustup_home: PathBuf::from("/outside/.rustup"),
+        },
+        BubblewrapRustToolchainRoots {
+            cargo_bin: PathBuf::from("/workspace/.cargo/bin"),
+            rustup_home: PathBuf::from("/outside/.rustup"),
+        },
+        BubblewrapRustToolchainRoots {
+            cargo_bin: PathBuf::from("/workspace2/.cargo/bin"),
+            rustup_home: PathBuf::from("/workspace2/.rustup"),
+        },
+    ] {
+        let mut compile_request = request(&config, &authority, &evaluation);
+        compile_request.rust_toolchain = Some(&roots);
+
+        let error = compile_bubblewrap_launch_plan(compile_request).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            SandboxCompileErrorKind::ToolchainOutsideAuthority
+        );
+        assert!(!error.kind().approval_fallback_eligible());
     }
 }
 

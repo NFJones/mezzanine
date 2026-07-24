@@ -2898,6 +2898,8 @@ Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
 derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
 evidence, reject missing, symlinked, overlapping, unexpected, credential, and
 runtime roots, and mount only those roots read-only at fixed sandbox paths.
+Both roots MUST be component-wise descendants of the pane-resolved maximum
+read authority; toolchain selection MUST NOT add host filesystem authority.
 Only Cargo's `bin` directory MAY be mounted; Cargo credentials, registry
 configuration, and caches MUST remain hidden. Cargo binaries MUST precede
 `/usr/bin:/bin` deterministically. The projection

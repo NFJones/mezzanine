@@ -361,6 +361,8 @@ pub(crate) enum SandboxCompileErrorKind {
     UnresolvedEffectPath,
     /// A complete effect requested access outside maximum authority.
     EffectOutsideAuthority,
+    /// A selected toolchain root falls outside maximum read authority.
+    ToolchainOutsideAuthority,
     /// Configuration would expose a forbidden host path.
     ForbiddenHostPath,
     /// Network was denied by policy.
@@ -392,6 +394,7 @@ impl SandboxCompileErrorKind {
             Self::UnresolvedAuthority => "unresolved_authority",
             Self::UnresolvedEffectPath => "unresolved_effect_path",
             Self::EffectOutsideAuthority => "effect_outside_authority",
+            Self::ToolchainOutsideAuthority => "toolchain_outside_authority",
             Self::ForbiddenHostPath => "forbidden_host_path",
             Self::NetworkDenied => "network_denied",
             Self::MediatedNetworkUnavailable => "mediated_network_unavailable",
@@ -651,6 +654,7 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
     if let Some(rust) = request.rust_toolchain {
         validate_cargo_bin(&rust.cargo_bin)?;
         validate_toolchain_root(&rust.rustup_home, "Rustup home", &[".rustup", "rustup"])?;
+        validate_toolchain_authority(rust, request.maximum_authority)?;
     }
     if !Path::new(request.child_shell_path).starts_with("/bin")
         && !Path::new(request.child_shell_path).starts_with("/usr")
@@ -1342,6 +1346,30 @@ fn validate_cargo_bin(path: &Path) -> Result<(), SandboxCompileError> {
             SandboxCompileErrorKind::ForbiddenHostPath,
             "Cargo bin must be directly beneath an allowlisted Cargo home",
         ));
+    }
+    Ok(())
+}
+
+/// Requires every convenience toolchain projection to remain within the
+/// pane-resolved maximum read authority instead of adding host access.
+fn validate_toolchain_authority(
+    roots: &BubblewrapRustToolchainRoots,
+    authority: &PathScopes,
+) -> Result<(), SandboxCompileError> {
+    for (path, label) in [
+        (&roots.cargo_bin, "Cargo bin"),
+        (&roots.rustup_home, "Rustup home"),
+    ] {
+        if !authority
+            .read_scopes
+            .iter()
+            .any(|scope| path.starts_with(Path::new(scope)))
+        {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ToolchainOutsideAuthority,
+                format!("{label} falls outside maximum sandbox read authority"),
+            ));
+        }
     }
     Ok(())
 }
