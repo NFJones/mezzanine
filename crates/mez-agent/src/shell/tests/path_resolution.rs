@@ -80,3 +80,76 @@ fn pane_path_resolution_rejects_incomplete_protocol_output() {
 
     assert_eq!(error.kind(), AgentShellValidationErrorKind::InvalidArgs);
 }
+
+/// Verifies POSIX path resolution selects only reviewed absolute Python
+/// interpreters, so pane-local aliases, functions, virtualenvs, and mutable
+/// `PATH` entries cannot execute before Bubblewrap confinement.
+#[test]
+fn posix_path_resolution_uses_only_absolute_python_candidates() {
+    let request =
+        PanePathResolutionRequest::new(vec![".".to_string()], Vec::new(), Vec::new()).unwrap();
+    let command = pane_path_resolution_command(&request, ShellClassification::PosixSh).unwrap();
+
+    assert!(!command.contains("command -v"), "{command}");
+    assert!(!command.contains("python3 -c"), "{command}");
+    assert!(!command.contains("python -c"), "{command}");
+    assert!(command.contains("/usr/bin/python3"), "{command}");
+    assert!(command.contains("/bin/python3"), "{command}");
+    assert!(command.contains(" -I -S -c "), "{command}");
+}
+
+/// Verifies executing the POSIX resolver with a hostile leading `PATH` entry
+/// never invokes that entry, while the approved absolute resolver still
+/// produces valid pane-local path evidence.
+#[test]
+fn posix_path_resolution_does_not_execute_mutable_path_python() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = test_temp_dir("path-resolution-hostile-path");
+    let fake_bin = root.join("bin");
+    let sentinel = root.join("fake-python-ran");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let fake_python = fake_bin.join("python3");
+    std::fs::write(
+        &fake_python,
+        format!("#!/bin/sh\nprintf ran > '{}'\nexit 0\n", sentinel.display()),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&fake_python).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_python, permissions).unwrap();
+
+    let request =
+        PanePathResolutionRequest::new(vec![".".to_string()], Vec::new(), Vec::new()).unwrap();
+    let command = pane_path_resolution_command(&request, ShellClassification::PosixSh).unwrap();
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .env("PATH", &fake_bin)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(!sentinel.exists(), "mutable-PATH python executed");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    parse_pane_path_resolution_output(&stdout, &request).unwrap();
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies Fish path resolution uses the same reviewed absolute interpreter
+/// candidates without consulting Fish's command lookup or inherited `PATH`.
+#[test]
+fn fish_path_resolution_uses_only_absolute_python_candidates() {
+    let request =
+        PanePathResolutionRequest::new(vec![".".to_string()], Vec::new(), Vec::new()).unwrap();
+    let command = pane_path_resolution_command(&request, ShellClassification::Fish).unwrap();
+
+    assert!(!command.contains("command -s"), "{command}");
+    assert!(!command.contains("python3 -c"), "{command}");
+    assert!(!command.contains("python -c"), "{command}");
+    assert!(command.contains("/usr/bin/python3"), "{command}");
+    assert!(command.contains("/bin/python3"), "{command}");
+    assert!(command.contains(" -I -S -c "), "{command}");
+}

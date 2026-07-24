@@ -160,13 +160,13 @@ pub fn pane_path_resolution_command(
     let payload = base64::engine::general_purpose::STANDARD.encode(payload);
     if classification == ShellClassification::Fish {
         Ok(format!(
-            "set -l MEZ_PATH_PYTHON (command -s python3 2>/dev/null; or command -s python 2>/dev/null)\nif test -z \"$MEZ_PATH_PYTHON\"\n    printf '%s\\n' 'python3 or python is required for Mezzanine path resolution' >&2\n    exit 127\nend\ncommand $MEZ_PATH_PYTHON -c {} {}\n",
+            "set -l MEZ_PATH_PYTHON\nif test -x /usr/bin/python3\n    set MEZ_PATH_PYTHON /usr/bin/python3\nelse if test -x /bin/python3\n    set MEZ_PATH_PYTHON /bin/python3\nelse\n    printf '%s\\n' 'an approved absolute Python interpreter is required for Mezzanine path resolution' >&2\n    exit 127\nend\ncommand $MEZ_PATH_PYTHON -I -S -c {} {}\n",
             fish_quote(PATH_RESOLUTION_PYTHON),
             fish_quote(&payload),
         ))
     } else {
         Ok(format!(
-            "MEZ_PATH_PYTHON=$(command -v python3 2>/dev/null || command -v python 2>/dev/null) || exit 127\nif [ -z \"$MEZ_PATH_PYTHON\" ]; then printf '%s\\n' 'python3 or python is required for Mezzanine path resolution' >&2; exit 127; fi\n\"$MEZ_PATH_PYTHON\" -c {} {}\n",
+            "if [ -x /usr/bin/python3 ]; then MEZ_PATH_PYTHON=/usr/bin/python3; elif [ -x /bin/python3 ]; then MEZ_PATH_PYTHON=/bin/python3; else printf '%s\\n' 'an approved absolute Python interpreter is required for Mezzanine path resolution' >&2; exit 127; fi\n\"$MEZ_PATH_PYTHON\" -I -S -c {} {}\n",
             shell_quote(PATH_RESOLUTION_PYTHON),
             shell_quote(&payload),
         ))

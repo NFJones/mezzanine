@@ -7781,8 +7781,11 @@ before sending the command to the pane shell:
 Mezzanine MUST resolve relative classified paths against the pane shell's
 current working directory as observed through the pane shell. When canonical
 path resolution is needed for scope comparison, Mezzanine MUST perform the
-resolution through read-only shell commands inside the pane environment, such
-as `pwd -P` and `python3` or `python` path canonicalization when available.
+resolution through read-only shell commands inside the pane environment. Any
+resolver executable MUST be selected from reviewed absolute paths and invoked
+through the owning pane buffer; resolution MUST NOT consult mutable `PATH`,
+aliases, shell functions, or virtual-environment shims, and MUST fail closed
+when no approved resolver is available.
 
 Resolved path authority MUST contain canonical absolute paths observed in the
 pane environment. Write scopes MUST imply read authority. Duplicate and
