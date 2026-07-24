@@ -858,6 +858,13 @@ fn runtime_agent_resize_rebuilds_source_backed_presentation_at_new_width() {
         "{rebuilt}"
     );
     assert!(!rebuilt.contains("stalecachedprojection"), "{rebuilt}");
+    let rebuilt_size = service.pane_screen("%1").unwrap().size();
+    assert!(
+        !service
+            .rebuild_agent_presentation_after_resize("%1", rebuilt_size)
+            .unwrap(),
+        "the installed projection should bypass repeated semantic replay"
+    );
     assert_eq!(
         transcript_store
             .inspect_presentation(

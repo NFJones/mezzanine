@@ -235,6 +235,8 @@ pub(crate) struct RuntimePresentationComponent {
     agent_presentation_replay_panes: std::collections::BTreeSet<String>,
     /// Newest pane size awaiting source-backed agent presentation replay.
     pending_agent_presentation_resize_sizes: std::collections::BTreeMap<String, Size>,
+    /// Installed source-backed presentation projections keyed by pane id.
+    agent_presentation_projection_cache: std::collections::BTreeMap<String, (String, Size)>,
     /// Submitted command-prompt history retained across prompt openings.
     primary_command_prompt_history: Vec<String>,
     /// Active primary-client readline prompt, when one is open.
@@ -290,6 +292,7 @@ impl RuntimePresentationComponent {
     pub(crate) fn apply_settings(&mut self, settings: RuntimePresentationSettings) {
         crate::host::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
         self.settings = settings;
+        self.agent_presentation_projection_cache.clear();
     }
 
     /// Clears an in-progress pane-resize gesture after layout mutation.

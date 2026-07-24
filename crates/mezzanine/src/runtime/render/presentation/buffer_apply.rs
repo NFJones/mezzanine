@@ -255,7 +255,7 @@ impl RuntimeSessionService {
 
     /// Persists one durable user-visible agent presentation entry.
     fn persist_agent_presentation_entry(
-        &self,
+        &mut self,
         pane_id: &str,
         style_names: Vec<String>,
         display_lines: Vec<String>,
@@ -272,6 +272,9 @@ impl RuntimeSessionService {
         {
             return;
         }
+        self.presentation
+            .agent_presentation_projection_cache
+            .remove(pane_id);
         let Some(store) = self.persistence.transcript_store() else {
             return;
         };
@@ -481,13 +484,22 @@ impl RuntimeSessionService {
         if session.visibility != AgentShellVisibility::Visible {
             return Ok(false);
         }
+        let session_id = session.session_id.clone();
+        if self
+            .presentation
+            .agent_presentation_projection_cache
+            .get(pane_id)
+            .is_some_and(|(cached_session_id, projection_size)| {
+                cached_session_id == &session_id && *projection_size == size
+            })
+        {
+            return Ok(false);
+        }
         let Some(store) = self.persistence.transcript_store() else {
             return Ok(false);
         };
-        let entries = store.inspect_presentation_replay_tail(
-            &session.session_id,
-            MAX_PRESENTATION_REPLAY_ENTRIES,
-        )?;
+        let entries =
+            store.inspect_presentation_replay_tail(&session_id, MAX_PRESENTATION_REPLAY_ENTRIES)?;
         if !entries.iter().any(|entry| entry.source_text.is_some()) {
             return Ok(false);
         }
@@ -506,6 +518,9 @@ impl RuntimeSessionService {
             }
             return Err(error);
         }
+        self.presentation
+            .agent_presentation_projection_cache
+            .insert(pane_id.to_string(), (session_id, size));
         Ok(true)
     }
 
