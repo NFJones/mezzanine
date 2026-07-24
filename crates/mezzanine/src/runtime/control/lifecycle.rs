@@ -294,6 +294,7 @@ impl RuntimeSessionService {
         self.clear_subagent_placement_state();
         self.clear_all_joined_subagent_dependencies();
         self.clear_all_subagent_authority_state();
+        self.integration.clear_pane_permission_overrides();
         self.clear_all_blocked_agent_approval_refs();
         self.clear_all_shell_transaction_state();
         self.clear_pane_readiness_state_and_overrides();

@@ -179,16 +179,6 @@ impl RuntimeSessionService {
             .set_approval_bypass(active);
     }
 
-    /// Applies an explicit user-selected approval policy override.
-    ///
-    /// # Parameters
-    /// - `policy`: Approval policy that should survive unrelated config reloads.
-    pub fn set_live_approval_policy_override(&mut self, policy: mez_agent::ApprovalPolicy) {
-        self.integration
-            .set_live_approval_policy_override(Some(policy));
-        self.integration.permission_policy_mut().approval_policy = policy;
-    }
-
     /// Runs the blocked approvals operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

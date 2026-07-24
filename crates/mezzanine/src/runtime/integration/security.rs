@@ -30,7 +30,6 @@ pub(super) struct RuntimeSecurityState {
     configured_permissions: ConfiguredPermissions,
     pane_permission_overrides: BTreeMap<String, PanePermissionOverride>,
     live_approval_bypass_override: Option<bool>,
-    live_approval_policy_override: Option<ApprovalPolicy>,
     blocked_approvals: BlockedApprovalQueue,
     session_approvals: SessionApprovalStore,
     session_memory: SessionMemoryStore,
@@ -87,20 +86,20 @@ impl RuntimeSecurityState {
         }
     }
 
+    pub(super) fn remove_pane_permission_override(&mut self, pane_id: &str) {
+        self.pane_permission_overrides.remove(pane_id);
+    }
+
+    pub(super) fn clear_pane_permission_overrides(&mut self) {
+        self.pane_permission_overrides.clear();
+    }
+
     pub(super) fn live_approval_bypass_override(&self) -> Option<bool> {
         self.live_approval_bypass_override
     }
 
     pub(super) fn set_live_approval_bypass_override(&mut self, value: Option<bool>) {
         self.live_approval_bypass_override = value;
-    }
-
-    pub(super) fn live_approval_policy_override(&self) -> Option<ApprovalPolicy> {
-        self.live_approval_policy_override
-    }
-
-    pub(super) fn set_live_approval_policy_override(&mut self, value: Option<ApprovalPolicy>) {
-        self.live_approval_policy_override = value;
     }
 
     pub(super) fn blocked_approvals(&self) -> &BlockedApprovalQueue {

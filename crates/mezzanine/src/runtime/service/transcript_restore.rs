@@ -12,6 +12,7 @@ use super::{
     runtime_parse_approval_policy,
 };
 use crate::integrations::agent::actions::next_transcript_sequence;
+use crate::runtime::{runtime_parse_permission_preset, runtime_permission_preset_name};
 use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 
 impl RuntimeSessionService {
@@ -177,7 +178,10 @@ impl RuntimeSessionService {
             self.set_agent_planning_enabled(&metadata.pane_id, metadata.planning_enabled);
             self.set_agent_response_style(&metadata.pane_id, metadata.response_style.clone());
             self.set_agent_routing_override(&metadata.pane_id, metadata.routing_enabled);
-            self.restore_agent_approval_policy_from_metadata(
+            self.restore_agent_permission_overrides_from_metadata(
+                &metadata.pane_id,
+                metadata.pane_permission_preset_override.as_deref(),
+                metadata.pane_approval_policy_override.as_deref(),
                 metadata.approval_policy.as_deref(),
                 "agent-session-restore",
             )?;
@@ -346,9 +350,17 @@ impl RuntimeSessionService {
                         .map(ToOwned::to_owned),
                     directive: session.directive.clone(),
                     routing_enabled: self.agent_routing_override(&session.pane_id),
-                    approval_policy: self
+                    approval_policy: None,
+                    pane_permission_preset_override: self
                         .integration
-                        .live_approval_policy_override()
+                        .pane_permission_override(&session.pane_id)
+                        .and_then(|fields| fields.preset)
+                        .map(runtime_permission_preset_name)
+                        .map(ToOwned::to_owned),
+                    pane_approval_policy_override: self
+                        .integration
+                        .pane_permission_override(&session.pane_id)
+                        .and_then(|fields| fields.approval_policy)
                         .map(runtime_approval_policy_name)
                         .map(ToOwned::to_owned),
                     working_directory,
@@ -405,7 +417,10 @@ impl RuntimeSessionService {
             self.set_agent_planning_enabled(pane_id, metadata.planning_enabled);
             self.set_agent_response_style(pane_id, metadata.response_style.clone());
             self.set_agent_routing_override(pane_id, metadata.routing_enabled);
-            self.restore_agent_approval_policy_from_metadata(
+            self.restore_agent_permission_overrides_from_metadata(
+                pane_id,
+                metadata.pane_permission_preset_override.as_deref(),
+                metadata.pane_approval_policy_override.as_deref(),
                 metadata.approval_policy.as_deref(),
                 "agent-session-resume",
             )?;
@@ -423,38 +438,55 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Applies a saved approval-policy value directly from session metadata.
+    /// Restores explicit pane-owned permission fields from session metadata.
     ///
-    /// New checkpoints only persist this field for explicit live approval
-    /// choices. Older checkpoints stored the effective policy, so restore must
-    /// avoid letting legacy inherited values narrow a stronger configured
-    /// default.
-    pub(super) fn restore_agent_approval_policy_from_metadata(
+    /// New checkpoints persist sparse pane fields directly. Older checkpoints
+    /// stored one effective approval policy in the legacy field, so accepted
+    /// legacy values are confined to the rebound pane and cannot narrow a
+    /// stronger configured default.
+    pub(super) fn restore_agent_permission_overrides_from_metadata(
         &mut self,
+        pane_id: &str,
+        permission_preset: Option<&str>,
         approval_policy: Option<&str>,
+        legacy_approval_policy: Option<&str>,
         source: &str,
     ) -> Result<()> {
-        let Some(approval_policy) =
-            approval_policy.filter(|approval_policy| !approval_policy.trim().is_empty())
-        else {
-            return Ok(());
-        };
-        let requested = runtime_parse_approval_policy(approval_policy).map_err(|_| {
-            MezError::invalid_args("agent session metadata approval policy is invalid")
-        })?;
-        if matches!(
-            compare_approval_policy_authority(self.permission_policy().approval_policy, requested),
-            PermissionAuthorityChange::Narrowing
-        ) {
-            return Ok(());
+        let permission_preset = permission_preset
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                runtime_parse_permission_preset(value).map_err(|_| {
+                    MezError::invalid_args("agent session metadata permission preset is invalid")
+                })
+            })
+            .transpose()?;
+        let mut approval_policy = approval_policy
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                runtime_parse_approval_policy(value).map_err(|_| {
+                    MezError::invalid_args("agent session metadata approval policy is invalid")
+                })
+            })
+            .transpose()?;
+        if approval_policy.is_none()
+            && let Some(legacy) = legacy_approval_policy.filter(|value| !value.trim().is_empty())
+        {
+            let requested = runtime_parse_approval_policy(legacy).map_err(|_| {
+                MezError::invalid_args("agent session metadata approval policy is invalid")
+            })?;
+            if !matches!(
+                compare_approval_policy_authority(
+                    self.permission_policy().approval_policy,
+                    requested
+                ),
+                PermissionAuthorityChange::Narrowing
+            ) {
+                approval_policy = Some(requested);
+            }
         }
-        let previous_permission_policy = self.permission_policy().clone();
-        self.set_live_approval_policy_override(requested);
-        self.reconcile_pending_agent_approvals_after_permission_change(
-            None,
-            &previous_permission_policy,
-            source,
-        )?;
+        self.set_pane_permission_preset_override(pane_id, permission_preset);
+        self.set_pane_approval_policy_override(pane_id, approval_policy);
+        self.reconcile_pending_agent_approvals_after_pane_permission_change(pane_id, source)?;
         Ok(())
     }
 

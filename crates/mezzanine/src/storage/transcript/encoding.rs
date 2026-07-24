@@ -311,6 +311,14 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
         context_usage_snapshot,
         metadata.running_turn_kind.clone().unwrap_or_default(),
         latest_request_usage,
+        metadata
+            .pane_permission_preset_override
+            .clone()
+            .unwrap_or_default(),
+        metadata
+            .pane_approval_policy_override
+            .clone()
+            .unwrap_or_default(),
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -333,7 +341,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         || fields.len() == 24
         || fields.len() == 25
         || fields.len() == 26
-        || fields.len() == 27)
+        || fields.len() == 27
+        || fields.len() == 29)
         || fields[0] != AGENT_SESSION_METADATA_VERSION
     {
         return Err(MezError::invalid_args(
@@ -514,6 +523,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
             .filter(|value| !value.is_empty())
             .map(|value| decode_latest_request_usage(value))
             .transpose()?,
+        pane_permission_preset_override: fields.get(27).filter(|value| !value.is_empty()).cloned(),
+        pane_approval_policy_override: fields.get(28).filter(|value| !value.is_empty()).cloned(),
     };
     metadata.validate()?;
     Ok(metadata)

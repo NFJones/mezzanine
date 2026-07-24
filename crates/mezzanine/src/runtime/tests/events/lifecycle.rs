@@ -516,6 +516,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         &primary,
     );
     assert!(approval.contains("requested=full-access"), "{approval}");
+    service.set_pane_permission_preset_override("%1", Some(mez_agent::PermissionPreset::Auto));
     let personality = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"restore-personality","method":"agent/shell/command","params":{"idempotency_key":"restore-personality","input":"/personality concise"}}"#,
         &primary,
@@ -548,6 +549,14 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     );
     assert_eq!(saved_metadata[0].routing_enabled, Some(true));
     assert_eq!(saved_metadata[0].approval_policy, None);
+    assert_eq!(
+        saved_metadata[0].pane_permission_preset_override.as_deref(),
+        Some("auto")
+    );
+    assert_eq!(
+        saved_metadata[0].pane_approval_policy_override.as_deref(),
+        Some("full-access")
+    );
 
     let mut restored = test_runtime_service();
     restored.session.id = service.session().id.clone();
@@ -573,6 +582,18 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     assert_eq!(
         restored.permission_policy().approval_policy,
         ApprovalPolicy::Ask
+    );
+    assert_eq!(
+        restored.permission_policy().preset,
+        mez_agent::PermissionPreset::ReadOnly
+    );
+    assert_eq!(
+        restored.permission_policy_for_pane("%1").approval_policy,
+        ApprovalPolicy::FullAccess
+    );
+    assert_eq!(
+        restored.permission_policy_for_pane("%1").preset,
+        mez_agent::PermissionPreset::Auto
     );
     assert_eq!(
         restored.pane_current_working_directory("%1").as_deref(),
@@ -635,6 +656,8 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 directive: None,
                 routing_enabled: None,
                 approval_policy: None,
+                pane_permission_preset_override: None,
+                pane_approval_policy_override: None,
                 working_directory: None,
                 project_root: None,
                 context_usage: None,

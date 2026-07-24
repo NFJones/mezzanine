@@ -331,9 +331,6 @@ impl RuntimeSessionService {
         self.configure_agent_scheduler_limit(max_concurrent_agents)?;
         self.start_ready_agent_turns()?;
         let mut configured_permissions = runtime_configured_permissions_from_config(&structured)?;
-        if let Some(approval_policy) = self.integration.live_approval_policy_override() {
-            configured_permissions.authorization.approval_policy = approval_policy;
-        }
         if let Some(active) = self.integration.live_approval_bypass_override() {
             configured_permissions
                 .authorization

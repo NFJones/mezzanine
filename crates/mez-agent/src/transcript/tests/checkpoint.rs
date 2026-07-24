@@ -22,6 +22,8 @@ fn valid_checkpoint() -> AgentSessionMetadata {
         directive: None,
         routing_enabled: None,
         approval_policy: Some("ask".to_string()),
+        pane_permission_preset_override: None,
+        pane_approval_policy_override: None,
         working_directory: None,
         project_root: None,
         token_usage: ModelTokenUsage::default(),

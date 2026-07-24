@@ -630,6 +630,29 @@ fn runtime_pane_permission_overrides_inherit_and_shadow_by_field() {
     );
 }
 
+/// Verifies pane cleanup removes only that pane's explicit permission fields.
+///
+/// Closing one descendant must not erase an ancestor's independently owned
+/// override or leave the removed pane carrying stale authority if its id is
+/// queried before reuse.
+#[test]
+fn runtime_pane_permission_cleanup_isolated_to_removed_pane() {
+    let mut service = test_runtime_service();
+    service.set_pane_approval_policy_override("%1", Some(ApprovalPolicy::FullAccess));
+    service.set_pane_approval_policy_override("%2", Some(ApprovalPolicy::HostAccess));
+
+    service.cleanup_removed_pane_runtime_state("%2");
+
+    assert_eq!(
+        service.permission_policy_for_pane("%1").approval_policy,
+        ApprovalPolicy::FullAccess
+    );
+    assert_eq!(
+        service.permission_policy_for_pane("%2").approval_policy,
+        ApprovalPolicy::Ask
+    );
+}
+
 /// Verifies pane permission slash commands can clear explicit fields and
 /// restore dynamic inheritance from the configured session baseline.
 #[test]

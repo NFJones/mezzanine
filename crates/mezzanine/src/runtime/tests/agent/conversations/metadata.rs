@@ -52,6 +52,8 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 directive: Some("Prefer focused tests.".to_string()),
                 routing_enabled: Some(true),
                 approval_policy: Some("full-access".to_string()),
+                pane_permission_preset_override: None,
+                pane_approval_policy_override: None,
                 working_directory: None,
                 project_root: None,
                 context_usage: Some("42%".to_string()),
@@ -98,6 +100,10 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
     assert_eq!(service.agent_routing_override("%1"), Some(true));
     assert_eq!(
         service.permission_policy().approval_policy,
+        ApprovalPolicy::Ask
+    );
+    assert_eq!(
+        service.permission_policy_for_pane("%1").approval_policy,
         ApprovalPolicy::FullAccess
     );
     assert_eq!(

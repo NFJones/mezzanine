@@ -417,9 +417,9 @@ use commands_support::{
     runtime_append_observer_decision_audit, runtime_apply_persisted_config_mutation_batch,
     runtime_approval_command, runtime_approval_policy_name, runtime_bypass_approvals_command,
     runtime_list_command_rules_display, runtime_mcp_retry_event_payload,
-    runtime_parse_approval_policy, runtime_paste_bytes, runtime_permission_preset_name,
-    runtime_permissions_command, runtime_primary_config_path, runtime_remove_command_rule,
-    runtime_set_theme_command, runtime_write_agent_context_for_pane,
+    runtime_parse_approval_policy, runtime_parse_permission_preset, runtime_paste_bytes,
+    runtime_permission_preset_name, runtime_permissions_command, runtime_primary_config_path,
+    runtime_remove_command_rule, runtime_set_theme_command, runtime_write_agent_context_for_pane,
     runtime_write_agent_copy_output_for_pane, runtime_write_agent_patches_for_pane,
     runtime_write_agent_trace_log_for_pane,
 };

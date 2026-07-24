@@ -160,6 +160,16 @@ impl RuntimeIntegrationComponent {
             .set_pane_approval_policy_override(pane_id, value);
     }
 
+    /// Removes every explicit permission field owned by one pane.
+    pub(crate) fn remove_pane_permission_override(&mut self, pane_id: &str) {
+        self.security.remove_pane_permission_override(pane_id);
+    }
+
+    /// Clears all explicit pane-owned permission overrides.
+    pub(crate) fn clear_pane_permission_overrides(&mut self) {
+        self.security.clear_pane_permission_overrides();
+    }
+
     /// Returns the explicit live approval-bypass override.
     pub(crate) fn live_approval_bypass_override(&self) -> Option<bool> {
         self.security.live_approval_bypass_override()
@@ -168,16 +178,6 @@ impl RuntimeIntegrationComponent {
     /// Replaces the explicit live approval-bypass override.
     pub(crate) fn set_live_approval_bypass_override(&mut self, value: Option<bool>) {
         self.security.set_live_approval_bypass_override(value);
-    }
-
-    /// Returns the explicit live approval-policy override.
-    pub(crate) fn live_approval_policy_override(&self) -> Option<ApprovalPolicy> {
-        self.security.live_approval_policy_override()
-    }
-
-    /// Replaces the explicit live approval-policy override.
-    pub(crate) fn set_live_approval_policy_override(&mut self, value: Option<ApprovalPolicy>) {
-        self.security.set_live_approval_policy_override(value);
     }
 
     /// Returns the blocked approval queue.

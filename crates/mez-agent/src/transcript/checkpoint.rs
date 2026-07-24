@@ -40,8 +40,12 @@ pub struct AgentSessionMetadata {
     pub directive: Option<String>,
     /// Pane-local routing override, if one is active.
     pub routing_enabled: Option<bool>,
-    /// Saved approval policy name for the session, if known.
+    /// Legacy saved approval policy name retained for checkpoint compatibility.
     pub approval_policy: Option<String>,
+    /// Explicit permission-preset override owned by this pane, if any.
+    pub pane_permission_preset_override: Option<String>,
+    /// Explicit approval-policy override owned by this pane, if any.
+    pub pane_approval_policy_override: Option<String>,
     /// Best-known pane working directory for the agent session.
     pub working_directory: Option<String>,
     /// Best-known project root for the agent session.
@@ -92,6 +96,12 @@ impl AgentSessionMetadata {
         if let Some(approval_policy) = self.approval_policy.as_deref() {
             validate_agent_approval_policy(approval_policy)?;
         }
+        if let Some(permission_preset) = self.pane_permission_preset_override.as_deref() {
+            validate_agent_permission_preset(permission_preset)?;
+        }
+        if let Some(approval_policy) = self.pane_approval_policy_override.as_deref() {
+            validate_agent_approval_policy(approval_policy)?;
+        }
         if let Some(snapshot) = self.context_usage_snapshot {
             if snapshot.input_tokens == 0 {
                 return Err(TranscriptContractError::new(
@@ -137,6 +147,15 @@ fn validate_agent_approval_policy(value: &str) -> Result<(), TranscriptContractE
         "ask" | "auto-allow" | "full-access" | "host-access" => Ok(()),
         _ => Err(TranscriptContractError::new(
             "unknown persisted approval policy",
+        )),
+    }
+}
+
+fn validate_agent_permission_preset(value: &str) -> Result<(), TranscriptContractError> {
+    match value {
+        "read-only" | "auto" => Ok(()),
+        _ => Err(TranscriptContractError::new(
+            "unknown persisted permission preset",
         )),
     }
 }

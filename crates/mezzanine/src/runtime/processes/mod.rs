@@ -1648,6 +1648,7 @@ impl RuntimeSessionService {
     /// closed pane appear partially alive to later agent/session surfaces.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) {
         self.agent_shell_store_mut().remove_session(pane_id);
+        self.integration.remove_pane_permission_override(pane_id);
         self.clear_agent_subshell_state(pane_id);
         self.remove_agent_prompt_input(pane_id);
         self.clear_agent_pane_presentation_preferences(pane_id);

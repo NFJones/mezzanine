@@ -23,6 +23,9 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
         .unwrap();
     let old_pane_id = old_pane_start.pane_id.clone();
     assert!(service.pane_processes().contains_pane(&old_pane_id));
+    service
+        .set_pane_permission_preset_override(&old_pane_id, Some(mez_agent::PermissionPreset::Auto));
+    service.set_pane_approval_policy_override(&old_pane_id, Some(ApprovalPolicy::FullAccess));
 
     let create = service
         .execute_terminal_command(&primary, "save-layout --name checkpoint")
@@ -53,6 +56,11 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
         .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
         .collect::<Vec<_>>();
     assert!(!live_pane_ids.contains(&old_pane_id));
+    for pane_id in &live_pane_ids {
+        let policy = service.permission_policy_for_pane(pane_id);
+        assert_eq!(policy.preset, mez_agent::PermissionPreset::ReadOnly);
+        assert_eq!(policy.approval_policy, ApprovalPolicy::Ask);
+    }
     let events = service
         .event_log()
         .unwrap()
