@@ -121,6 +121,11 @@ pub(crate) struct RuntimeProcessComponent {
     shell_transaction_started_markers: BTreeSet<String>,
     /// Agent-action markers whose child launch uses the Bubblewrap backend.
     sandboxed_shell_transaction_markers: BTreeSet<String>,
+    /// Shared managed-home activity locks retained for sandboxed workloads.
+    managed_home_activity_locks: std::collections::BTreeMap<
+        String,
+        crate::security::sandbox::BubblewrapManagedHomeActivityLock,
+    >,
     /// Active pane output pipes keyed by their source pane id.
     active_pane_pipes: std::collections::BTreeMap<String, ActivePanePipe>,
     /// Process identity for panes whose handles are adapter-owned.
@@ -287,6 +292,7 @@ impl RuntimeSessionService {
         &mut self,
         marker: &str,
     ) -> Option<RunningShellTransactionRef> {
+        self.process.managed_home_activity_locks.remove(marker);
         self.process.running_shell_transactions.remove(marker)
     }
 
@@ -295,6 +301,7 @@ impl RuntimeSessionService {
         self.process.running_shell_transactions.clear();
         self.process.shell_transaction_require_start_markers.clear();
         self.process.shell_transaction_started_markers.clear();
+        self.process.managed_home_activity_locks.clear();
     }
 
     /// Returns the active pane-screen history limit.

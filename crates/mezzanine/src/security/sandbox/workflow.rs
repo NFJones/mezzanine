@@ -16,7 +16,7 @@ use mez_agent::ApprovalPolicy;
 use crate::runtime::{ConfiguredPermissions, SandboxConfig};
 use crate::security::project::{ProjectRootDiscovery, ProjectRootMarkerKind, TrustDecision};
 
-use super::{BUBBLEWRAP_RESTRICTION_IDS, bubblewrap_managed_home_project_key};
+use super::{BUBBLEWRAP_RESTRICTION_IDS, inspect_bubblewrap_managed_home};
 
 /// Inputs used to build one side-effect-free sandbox workflow projection.
 pub(crate) struct SandboxWorkflowRequest<'a> {
@@ -113,6 +113,10 @@ pub(crate) struct SandboxEffectiveState {
     pub(crate) bubblewrap_probe_state: String,
     /// Managed-home readiness without creating a home.
     pub(crate) managed_home_state: String,
+    /// Regular-file bytes currently retained in the selected managed home.
+    pub(crate) managed_home_bytes: u64,
+    /// Whether the selected managed home is currently mounted by a workload.
+    pub(crate) managed_home_active: bool,
     /// Standalone readiness state for configured toolchain projections.
     pub(crate) toolchain_state: String,
     /// Whether Bubblewrap uses an isolated network namespace.
@@ -244,20 +248,33 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         "pane-bootstrap-required"
     };
 
-    let (bubblewrap_executable, executable_state, managed_home_state, network_isolated) =
-        match &request.permissions.sandbox {
-            SandboxConfig::PolicyOnly => (None, "not-configured", "not-applicable", false),
-            SandboxConfig::Bubblewrap(config) => {
-                let executable = PathBuf::from(&config.executable);
-                let executable_state = inspect_executable(&executable);
-                let managed_home_state = if trusted {
-                    inspect_managed_home(request.config_root, &request.discovery.canonical_root)
-                } else {
-                    "not-applicable"
-                };
-                (Some(executable), executable_state, managed_home_state, true)
-            }
-        };
+    let (
+        bubblewrap_executable,
+        executable_state,
+        managed_home_state,
+        managed_home_bytes,
+        managed_home_active,
+        network_isolated,
+    ) = match &request.permissions.sandbox {
+        SandboxConfig::PolicyOnly => (None, "not-configured", "not-applicable", 0, false, false),
+        SandboxConfig::Bubblewrap(config) => {
+            let executable = PathBuf::from(&config.executable);
+            let executable_state = inspect_executable(&executable);
+            let (managed_home_state, managed_home_bytes, managed_home_active) = if trusted {
+                inspect_managed_home_state(request.config_root, &request.discovery.canonical_root)
+            } else {
+                ("not-applicable", 0, false)
+            };
+            (
+                Some(executable),
+                executable_state,
+                managed_home_state,
+                managed_home_bytes,
+                managed_home_active,
+                true,
+            )
+        }
+    };
 
     let mut diagnostics = Vec::new();
     if request.discovery.marker_kind == ProjectRootMarkerKind::Fallback {
@@ -395,6 +412,8 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             }
             .to_string(),
             managed_home_state: managed_home_state.to_string(),
+            managed_home_bytes,
+            managed_home_active,
             toolchain_state: toolchain_state.to_string(),
             network_isolated,
             restrictions: if matches!(request.permissions.sandbox, SandboxConfig::Bubblewrap(_)) {
@@ -426,17 +445,17 @@ fn inspect_executable(path: &Path) -> &'static str {
     }
 }
 
-fn inspect_managed_home(config_root: &Path, project_root: &Path) -> &'static str {
-    let home = config_root
-        .join("sandbox")
-        .join("cache-homes")
-        .join(bubblewrap_managed_home_project_key(project_root))
-        .join("home");
-    match fs::symlink_metadata(home) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => "ready",
-        Ok(_) => "unsafe",
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent",
-        Err(_) => "unavailable",
+fn inspect_managed_home_state(
+    config_root: &Path,
+    project_root: &Path,
+) -> (&'static str, u64, bool) {
+    match inspect_bubblewrap_managed_home(config_root, project_root) {
+        Ok(inspection) if inspection.exists && inspection.active => {
+            ("active", inspection.bytes, true)
+        }
+        Ok(inspection) if inspection.exists => ("ready", inspection.bytes, false),
+        Ok(_) => ("absent", 0, false),
+        Err(_) => ("unsafe", 0, false),
     }
 }
 
@@ -505,11 +524,68 @@ mod tests {
         assert_eq!(plan.effective.sandbox, "bubblewrap");
         assert_eq!(plan.effective.scope_provenance, "trusted-project");
         assert_eq!(plan.effective.managed_home_state, "absent");
+        assert_eq!(plan.effective.managed_home_bytes, 0);
+        assert!(!plan.effective.managed_home_active);
         assert!(plan.configured.toolchains.is_empty());
         assert_eq!(plan.effective.toolchain_state, "not-configured");
         assert_eq!(plan.doctor_exit_code(), 0);
         assert!(!config_root.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies the shared status projection reports managed-home byte usage
+    /// and activity without modifying the selected home.
+    #[test]
+    fn read_only_plan_reports_managed_home_usage_and_activity() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-sandbox-workflow-managed-home-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("project")).unwrap();
+        let project = root.join("project").canonicalize().unwrap();
+        let config_root = root.join("config");
+        let (managed, activity) =
+            super::super::prepare_bubblewrap_managed_home_for_workload(&config_root, &project)
+                .unwrap();
+        fs::write(managed.host_path.join(".cache/status-payload"), b"payload").unwrap();
+        let permissions = ConfiguredPermissions {
+            sandbox: SandboxConfig::Bubblewrap(BubblewrapConfig {
+                executable: "/bin/sh".to_string(),
+                unavailable: SandboxUnavailablePolicy::Fail,
+                network: BubblewrapNetworkMode::Isolated,
+                environment: SandboxEnvironmentPolicy::Minimal,
+                git_user_name: None,
+                git_user_email: None,
+                toolchains: Vec::new(),
+            }),
+            ..ConfiguredPermissions::default()
+        };
+        let discovery = ProjectRootDiscovery {
+            canonical_start: project.clone(),
+            canonical_root: project,
+            input_source: ProjectRootInputSource::ExplicitPath,
+            marker_kind: ProjectRootMarkerKind::GitDirectory,
+            nesting_depth: 0,
+        };
+
+        let plan = plan_sandbox_workflow(SandboxWorkflowRequest {
+            permissions: &permissions,
+            discovery: &discovery,
+            trust_state: TrustDecision::Trusted,
+            config_root: &config_root,
+            sandbox_source: "primary",
+            approval_policy_source: "primary",
+            read_scopes_source: "default",
+            write_scopes_source: "default",
+        });
+
+        assert_eq!(plan.effective.managed_home_state, "active");
+        assert!(plan.effective.managed_home_bytes >= 7);
+        assert!(plan.effective.managed_home_active);
+        assert!(managed.host_path.exists());
+        drop(activity);
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// Verifies host access remains visibly distinct from configured

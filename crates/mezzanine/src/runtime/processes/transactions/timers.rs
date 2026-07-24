@@ -129,6 +129,7 @@ impl RuntimeSessionService {
         self.process
             .sandboxed_shell_transaction_markers
             .remove(marker);
+        self.process.managed_home_activity_locks.remove(marker);
     }
 
     /// Records that one live agent-action transaction uses Bubblewrap.
@@ -136,6 +137,17 @@ impl RuntimeSessionService {
         self.process
             .sandboxed_shell_transaction_markers
             .insert(marker.to_string());
+    }
+
+    /// Retains one managed-home activity lock until its transaction settles.
+    pub(crate) fn register_managed_home_activity_lock(
+        &mut self,
+        marker: &str,
+        activity_lock: crate::security::sandbox::BubblewrapManagedHomeActivityLock,
+    ) {
+        self.process
+            .managed_home_activity_locks
+            .insert(marker.to_string(), activity_lock);
     }
 
     /// Interrupts a pane after a protocol violation when the process is live.

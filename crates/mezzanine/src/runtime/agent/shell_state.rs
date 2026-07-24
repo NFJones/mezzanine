@@ -140,6 +140,7 @@ impl RuntimeSessionService {
             command,
         )?;
         let mut sandbox_audit_summary = None;
+        let mut managed_home_activity_lock = None;
         let permission_policy = self.permission_policy_for_turn(turn);
         let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
             &self.configured_permissions().sandbox,
@@ -184,13 +185,16 @@ impl RuntimeSessionService {
                 self.integration.config_root(),
                 self.trusted_project_root_for_pane(&turn.pane_id),
             ) {
-                (Some(config_root), Some(project_root)) => Some(
-                    crate::security::sandbox::prepare_bubblewrap_managed_home(
-                        config_root,
-                        &project_root,
-                    )
-                    .map_err(|error| MezError::invalid_state(error.message()))?,
-                ),
+                (Some(config_root), Some(project_root)) => {
+                    let (home, activity_lock) =
+                        crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload(
+                            config_root,
+                            &project_root,
+                        )
+                        .map_err(|error| MezError::invalid_state(error.message()))?;
+                    managed_home_activity_lock = Some(activity_lock);
+                    Some(home)
+                }
                 _ => None,
             };
             let rust_toolchain = crate::security::sandbox::bubblewrap_rust_toolchain_roots(
@@ -388,6 +392,9 @@ impl RuntimeSessionService {
         );
         if sandbox_audit_summary.is_some() {
             self.register_sandboxed_shell_transaction_marker(&marker_id);
+        }
+        if let Some(activity_lock) = managed_home_activity_lock {
+            self.register_managed_home_activity_lock(&marker_id, activity_lock);
         }
         self.append_agent_trace_turn_event(
             &turn.pane_id,

@@ -408,7 +408,11 @@ Current support reflects behavior implemented in the repository today.
 - Trusted-project Bubblewrap runs reuse a private Mezzanine-managed home with
   persistent XDG cache, config, data, and state directories. Homes are isolated
   by project and sandbox profile, never copy the real user home, and are removed
-  when project trust is revoked.
+  when project trust is revoked. `mez sandbox cache status [PATH]` reports usage
+  without creating storage. `cache clear [PATH]` and `cache prune` preview
+  inactive candidates by default; pass `--dry-run` for an explicit preview or
+  `--yes` to delete. Active homes are locked and skipped, and maintenance never
+  follows symbolic links.
 - Bubblewrap disables host system/global Git configuration. Users may configure
   a paired sanitized Git name and email; only those identity values are
   projected, while credential helpers, signing keys, includes, URL rewrites,

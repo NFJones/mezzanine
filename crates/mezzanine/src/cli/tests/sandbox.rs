@@ -675,3 +675,138 @@ fn sandbox_profile_import_requires_confirmation_and_uses_local_root() {
 
     let _ = fs::remove_dir_all(home);
 }
+
+/// Managed-home cache status is read-only, clear previews without `--yes`,
+/// and confirmed clear removes only the selected project's inactive home.
+#[test]
+fn sandbox_cache_status_and_clear_require_confirmation() {
+    let (env, home) = test_env("sandbox-cache-clear");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let canonical_project = project.canonicalize().unwrap();
+    let config_root = home.join(".config/mezzanine");
+    let managed =
+        crate::security::sandbox::prepare_bubblewrap_managed_home(&config_root, &canonical_project)
+            .unwrap();
+    fs::write(managed.host_path.join(".cache/cli-payload"), b"payload").unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let status_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "cache".to_string(),
+            "status".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(status_code, 0);
+    let status: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(status["operation"], "status");
+    assert!(status["total_bytes"].as_u64().unwrap() >= 7);
+    assert_eq!(status["homes"][0]["exists"], true);
+    assert!(managed.host_path.exists());
+
+    stdout.clear();
+    let preview_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "cache".to_string(),
+            "clear".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(preview_code, 1);
+    let preview: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(preview["confirmation_required"], true);
+    assert_eq!(preview["candidate_homes"], 1);
+    assert_eq!(preview["removed_homes"], 0);
+    assert!(managed.host_path.exists());
+
+    stdout.clear();
+    let clear_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "cache".to_string(),
+            "clear".to_string(),
+            project.to_string_lossy().into_owned(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(clear_code, 0);
+    let cleared: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(cleared["removed_homes"], 1);
+    assert!(!managed.host_path.exists());
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Confirmed pruning removes inactive homes while reporting and retaining a
+/// home whose shared workload activity lock is still held.
+#[test]
+fn sandbox_cache_prune_skips_active_managed_homes() {
+    let (env, home) = test_env("sandbox-cache-prune-active");
+    let config_root = home.join(".config/mezzanine");
+    let active_project = home.join("active-project");
+    let inactive_project = home.join("inactive-project");
+    fs::create_dir_all(active_project.join(".git")).unwrap();
+    fs::create_dir_all(inactive_project.join(".git")).unwrap();
+    let active_project = active_project.canonicalize().unwrap();
+    let inactive_project = inactive_project.canonicalize().unwrap();
+    let (active_home, activity) =
+        crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload(
+            &config_root,
+            &active_project,
+        )
+        .unwrap();
+    let inactive_home =
+        crate::security::sandbox::prepare_bubblewrap_managed_home(&config_root, &inactive_project)
+            .unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "cache".to_string(),
+            "prune".to_string(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let result: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(result["active_homes"], 1);
+    assert_eq!(result["removed_homes"], 1);
+    assert!(active_home.host_path.exists());
+    assert!(!inactive_home.host_path.exists());
+    assert!(stderr.is_empty());
+
+    drop(activity);
+    let _ = fs::remove_dir_all(home);
+}

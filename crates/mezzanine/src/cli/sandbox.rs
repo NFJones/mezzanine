@@ -26,7 +26,9 @@ use crate::security::project::{
     default_trust_database_path, discover_existing_overlays, discover_project_root_with_metadata,
 };
 use crate::security::sandbox::{
-    SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest, plan_sandbox_workflow,
+    BubblewrapManagedHomeMaintenance, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
+    SandboxWorkflowRequest, clear_bubblewrap_managed_home, inspect_bubblewrap_managed_home,
+    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -79,6 +81,58 @@ enum SandboxCliCommand {
         #[command(subcommand)]
         command: SandboxToolchainsCommand,
     },
+    /// Inspects or safely removes Mezzanine-managed Bubblewrap homes.
+    Cache {
+        /// Managed-home cache workflow to run.
+        #[command(subcommand)]
+        command: SandboxCacheCommand,
+    },
+}
+
+/// Direct-user managed-home inspection and maintenance commands.
+#[derive(Debug, Clone, Subcommand)]
+enum SandboxCacheCommand {
+    /// Reports usage and activity for the selected project's managed home.
+    Status {
+        /// Project path to inspect instead of the current directory.
+        path: Option<PathBuf>,
+    },
+    /// Removes the selected project's inactive managed home.
+    Clear {
+        /// Project path to clear instead of the current directory.
+        path: Option<PathBuf>,
+        /// Reports the deletion candidate without removing it.
+        #[arg(long)]
+        dry_run: bool,
+        /// Confirms deletion after reviewing the candidate.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Removes every inactive managed home.
+    Prune {
+        /// Reports all deletion candidates without removing them.
+        #[arg(long)]
+        dry_run: bool,
+        /// Confirms deletion after reviewing all candidates.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// Stable projection returned by managed-home cache workflows.
+#[derive(Debug, Serialize)]
+struct SandboxCacheResult {
+    version: u32,
+    operation: &'static str,
+    project_root: Option<PathBuf>,
+    homes: Vec<BubblewrapManagedHomeMaintenance>,
+    total_bytes: u64,
+    active_homes: usize,
+    candidate_homes: usize,
+    removed_homes: usize,
+    dry_run: bool,
+    confirmation_required: bool,
+    applied: bool,
 }
 
 /// Shared preview and mutation arguments for guided sandbox setup.
@@ -217,6 +271,9 @@ pub(super) fn run_sandbox<W: Write>(
     stdout: &mut W,
 ) -> Result<u8> {
     let (path, input_source, doctor, verbose) = match args.command {
+        Some(SandboxCliCommand::Cache { command }) => {
+            return run_sandbox_cache(command, env, output_format, stdout);
+        }
         Some(SandboxCliCommand::Toolchains { command }) => {
             return run_sandbox_toolchains(command, env, interactive, output_format, stdout);
         }
@@ -342,6 +399,151 @@ pub(super) fn run_sandbox<W: Write>(
         write!(stdout, "{}", sandbox_plan_plain_text(&plan, verbose))?;
     }
     Ok(if doctor { plan.doctor_exit_code() } else { 0 })
+}
+
+/// Runs one read-only or explicitly confirmed managed-home cache workflow.
+fn run_sandbox_cache<W: Write>(
+    command: SandboxCacheCommand,
+    env: CliEnv,
+    output_format: CliOutputFormat,
+    stdout: &mut W,
+) -> Result<u8> {
+    let paths = env.config_paths()?;
+    let (operation, project_root, homes, dry_run, confirmation_required, applied) = match command {
+        SandboxCacheCommand::Status { path } => {
+            let path = path.unwrap_or(std::env::current_dir()?);
+            let discovery =
+                discover_project_root_with_metadata(&path, ProjectRootInputSource::ExplicitPath)?;
+            let inspection =
+                inspect_bubblewrap_managed_home(paths.root(), &discovery.canonical_root)
+                    .map_err(|error| MezError::invalid_state(error.message()))?;
+            let home = BubblewrapManagedHomeMaintenance {
+                project_key: inspection.project_key,
+                exists: inspection.exists,
+                bytes: inspection.bytes,
+                active: inspection.active,
+                candidate: inspection.exists && !inspection.active,
+                removed: false,
+            };
+            (
+                "status",
+                Some(discovery.canonical_root),
+                vec![home],
+                true,
+                false,
+                false,
+            )
+        }
+        SandboxCacheCommand::Clear { path, dry_run, yes } => {
+            let path = path.unwrap_or(std::env::current_dir()?);
+            let discovery =
+                discover_project_root_with_metadata(&path, ProjectRootInputSource::ExplicitPath)?;
+            let preview_only = dry_run || !yes;
+            let home = clear_bubblewrap_managed_home(
+                paths.root(),
+                &discovery.canonical_root,
+                preview_only,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            (
+                "clear",
+                Some(discovery.canonical_root),
+                vec![home],
+                preview_only,
+                !dry_run && !yes,
+                yes && !dry_run,
+            )
+        }
+        SandboxCacheCommand::Prune { dry_run, yes } => {
+            let preview_only = dry_run || !yes;
+            let homes = prune_bubblewrap_managed_homes(paths.root(), preview_only)
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+            (
+                "prune",
+                None,
+                homes,
+                preview_only,
+                !dry_run && !yes,
+                yes && !dry_run,
+            )
+        }
+    };
+    let result = sandbox_cache_result(
+        operation,
+        project_root,
+        homes,
+        dry_run,
+        confirmation_required,
+        applied,
+    )?;
+    write_sandbox_cache_result(stdout, output_format, &result)?;
+    Ok(if result.confirmation_required { 1 } else { 0 })
+}
+
+fn sandbox_cache_result(
+    operation: &'static str,
+    project_root: Option<PathBuf>,
+    homes: Vec<BubblewrapManagedHomeMaintenance>,
+    dry_run: bool,
+    confirmation_required: bool,
+    applied: bool,
+) -> Result<SandboxCacheResult> {
+    let total_bytes = homes.iter().try_fold(0_u64, |total, home| {
+        total
+            .checked_add(home.bytes)
+            .ok_or_else(|| MezError::invalid_state("managed-home byte total overflowed"))
+    })?;
+    Ok(SandboxCacheResult {
+        version: 1,
+        operation,
+        project_root,
+        active_homes: homes.iter().filter(|home| home.active).count(),
+        candidate_homes: homes.iter().filter(|home| home.candidate).count(),
+        removed_homes: homes.iter().filter(|home| home.removed).count(),
+        homes,
+        total_bytes,
+        dry_run,
+        confirmation_required,
+        applied,
+    })
+}
+
+fn write_sandbox_cache_result<W: Write>(
+    stdout: &mut W,
+    output_format: CliOutputFormat,
+    result: &SandboxCacheResult,
+) -> Result<()> {
+    if output_format.is_json() {
+        writeln!(stdout, "{}", serialize_json(result)?)?;
+    } else {
+        writeln!(stdout, "operation: {}", result.operation)?;
+        if let Some(project_root) = &result.project_root {
+            writeln!(stdout, "project_root: {}", project_root.display())?;
+        }
+        writeln!(stdout, "total_bytes: {}", result.total_bytes)?;
+        writeln!(stdout, "active_homes: {}", result.active_homes)?;
+        writeln!(stdout, "candidate_homes: {}", result.candidate_homes)?;
+        writeln!(stdout, "removed_homes: {}", result.removed_homes)?;
+        writeln!(stdout, "dry_run: {}", result.dry_run)?;
+        writeln!(
+            stdout,
+            "confirmation_required: {}",
+            result.confirmation_required
+        )?;
+        for home in &result.homes {
+            writeln!(
+                stdout,
+                "home: {} exists={} bytes={} active={} candidate={} removed={}",
+                home.project_key,
+                home.exists,
+                home.bytes,
+                home.active,
+                home.candidate,
+                home.removed
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Loads effective local configuration without migrations or persistence.
@@ -821,7 +1023,7 @@ fn write_setup_result<W: Write>(
 
 fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String {
     let mut output = format!(
-        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\napproval_policy: {}\nscope_provenance: {}\nbubblewrap_executable_state: {}\nbubblewrap_probe_state: {}\nmanaged_home_state: {}\ntoolchains: {}\ntoolchain_state: {}\nnetwork_isolated: {}\nreload_freshness: {}\n",
+        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\napproval_policy: {}\nscope_provenance: {}\nbubblewrap_executable_state: {}\nbubblewrap_probe_state: {}\nmanaged_home_state: {}\nmanaged_home_bytes: {}\nmanaged_home_active: {}\ntoolchains: {}\ntoolchain_state: {}\nnetwork_isolated: {}\nreload_freshness: {}\n",
         plan.project.canonical_root.display(),
         plan.project.input_source,
         plan.project.marker_kind,
@@ -833,6 +1035,8 @@ fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String 
         plan.effective.bubblewrap_executable_state,
         plan.effective.bubblewrap_probe_state,
         plan.effective.managed_home_state,
+        plan.effective.managed_home_bytes,
+        plan.effective.managed_home_active,
         if plan.configured.toolchains.is_empty() {
             "none".to_string()
         } else {

@@ -30,8 +30,12 @@ use crate::runtime::{
 mod managed_home;
 mod workflow;
 
+#[cfg(test)]
+pub(crate) use managed_home::prepare_bubblewrap_managed_home;
 pub(crate) use managed_home::{
-    bubblewrap_managed_home_project_key, prepare_bubblewrap_managed_home,
+    BubblewrapManagedHomeActivityLock, BubblewrapManagedHomeMaintenance,
+    clear_bubblewrap_managed_home, inspect_bubblewrap_managed_home,
+    prepare_bubblewrap_managed_home_for_workload, prune_bubblewrap_managed_homes,
     remove_bubblewrap_managed_home,
 };
 pub(crate) use workflow::{

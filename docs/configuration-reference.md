@@ -776,6 +776,14 @@ create managed homes, or run/cache the pane-specific Bubblewrap probe. Only a
 direct user may apply policy changes; diagnostics never broaden authority or
 select host execution automatically.
 
+Managed-home usage and lifecycle are available through `mez sandbox cache`.
+`cache status [PATH]` is read-only and reports existence, regular-file bytes,
+and whether a workload currently holds the home active. `cache clear [PATH]`
+and `cache prune` preview inactive deletion candidates unless `--yes` is given;
+`--dry-run` always previews. Active homes are skipped. Inspection and deletion
+reject symlinks and remain scoped to Mezzanine's private project/profile cache
+root. There is no automatic cleanup or persisted quota setting.
+
 Guided setup is available through `mez sandbox plan`, `enable`, `preset apply`,
 `disable`, and `trust-current-project`. The code-owned presets are
 `project-safe` (Bubblewrap plus `ask`), `project-auto` (Bubblewrap plus

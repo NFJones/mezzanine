@@ -2832,14 +2832,26 @@ arguments, environment values, or unrelated host paths.
 build one deterministic, read-only workflow projection containing configured
 and effective sandbox boundaries, approval policy, canonical project-root
 discovery and source, trust state, scope provenance, Bubblewrap executable and
-pane-probe state, managed-home readiness, network isolation, reload freshness,
-and stable diagnostics. Inspection MUST NOT migrate or persist configuration,
-mutate trust, create managed homes, or populate probe caches. Doctor diagnostics
+pane-probe state, managed-home readiness, byte usage and active state, network
+isolation, reload freshness, and stable diagnostics. Inspection MUST NOT migrate
+or persist configuration, mutate trust, create managed homes, or populate probe
+caches. Doctor diagnostics
 MUST contain stable `id`, `severity`, `summary`, `details`, `remedy`,
 `affected_path`, and `source` fields and MUST use process status 0 for healthy
 state, 1 when warnings are present, and 2 when errors are present. Remedies MUST
 remain direct-user actions and MUST NOT suggest automatic authority broadening
 or host fallback.
+
+`mez sandbox cache status [PATH]` MUST inspect the selected project/profile home
+without creating it. `mez sandbox cache clear [PATH]` and `mez sandbox cache
+prune` MUST preview candidate count and bytes unless deletion is confirmed with
+`--yes`; `--dry-run` MUST always remain non-mutating. Maintenance MUST remain
+scoped below the private managed-home root, reject symbolic links and unsupported
+filesystem entries instead of following them, and acquire an exclusive per-home
+lock before deletion. Bubblewrap workloads MUST retain a shared lock for the
+complete mounted-home transaction lifetime. Active homes MUST be reported and
+skipped. Trust revocation MUST use the same scoped maintenance boundary. This
+workflow MUST NOT add automatic cleanup or persisted quota policy.
 
 Guided setup MUST provide code-owned `project-safe`, `project-auto`,
 `project-read-only`, and `off` presets through `mez sandbox plan`, `enable`,
