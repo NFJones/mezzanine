@@ -706,9 +706,9 @@ impl RuntimeSessionService {
             resolved_primary_path_scopes.or_else(|| self.path_scopes_for_pane(&turn.pane_id))
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        let sandbox_first_local_prompts = matches!(
-            self.configured_permissions().sandbox,
-            crate::runtime::SandboxConfig::Bubblewrap(_)
+        let sandbox_first_local_prompts = crate::runtime::config::bubblewrap_applies_to_policy(
+            &self.configured_permissions().sandbox,
+            &permission_policy,
         );
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.append_agent_trace_turn_event(

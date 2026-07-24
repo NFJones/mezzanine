@@ -406,6 +406,118 @@ fn bubblewrap_probe_service() -> RuntimeSessionService {
     service
 }
 
+/// Verifies host access skips Bubblewrap path and capability preflight without
+/// consuming an exact fallback grant, while returning to full access makes the
+/// configured Bubblewrap backend effective for the next action.
+#[test]
+fn runtime_host_access_skips_bubblewrap_preflight_and_transition_reenables_it() {
+    let mut service = bubblewrap_probe_service();
+    let turn = path_resolution_turn();
+    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+    service.grant_sandbox_bypass_after_approval(&turn.turn_id, "fallback-action");
+
+    assert!(
+        service
+            .ensure_bubblewrap_path_resolution_for_action(&turn, "host-action", None)
+            .unwrap()
+    );
+    assert!(
+        service
+            .ensure_bubblewrap_capability_for_action(&turn, "host-action")
+            .unwrap()
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert!(service.activate_sandbox_bypass_after_approval(&turn.turn_id, "fallback-action"));
+
+    service.permission_policy_mut().approval_policy = ApprovalPolicy::FullAccess;
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "sandboxed-action")
+            .unwrap()
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| matches!(
+                transaction.kind,
+                RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+            ))
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies host access dispatches an ordinary pane-shell transaction even
+/// while Bubblewrap remains configured, and does not consume an unrelated
+/// exact fallback grant while doing so.
+#[test]
+fn runtime_host_access_dispatches_unwrapped_without_consuming_fallback() {
+    let mut service = bubblewrap_probe_service();
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+    service.grant_sandbox_bypass_after_approval(&turn.turn_id, "fallback-action");
+
+    assert!(
+        service
+            .dispatch_shell_action_to_pane_for_tests(&turn, &action, "pwd", None)
+            .unwrap()
+    );
+    let (marker, transaction) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find(|(_, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { .. }
+            )
+        })
+        .unwrap();
+    assert_eq!(transaction.command, "pwd");
+    assert!(!service.shell_transaction_is_sandboxed_for_tests(marker));
+    assert!(service.activate_sandbox_bypass_after_approval(&turn.turn_id, "fallback-action"));
+    assert!(matches!(
+        service.configured_permissions().sandbox,
+        crate::runtime::SandboxConfig::Bubblewrap(_)
+    ));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies host access does not bypass the backend-independent network deny
+/// policy or convert it into an unsandboxed pane-shell transaction.
+#[test]
+fn runtime_host_access_keeps_network_deny_terminal() {
+    let (mut service, turn_id, _) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+    let evaluation = service
+        .agent_turn_executions_mut()
+        .get_mut(&turn_id)
+        .unwrap()
+        .action_results[0]
+        .permission_evaluation
+        .as_mut()
+        .unwrap();
+    evaluation.effects.network = true;
+    evaluation.candidates[0].effects.network = true;
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("network_policy_denied")
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Builds one prompting shell evaluation retained by sandbox-first dispatch.
 fn sandbox_fallback_prompt_evaluation() -> mez_agent::permissions::PermissionEvaluation {
     let effects = path_resolution_effects();

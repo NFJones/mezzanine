@@ -40,6 +40,13 @@ impl RuntimeSessionService {
         turn: &mez_agent::AgentTurnRecord,
         action_id: &str,
     ) -> Result<bool> {
+        let permission_policy = self.permission_policy_for_turn(turn);
+        if !crate::runtime::config::bubblewrap_applies_to_policy(
+            &self.configured_permissions().sandbox,
+            &permission_policy,
+        ) {
+            return Ok(true);
+        }
         let SandboxConfig::Bubblewrap(config) = self.configured_permissions().sandbox.clone()
         else {
             return Ok(true);

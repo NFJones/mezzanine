@@ -801,9 +801,9 @@ impl RuntimeSessionService {
         if let Some(scope) = self.subagent_scope_declaration(parent_agent_id) {
             return Some(scope);
         }
-        if !matches!(
-            self.configured_permissions().sandbox,
-            crate::runtime::SandboxConfig::Bubblewrap(_)
+        if !crate::runtime::config::bubblewrap_applies_to_policy(
+            &self.configured_permissions().sandbox,
+            self.permission_policy(),
         ) {
             return None;
         }

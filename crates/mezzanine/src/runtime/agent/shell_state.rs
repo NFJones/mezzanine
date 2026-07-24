@@ -140,9 +140,15 @@ impl RuntimeSessionService {
             command,
         )?;
         let mut sandbox_audit_summary = None;
-        let sandbox_bypassed =
-            self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
+        let permission_policy = self.permission_policy_for_turn(turn);
+        let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
+            &self.configured_permissions().sandbox,
+            &permission_policy,
+        );
+        let sandbox_bypassed = bubblewrap_applies
+            && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
         if let SandboxConfig::Bubblewrap(config) = self.configured_permissions().sandbox.clone()
+            && bubblewrap_applies
             && !sandbox_bypassed
         {
             let evaluation = permission_evaluation.ok_or_else(|| {
@@ -390,6 +396,29 @@ impl RuntimeSessionService {
         Ok(ShellActionDispatchOutcome::Dispatched)
     }
 
+    /// Dispatches one ordinary shell action for focused sandbox-boundary tests.
+    #[cfg(test)]
+    pub(crate) fn dispatch_shell_action_to_pane_for_tests(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        command: &str,
+        permission_evaluation: Option<&PermissionEvaluation>,
+    ) -> Result<bool> {
+        self.dispatch_shell_action_to_pane(
+            turn,
+            action,
+            ShellActionDispatch {
+                command,
+                stateful: false,
+                interactive: false,
+                timeout_ms: None,
+                permission_evaluation,
+            },
+        )
+        .map(|outcome| matches!(outcome, ShellActionDispatchOutcome::Dispatched))
+    }
+
     /// Ensures complete filesystem effects have exact pane-shell path evidence
     /// before Bubblewrap capability probing or workload compilation begins.
     pub(crate) fn ensure_bubblewrap_path_resolution_for_action(
@@ -398,9 +427,10 @@ impl RuntimeSessionService {
         action_id: &str,
         evaluation: Option<&PermissionEvaluation>,
     ) -> Result<bool> {
-        if !matches!(
-            self.configured_permissions().sandbox,
-            SandboxConfig::Bubblewrap(_)
+        let permission_policy = self.permission_policy_for_turn(turn);
+        if !crate::runtime::config::bubblewrap_applies_to_policy(
+            &self.configured_permissions().sandbox,
+            &permission_policy,
         ) {
             return Ok(true);
         }

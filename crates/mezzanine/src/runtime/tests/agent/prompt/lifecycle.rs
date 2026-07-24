@@ -190,6 +190,52 @@ fn runtime_subagent_omitted_scopes_inherit_parent_bubblewrap_authority() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies a root parent in host access does not manufacture Bubblewrap scope
+/// inheritance for its child while the configured backend remains unchanged.
+#[test]
+fn runtime_host_access_subagent_does_not_inherit_bubblewrap_scope() {
+    let (mut service, primary, root, _) =
+        trusted_project_subagent_scope_service("runtime-subagent-host-access");
+    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::OwnedWrite,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        task_prompt: "work with inherited host access".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            spawn,
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let child_agent_id =
+        serde_json::from_str::<serde_json::Value>(&spawned).unwrap()["agent"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+    assert!(!service.has_subagent_scope_declaration(&child_agent_id));
+    assert!(matches!(
+        service.configured_permissions().sandbox,
+        crate::runtime::SandboxConfig::Bubblewrap(_)
+    ));
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies explicit empty child scope arrays remain empty and therefore deny
 /// Bubblewrap filesystem authority rather than behaving like omitted fields.
 #[test]

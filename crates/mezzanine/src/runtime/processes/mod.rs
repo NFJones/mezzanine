@@ -549,6 +549,13 @@ impl RuntimeSessionService {
         &mut self.process.running_shell_transactions
     }
 
+    /// Reports whether one live agent-action transaction uses Bubblewrap.
+    pub(crate) fn shell_transaction_is_sandboxed_for_tests(&self, marker: &str) -> bool {
+        self.process
+            .sandboxed_shell_transaction_markers
+            .contains(marker)
+    }
+
     /// Injects one failure while sending Ctrl-C to a pane shell.
     pub(crate) fn fail_next_pane_interrupt_write_for_tests(&mut self) {
         self.process.fail_next_pane_interrupt_write = true;

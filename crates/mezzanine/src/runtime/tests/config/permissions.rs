@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::runtime::config::{
-    NetworkPolicy, SandboxConfig, runtime_configured_permissions_from_config,
+    NetworkPolicy, SandboxConfig, bubblewrap_applies_to_policy,
+    runtime_configured_permissions_from_config,
 };
 use mez_agent::permissions::EffectCompleteness;
 
@@ -50,6 +51,24 @@ fn runtime_materializes_typed_sandbox_permissions() {
         rule.declared_effects.as_ref().unwrap().completeness,
         EffectCompleteness::Complete
     );
+}
+
+/// Verifies configured Bubblewrap remains active for full access but becomes
+/// ineffective only while the primary-user host-access policy is selected.
+#[test]
+fn runtime_effective_bubblewrap_tracks_approval_policy_without_mutating_config() {
+    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {"sandbox": "bubblewrap"}
+    }))
+    .unwrap();
+    let mut policy = configured.authorization.clone();
+
+    policy.approval_policy = ApprovalPolicy::FullAccess;
+    assert!(bubblewrap_applies_to_policy(&configured.sandbox, &policy));
+
+    policy.approval_policy = ApprovalPolicy::HostAccess;
+    assert!(!bubblewrap_applies_to_policy(&configured.sandbox, &policy));
+    assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
 }
 
 /// Verifies Bubblewrap configuration permits omitted explicit scopes so a

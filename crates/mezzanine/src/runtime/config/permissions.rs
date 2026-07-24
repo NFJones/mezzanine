@@ -107,6 +107,16 @@ impl SandboxConfig {
     }
 }
 
+/// Reports whether configured Bubblewrap confinement applies to one effective
+/// permission policy. Host access leaves the configured backend unchanged but
+/// deliberately executes local shell actions outside it.
+pub(crate) fn bubblewrap_applies_to_policy(
+    sandbox: &SandboxConfig,
+    policy: &PermissionPolicy,
+) -> bool {
+    matches!(sandbox, SandboxConfig::Bubblewrap(_)) && !policy.approval_policy.bypasses_sandbox()
+}
+
 /// Typed fail-closed Bubblewrap configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BubblewrapConfig {

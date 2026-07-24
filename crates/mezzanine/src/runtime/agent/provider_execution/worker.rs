@@ -228,9 +228,9 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        let sandbox_first_local_prompts = matches!(
-            self.configured_permissions().sandbox,
-            crate::runtime::SandboxConfig::Bubblewrap(_)
+        let sandbox_first_local_prompts = crate::runtime::config::bubblewrap_applies_to_policy(
+            &self.configured_permissions().sandbox,
+            &permission_policy,
         );
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
@@ -539,9 +539,9 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        let sandbox_first_local_prompts = matches!(
-            self.configured_permissions().sandbox,
-            crate::runtime::SandboxConfig::Bubblewrap(_)
+        let sandbox_first_local_prompts = crate::runtime::config::bubblewrap_applies_to_policy(
+            &self.configured_permissions().sandbox,
+            &permission_policy,
         );
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;

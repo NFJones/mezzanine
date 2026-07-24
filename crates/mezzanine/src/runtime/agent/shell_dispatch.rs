@@ -22,7 +22,7 @@ use super::{
     runtime_mezzanine_error_code, runtime_pane_readiness_state_name,
     runtime_pre_shell_hook_payload,
 };
-use crate::runtime::RuntimeSandboxFallbackAudit;
+use crate::runtime::{NetworkPolicy, RuntimeSandboxFallbackAudit};
 
 /// Describes why an `apply_patch` snapshot cannot safely reach write planning.
 ///
@@ -953,9 +953,33 @@ impl RuntimeSessionService {
             let permission_evaluation = execution.action_results[index]
                 .permission_evaluation
                 .clone();
-            let sandbox_bypassed =
-                self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
-            if !sandbox_bypassed {
+            if self.configured_permissions().resources.network_policy == NetworkPolicy::Deny
+                && permission_evaluation
+                    .as_ref()
+                    .is_some_and(|evaluation| evaluation.effects.network)
+            {
+                execution.action_results[index] = ActionResult::failed(
+                    turn,
+                    action,
+                    ActionStatus::Denied,
+                    "network_policy_denied",
+                    "network access is denied by the effective permission policy",
+                )?;
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    &format!("action {} denied reason=network_policy", action.id),
+                )?;
+                continue;
+            }
+            let permission_policy = self.permission_policy_for_turn(turn);
+            let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
+                &self.configured_permissions().sandbox,
+                &permission_policy,
+            );
+            let sandbox_bypassed = bubblewrap_applies
+                && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
+            if bubblewrap_applies && !sandbox_bypassed {
                 match self.ensure_bubblewrap_path_resolution_for_action(
                     turn,
                     &action.id,
