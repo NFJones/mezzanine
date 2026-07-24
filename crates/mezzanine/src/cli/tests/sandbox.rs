@@ -253,3 +253,260 @@ fn sandbox_toolchain_enable_requires_confirmation_and_persists_only_kind() {
 
     let _ = fs::remove_dir_all(home);
 }
+
+/// Guided setup planning is strictly read-only and reports the complete
+/// code-owned preset mutation set without creating config or trust state.
+#[test]
+fn sandbox_setup_plan_is_read_only_and_requires_explicit_authority() {
+    let (env, home) = test_env("sandbox-setup-plan");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "plan".to_string(),
+            "--preset".to_string(),
+            "project-safe".to_string(),
+            "--authority".to_string(),
+            "explicit-scope".to_string(),
+            "--path".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(output["preset"], "project-safe");
+    assert_eq!(output["authority"], "explicit-scope");
+    assert_eq!(output["dry_run"], true);
+    assert_eq!(output["applied"], false);
+    assert_eq!(output["trust_current_project"], false);
+    assert!(!home.join(".config/mezzanine").exists());
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Noninteractive setup previews without confirmation, then atomically
+/// persists the selected explicit-scope preset when `--yes` is supplied.
+#[test]
+fn sandbox_setup_enable_requires_confirmation_and_persists_preset() {
+    let (env, home) = test_env("sandbox-setup-enable");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let base = vec![
+        "mez".to_string(),
+        "sandbox".to_string(),
+        "enable".to_string(),
+        "--preset".to_string(),
+        "project-auto".to_string(),
+        "--authority".to_string(),
+        "explicit-scope".to_string(),
+        "--path".to_string(),
+        project.to_string_lossy().into_owned(),
+    ];
+
+    let preview_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(base.clone()),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(preview_code, 1);
+    assert!(!config_path.exists());
+
+    stdout.clear();
+    let mut confirmed = base;
+    confirmed.push("--yes".to_string());
+    let applied_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(confirmed),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(applied_code, 0);
+    let config = fs::read_to_string(&config_path).unwrap();
+    assert!(config.contains("sandbox = \"bubblewrap\""), "{config}");
+    assert!(
+        config.contains("approval_policy = \"auto-allow\""),
+        "{config}"
+    );
+    assert!(
+        config.contains(
+            &project
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        )
+    );
+    assert!(!home.join(".config/mezzanine/project-trust.tsv").exists());
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Trusted-project setup persists the independently discovered project trust
+/// record while leaving explicit scope arrays omitted from user configuration.
+#[test]
+fn sandbox_setup_trusted_project_persists_trust_without_explicit_scopes() {
+    let (env, home) = test_env("sandbox-setup-trusted-project");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "enable".to_string(),
+            "--preset".to_string(),
+            "project-safe".to_string(),
+            "--authority".to_string(),
+            "trusted-project".to_string(),
+            "--path".to_string(),
+            project.to_string_lossy().into_owned(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let config = fs::read_to_string(home.join(".config/mezzanine/config.toml")).unwrap();
+    assert!(config.contains("sandbox = \"bubblewrap\""), "{config}");
+    assert!(!config.contains("read_scopes"), "{config}");
+    assert!(!config.contains("write_scopes"), "{config}");
+    let trust =
+        ProjectTrustStore::load_from_file(&home.join(".config/mezzanine/project-trust.tsv"))
+            .unwrap();
+    assert_eq!(
+        trust.get(&project).map(|record| record.state),
+        Some(TrustDecision::Trusted)
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// The read-only preset grants only project read authority, while disabling
+/// Bubblewrap later changes only the backend and retains scopes and policy.
+#[test]
+fn sandbox_setup_read_only_and_disable_retain_expected_policy() {
+    let (env, home) = test_env("sandbox-setup-read-only-disable");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let apply_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "preset".to_string(),
+            "apply".to_string(),
+            "--preset".to_string(),
+            "project-read-only".to_string(),
+            "--authority".to_string(),
+            "explicit-scope".to_string(),
+            "--path".to_string(),
+            project.to_string_lossy().into_owned(),
+            "--yes".to_string(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(apply_code, 0);
+
+    stdout.clear();
+    let disable_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "disable".to_string(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(disable_code, 0);
+    let config = fs::read_to_string(home.join(".config/mezzanine/config.toml")).unwrap();
+    assert!(config.contains("sandbox = \"policy-only\""), "{config}");
+    assert!(config.contains("approval_policy = \"ask\""), "{config}");
+    assert!(config.contains("read_scopes = ["), "{config}");
+    assert!(config.contains("write_scopes = []"), "{config}");
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// A trust-store write failure after config persistence restores the original
+/// config document instead of leaving a partially applied trusted preset.
+#[test]
+fn sandbox_setup_rolls_back_config_when_trust_persistence_fails() {
+    let (env, home) = test_env("sandbox-setup-trust-rollback");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    let config_path = config_root.join("config.toml");
+    let original =
+        "version = 25\n[permissions]\nsandbox = \"policy-only\"\napproval_policy = \"ask\"\n";
+    fs::write(&config_path, original).unwrap();
+    fs::create_dir(config_root.join("project-trust.tsv")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "enable".to_string(),
+            "--preset".to_string(),
+            "project-safe".to_string(),
+            "--authority".to_string(),
+            "trusted-project".to_string(),
+            "--path".to_string(),
+            project.to_string_lossy().into_owned(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Io);
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}

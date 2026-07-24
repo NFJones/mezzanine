@@ -303,3 +303,62 @@ async fn config_mutation_persists_json_scalar_with_private_posture_async() {
 
     let _ = fs::remove_dir_all(root);
 }
+
+/// Verifies related sandbox settings are composed in memory and validated
+/// only as one complete document, allowing atomic transitions that would have
+/// invalid intermediate states.
+#[test]
+fn config_mutation_batch_validates_only_the_final_document() {
+    let plan = crate::config::plan_config_mutations(
+        ConfigFormat::Toml,
+        "version = 25\n[permissions]\nsandbox = \"policy-only\"\n",
+        ConfigScope::Primary,
+        vec![
+            set_string("permissions.sandbox", "bubblewrap"),
+            set_string("permissions.bubblewrap.git_user_name", "Sandbox Author"),
+            set_string(
+                "permissions.bubblewrap.git_user_email",
+                "sandbox@example.invalid",
+            ),
+        ],
+    )
+    .unwrap();
+
+    assert!(plan.changed);
+    assert!(plan.reload_required);
+    assert!(plan.validation.valid);
+    assert_eq!(plan.mutations.len(), 3);
+    let values = extract_config_values(ConfigFormat::Toml, &plan.text);
+    assert_eq!(
+        values.get("permissions.sandbox"),
+        Some(&"bubblewrap".to_string())
+    );
+    assert_eq!(
+        values.get("permissions.bubblewrap.git_user_name"),
+        Some(&"Sandbox Author".to_string())
+    );
+    assert_eq!(
+        values.get("permissions.bubblewrap.git_user_email"),
+        Some(&"sandbox@example.invalid".to_string())
+    );
+}
+
+/// Verifies one invalid final value rejects the whole batch without returning
+/// partially mutated text for persistence.
+#[test]
+fn config_mutation_batch_rejects_invalid_final_document() {
+    let error = crate::config::plan_config_mutations(
+        ConfigFormat::Toml,
+        "version = 25\n[permissions]\napproval_policy = \"ask\"\n",
+        ConfigScope::Primary,
+        vec![
+            set_string("permissions.sandbox", "bubblewrap"),
+            set_string("permissions.approval_policy", "unsupported"),
+        ],
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Config);
+    assert!(error.message().contains("mutation batch rejected"));
+    assert!(error.message().contains("permissions.approval_policy"));
+}

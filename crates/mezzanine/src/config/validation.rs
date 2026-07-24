@@ -7,15 +7,16 @@
 #[cfg(test)]
 use super::write_private_config_file_async;
 use super::{
-    BASELINE_TOP_LEVEL_KEYS, BTreeMap, CURRENT_CONFIG_SCHEMA_VERSION, ConfigDiagnostic,
-    ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan,
-    ConfigMutationValue, ConfigScope, ConfigValidation, ConfigValue, EffectiveConfig, MezError,
-    Path, Result, contains_secret_material, extract_config_values, extract_json_paths,
-    extract_toml_paths, extract_yaml_paths, format_diagnostics, fs, mutate_json_text,
-    mutate_toml_text, mutate_yaml_text, parse_config_schema_version, parse_mutation_path,
-    reject_container_target, reject_unsupported_mutation_path, validate_command_rule_effects,
-    validate_command_rule_examples, validate_known_schema_path, validate_mcp_server_path,
-    validate_permission_value, validate_permissions_path, write_private_config_file,
+    BASELINE_TOP_LEVEL_KEYS, BTreeMap, CURRENT_CONFIG_SCHEMA_VERSION, ConfigBatchMutationPlan,
+    ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
+    ConfigMutationPlan, ConfigMutationValue, ConfigScope, ConfigValidation, ConfigValue,
+    EffectiveConfig, MezError, Path, Result, contains_secret_material, extract_config_values,
+    extract_json_paths, extract_toml_paths, extract_yaml_paths, format_diagnostics, fs,
+    mutate_json_text, mutate_toml_text, mutate_yaml_text, parse_config_schema_version,
+    parse_mutation_path, reject_container_target, reject_unsupported_mutation_path,
+    validate_command_rule_effects, validate_command_rule_examples, validate_known_schema_path,
+    validate_mcp_server_path, validate_permission_value, validate_permissions_path,
+    write_private_config_file,
 };
 use mez_mux::theme::{parse_hex_color, valid_color_alias_name};
 
@@ -93,6 +94,51 @@ pub fn plan_config_mutation(
         scope,
         path: mutation.path,
         operation: mutation.operation,
+        text: mutated,
+        validation,
+        changed,
+        reload_required: changed,
+    })
+}
+
+/// Builds one validated final document from an ordered mutation batch.
+///
+/// Every mutation is structurally checked and applied in memory, but schema
+/// validation runs only after the complete batch has been composed. Callers
+/// can therefore change related fields atomically without exposing invalid
+/// intermediate documents to persistence.
+pub fn plan_config_mutations(
+    format: ConfigFormat,
+    text: &str,
+    scope: ConfigScope,
+    mutations: Vec<ConfigMutation>,
+) -> Result<ConfigBatchMutationPlan> {
+    let mut mutated = text.to_string();
+    for mutation in &mutations {
+        let segments = parse_mutation_path(&mutation.path)?;
+        reject_unsupported_mutation_path(&segments)?;
+        reject_container_target(format, &mutated, &segments, &mutation.operation)?;
+        mutated = match format {
+            ConfigFormat::Toml => mutate_toml_text(&mutated, &segments, &mutation.operation)?,
+            ConfigFormat::Yaml => mutate_yaml_text(&mutated, &segments, &mutation.operation)?,
+            ConfigFormat::Json => mutate_json_text(&mutated, &segments, &mutation.operation)?,
+        };
+    }
+    if scope == ConfigScope::ProjectOverlay {
+        mutated = materialize_project_overlay_schema_version(format, &mutated)?;
+    }
+    let validation = validate_config_text(format, &mutated, scope);
+    if !validation.valid {
+        return Err(MezError::config(format!(
+            "configuration mutation batch rejected; proposed config is invalid: {}",
+            format_diagnostics(&validation.diagnostics)
+        )));
+    }
+    let changed = mutated != text;
+    Ok(ConfigBatchMutationPlan {
+        format,
+        scope,
+        mutations,
         text: mutated,
         validation,
         changed,

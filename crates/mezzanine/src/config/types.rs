@@ -293,6 +293,25 @@ pub struct ConfigMutationPlan {
     pub reload_required: bool,
 }
 
+/// Validated final document produced by one ordered batch of config mutations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigBatchMutationPlan {
+    /// Concrete configuration format used to render the final document.
+    pub format: ConfigFormat,
+    /// Configuration scope validated for the complete batch.
+    pub scope: ConfigScope,
+    /// Ordered mutations applied in memory.
+    pub mutations: Vec<ConfigMutation>,
+    /// Complete validated replacement text.
+    pub text: String,
+    /// Validation result for the final document only.
+    pub validation: ConfigValidation,
+    /// Whether the final document differs from the input.
+    pub changed: bool,
+    /// Whether live consumers must reload after persistence.
+    pub reload_required: bool,
+}
+
 impl ConfigValidation {
     /// Runs the from diagnostics operation for this subsystem.
     ///

@@ -395,6 +395,11 @@ Current support reflects behavior implemented in the repository today.
   for healthy state, 1 for warnings, or 2 for errors. Both commands are
   strictly read-only: they do not migrate configuration, mutate trust, create
   managed homes, or populate capability-probe caches.
+- `mez sandbox plan`, `enable`, `preset apply`, `disable`, and
+  `trust-current-project` provide direct-user guided setup. Plans and
+  `--dry-run` never write; mutations require confirmation and noninteractive
+  use requires `--yes`. Code-owned presets provide safe, automatic,
+  read-only, and off modes without exposing these policy changes to agents.
 - Trusted-project Bubblewrap runs reuse a private Mezzanine-managed home with
   persistent XDG cache, config, data, and state directories. Homes are isolated
   by project and sandbox profile, never copy the real user home, and are removed

@@ -70,13 +70,13 @@ pub use schema::{
     config_change_setting_path_annotations_markdown, config_change_setting_path_description,
 };
 pub use types::{
-    ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
-    ConfigMutationPlan, ConfigMutationValue, ConfigScope, ConfigValidation, ConfigValue,
-    EffectiveConfig,
+    ConfigBatchMutationPlan, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation,
+    ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigScope,
+    ConfigValidation, ConfigValue, EffectiveConfig,
 };
 pub use validation::{
     compose_effective_config, persist_config_mutation, persist_config_text, plan_config_mutation,
-    validate_config_file, validate_config_text,
+    plan_config_mutations, validate_config_file, validate_config_text,
 };
 #[cfg(test)]
 pub use validation::{persist_config_mutation_async, validate_config_file_async};

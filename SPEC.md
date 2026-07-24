@@ -2841,6 +2841,20 @@ state, 1 when warnings are present, and 2 when errors are present. Remedies MUST
 remain direct-user actions and MUST NOT suggest automatic authority broadening
 or host fallback.
 
+Guided setup MUST provide code-owned `project-safe`, `project-auto`,
+`project-read-only`, and `off` presets through `mez sandbox plan`, `enable`,
+`preset apply`, `disable`, and `trust-current-project`. Planning and `--dry-run`
+MUST be side-effect-free. Every mutation MUST require direct-user confirmation;
+noninteractive or JSON mutation MUST require `--yes`, and noninteractive setup
+MUST explicitly select `trusted-project` or `explicit-scope` authority. Preset
+changes MUST be composed and validated as one final config document and written
+atomically. Config and trust persistence MUST be serialized, and a failed trust
+write after config persistence MUST attempt config rollback and report rollback
+failure explicitly. Trusted-project mode MUST disclose possible activation of
+project overlays, macros, and skills; explicit-scope mode MUST NOT change trust.
+The `off` preset MUST retain trust, scopes, approval policy, and managed caches.
+Agents MUST NOT apply these policy mutations through `config_change`.
+
 Bubblewrap MUST disable host system and global Git configuration. The typed
 Bubblewrap configuration MAY contain a paired non-secret Git author name and
 email; both values MUST be present together and MUST be printable. When

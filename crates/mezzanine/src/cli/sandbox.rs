@@ -7,14 +7,17 @@
 
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
+use rustix::fs::{FlockOperation, flock};
 
 use super::{CliEnv, CliOutputFormat, MezError, Result, Serialize, serialize_json};
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigScope, DEFAULT_CONFIG_TOML, compose_effective_config, persist_config_mutation,
+    persist_config_text, plan_config_mutations,
 };
 use crate::runtime::{runtime_configured_permissions_from_config, runtime_effective_config_value};
 use crate::security::project::{
@@ -49,12 +52,92 @@ enum SandboxCliCommand {
         /// Project path to inspect instead of the current directory.
         path: Option<PathBuf>,
     },
+    /// Previews a code-owned sandbox preset without changing local state.
+    Plan(SandboxSetupArgs),
+    /// Applies a code-owned sandbox preset after direct-user confirmation.
+    Enable(SandboxSetupArgs),
+    /// Applies one named code-owned sandbox preset.
+    Preset {
+        /// Preset workflow to run.
+        #[command(subcommand)]
+        command: SandboxPresetCommand,
+    },
+    /// Selects policy-only execution while retaining other sandbox settings.
+    Disable(SandboxMutationArgs),
+    /// Trusts the independently discovered current project.
+    TrustCurrentProject(SandboxMutationArgs),
     /// Detects or enables allowlisted read-only developer toolchains.
     Toolchains {
         /// Toolchain workflow to run.
         #[command(subcommand)]
         command: SandboxToolchainsCommand,
     },
+}
+
+/// Shared preview and mutation arguments for guided sandbox setup.
+#[derive(Debug, Clone, Args)]
+struct SandboxSetupArgs {
+    /// Code-owned preset: project-safe, project-auto, or project-read-only.
+    #[arg(long, default_value = "project-safe")]
+    preset: String,
+    /// Authority source: trusted-project or explicit-scope.
+    #[arg(long)]
+    authority: Option<String>,
+    /// Project path to resolve independently instead of the current directory.
+    #[arg(long)]
+    path: Option<PathBuf>,
+    /// Builds and displays the complete plan without persisting it.
+    #[arg(long)]
+    dry_run: bool,
+    /// Confirms every planned mutation.
+    #[arg(long)]
+    yes: bool,
+}
+
+/// Shared confirmation arguments for one guided mutation.
+#[derive(Debug, Clone, Args)]
+struct SandboxMutationArgs {
+    /// Builds and displays the complete plan without persisting it.
+    #[arg(long)]
+    dry_run: bool,
+    /// Confirms every planned mutation.
+    #[arg(long)]
+    yes: bool,
+}
+
+/// Named preset application commands.
+#[derive(Debug, Clone, Subcommand)]
+enum SandboxPresetCommand {
+    /// Applies one code-owned preset by stable name.
+    Apply(SandboxSetupArgs),
+}
+
+/// Normalized guided setup operation dispatched to the transactional owner.
+#[derive(Debug, Clone)]
+enum SandboxSetupCommand {
+    /// Previews one preset without persistence.
+    Plan(SandboxSetupArgs),
+    /// Applies one preset after confirmation.
+    Enable(SandboxSetupArgs),
+    /// Selects policy-only execution while retaining other settings.
+    Disable(SandboxMutationArgs),
+    /// Trusts the independently discovered current project.
+    TrustCurrentProject(SandboxMutationArgs),
+}
+
+/// Stable preview and application result for guided sandbox setup.
+#[derive(Debug, Serialize)]
+struct SandboxSetupResult {
+    version: u32,
+    project_root: PathBuf,
+    preset: String,
+    authority: String,
+    mutations: Vec<String>,
+    trust_current_project: bool,
+    confirmation_required: bool,
+    dry_run: bool,
+    applied: bool,
+    warning: Option<String>,
 }
 
 /// Direct-user Rust toolchain discovery and activation commands.
@@ -87,6 +170,53 @@ pub(super) fn run_sandbox<W: Write>(
     let (path, input_source, doctor, verbose) = match args.command {
         Some(SandboxCliCommand::Toolchains { command }) => {
             return run_sandbox_toolchains(command, env, interactive, output_format, stdout);
+        }
+        Some(SandboxCliCommand::Plan(args)) => {
+            return run_sandbox_setup(
+                SandboxSetupCommand::Plan(args),
+                env,
+                interactive,
+                output_format,
+                stdout,
+            );
+        }
+        Some(SandboxCliCommand::Enable(args)) => {
+            return run_sandbox_setup(
+                SandboxSetupCommand::Enable(args),
+                env,
+                interactive,
+                output_format,
+                stdout,
+            );
+        }
+        Some(SandboxCliCommand::Preset {
+            command: SandboxPresetCommand::Apply(args),
+        }) => {
+            return run_sandbox_setup(
+                SandboxSetupCommand::Enable(args),
+                env,
+                interactive,
+                output_format,
+                stdout,
+            );
+        }
+        Some(SandboxCliCommand::Disable(args)) => {
+            return run_sandbox_setup(
+                SandboxSetupCommand::Disable(args),
+                env,
+                interactive,
+                output_format,
+                stdout,
+            );
+        }
+        Some(SandboxCliCommand::TrustCurrentProject(args)) => {
+            return run_sandbox_setup(
+                SandboxSetupCommand::TrustCurrentProject(args),
+                env,
+                interactive,
+                output_format,
+                stdout,
+            );
         }
         None => (
             std::env::current_dir()?,
@@ -206,6 +336,295 @@ fn load_read_only_config_layers(
         });
     }
     Ok(layers)
+}
+
+/// Plans or applies one code-owned guided sandbox setup transaction.
+fn run_sandbox_setup<W: Write>(
+    command: SandboxSetupCommand,
+    env: CliEnv,
+    interactive: bool,
+    output_format: CliOutputFormat,
+    stdout: &mut W,
+) -> Result<u8> {
+    let (preset, authority, path, dry_run, yes, force_read_only, trust_only) = match command {
+        SandboxSetupCommand::Plan(args) => (
+            args.preset,
+            args.authority,
+            args.path,
+            true,
+            false,
+            true,
+            false,
+        ),
+        SandboxSetupCommand::Enable(args) => (
+            args.preset,
+            args.authority,
+            args.path,
+            args.dry_run,
+            args.yes,
+            false,
+            false,
+        ),
+        SandboxSetupCommand::Disable(args) => (
+            "off".to_string(),
+            Some("retained".to_string()),
+            None,
+            args.dry_run,
+            args.yes,
+            false,
+            false,
+        ),
+        SandboxSetupCommand::TrustCurrentProject(args) => (
+            "trust-current-project".to_string(),
+            Some("trusted-project".to_string()),
+            None,
+            args.dry_run,
+            args.yes,
+            false,
+            true,
+        ),
+    };
+    let path = path.unwrap_or(std::env::current_dir()?);
+    let discovery = discover_project_root_with_metadata(
+        &path,
+        if path == std::env::current_dir()? {
+            ProjectRootInputSource::CurrentDirectory
+        } else {
+            ProjectRootInputSource::ExplicitPath
+        },
+    )?;
+    let authority = match authority {
+        Some(authority) => authority,
+        None if interactive && !output_format.is_json() => "trusted-project".to_string(),
+        None => {
+            return Err(MezError::invalid_args(
+                "noninteractive sandbox setup requires --authority trusted-project|explicit-scope",
+            ));
+        }
+    };
+    let project = discovery.canonical_root.to_string_lossy().into_owned();
+    let mut trust_current_project = trust_only;
+    let mutations = if trust_only {
+        Vec::new()
+    } else {
+        sandbox_setup_mutations(&preset, &authority, &project, &mut trust_current_project)?
+    };
+    let paths = env.config_paths()?;
+    let config_path = paths
+        .select_primary_file()?
+        .unwrap_or_else(|| paths.default_primary_file());
+    let original_exists = config_path.is_file();
+    let original_text = if original_exists {
+        fs::read_to_string(&config_path)?
+    } else {
+        DEFAULT_CONFIG_TOML.to_string()
+    };
+    let batch = plan_config_mutations(
+        ConfigFormat::from_path(&config_path)?,
+        &original_text,
+        ConfigScope::Primary,
+        mutations,
+    )?;
+    let warning = if trust_current_project {
+        Some(
+            "Trusting this project may activate applicable project overlays, macros, and skills."
+                .to_string(),
+        )
+    } else if discovery.marker_kind == ProjectRootMarkerKind::Fallback {
+        Some("The selected authority uses a non-repository fallback root.".to_string())
+    } else {
+        None
+    };
+    let mut result = SandboxSetupResult {
+        version: 1,
+        project_root: discovery.canonical_root.clone(),
+        preset,
+        authority,
+        mutations: batch
+            .mutations
+            .iter()
+            .map(|mutation| mutation.path.clone())
+            .collect(),
+        trust_current_project,
+        confirmation_required: !force_read_only,
+        dry_run: dry_run || force_read_only,
+        applied: false,
+        warning,
+    };
+    if force_read_only || dry_run || !yes {
+        write_setup_result(stdout, output_format, &result)?;
+        return Ok(if force_read_only || dry_run { 0 } else { 1 });
+    }
+
+    if !original_exists {
+        paths.ensure_default_config()?;
+    }
+    let _transaction_lock = acquire_sandbox_setup_lock(paths.root())?;
+    let current_text = fs::read_to_string(&config_path)?;
+    if current_text != original_text {
+        return Err(MezError::conflict(
+            "sandbox setup configuration changed after planning; rerun the command",
+        ));
+    }
+    if batch.changed {
+        persist_config_text(&config_path, ConfigScope::Primary, &batch.text)?;
+    }
+    if trust_current_project {
+        let trust_path = default_trust_database_path(paths.root());
+        let trust_result = (|| -> Result<()> {
+            let mut store = ProjectTrustStore::load_from_file(&trust_path)?;
+            let git_marker = match discovery.marker_kind {
+                ProjectRootMarkerKind::GitDirectory | ProjectRootMarkerKind::GitFile => {
+                    Some(discovery.canonical_root.join(".git"))
+                }
+                ProjectRootMarkerKind::Fallback => None,
+            };
+            store.decide(
+                discovery.canonical_root.clone(),
+                TrustDecision::Trusted,
+                git_marker,
+            )?;
+            store.save_to_file(&trust_path)
+        })();
+        if let Err(error) = trust_result {
+            let rollback = if original_exists {
+                persist_config_text(&config_path, ConfigScope::Primary, &original_text)
+            } else {
+                fs::remove_file(&config_path).map_err(MezError::from)
+            };
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(MezError::invalid_state(format!(
+                    "project trust persistence failed and config rollback also failed: {error}; rollback: {rollback_error}"
+                ))),
+            };
+        }
+    }
+    result.applied = true;
+    result.confirmation_required = false;
+    write_setup_result(stdout, output_format, &result)?;
+    Ok(0)
+}
+
+/// Exclusive process lock serializing guided config and trust persistence.
+struct SandboxSetupTransactionLock {
+    _file: fs::File,
+}
+
+fn acquire_sandbox_setup_lock(config_root: &Path) -> Result<SandboxSetupTransactionLock> {
+    let lock_path = config_root.join(".sandbox-setup.lock");
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600))?;
+    flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+    Ok(SandboxSetupTransactionLock { _file: file })
+}
+
+fn sandbox_setup_mutations(
+    preset: &str,
+    authority: &str,
+    project: &str,
+    trust_current_project: &mut bool,
+) -> Result<Vec<ConfigMutation>> {
+    let mut mutations = Vec::new();
+    if preset == "off" {
+        mutations.push(set_setup_string("permissions.sandbox", "policy-only"));
+        return Ok(mutations);
+    }
+    let approval_policy = match preset {
+        "project-safe" | "project-read-only" => "ask",
+        "project-auto" => "auto-allow",
+        _ => {
+            return Err(MezError::invalid_args(
+                "sandbox preset must be project-safe, project-auto, project-read-only, or off",
+            ));
+        }
+    };
+    mutations.push(set_setup_string("permissions.sandbox", "bubblewrap"));
+    mutations.push(set_setup_string(
+        "permissions.approval_policy",
+        approval_policy,
+    ));
+    if preset == "project-read-only" {
+        mutations.push(set_setup_array("permissions.read_scopes", &[project]));
+        mutations.push(set_setup_array("permissions.write_scopes", &[]));
+        return Ok(mutations);
+    }
+    match authority {
+        "trusted-project" => {
+            *trust_current_project = true;
+            mutations.push(unset_setup("permissions.read_scopes"));
+            mutations.push(unset_setup("permissions.write_scopes"));
+        }
+        "explicit-scope" => {
+            mutations.push(set_setup_array("permissions.read_scopes", &[project]));
+            mutations.push(set_setup_array("permissions.write_scopes", &[project]));
+        }
+        _ => {
+            return Err(MezError::invalid_args(
+                "sandbox authority must be trusted-project or explicit-scope",
+            ));
+        }
+    }
+    Ok(mutations)
+}
+
+fn set_setup_string(path: &str, value: &str) -> ConfigMutation {
+    ConfigMutation {
+        path: path.to_string(),
+        operation: ConfigMutationOperation::Set(ConfigMutationValue::String(value.to_string())),
+    }
+}
+
+fn set_setup_array(path: &str, values: &[&str]) -> ConfigMutation {
+    ConfigMutation {
+        path: path.to_string(),
+        operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(
+            values.iter().map(|value| (*value).to_string()).collect(),
+        )),
+    }
+}
+
+fn unset_setup(path: &str) -> ConfigMutation {
+    ConfigMutation {
+        path: path.to_string(),
+        operation: ConfigMutationOperation::Unset,
+    }
+}
+
+fn write_setup_result<W: Write>(
+    stdout: &mut W,
+    output_format: CliOutputFormat,
+    result: &SandboxSetupResult,
+) -> Result<()> {
+    if output_format.is_json() {
+        writeln!(stdout, "{}", serialize_json(result)?)?;
+    } else {
+        writeln!(stdout, "preset: {}", result.preset)?;
+        writeln!(stdout, "authority: {}", result.authority)?;
+        writeln!(stdout, "project_root: {}", result.project_root.display())?;
+        writeln!(stdout, "mutations: {}", result.mutations.join(","))?;
+        writeln!(
+            stdout,
+            "trust_current_project: {}",
+            result.trust_current_project
+        )?;
+        writeln!(
+            stdout,
+            "confirmation_required: {}",
+            result.confirmation_required
+        )?;
+        writeln!(stdout, "dry_run: {}", result.dry_run)?;
+        writeln!(stdout, "applied: {}", result.applied)?;
+        if let Some(warning) = &result.warning {
+            writeln!(stdout, "warning: {warning}")?;
+        }
+    }
+    Ok(())
 }
 
 fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String {

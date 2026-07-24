@@ -776,6 +776,17 @@ create managed homes, or run/cache the pane-specific Bubblewrap probe. Only a
 direct user may apply policy changes; diagnostics never broaden authority or
 select host execution automatically.
 
+Guided setup is available through `mez sandbox plan`, `enable`, `preset apply`,
+`disable`, and `trust-current-project`. The code-owned presets are
+`project-safe` (Bubblewrap plus `ask`), `project-auto` (Bubblewrap plus
+`auto-allow`), `project-read-only` (project read scope with no write scope),
+and `off` (policy-only while retaining the other sandbox settings). Planning
+and `--dry-run` are read-only. Every mutation requires confirmation;
+noninteractive or JSON mutation requires `--yes`, and setup must explicitly
+choose `trusted-project` or `explicit-scope` authority. Trusted-project mode
+can activate applicable project overlays, macros, and skills, while
+explicit-scope mode does not change project trust.
+
 Bubblewrap disables system and global Git configuration. When both sanitized
 identity fields are configured, Mezzanine projects only `user.name` and
 `user.email` through Git command-scope configuration, which takes precedence
