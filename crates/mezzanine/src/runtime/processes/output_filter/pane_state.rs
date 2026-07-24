@@ -448,7 +448,45 @@ impl RuntimeSessionService {
         match self.pane_output_render_mode(pane_id) {
             PaneOutputRenderMode::Normal
             | PaneOutputRenderMode::VerboseAgentAction
-            | PaneOutputRenderMode::Trace => renderable_shell_transaction_bytes(transaction_bytes),
+            | PaneOutputRenderMode::Trace => {
+                let begin = SHELL_OUTPUT_BASE64_BEGIN_MARKER.as_bytes();
+                let end = SHELL_OUTPUT_BASE64_END_MARKER.as_bytes();
+                let mut pending = self
+                    .process
+                    .pane_shell_output_render_pending
+                    .remove(pane_id)
+                    .unwrap_or_default();
+                pending.extend_from_slice(transaction_bytes);
+
+                if let Some(begin_index) = find_byte_subsequence(&pending, begin) {
+                    let before = renderable_shell_transaction_bytes(&pending[..begin_index]);
+                    if find_byte_subsequence(&pending[begin_index + begin.len()..], end).is_some() {
+                        let mut rendered = before;
+                        rendered
+                            .extend(renderable_shell_transaction_bytes(&pending[begin_index..]));
+                        return rendered;
+                    }
+                    if pending.len() <= SHELL_OUTPUT_BASE64_MAX_RAW_BYTES.saturating_mul(2) {
+                        self.process
+                            .pane_shell_output_render_pending
+                            .insert(pane_id.to_string(), pending[begin_index..].to_vec());
+                    }
+                    return before;
+                }
+
+                let partial_len = (1..begin.len().min(pending.len() + 1))
+                    .rev()
+                    .find(|length| pending.ends_with(&begin[..*length]))
+                    .unwrap_or(0);
+                let render_end = pending.len().saturating_sub(partial_len);
+                let rendered = renderable_shell_transaction_bytes(&pending[..render_end]);
+                if partial_len > 0 {
+                    self.process
+                        .pane_shell_output_render_pending
+                        .insert(pane_id.to_string(), pending[render_end..].to_vec());
+                }
+                rendered
+            }
             PaneOutputRenderMode::HiddenLiveAgentShell => {
                 if !transaction_bytes.is_empty() {
                     self.remember_hidden_shell_render_suppression(pane_id);

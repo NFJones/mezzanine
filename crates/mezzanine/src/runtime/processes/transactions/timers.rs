@@ -127,6 +127,9 @@ impl RuntimeSessionService {
             .shell_transaction_started_markers
             .remove(marker);
         self.process
+            .shell_transaction_output_utf8_pending
+            .remove(marker);
+        self.process
             .sandboxed_shell_transaction_markers
             .remove(marker);
         self.process.managed_home_activity_locks.remove(marker);

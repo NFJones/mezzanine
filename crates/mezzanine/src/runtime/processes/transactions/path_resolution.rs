@@ -173,10 +173,9 @@ impl RuntimeSessionService {
             wrapper.push('\n');
         }
         self.remember_mez_wrapper_filter_command(pane_id, &command);
-        self.write_runtime_pane_input(pane_id, wrapper.as_bytes())?;
         let previous = self.pane_readiness_state(pane_id);
         self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
-        self.process.running_shell_transactions.insert(
+        self.register_running_shell_transaction(
             marker_id.clone(),
             RunningShellTransactionRef {
                 turn_id,
@@ -194,10 +193,12 @@ impl RuntimeSessionService {
                 observed_output_preview: String::new(),
                 observed_output_truncated: false,
             },
+            true,
         );
-        self.process
-            .shell_transaction_require_start_markers
-            .insert(marker_id.clone());
+        if let Err(error) = self.write_runtime_pane_input(pane_id, wrapper.as_bytes()) {
+            self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+            return Err(error);
+        }
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(

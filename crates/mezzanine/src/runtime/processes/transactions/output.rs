@@ -7,6 +7,17 @@ use super::{
     runtime_shell_transaction_observation_limit,
 };
 
+/// Returns complete UTF-8 bytes while retaining only an incomplete trailing scalar.
+fn complete_transaction_utf8_bytes(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<u8> {
+    pending.extend_from_slice(bytes);
+    let complete_len = match std::str::from_utf8(pending) {
+        Ok(_) => pending.len(),
+        Err(error) if error.error_len().is_none() => error.valid_up_to(),
+        Err(_) => pending.len(),
+    };
+    pending.drain(..complete_len).collect()
+}
+
 impl RuntimeSessionService {
     pub(crate) fn record_running_shell_transaction_output(&mut self, pane_id: &str, bytes: &[u8]) {
         let output_preview_lines = self.process.settings.terminal_shell_output_preview_lines;
@@ -14,12 +25,19 @@ impl RuntimeSessionService {
         let mut status_line_updates = Vec::new();
         for (marker, transaction) in self.process.running_shell_transactions.iter_mut() {
             if transaction.pane_id == pane_id {
+                let transaction_bytes =
+                    agent_shell_transaction_bytes_before_end_marker(bytes, marker);
+                let complete_bytes = complete_transaction_utf8_bytes(
+                    self.process
+                        .shell_transaction_output_utf8_pending
+                        .entry(marker.clone())
+                        .or_default(),
+                    transaction_bytes,
+                );
                 let observed_bytes = match transaction.kind {
                     RunningShellTransactionKind::AgentAction { .. } => {
-                        let transaction_bytes =
-                            agent_shell_transaction_bytes_before_end_marker(bytes, marker);
                         agent_shell_transaction_observation_bytes(
-                            transaction_bytes,
+                            &complete_bytes,
                             &transaction.command,
                         )
                     }
@@ -27,7 +45,7 @@ impl RuntimeSessionService {
                     | RunningShellTransactionKind::Bootstrap
                     | RunningShellTransactionKind::PathResolution { .. }
                     | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
-                        bytes.to_vec()
+                        complete_bytes
                     }
                 };
                 if let RunningShellTransactionKind::AgentAction { action_id } = &transaction.kind

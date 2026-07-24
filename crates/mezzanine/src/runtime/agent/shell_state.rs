@@ -334,7 +334,6 @@ impl RuntimeSessionService {
         }
         self.remember_mez_wrapper_filter_command(&turn.pane_id, command);
         let wrapper_bytes = wrapper.len().saturating_add(payload_len);
-        self.write_runtime_pane_input(&turn.pane_id, wrapper.as_bytes())?;
         self.revoke_pane_readiness_override(
             &turn.pane_id,
             ReadinessOverrideRevocation::HarnessOwnedCommand,
@@ -348,22 +347,6 @@ impl RuntimeSessionService {
                 runtime_pane_readiness_state_name(previous_readiness),
                 action.id,
                 marker_id
-            ),
-        )?;
-        self.append_agent_shell_command_audit(
-            turn,
-            action,
-            command,
-            permission_evaluation,
-            sandbox_audit_summary.as_ref(),
-            "sent",
-        )?;
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            &format!(
-                "pane_input accepted bytes={} action={} marker={}",
-                wrapper_bytes, action.id, marker_id
             ),
         )?;
         self.register_running_shell_transaction(
@@ -396,6 +379,28 @@ impl RuntimeSessionService {
         if let Some(activity_lock) = managed_home_activity_lock {
             self.register_managed_home_activity_lock(&marker_id, activity_lock);
         }
+        if let Err(error) = self.write_runtime_pane_input(&turn.pane_id, wrapper.as_bytes()) {
+            self.remove_running_shell_transaction(&marker_id);
+            self.clear_shell_transaction_protocol_state(&marker_id);
+            self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Degraded);
+            return Err(error);
+        }
+        self.append_agent_shell_command_audit(
+            turn,
+            action,
+            command,
+            permission_evaluation,
+            sandbox_audit_summary.as_ref(),
+            "sent",
+        )?;
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "pane_input accepted bytes={} action={} marker={}",
+                wrapper_bytes, action.id, marker_id
+            ),
+        )?;
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,

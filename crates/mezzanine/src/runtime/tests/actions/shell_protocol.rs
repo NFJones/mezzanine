@@ -64,6 +64,54 @@ fn runtime_shell_transaction_observation_is_bounded_and_truncated() {
     assert!(transaction.observed_output_truncated);
 }
 
+/// Verifies retained transaction output reconstructs one UTF-8 scalar split
+/// across arbitrary PTY reads instead of replacing each partial chunk.
+#[test]
+fn runtime_shell_transaction_observation_preserves_split_utf8() {
+    let mut service = test_runtime_service();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "marker-1".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "a1".to_string(),
+            },
+            pane_id: "%1".to_string(),
+            command: "printf unicode".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+
+    service.record_running_shell_transaction_output("%1", &[0xe2]);
+    service.record_running_shell_transaction_output("%1", &[0x82, 0xac]);
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
+    assert_eq!(transaction.observed_output_preview, "€\n");
+    assert_eq!(transaction.observed_output_bytes, 4);
+    assert!(!transaction.observed_output_truncated);
+}
+
+/// Verifies visible transaction rendering retains a Base64 frame split across
+/// PTY reads and emits only its decoded payload after the matching end marker.
+#[test]
+fn runtime_rendering_preserves_split_shell_output_transport() {
+    let mut service = test_runtime_service();
+    let first = service.renderable_pane_output_bytes("%1", b"__MEZ_SHELL_OUTPUT_BASE64_BEG");
+    let second = service
+        .renderable_pane_output_bytes("%1", b"IN__\n4oKsCg==\n__MEZ_SHELL_OUTPUT_BASE64_END__\n");
+
+    assert!(first.is_empty(), "split private marker leaked: {first:?}");
+    assert_eq!(second, "€\n".as_bytes());
+}
+
 /// Verifies async pane write completions are retained in the hidden trace log.
 ///
 /// A shell transaction being recorded as running is not enough evidence that

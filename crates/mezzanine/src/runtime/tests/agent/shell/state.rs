@@ -1189,6 +1189,31 @@ fn runtime_bubblewrap_probe_failure_allows_later_reprobe() {
     );
 }
 
+/// Verifies Bubblewrap probe ownership and strict marker state are installed
+/// before any wrapper bytes can be delivered to the owning pane.
+#[test]
+fn runtime_bubblewrap_probe_registers_before_pane_delivery() {
+    let mut service = bubblewrap_probe_service();
+    let turn = path_resolution_turn();
+    service.require_registered_transaction_on_next_write_for_tests();
+
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-1")
+            .unwrap()
+    );
+    let (marker, transaction) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .next()
+        .expect("Bubblewrap probe transaction should be registered");
+    assert!(matches!(
+        transaction.kind,
+        RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+    ));
+    assert!(service.shell_transaction_requires_start_marker_for_tests(marker));
+}
+
 /// Verifies concurrent waiters share one exact in-flight capability probe and
 /// may both continue once that probe has populated the capability cache.
 #[test]

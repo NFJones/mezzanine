@@ -131,7 +131,6 @@ impl RuntimeSessionService {
         if !wrapper.ends_with('\n') {
             wrapper.push('\n');
         }
-        self.write_runtime_pane_input(&turn.pane_id, wrapper.as_bytes())?;
         let previous = self.pane_readiness_state(&turn.pane_id);
         self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Busy);
         self.register_running_shell_transaction(
@@ -156,6 +155,10 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if let Err(error) = self.write_runtime_pane_input(&turn.pane_id, wrapper.as_bytes()) {
+            self.fail_shell_transactions_for_pane_write_failure(&turn.pane_id, error.message())?;
+            return Err(error);
+        }
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,

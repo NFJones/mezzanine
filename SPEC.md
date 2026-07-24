@@ -4506,6 +4506,13 @@ zero-byte write progress as a bounded failure, and MUST leave enough
 interleaving opportunity for PTY output reads and lifecycle events between
 large-input chunks. A failed chunk MUST NOT cause previously accepted bytes to
 be sent again.
+Mezzanine MUST register shell transaction identity, strict marker ownership,
+and busy readiness before delivering any transaction wrapper bytes to the pane.
+Delivery failure after registration MUST settle the transaction fail closed and
+MUST NOT retry a possibly delivered wrapper. Transaction output retention and
+private output-frame rendering MUST preserve bounded incremental state across
+arbitrary PTY chunk boundaries, including split UTF-8 scalars and Base64 frame
+markers, without exposing private framing bytes.
 The `apply_patch` semantic action MUST emit one execution row naming the active path for each per-file read transaction and MUST suppress its internal write-phase start row. It MUST preserve completed per-file mutations when a later file operation in the same patch fails, retain and display confirmed diffs for applied paths, update modified-file tracking for those paths, and identify each failed path or operation so the model can retry only the remaining file work instead of treating the whole patch as rolled back. Machine-readable per-file outcome records MUST be filtered from user-visible diff output; malformed, missing, or truncated records MUST retain generic fail-closed diagnostics.
 The `apply_patch` semantic action MUST synthesize an explicit short timeout
 instead of inheriting the general shell-command default, so malformed or

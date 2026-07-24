@@ -52,8 +52,9 @@ use mez_agent::shell_observation::{
     renderable_shell_transaction_bytes,
 };
 use mez_agent::{
-    DEFAULT_BOOTSTRAP_TIMEOUT_MS, bootstrap_script_for_classification, parse_bootstrap_env_output,
-    readiness_probe_command_for_classification,
+    DEFAULT_BOOTSTRAP_TIMEOUT_MS, SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_END_MARKER,
+    SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, bootstrap_script_for_classification,
+    parse_bootstrap_env_output, readiness_probe_command_for_classification,
 };
 use mez_mux::process::PaneProcess;
 use mez_terminal::TerminalStyledLine;
@@ -119,6 +120,8 @@ pub(crate) struct RuntimeProcessComponent {
     shell_transaction_require_start_markers: BTreeSet<String>,
     /// Markers whose mandatory wrapper start event has been observed.
     shell_transaction_started_markers: BTreeSet<String>,
+    /// Incomplete UTF-8 suffixes retained per shell transaction across PTY reads.
+    shell_transaction_output_utf8_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Agent-action markers whose child launch uses the Bubblewrap backend.
     sandboxed_shell_transaction_markers: BTreeSet<String>,
     /// Shared managed-home activity locks retained for sandboxed workloads.
@@ -140,6 +143,8 @@ pub(crate) struct RuntimeProcessComponent {
     pane_transaction_osc_screens: std::collections::BTreeMap<String, TerminalScreen>,
     /// Bounded hidden-shell OSC marker fragments keyed by pane id.
     pane_transaction_osc_pending: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Incomplete private shell-output frames retained across visible PTY reads.
+    pane_shell_output_render_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Partial wrapper-filter bytes keyed by pane id.
     pane_mez_wrapper_filter_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Recently hidden wrapper commands keyed by pane id.
@@ -157,6 +162,9 @@ pub(crate) struct RuntimeProcessComponent {
     /// Test-only one-shot failure injected while interrupting a pane shell.
     #[cfg(test)]
     fail_next_pane_interrupt_write: bool,
+    /// Test-only guard proving transaction ownership precedes pane delivery.
+    #[cfg(test)]
+    require_registered_transaction_on_next_write: bool,
 }
 
 /// Owns terminal configuration that controls pane process and screen behavior.
@@ -293,6 +301,9 @@ impl RuntimeSessionService {
         marker: &str,
     ) -> Option<RunningShellTransactionRef> {
         self.process.managed_home_activity_locks.remove(marker);
+        self.process
+            .shell_transaction_output_utf8_pending
+            .remove(marker);
         self.process.running_shell_transactions.remove(marker)
     }
 
@@ -301,6 +312,7 @@ impl RuntimeSessionService {
         self.process.running_shell_transactions.clear();
         self.process.shell_transaction_require_start_markers.clear();
         self.process.shell_transaction_started_markers.clear();
+        self.process.shell_transaction_output_utf8_pending.clear();
         self.process.managed_home_activity_locks.clear();
     }
 
@@ -502,6 +514,7 @@ impl RuntimeSessionService {
     pub(crate) fn clear_pane_transaction_parsers(&mut self) {
         self.process.pane_transaction_osc_screens.clear();
         self.process.pane_transaction_osc_pending.clear();
+        self.process.pane_shell_output_render_pending.clear();
     }
 
     /// Clears pane exit and closing markers when the live session is replaced.
@@ -639,6 +652,11 @@ impl RuntimeSessionService {
         &self,
     ) -> &std::collections::BTreeMap<String, Vec<u8>> {
         &self.process.pane_transaction_osc_pending
+    }
+
+    /// Requires the next test pane write to observe registered transaction ownership.
+    pub(crate) fn require_registered_transaction_on_next_write_for_tests(&mut self) {
+        self.process.require_registered_transaction_on_next_write = true;
     }
 
     /// Installs one pane exit status for presentation integration tests.
@@ -1513,6 +1531,18 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_args("pane input must not be empty"));
         }
         #[cfg(test)]
+        if std::mem::take(&mut self.process.require_registered_transaction_on_next_write)
+            && !self
+                .process
+                .running_shell_transactions
+                .values()
+                .any(|transaction| transaction.pane_id == pane_id)
+        {
+            return Err(MezError::invalid_state(
+                "pane transaction must be registered before delivery",
+            ));
+        }
+        #[cfg(test)]
         if input == b"\x03" && std::mem::take(&mut self.process.fail_next_pane_interrupt_write) {
             return Err(MezError::new(
                 crate::error::MezErrorKind::Io,
@@ -1636,6 +1666,9 @@ impl RuntimeSessionService {
         self.process.pane_screens.remove(pane_id);
         self.process.pane_transaction_osc_screens.remove(pane_id);
         self.process.pane_transaction_osc_pending.remove(pane_id);
+        self.process
+            .pane_shell_output_render_pending
+            .remove(pane_id);
         self.process.pane_mez_wrapper_filter_pending.remove(pane_id);
         self.process
             .pane_mez_wrapper_filter_recent_commands
