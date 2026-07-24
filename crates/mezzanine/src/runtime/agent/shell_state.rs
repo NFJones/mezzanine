@@ -171,7 +171,9 @@ impl RuntimeSessionService {
             )
             .map_err(|error| MezError::invalid_state(error.message()))?;
             let cache_key = crate::security::sandbox::bubblewrap_capability_cache_key(
+                &turn.pane_id,
                 &signature.stable_hash(),
+                self.session.config_generation,
                 &probe_plan,
             )
             .map_err(|error| MezError::invalid_state(error.message()))?;

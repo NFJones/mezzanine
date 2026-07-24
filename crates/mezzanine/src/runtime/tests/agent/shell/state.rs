@@ -1312,13 +1312,19 @@ fn runtime_bubblewrap_probe_failure_settles_all_waiters() {
         )
         .unwrap();
 
-    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
-    assert!(
-        execution
-            .action_results
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
             .iter()
-            .all(|result| result.status != ActionStatus::Running)
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
     );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(trace.contains(&action_id), "{trace}");
+    assert!(trace.contains("second-waiter"), "{trace}");
+    assert!(trace.contains("bubblewrap_probe_failed"), "{trace}");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1363,18 +1369,25 @@ fn runtime_bubblewrap_probe_timeout_settles_all_waiters() {
         )
         .unwrap();
 
-    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
-    assert!(
-        execution
-            .action_results
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
             .iter()
-            .all(|result| result.status != ActionStatus::Running)
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
     );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(trace.contains(&action_id), "{trace}");
+    assert!(trace.contains("second-waiter"), "{trace}");
+    assert!(trace.contains("bubblewrap_probe_timeout"), "{trace}");
     fs::remove_dir_all(root).unwrap();
 }
 
 /// Verifies a successful probe remains cached and suppresses later probes for
-/// the same pane environment and runtime-profile identity.
+/// the same pane environment, configuration generation, and runtime-profile
+/// identity, while a generation change requires fresh pane-shell evidence.
 #[test]
 fn runtime_bubblewrap_successful_probe_is_cached() {
     let mut service = bubblewrap_probe_service();
@@ -1402,6 +1415,181 @@ fn runtime_bubblewrap_successful_probe_is_cached() {
             .unwrap()
     );
     assert!(service.running_shell_transactions_for_tests().is_empty());
+
+    service.session.advance_config_generation();
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "action-3")
+            .unwrap()
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| matches!(
+                transaction.kind,
+                RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+            ))
+    );
+}
+
+/// Verifies a non-zero capability probe retains the real child status and a
+/// bounded escaped output preview while classifying the failure precisely.
+#[test]
+fn runtime_bubblewrap_probe_nonzero_exit_retains_typed_evidence() {
+    let root = temp_root("runtime-bubblewrap-probe-nonzero-evidence");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, &action_id)
+            .unwrap()
+    );
+    let (marker, mut transaction) = take_bubblewrap_probe_transaction(&mut service);
+    let cache_key = match &transaction.kind {
+        RunningShellTransactionKind::BubblewrapCapabilityProbe { cache_key, .. } => {
+            cache_key.clone()
+        }
+        _ => unreachable!(),
+    };
+    transaction.observed_output_preview =
+        "bwrap: namespace denied\n\u{1b}[31mfailed\u{1b}[0m\n".to_string();
+    transaction.observed_output_bytes = transaction.observed_output_preview.len();
+
+    service
+        .observe_bubblewrap_capability_probe_transaction_end(&marker, transaction, 23)
+        .unwrap();
+
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(trace.contains("bubblewrap_probe_nonzero_exit"), "{trace}");
+    assert!(trace.contains("\"exit_code\": 23"), "{trace}");
+    assert!(
+        trace.contains("\"failure_class\": \"nonzero_exit\""),
+        "{trace}"
+    );
+    assert!(trace.contains("\"combined_output_bytes\": 40"), "{trace}");
+    assert!(trace.contains("bwrap: namespace denied"), "{trace}");
+    assert!(trace.contains("\\\\u{1b}"), "{trace}");
+    assert!(service.bubblewrap_capability(&cache_key).is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies exact sentinel output contaminated by unrelated pane bytes is a
+/// distinct fail-closed mismatch and never populates the capability cache.
+#[test]
+fn runtime_bubblewrap_probe_contaminated_sentinel_fails_closed() {
+    let root = temp_root("runtime-bubblewrap-probe-contaminated-evidence");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, &action_id)
+            .unwrap()
+    );
+    let (marker, mut transaction) = take_bubblewrap_probe_transaction(&mut service);
+    let (cache_key, expected_stdout) = match &transaction.kind {
+        RunningShellTransactionKind::BubblewrapCapabilityProbe {
+            cache_key,
+            probe_plan,
+            ..
+        } => (cache_key.clone(), probe_plan.expected_stdout),
+        _ => unreachable!(),
+    };
+    transaction.observed_output_preview = format!("{expected_stdout}$ prompt repaint\n");
+    transaction.observed_output_bytes = transaction.observed_output_preview.len();
+
+    service
+        .observe_bubblewrap_capability_probe_transaction_end(&marker, transaction, 0)
+        .unwrap();
+
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(
+        trace.contains("bubblewrap_probe_output_mismatch"),
+        "{trace}"
+    );
+    assert!(
+        trace.contains("\"failure_class\": \"output_mismatch\""),
+        "{trace}"
+    );
+    assert!(trace.contains("\"exit_code\": 0"), "{trace}");
+    assert!(trace.contains("\"exact_sentinel\": false"), "{trace}");
+    assert!(service.bubblewrap_capability(&cache_key).is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies truncated capability evidence is classified before sentinel
+/// parsing and cannot create a successful cache entry.
+#[test]
+fn runtime_bubblewrap_probe_truncation_fails_closed_with_typed_evidence() {
+    let root = temp_root("runtime-bubblewrap-probe-truncated-evidence");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, &action_id)
+            .unwrap()
+    );
+    let (marker, mut transaction) = take_bubblewrap_probe_transaction(&mut service);
+    let cache_key = match &transaction.kind {
+        RunningShellTransactionKind::BubblewrapCapabilityProbe { cache_key, .. } => {
+            cache_key.clone()
+        }
+        _ => unreachable!(),
+    };
+    transaction.observed_output_preview = "mez-bubblewrap-capability-v1\n".to_string();
+    transaction.observed_output_bytes = 4096;
+    transaction.observed_output_truncated = true;
+
+    service
+        .observe_bubblewrap_capability_probe_transaction_end(&marker, transaction, 0)
+        .unwrap();
+
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(
+        trace.contains("bubblewrap_probe_output_truncated"),
+        "{trace}"
+    );
+    assert!(
+        trace.contains("\"failure_class\": \"output_truncated\""),
+        "{trace}"
+    );
+    assert!(trace.contains("\"combined_output_bytes\": 4096"), "{trace}");
+    assert!(trace.contains("\"output_truncated\": true"), "{trace}");
+    assert!(service.bubblewrap_capability(&cache_key).is_none());
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Verifies a timed-out probe leaves no durable negative entry, while pane

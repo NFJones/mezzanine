@@ -176,7 +176,9 @@ fn verified_capability(config: &BubblewrapConfig) -> Option<BubblewrapCapability
     }
     Some(
         parse_bubblewrap_capability_probe(
+            "%1",
             "real-linux-pane-environment",
+            0,
             &plan,
             output.status.code().unwrap_or(1),
             &String::from_utf8_lossy(&output.stdout),

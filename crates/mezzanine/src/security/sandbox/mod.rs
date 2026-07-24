@@ -268,8 +268,12 @@ pub(crate) struct BubblewrapCapabilityProbePlan {
 /// Cache identity for one successful pane-environment capability probe.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct BubblewrapCapabilityCacheKey {
+    /// Pane whose registered shell transaction executed the probe.
+    pub(crate) pane_id: String,
     /// Bootstrap-derived identity of the pane environment.
     pub(crate) pane_environment_signature: String,
+    /// Configuration generation that selected the executable and profile.
+    pub(crate) config_generation: u64,
     /// Absolute executable path tested by the probe.
     pub(crate) executable: String,
     /// Fixed runtime-profile version exercised by the probe.
@@ -566,7 +570,9 @@ pub(crate) fn bubblewrap_capability_probe_plan(
 /// Validates one completed pane-shell capability probe and returns its exact
 /// cache identity. Failed or ambiguous output never enables the backend.
 pub(crate) fn parse_bubblewrap_capability_probe(
+    pane_id: &str,
     pane_environment_signature: &str,
+    config_generation: u64,
     plan: &BubblewrapCapabilityProbePlan,
     exit_code: i32,
     stdout: &str,
@@ -588,16 +594,25 @@ pub(crate) fn parse_bubblewrap_capability_probe(
         ));
     }
     Ok(BubblewrapCapability {
-        cache_key: bubblewrap_capability_cache_key(pane_environment_signature, plan)?,
+        cache_key: bubblewrap_capability_cache_key(
+            pane_id,
+            pane_environment_signature,
+            config_generation,
+            plan,
+        )?,
     })
 }
 
 /// Builds the exact cache identity for a deterministic capability probe.
 pub(crate) fn bubblewrap_capability_cache_key(
+    pane_id: &str,
     pane_environment_signature: &str,
+    config_generation: u64,
     plan: &BubblewrapCapabilityProbePlan,
 ) -> Result<BubblewrapCapabilityCacheKey, SandboxCompileError> {
-    if pane_environment_signature.is_empty()
+    if pane_id.is_empty()
+        || pane_id.bytes().any(|byte| byte.is_ascii_control())
+        || pane_environment_signature.is_empty()
         || pane_environment_signature
             .bytes()
             .any(|byte| byte.is_ascii_control())
@@ -608,7 +623,9 @@ pub(crate) fn bubblewrap_capability_cache_key(
         ));
     }
     Ok(BubblewrapCapabilityCacheKey {
+        pane_id: pane_id.to_string(),
         pane_environment_signature: pane_environment_signature.to_string(),
+        config_generation,
         executable: plan.executable.clone(),
         runtime_profile_version: BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
         probe_sha256: plan.probe_sha256.clone(),

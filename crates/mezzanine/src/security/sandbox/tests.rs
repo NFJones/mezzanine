@@ -127,7 +127,8 @@ fn request<'a>(
 
 fn capability(config: &BubblewrapConfig) -> BubblewrapCapability {
     let plan = bubblewrap_capability_probe_plan(config, "/bin/sh").unwrap();
-    parse_bubblewrap_capability_probe("pane-env-sha256", &plan, 0, plan.expected_stdout).unwrap()
+    parse_bubblewrap_capability_probe("%1", "pane-env-sha256", 0, &plan, 0, plan.expected_stdout)
+        .unwrap()
 }
 
 /// Prompt evaluations may compile for sandbox-first execution, while hard
@@ -388,7 +389,9 @@ fn capability_probe_is_deterministic_and_environment_bound() {
             .any(|argument| argument.contains("/etc/passwd"))
     );
     let capability = parse_bubblewrap_capability_probe(
+        "%1",
         "pane-env-sha256",
+        0,
         &plan,
         0,
         "mez-bubblewrap-capability-v1\n",
@@ -399,13 +402,15 @@ fn capability_probe_is_deterministic_and_environment_bound() {
         BUBBLEWRAP_RUNTIME_PROFILE_VERSION
     );
     assert_eq!(capability.cache_key.executable, "/usr/bin/bwrap");
+    assert_eq!(capability.cache_key.pane_id, "%1");
+    assert_eq!(capability.cache_key.config_generation, 0);
     assert_eq!(
         capability.cache_key.pane_environment_signature,
         "pane-env-sha256"
     );
 
     assert_eq!(
-        parse_bubblewrap_capability_probe("pane-env-sha256", &plan, 1, "")
+        parse_bubblewrap_capability_probe("%1", "pane-env-sha256", 0, &plan, 1, "")
             .unwrap_err()
             .kind(),
         SandboxCompileErrorKind::CapabilityProbeFailed

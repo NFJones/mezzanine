@@ -15,6 +15,42 @@ use crate::runtime::SandboxConfig;
 use mez_agent::{ShellChildArgument, ShellChildLaunch};
 
 const RUNTIME_BUBBLEWRAP_CAPABILITY_PROBE_TIMEOUT_MS: u64 = 15_000;
+const RUNTIME_BUBBLEWRAP_CAPABILITY_PREVIEW_BYTES: usize = 512;
+
+/// Typed completion evidence retained for one failed capability probe.
+#[derive(Debug, Clone, Copy)]
+struct BubblewrapProbeFailureEvidence<'a> {
+    /// Stable action-result error code.
+    code: &'a str,
+    /// Bounded user-facing failure message.
+    message: &'a str,
+    /// Whether pane readiness must remain degraded after settlement.
+    degraded: bool,
+    /// Whether the failure represents probe timeout.
+    timed_out: bool,
+    /// Actual wrapper child exit status when an end marker was observed.
+    exit_code: Option<i32>,
+    /// Stable failure classification exposed to action-result consumers.
+    failure_class: &'a str,
+    /// Whether strict start/end transaction framing completed.
+    framing_complete: bool,
+    /// Whether retained output exactly matched the fixed sentinel.
+    exact_sentinel: bool,
+}
+
+/// Returns a bounded escaped preview suitable for probe failure evidence.
+fn bubblewrap_probe_output_preview(output: &str) -> String {
+    let mut preview = String::new();
+    for character in output.chars() {
+        let escaped = character.escape_default().to_string();
+        if preview.len().saturating_add(escaped.len()) > RUNTIME_BUBBLEWRAP_CAPABILITY_PREVIEW_BYTES
+        {
+            break;
+        }
+        preview.push_str(&escaped);
+    }
+    preview
+}
 
 impl RuntimeSessionService {
     /// Returns the exact successful Bubblewrap capability cached for one pane
@@ -65,7 +101,9 @@ impl RuntimeSessionService {
         )
         .map_err(|error| crate::MezError::invalid_state(error.message()))?;
         let cache_key = crate::security::sandbox::BubblewrapCapabilityCacheKey {
+            pane_id: turn.pane_id.clone(),
             pane_environment_signature: signature.stable_hash(),
+            config_generation: self.session.config_generation,
             executable: probe_plan.executable.clone(),
             runtime_profile_version: crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
             probe_sha256: probe_plan.probe_sha256.clone(),
@@ -200,11 +238,16 @@ impl RuntimeSessionService {
         let current_environment = self
             .pane_environment_signature(&transaction.pane_id)
             .map(|signature| signature.stable_hash());
-        let current_key_matches =
-            current_environment.as_deref() == Some(cache_key.pane_environment_signature.as_str());
+        let current_key_matches = cache_key.pane_id == transaction.pane_id
+            && cache_key.config_generation == self.session.config_generation
+            && current_environment.as_deref()
+                == Some(cache_key.pane_environment_signature.as_str());
+        let exact_sentinel = transaction.observed_output_preview == probe_plan.expected_stdout;
         let parsed = if current_key_matches && !transaction.observed_output_truncated {
             crate::security::sandbox::parse_bubblewrap_capability_probe(
+                &cache_key.pane_id,
                 &cache_key.pane_environment_signature,
+                cache_key.config_generation,
                 &probe_plan,
                 exit_code,
                 &transaction.observed_output_preview,
@@ -245,24 +288,92 @@ impl RuntimeSessionService {
                 Ok(1)
             }
             Ok(_) => {
-                self.fail_bubblewrap_capability_probe_transaction(
+                self.fail_bubblewrap_capability_probe_transaction_with_evidence(
                     marker,
                     transaction,
-                    "bubblewrap_probe_identity_mismatch",
-                    "Bubblewrap capability probe result did not match its requested identity",
-                    false,
-                    false,
+                    BubblewrapProbeFailureEvidence {
+                        code: "bubblewrap_probe_identity_mismatch",
+                        message: "Bubblewrap capability probe result did not match its requested identity",
+                        degraded: false,
+                        timed_out: false,
+                        exit_code: Some(exit_code),
+                        failure_class: "identity_mismatch",
+                        framing_complete: true,
+                        exact_sentinel,
+                    },
+                )?;
+                Ok(1)
+            }
+            Err(message) if !current_key_matches => {
+                self.fail_bubblewrap_capability_probe_transaction_with_evidence(
+                    marker,
+                    transaction,
+                    BubblewrapProbeFailureEvidence {
+                        code: "bubblewrap_probe_stale_identity",
+                        message: &message,
+                        degraded: false,
+                        timed_out: false,
+                        exit_code: Some(exit_code),
+                        failure_class: "stale_identity",
+                        framing_complete: true,
+                        exact_sentinel,
+                    },
+                )?;
+                Ok(1)
+            }
+            Err(message) if transaction.observed_output_truncated => {
+                self.fail_bubblewrap_capability_probe_transaction_with_evidence(
+                    marker,
+                    transaction,
+                    BubblewrapProbeFailureEvidence {
+                        code: "bubblewrap_probe_output_truncated",
+                        message: &message,
+                        degraded: false,
+                        timed_out: false,
+                        exit_code: Some(exit_code),
+                        failure_class: "output_truncated",
+                        framing_complete: true,
+                        exact_sentinel,
+                    },
+                )?;
+                Ok(1)
+            }
+            Err(message) if exit_code != 0 => {
+                self.fail_bubblewrap_capability_probe_transaction_with_evidence(
+                    marker,
+                    transaction,
+                    BubblewrapProbeFailureEvidence {
+                        code: "bubblewrap_probe_nonzero_exit",
+                        message: &message,
+                        degraded: false,
+                        timed_out: false,
+                        exit_code: Some(exit_code),
+                        failure_class: "nonzero_exit",
+                        framing_complete: true,
+                        exact_sentinel,
+                    },
                 )?;
                 Ok(1)
             }
             Err(message) => {
-                self.fail_bubblewrap_capability_probe_transaction(
+                let failure_class = if transaction.observed_output_preview.is_empty() {
+                    "empty_output"
+                } else {
+                    "output_mismatch"
+                };
+                self.fail_bubblewrap_capability_probe_transaction_with_evidence(
                     marker,
                     transaction,
-                    "bubblewrap_probe_failed",
-                    &message,
-                    false,
-                    false,
+                    BubblewrapProbeFailureEvidence {
+                        code: "bubblewrap_probe_output_mismatch",
+                        message: &message,
+                        degraded: false,
+                        timed_out: false,
+                        exit_code: Some(exit_code),
+                        failure_class,
+                        framing_complete: true,
+                        exact_sentinel,
+                    },
                 )?;
                 Ok(1)
             }
@@ -301,6 +412,29 @@ impl RuntimeSessionService {
         degraded: bool,
         timed_out: bool,
     ) -> Result<()> {
+        self.fail_bubblewrap_capability_probe_transaction_with_evidence(
+            marker,
+            transaction,
+            BubblewrapProbeFailureEvidence {
+                code,
+                message,
+                degraded,
+                timed_out,
+                exit_code: None,
+                failure_class: code,
+                framing_complete: false,
+                exact_sentinel: false,
+            },
+        )
+    }
+
+    /// Settles a failed capability probe with bounded typed evidence.
+    fn fail_bubblewrap_capability_probe_transaction_with_evidence(
+        &mut self,
+        marker: &str,
+        transaction: RunningShellTransactionRef,
+        evidence: BubblewrapProbeFailureEvidence<'_>,
+    ) -> Result<()> {
         let RunningShellTransactionKind::BubblewrapCapabilityProbe {
             action_id: _,
             waiters,
@@ -314,7 +448,7 @@ impl RuntimeSessionService {
         let previous = self.pane_readiness_state(&transaction.pane_id);
         self.set_pane_readiness(
             &transaction.pane_id,
-            if degraded {
+            if evidence.degraded {
                 PaneReadinessState::Degraded
             } else {
                 PaneReadinessState::Ready
@@ -324,49 +458,64 @@ impl RuntimeSessionService {
             &transaction.pane_id,
             &transaction.turn_id,
             &format!(
-                "pane_readiness {} -> {} reason={code} marker={marker}",
+                "pane_readiness {} -> {} reason={} marker={marker}",
                 runtime_pane_readiness_state_name(previous),
-                if degraded { "degraded" } else { "ready" }
+                if evidence.degraded {
+                    "degraded"
+                } else {
+                    "ready"
+                },
+                evidence.code
             ),
         )?;
         let terminal_observation = serde_json::json!({
             "source": "pty",
             "stream": "pty_combined",
             "marker": marker,
-            "exit_code": null,
-            "timed_out": timed_out,
+            "pane_id": transaction.pane_id,
+            "transaction_turn_id": transaction.turn_id,
+            "runtime_profile_version": cache_key.runtime_profile_version,
+            "probe_sha256": cache_key.probe_sha256,
+            "pane_environment_signature": cache_key.pane_environment_signature,
+            "config_generation": cache_key.config_generation,
+            "framing_complete": evidence.framing_complete,
+            "exit_code": evidence.exit_code,
+            "timed_out": evidence.timed_out,
             "combined_output_bytes": transaction.observed_output_bytes,
+            "decoded_output_bytes": transaction.observed_output_preview.len(),
+            "combined_output_preview": bubblewrap_probe_output_preview(
+                &transaction.observed_output_preview
+            ),
+            "failure_class": evidence.failure_class,
+            "exact_sentinel": evidence.exact_sentinel,
             "boundary_state": "bubblewrap-capability-probe-failed",
             "output_truncated": transaction.observed_output_truncated
         });
+        let mut waiters_by_turn = std::collections::BTreeMap::<String, Vec<String>>::new();
         for (turn_id, action_id) in waiters {
+            waiters_by_turn.entry(turn_id).or_default().push(action_id);
+        }
+        for (turn_id, action_ids) in waiters_by_turn {
             let mut waiter_transaction = transaction.clone();
             waiter_transaction.turn_id = turn_id;
-            if self.offer_sandbox_pre_payload_fallback_approval(
-                marker,
-                &waiter_transaction.turn_id,
-                &action_id,
-                code,
-            )? {
-                continue;
-            }
-            let _ = self.fail_running_shell_transaction_action(
-                &waiter_transaction,
-                marker,
-                RuntimeShellTransactionActionFailure {
+            let failures = action_ids
+                .into_iter()
+                .map(|action_id| RuntimeShellTransactionActionFailure {
                     action_id,
-                    status: if timed_out {
+                    status: if evidence.timed_out {
                         ActionStatus::TimedOut
                     } else {
                         ActionStatus::Failed
                     },
-                    code: code.to_string(),
-                    message: message.to_string(),
+                    code: evidence.code.to_string(),
+                    message: evidence.message.to_string(),
                     sent_to_pane: false,
                     terminal_observation: terminal_observation.clone(),
-                    trace_reason: code.to_string(),
-                },
-            )?;
+                    trace_reason: evidence.code.to_string(),
+                })
+                .collect();
+            let _ =
+                self.fail_running_shell_transaction_actions(&waiter_transaction, marker, failures)?;
         }
         Ok(())
     }

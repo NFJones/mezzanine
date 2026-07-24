@@ -377,6 +377,173 @@ impl RuntimeSessionService {
         Ok(1)
     }
 
+    /// Settles multiple actions owned by one shell transaction and turn before
+    /// applying terminal lifecycle cleanup.
+    ///
+    /// Shared prerequisite transactions, such as one Bubblewrap capability
+    /// probe with multiple waiters, must update every waiting action while the
+    /// execution is still live. The turn is persisted and completed only after
+    /// all matching running results have become terminal.
+    pub(crate) fn fail_running_shell_transaction_actions(
+        &mut self,
+        transaction_ref: &RunningShellTransactionRef,
+        marker: &str,
+        failures: Vec<RuntimeShellTransactionActionFailure>,
+    ) -> Result<usize> {
+        if failures.is_empty() {
+            return Ok(0);
+        }
+        for failure in &failures {
+            self.append_sandbox_fallback_result_audit(
+                &transaction_ref.turn_id,
+                &failure.action_id,
+                "failed",
+            )?;
+            self.clear_sandbox_bypass_for_action(&transaction_ref.turn_id, &failure.action_id);
+        }
+        let Some(turn) = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == transaction_ref.turn_id)
+            .cloned()
+        else {
+            return Ok(0);
+        };
+        let (mut execution, observed_results, transition_traces) = {
+            let execution = self
+                .agent_turn_executions_mut()
+                .get_mut(&turn.turn_id)
+                .ok_or_else(|| MezError::invalid_state("running agent execution is unavailable"))?;
+            let batch = execution.response.action_batch.as_ref().ok_or_else(|| {
+                MezError::invalid_state("running agent execution has no action batch")
+            })?;
+            let mut observed_results = Vec::new();
+            let mut transition_traces = Vec::new();
+            for failure in &failures {
+                let Some(action) = batch
+                    .actions
+                    .iter()
+                    .find(|action| action.id == failure.action_id)
+                    .cloned()
+                else {
+                    continue;
+                };
+                let Some(result_index) = execution
+                    .action_results
+                    .iter()
+                    .position(|result| result.action_id == failure.action_id)
+                else {
+                    continue;
+                };
+                if execution.action_results[result_index].status != ActionStatus::Running {
+                    continue;
+                }
+                let plan = local_action_plan(&action)?.ok_or_else(|| {
+                    MezError::invalid_state(
+                        "shell transaction failure does not match shell-backed action payload",
+                    )
+                })?;
+                let structured_content = mez_agent::shell_action_structured_content_json(
+                    &action,
+                    &plan,
+                    Some("pane_shell"),
+                    failure.sent_to_pane,
+                    serde_json::Value::Null,
+                    &[],
+                    failure.terminal_observation.clone(),
+                );
+                let mut result = ActionResult::failed(
+                    &turn,
+                    &action,
+                    failure.status,
+                    failure.code.clone(),
+                    failure.message.clone(),
+                )?;
+                result.structured_content_json = Some(structured_content);
+                execution.action_results[result_index] = result.clone();
+                observed_results.push(result);
+                transition_traces.push(format!(
+                    "action {} {} reason={}",
+                    failure.action_id,
+                    runtime_action_status_name(failure.status),
+                    failure.trace_reason
+                ));
+            }
+            if observed_results.is_empty() {
+                return Ok(0);
+            }
+            execution.terminal_state = runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                execution.final_turn,
+            );
+            (execution.clone(), observed_results, transition_traces)
+        };
+        let terminal_state = execution.terminal_state;
+        for transition_trace in transition_traces {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "{transition_trace} terminal_state={}",
+                    runtime_agent_turn_state_name(terminal_state)
+                ),
+            )?;
+        }
+        self.append_agent_trace_maap_action_results(
+            &turn.pane_id,
+            &turn.turn_id,
+            "shell_transaction_failure_action_results",
+            &observed_results,
+        )?;
+        self.record_runtime_agent_patch_results_for_turn(&turn, &execution);
+        self.append_agent_error_text_to_terminal_buffer(
+            &turn.pane_id,
+            &format!("agent: {}", failures[0].message),
+        )?;
+        self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
+        self.append_runtime_agent_execution_failure_audit(&turn, &execution)?;
+        let trace_reason = failures[0].trace_reason.as_str();
+        let transcript_entries = if self.queue_agent_failure_feedback_for_correction(
+            &turn,
+            &mut execution,
+            "shell_transaction_runtime_failure",
+        )? {
+            self.agent_turn_executions_mut().remove(&turn.turn_id);
+            0
+        } else {
+            let transcript_entries =
+                self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
+            self.emit_subagent_task_result_for_execution(&turn, &execution)?;
+            self.complete_running_agent_turn_and_start_ready(&turn, terminal_state, trace_reason)?;
+            transcript_entries
+        };
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","state":"{}","shell_transaction":"failed","marker":"{}","reason":"{}","failed_actions":{},"transcript_entries":{}}}"#,
+                json_escape(&turn.pane_id),
+                json_escape(&turn.turn_id),
+                runtime_agent_turn_state_name(terminal_state),
+                json_escape(marker),
+                json_escape(trace_reason),
+                observed_results.len(),
+                transcript_entries
+            ),
+        )?;
+        self.set_agent_prompt_display_lines_if_pane_present(
+            &turn.pane_id,
+            runtime_agent_execution_prompt_display_lines(
+                &turn.turn_id,
+                &execution.response.provider,
+                &execution,
+                0,
+                transcript_entries,
+            ),
+        )?;
+        Ok(observed_results.len())
+    }
+
     /// Records provider-style audit metadata for an execution that failed after
     /// the provider response was accepted by the runtime.
     pub(crate) fn append_runtime_agent_execution_failure_audit(
