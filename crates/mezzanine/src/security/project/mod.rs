@@ -33,7 +33,9 @@ mod store;
 mod types;
 
 pub use discovery::{
+    ProjectRootDiscovery, ProjectRootInputSource, ProjectRootMarkerKind,
     default_trust_database_path, discover_existing_overlays, discover_project_root,
+    discover_project_root_with_metadata,
 };
 #[cfg(test)]
 pub use discovery::{

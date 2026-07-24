@@ -78,6 +78,8 @@ pub(super) enum CliCommand {
     Issue(super::issue::IssueCliArgs),
     /// Manages persistent agent memory.
     Memory(super::memory::MemoryCliArgs),
+    /// Inspects and manages sandbox workflows.
+    Sandbox(super::sandbox::SandboxCliArgs),
     /// Prints version information.
     Version,
 }

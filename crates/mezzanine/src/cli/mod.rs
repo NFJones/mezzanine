@@ -126,6 +126,10 @@ mod mcp;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod memory;
+/// Exposes the sandbox module boundary.
+///
+/// The nested module owns direct-user sandbox status and diagnostic workflows.
+mod sandbox;
 /// Exposes the serve module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -161,6 +165,7 @@ use json::{
 };
 use mcp::{load_runtime_config_layers, run_mcp};
 use memory::run_memory;
+use sandbox::run_sandbox;
 use serve::{
     LoadedRuntimeConfig, ParsedServeOptions, RestoredSnapshotDaemonRequest, RuntimeDaemonStartup,
     apply_default_serve_auxiliary_sockets, run_foreground_control_daemon, run_new, run_serve,

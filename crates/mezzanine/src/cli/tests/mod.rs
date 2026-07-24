@@ -106,13 +106,14 @@ fn run_with(
     stdout: &mut Vec<u8>,
     stderr: &mut Vec<u8>,
 ) -> crate::error::Result<()> {
-    block_on_cli(super::run_with(
+    block_on_cli_code(super::run_with(
         with_json_output(args),
         env,
         interactive,
         stdout,
         stderr,
     ))
+    .map(|_| ())
 }
 
 /// Runs the run with plain operation for this subsystem.
@@ -127,17 +128,13 @@ fn run_with_plain(
     stdout: &mut Vec<u8>,
     stderr: &mut Vec<u8>,
 ) -> crate::error::Result<()> {
-    block_on_cli(super::run_with(args, env, interactive, stdout, stderr))
+    block_on_cli_code(super::run_with(args, env, interactive, stdout, stderr)).map(|_| ())
 }
 
-/// Runs the block on cli operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn block_on_cli<F>(future: F) -> crate::error::Result<()>
+/// Runs one CLI future that returns a command-specific process exit code.
+fn block_on_cli_code<F>(future: F) -> crate::error::Result<u8>
 where
-    F: std::future::Future<Output = crate::error::Result<()>>,
+    F: std::future::Future<Output = crate::error::Result<u8>>,
 {
     tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -246,5 +243,6 @@ mod issues;
 mod mcp;
 mod memory;
 mod new_serve;
+mod sandbox;
 mod snapshot;
 mod terminal_protocol;

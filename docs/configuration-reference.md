@@ -764,6 +764,15 @@ root. Bubblewrap status reports stable restriction identifiers:
 and `host-credentials-hidden`. These describe likely denial causes without
 including raw Bubblewrap arguments, environment values, or unrelated host paths.
 
+Use `mez sandbox status [PATH] [--verbose]` for a standalone configured/effective
+projection and `mez sandbox doctor [PATH]` for stable readiness diagnostics.
+Global `--json` emits the versioned structured projection. Doctor exits 0 when
+healthy, 1 for warnings, and 2 for errors. These commands are intentionally
+read-only: they inspect but do not migrate configuration, change project trust,
+create managed homes, or run/cache the pane-specific Bubblewrap probe. Only a
+direct user may apply policy changes; diagnostics never broaden authority or
+select host execution automatically.
+
 For a trusted project, Bubblewrap uses a persistent managed home below
 `<config-root>/sandbox/cache-homes/<project-profile-key>/home`. The key hashes
 the canonical project root and Bubblewrap runtime-profile version, so panes in

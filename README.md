@@ -384,6 +384,13 @@ Current support reflects behavior implemented in the repository today.
   came from explicit configuration, a trusted project, or no authority. It also
   reports stable restriction identifiers for the synthetic home, minimal PATH,
   isolated network, authority-only mounts, and hidden host credentials.
+- `mez sandbox status [PATH] [--verbose]` reports configured and effective
+  sandbox state, project discovery and trust provenance, local executable and
+  managed-home readiness, and pane-specific probe freshness. `mez sandbox
+  doctor [PATH]` emits the same projection with stable diagnostics and exits 0
+  for healthy state, 1 for warnings, or 2 for errors. Both commands are
+  strictly read-only: they do not migrate configuration, mutate trust, create
+  managed homes, or populate capability-probe caches.
 - Trusted-project Bubblewrap runs reuse a private Mezzanine-managed home with
   persistent XDG cache, config, data, and state directories. Homes are isolated
   by project and sandbox profile, never copy the real user home, and are removed

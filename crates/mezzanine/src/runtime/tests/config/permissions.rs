@@ -113,6 +113,10 @@ fn runtime_permission_status_reports_explicit_scope_provenance() {
         "{display}"
     );
     assert!(display.contains("trusted_project_root=none"), "{display}");
+    assert!(
+        display.contains("sandbox_effective=bubblewrap"),
+        "{display}"
+    );
     for restriction in crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS {
         assert!(display.contains(restriction), "{display}");
     }

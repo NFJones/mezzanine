@@ -1,7 +1,8 @@
 //! Unit tests for project trust storage and discovery behavior.
 
 use super::{
-    PathBuf, ProjectTrustStore, TrustDecision, default_trust_database_path, discover_project_root,
+    PathBuf, ProjectRootInputSource, ProjectRootMarkerKind, ProjectTrustStore, TrustDecision,
+    default_trust_database_path, discover_project_root, discover_project_root_with_metadata,
     discover_project_trust_prompt, select_overlay_for_directory, summarize_overlay_capabilities,
 };
 use std::fs;
@@ -84,6 +85,50 @@ fn no_git_marker_uses_current_directory_as_root() {
     fs::create_dir_all(&nested).unwrap();
 
     assert_eq!(discover_project_root(&nested), nested);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies typed discovery distinguishes worktree marker files and reports
+/// explicit input provenance and repository nesting without mutating disk.
+#[test]
+fn typed_discovery_reports_worktree_marker_and_explicit_path() {
+    let root = temp_root("worktree-root");
+    fs::write(root.join(".git"), "gitdir: /tmp/example-worktree\n").unwrap();
+    let nested = root.join("src/app");
+    fs::create_dir_all(&nested).unwrap();
+
+    let discovery =
+        discover_project_root_with_metadata(&nested, ProjectRootInputSource::ExplicitPath).unwrap();
+
+    assert_eq!(discovery.canonical_root, root.canonicalize().unwrap());
+    assert_eq!(discovery.canonical_start, nested.canonicalize().unwrap());
+    assert_eq!(discovery.input_source.as_str(), "explicit-path");
+    assert_eq!(discovery.marker_kind, ProjectRootMarkerKind::GitFile);
+    assert_eq!(discovery.marker_kind.as_str(), "git-file");
+    assert_eq!(discovery.nesting_depth, 2);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies typed discovery uses the canonical starting directory as a safe
+/// fallback when no repository marker exists.
+#[test]
+fn typed_discovery_reports_canonical_fallback() {
+    let root = temp_root("typed-fallback");
+    let nested = root.join("src/app");
+    fs::create_dir_all(&nested).unwrap();
+
+    let discovery =
+        discover_project_root_with_metadata(&nested, ProjectRootInputSource::CurrentDirectory)
+            .unwrap();
+
+    assert_eq!(discovery.canonical_root, nested.canonicalize().unwrap());
+    assert_eq!(discovery.canonical_start, nested.canonicalize().unwrap());
+    assert_eq!(discovery.input_source.as_str(), "current-directory");
+    assert_eq!(discovery.marker_kind, ProjectRootMarkerKind::Fallback);
+    assert_eq!(discovery.marker_kind.as_str(), "fallback");
+    assert_eq!(discovery.nesting_depth, 0);
 
     let _ = fs::remove_dir_all(root);
 }

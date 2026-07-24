@@ -32,6 +32,7 @@ fn help_mentions_mez_commands() {
     assert!(output.contains("list-sessions"));
     assert!(output.contains("attach-session"));
     assert!(output.contains("detach-client"));
+    assert!(output.contains("sandbox"));
     assert!(output.contains("version"));
     assert!(output.contains("--version"));
     assert!(stderr.is_empty());

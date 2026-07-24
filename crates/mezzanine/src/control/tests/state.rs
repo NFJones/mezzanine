@@ -55,6 +55,10 @@ fn dispatches_read_only_session_methods() {
         "policy-only"
     );
     assert_eq!(
+        response_json["result"]["session"]["permission_summary"]["sandbox_effective"],
+        "policy-only"
+    );
+    assert_eq!(
         response_json["result"]["session"]["permission_summary"]["network_policy"],
         "prompt"
     );

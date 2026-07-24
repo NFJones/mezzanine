@@ -8,7 +8,7 @@ use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
     PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, io, json_escape,
     prune_stale_socket_files_in_directory, run_attach, run_auth, run_config, run_control_request,
-    run_issue, run_list, run_mcp, run_memory, run_new, run_serve, run_snapshot,
+    run_issue, run_list, run_mcp, run_memory, run_new, run_sandbox, run_serve, run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -26,7 +26,7 @@ pub async fn run() -> u8 {
     let mut stderr = io::stderr();
 
     match run_with(args, env, interactive, &mut stdout, &mut stderr).await {
-        Ok(()) => 0,
+        Ok(code) => code,
         Err(error) => {
             let _ = writeln!(stderr, "mez: {error}");
             1
@@ -90,29 +90,28 @@ impl CliEnv {
     }
 }
 
-/// Runs the run with operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Runs one CLI invocation and preserves command-specific process exit status.
 pub async fn run_with<W: Write, E: Write>(
     args: Vec<String>,
     env: CliEnv,
     interactive: bool,
     stdout: &mut W,
     _stderr: &mut E,
-) -> Result<()> {
+) -> Result<u8> {
     let invocation = match CliInvocation::parse_or_display(&args, &env.runtime, env.mez.as_ref())? {
         CliInvocationParse::Invocation(invocation) => *invocation,
         CliInvocationParse::Display(display) => {
             write!(stdout, "{display}")?;
-            return Ok(());
+            return Ok(0);
         }
     };
-    cleanup_startup_stale_socket_files(&invocation, env.runtime.uid)?;
+    if !matches!(invocation.command.as_ref(), Some(CliCommand::Sandbox(_))) {
+        cleanup_startup_stale_socket_files(&invocation, env.runtime.uid)?;
+    }
     let socket_selection = invocation.socket_selection;
     let command = invocation.command;
     let output_format = invocation.output_format;
+    let mut exit_code = 0;
 
     match command {
         None => {
@@ -135,7 +134,8 @@ pub async fn run_with<W: Write, E: Write>(
                     output_format,
                     stdout,
                 )
-                .await;
+                .await
+                .map(|()| 0);
             }
             run_new(
                 &socket_selection,
@@ -240,9 +240,12 @@ pub async fn run_with<W: Write, E: Write>(
         Some(CliCommand::Memory(args)) => {
             run_memory(args, env, output_format, stdout)?;
         }
+        Some(CliCommand::Sandbox(args)) => {
+            exit_code = run_sandbox(args, env, output_format, stdout)?;
+        }
     }
 
-    Ok(())
+    Ok(exit_code)
 }
 
 /// Removes unserved sockets from Mezzanine-owned runtime directories at CLI

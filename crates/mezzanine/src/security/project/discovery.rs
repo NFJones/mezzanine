@@ -7,12 +7,135 @@ use super::{BTreeMap, MezError, OVERLAY_FILENAMES, Path, PathBuf, Result};
 #[cfg(test)]
 use super::{ProjectTrustPrompt, ProjectTrustStore, TrustDecision, fs};
 
+/// Identifies how the caller selected the path used for project discovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectRootInputSource {
+    /// Discovery started from the process current working directory.
+    CurrentDirectory,
+    /// Discovery started from a path explicitly supplied by the user.
+    ExplicitPath,
+}
+
+impl ProjectRootInputSource {
+    /// Returns the stable spelling used by status and diagnostic output.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CurrentDirectory => "current-directory",
+            Self::ExplicitPath => "explicit-path",
+        }
+    }
+}
+
+/// Describes the repository marker that established a discovered root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectRootMarkerKind {
+    /// A conventional `.git` directory established the root.
+    GitDirectory,
+    /// A worktree-style `.git` file established the root.
+    GitFile,
+    /// No repository marker was found and the canonical start directory is used.
+    Fallback,
+}
+
+impl ProjectRootMarkerKind {
+    /// Returns the stable spelling used by status and diagnostic output.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GitDirectory => "git-directory",
+            Self::GitFile => "git-file",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
+/// Typed, canonical project-root discovery evidence for user-facing workflows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRootDiscovery {
+    /// Canonical directory from which ancestor discovery began.
+    pub canonical_start: PathBuf,
+    /// Canonical project root selected by discovery.
+    pub canonical_root: PathBuf,
+    /// Whether the input came from cwd or an explicit CLI path.
+    pub input_source: ProjectRootInputSource,
+    /// Repository marker kind, or fallback when no marker exists.
+    pub marker_kind: ProjectRootMarkerKind,
+    /// Number of parent transitions from the start directory to the root.
+    pub nesting_depth: usize,
+}
+
+/// Discovers one canonical project root together with stable provenance.
+pub fn discover_project_root_with_metadata(
+    start: &Path,
+    input_source: ProjectRootInputSource,
+) -> Result<ProjectRootDiscovery> {
+    let start = if start.is_file() {
+        start.parent().unwrap_or(start)
+    } else {
+        start
+    };
+    let canonical_start = start.canonicalize().map_err(|error| {
+        MezError::invalid_args(format!(
+            "sandbox project path {} cannot be resolved: {error}",
+            start.display()
+        ))
+    })?;
+    let mut current = canonical_start.clone();
+    let mut nesting_depth = 0;
+
+    loop {
+        let marker = current.join(".git");
+        match std::fs::symlink_metadata(&marker) {
+            Ok(metadata) if metadata.is_dir() => {
+                return Ok(ProjectRootDiscovery {
+                    canonical_start,
+                    canonical_root: current,
+                    input_source,
+                    marker_kind: ProjectRootMarkerKind::GitDirectory,
+                    nesting_depth,
+                });
+            }
+            Ok(metadata) if metadata.is_file() => {
+                return Ok(ProjectRootDiscovery {
+                    canonical_start,
+                    canonical_root: current,
+                    input_source,
+                    marker_kind: ProjectRootMarkerKind::GitFile,
+                    nesting_depth,
+                });
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(MezError::invalid_args(format!(
+                    "sandbox project marker {} cannot be inspected: {error}",
+                    marker.display()
+                )));
+            }
+        }
+        if !current.pop() {
+            return Ok(ProjectRootDiscovery {
+                canonical_root: canonical_start.clone(),
+                canonical_start,
+                input_source,
+                marker_kind: ProjectRootMarkerKind::Fallback,
+                nesting_depth: 0,
+            });
+        }
+        nesting_depth += 1;
+    }
+}
+
 /// Runs the discover project root operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn discover_project_root(start: &Path) -> PathBuf {
+    if let Ok(discovery) =
+        discover_project_root_with_metadata(start, ProjectRootInputSource::CurrentDirectory)
+    {
+        return discovery.canonical_root;
+    }
     let mut current = if start.is_file() {
         start.parent().unwrap_or(start).to_path_buf()
     } else {

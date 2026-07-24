@@ -28,8 +28,16 @@ use crate::runtime::{
 };
 
 mod managed_home;
+mod workflow;
 
-pub(crate) use managed_home::{prepare_bubblewrap_managed_home, remove_bubblewrap_managed_home};
+pub(crate) use managed_home::{
+    bubblewrap_managed_home_project_key, prepare_bubblewrap_managed_home,
+    remove_bubblewrap_managed_home,
+};
+pub(crate) use workflow::{
+    SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
+    effective_sandbox_boundary, plan_sandbox_workflow,
+};
 
 /// Version of the fixed runtime projection emitted by this compiler.
 pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v1";

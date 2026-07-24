@@ -120,7 +120,6 @@ impl ProjectTrustStore {
     }
 
     /// Returns a trust record only when it matches the current project identity.
-    #[cfg(test)]
     pub fn get_for_project(
         &self,
         project_root: &Path,

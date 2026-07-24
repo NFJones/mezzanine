@@ -251,12 +251,17 @@ impl RuntimeSessionService {
         } else {
             Vec::new()
         };
+        let effective_sandbox = crate::security::sandbox::effective_sandbox_boundary(
+            &configured.sandbox,
+            self.permission_policy().approval_policy,
+        );
         format!(
-            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"sandbox":"{}","network_policy":"{}","trusted_project":{},"trusted_directories":{},"read_scopes":{},"write_scopes":{},"effective_scope_provenance":"{}","effective_read_scopes":{},"effective_write_scopes":{},"trusted_project_root":{},"sandbox_restrictions":{},"command_rule_generation":{}}}"#,
+            r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"sandbox":"{}","sandbox_effective":"{}","network_policy":"{}","trusted_project":{},"trusted_directories":{},"read_scopes":{},"write_scopes":{},"effective_scope_provenance":"{}","effective_read_scopes":{},"effective_write_scopes":{},"trusted_project_root":{},"sandbox_restrictions":{},"command_rule_generation":{}}}"#,
             runtime_permission_preset_name(self.permission_policy().preset),
             runtime_approval_policy_name(self.permission_policy().approval_policy),
             self.permission_policy().approval_bypass(),
             configured.sandbox.as_str(),
+            effective_sandbox,
             configured.resources.network_policy.as_str(),
             trusted_project,
             runtime_string_array_json(&trusted_directories),

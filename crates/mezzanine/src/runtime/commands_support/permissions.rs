@@ -212,13 +212,18 @@ pub(crate) fn runtime_permission_policy_display(service: &RuntimeSessionService)
     } else {
         "none".to_string()
     };
+    let effective_sandbox = crate::security::sandbox::effective_sandbox_boundary(
+        &configured.sandbox,
+        policy.approval_policy,
+    );
     format!(
-        "preset={} approval_policy={} bypass={} rules={} sandbox={} network_policy={} read_scopes={} write_scopes={} effective_scope_provenance={} effective_read_scopes={} effective_write_scopes={} trusted_project_root={} sandbox_restrictions={} source=runtime-policy",
+        "preset={} approval_policy={} bypass={} rules={} sandbox={} sandbox_effective={} network_policy={} read_scopes={} write_scopes={} effective_scope_provenance={} effective_read_scopes={} effective_write_scopes={} trusted_project_root={} sandbox_restrictions={} source=runtime-policy",
         runtime_permission_preset_name(policy.preset),
         runtime_approval_policy_name(policy.approval_policy),
         policy.approval_bypass(),
         policy.rules().len(),
         configured.sandbox.as_str(),
+        effective_sandbox,
         configured.resources.network_policy.as_str(),
         configured.resources.read_scopes.len(),
         configured.resources.write_scopes.len(),
