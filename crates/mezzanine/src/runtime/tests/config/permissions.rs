@@ -411,11 +411,185 @@ fn runtime_control_approval_methods_use_runtime_owned_queue() {
 /// config-driven: allow-forever writes an allow rule, deny writes a deny rule,
 /// and future decisions are evaluated from the project overlay rather than a
 /// hard-coded command blocklist.
+///
+/// Project persistence must fail closed before deciding the approval when no
+/// explicit trust store and trusted record bind the captured project root.
+#[test]
+fn runtime_control_project_approval_requires_explicit_trust_before_deciding() {
+    let root = temp_root("runtime-project-approval-requires-trust");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let descriptor = service.initial_pane_descriptor().unwrap();
+    service
+        .start_pane_process_with_start_directory(descriptor, Some("sleep 30"), Some(&root))
+        .unwrap();
+    let approval_id = service
+        .queue_blocked_approval(BlockedApprovalRequest {
+            id: String::new(),
+            requesting_agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            parent_agent_chain: vec!["agent-%1".to_string()],
+            action_kind: "shell_command".to_string(),
+            action_summary: "mez-test-command --flag".to_string(),
+            declared_effects: vec!["unknown command effects".to_string()],
+            matched_rules: vec!["default.prompt".to_string()],
+            read_scopes: Vec::new(),
+            write_scopes: Vec::new(),
+            cooperation_mode: None,
+            created_at_unix_seconds: None,
+            decided_at_unix_seconds: None,
+            decided_by_client_id: None,
+            state: mez_agent::permissions::BlockedApprovalState::Pending,
+            decision: None,
+            redirect_instruction: None,
+        })
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"requires-trust","method":"approval/decide","params":{{"approval_id":"{}","decision":"approve","scope":{{"persistence":"project"}},"idempotency_key":"requires-trust"}}}}"#,
+            approval_id
+        ),
+        &primary,
+    );
+
+    assert!(
+        response.contains("project approval persistence requires a project trust store"),
+        "{response}"
+    );
+    assert_eq!(
+        service.blocked_approvals().get(&approval_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Pending
+    );
+    assert!(!root.join(".mezzanine/config.toml").exists());
+
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a client cannot redirect project approval persistence by asserting
+/// a project root different from the runtime-captured approval root.
+#[test]
+fn runtime_control_project_approval_rejects_mismatched_project_root_assertion() {
+    let root = temp_root("runtime-project-approval-root-assertion");
+    let other_root = temp_root("runtime-project-approval-other-root");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(other_root.join(".git")).unwrap();
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            root.clone(),
+            TrustDecision::Trusted,
+            Some(root.join(".git")),
+            1,
+        )
+        .unwrap();
+    let mut service = test_runtime_service();
+    service.set_project_trust_store(trust_store, None);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let descriptor = service.initial_pane_descriptor().unwrap();
+    service
+        .start_pane_process_with_start_directory(descriptor, Some("sleep 30"), Some(&root))
+        .unwrap();
+    let approval_id = service
+        .queue_blocked_approval(BlockedApprovalRequest {
+            id: String::new(),
+            requesting_agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            parent_agent_chain: vec!["agent-%1".to_string()],
+            action_kind: "shell_command".to_string(),
+            action_summary: "mez-test-command --flag".to_string(),
+            declared_effects: vec!["unknown command effects".to_string()],
+            matched_rules: vec!["default.prompt".to_string()],
+            read_scopes: Vec::new(),
+            write_scopes: Vec::new(),
+            cooperation_mode: None,
+            created_at_unix_seconds: None,
+            decided_at_unix_seconds: None,
+            decided_by_client_id: None,
+            state: mez_agent::permissions::BlockedApprovalState::Pending,
+            decision: None,
+            redirect_instruction: None,
+        })
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"mismatched-root","method":"approval/decide","params":{{"approval_id":"{}","decision":"approve","scope":{{"persistence":"project","project_root":"{}"}},"idempotency_key":"mismatched-root"}}}}"#,
+            approval_id,
+            json_escape(&other_root.to_string_lossy())
+        ),
+        &primary,
+    );
+
+    assert!(
+        response.contains("does not match the captured project root"),
+        "{response}"
+    );
+    let working_directory_response = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"mismatched-working-directory","method":"approval/decide","params":{{"approval_id":"{}","decision":"approve","scope":{{"persistence":"project","project_root":"{}","working_directory":"{}"}},"idempotency_key":"mismatched-working-directory"}}}}"#,
+            approval_id,
+            json_escape(&root.to_string_lossy()),
+            json_escape(&other_root.to_string_lossy())
+        ),
+        &primary,
+    );
+    assert!(
+        working_directory_response.contains("does not match the captured working directory"),
+        "{working_directory_response}"
+    );
+    let digest_response = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"mismatched-digest","method":"approval/decide","params":{{"approval_id":"{}","decision":"approve","scope":{{"persistence":"project","project_root":"{}","working_directory":"{}","exact_sha256":"0000000000000000000000000000000000000000000000000000000000000000"}},"idempotency_key":"mismatched-digest"}}}}"#,
+            approval_id,
+            json_escape(&root.to_string_lossy()),
+            json_escape(&root.to_string_lossy())
+        ),
+        &primary,
+    );
+    assert!(
+        digest_response.contains("does not match the captured command"),
+        "{digest_response}"
+    );
+    assert_eq!(
+        service.blocked_approvals().get(&approval_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Pending
+    );
+    assert!(!root.join(".mezzanine/config.toml").exists());
+    assert!(!other_root.join(".mezzanine/config.toml").exists());
+
+    service.terminate_all_pane_processes().unwrap();
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(other_root);
+}
+
+/// Verifies that project-persistent approval choices create and update the
+/// project-local Mezzanine config with exact command rules for the command
+/// arguments the user actually reviewed. This keeps the prompt workflow
+/// config-driven: allow-forever writes an allow rule, deny writes a deny rule,
+/// and future decisions are evaluated from the project overlay rather than a
+/// hard-coded command blocklist.
 #[test]
 fn runtime_control_project_approval_decisions_persist_exact_command_rules() {
     let root = temp_root("runtime-project-approval-rules");
     fs::create_dir_all(root.join(".git")).unwrap();
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            root.clone(),
+            TrustDecision::Trusted,
+            Some(root.join(".git")),
+            1,
+        )
+        .unwrap();
     let mut service = test_runtime_service();
+    service.set_project_trust_store(trust_store, None);
     let primary = service
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
         .unwrap();
@@ -467,6 +641,10 @@ fn runtime_control_project_approval_decisions_persist_exact_command_rules() {
         })
         .unwrap();
 
+    let changed_directory = temp_root("runtime-project-approval-directory-change");
+    fs::create_dir_all(changed_directory.join(".git")).unwrap();
+    service.set_pane_current_working_directory("%1".to_string(), changed_directory.clone());
+
     let allow = service.dispatch_runtime_control_body(
         &format!(
             r#"{{"jsonrpc":"2.0","id":"allow-project","method":"approval/decide","params":{{"approval_id":"{}","decision":"approve","scope":{{"persistence":"project"}},"idempotency_key":"allow-project"}}}}"#,
@@ -486,6 +664,7 @@ fn runtime_control_project_approval_decisions_persist_exact_command_rules() {
     assert!(deny.contains(r#""state":"disapproved""#), "{deny}");
 
     let project_config = root.join(".mezzanine/config.toml");
+    assert!(!changed_directory.join(".mezzanine/config.toml").exists());
     let config_text = fs::read_to_string(&project_config).unwrap();
     assert!(
         config_text.contains(r#"approval_policy = "ask""#),
@@ -546,6 +725,7 @@ fn runtime_control_project_approval_decisions_persist_exact_command_rules() {
 
     service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(changed_directory);
 }
 
 /// Verifies runtime approval disapproval focuses blocked agent pane.

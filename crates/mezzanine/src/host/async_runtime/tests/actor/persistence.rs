@@ -1,6 +1,7 @@
 //! Async-runtime tests owned by persistence behavior.
 
 use super::super::*;
+use crate::security::project::{ProjectTrustStore, TrustDecision};
 
 /// Verifies that registry persistence side effects are coalesced before queue
 /// capacity is checked. Registry writes describe the latest discoverable
@@ -607,7 +608,17 @@ async fn async_actor_defers_project_approval_config_to_persistence_worker() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join(".git")).unwrap();
     let project_config = root.join(".mezzanine/config.toml");
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            root.clone(),
+            TrustDecision::Trusted,
+            Some(root.join(".git")),
+            1,
+        )
+        .unwrap();
     let mut service = test_service();
+    service.set_project_trust_store(trust_store, None);
     let primary = service
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 10)
         .unwrap();

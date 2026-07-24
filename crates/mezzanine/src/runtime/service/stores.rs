@@ -8,6 +8,9 @@ use super::{
     RuntimeSessionService, SessionApprovalStore, SessionMemoryStore, current_unix_seconds,
     json_escape,
 };
+use mez_agent::permissions::{
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, exact_command_sha256, normalize_exact_command_text,
+};
 
 impl RuntimeSessionService {
     /// Runs the control idempotency operation for this subsystem.
@@ -204,10 +207,30 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn queue_blocked_approval(&mut self, request: BlockedApprovalRequest) -> Result<String> {
+        let binding =
+            self.pane_current_working_directory(&request.pane_id)
+                .map(|working_directory| {
+                    (
+                        crate::security::project::discover_project_root(&working_directory),
+                        working_directory,
+                        exact_command_sha256(
+                            DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+                            &normalize_exact_command_text(&request.action_summary, false),
+                        ),
+                    )
+                });
         let approval_id = self
             .integration
             .blocked_approvals_mut()
             .create_at(request, current_unix_seconds())?;
+        if let Some((project_root, working_directory, command_sha256)) = binding {
+            self.control.insert_approval_binding(
+                approval_id.clone(),
+                project_root,
+                working_directory,
+                command_sha256,
+            );
+        }
         let approval = self
             .integration
             .blocked_approvals()

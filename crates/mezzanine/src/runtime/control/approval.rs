@@ -11,10 +11,10 @@ use super::{
     CommandRuleScope, ConfigFormat, ConfigLayer, ConfigScope, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
     EventKind, HookEvent, MezError, Path, PathBuf, Result, RuleDecision, RuleMatch,
     RuntimeSessionService, RuntimeSideEffect, TrustDecision, approval_decide_scope_persistence,
-    discover_project_root, dispatch_control_request_with_approvals,
-    dispatch_control_request_with_approvals_and_audit, json_escape, normalize_exact_command_text,
-    paths_equivalent, runtime_approval_decision_name_to_kind, runtime_json_rpc_error,
-    runtime_json_string_field, runtime_permission_decision_hook_payload, validate_config_text,
+    dispatch_control_request_with_approvals, dispatch_control_request_with_approvals_and_audit,
+    json_escape, normalize_exact_command_text, paths_equivalent,
+    runtime_approval_decision_name_to_kind, runtime_json_rpc_error, runtime_json_string_field,
+    runtime_permission_decision_hook_payload, validate_config_text,
 };
 use std::fs;
 
@@ -61,6 +61,37 @@ impl RuntimeSessionService {
                 .unwrap_or_else(|| "unknown".to_string());
             let decision = runtime_json_string_field(params, "decision")
                 .unwrap_or_else(|| "unknown".to_string());
+            let requested_scope = match approval_decide_scope_persistence(params) {
+                Ok(scope) => scope,
+                Err(error) => {
+                    return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+                }
+            };
+            if matches!(
+                requested_scope,
+                Some(ApprovalDecisionScopePersistence::Project)
+            ) && matches!(
+                runtime_approval_decision_name_to_kind(&decision),
+                Some(ApprovalDecision::Approve | ApprovalDecision::Disapprove)
+            ) && let Some(approval) = self.blocked_approvals().get(&approval_id)
+                && approval.action_kind == "shell_command"
+                && let Err(error) =
+                    self.validate_project_approval_scope_assertions(params, approval)
+            {
+                return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+            }
+            if matches!(
+                requested_scope,
+                Some(ApprovalDecisionScopePersistence::Project)
+            ) && matches!(
+                runtime_approval_decision_name_to_kind(&decision),
+                Some(ApprovalDecision::Approve | ApprovalDecision::Disapprove)
+            ) && let Some(approval) = self.blocked_approvals().get(&approval_id)
+                && approval.action_kind == "shell_command"
+                && let Err(error) = self.validate_project_shell_approval_persistence(approval)
+            {
+                return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+            }
             if let Some(block) = match self.run_configured_pre_action_hooks(
                 HookEvent::PermissionDecision,
                 &runtime_permission_decision_hook_payload(&approval_id, &decision),
@@ -97,7 +128,7 @@ impl RuntimeSessionService {
                 self.integration.blocked_approvals_mut(),
             )
         };
-        if response.contains(r#""result""#) && request.method == "approval/decide" {
+        if approval_decision_response_succeeded(&response) && request.method == "approval/decide" {
             let params = request.params.as_deref().unwrap_or("{}");
             let approval_id = runtime_json_string_field(params, "approval_id")
                 .unwrap_or_else(|| "unknown".to_string());
@@ -188,6 +219,7 @@ impl RuntimeSessionService {
             ) {
                 return runtime_json_rpc_error(&request.id, error.kind(), error.message());
             }
+            self.control.remove_approval_binding(&approval_id);
         }
         if let Some(cache_key) = cache_key {
             self.control.idempotency_mut().remember_response(
@@ -246,26 +278,7 @@ impl RuntimeSessionService {
         approval: &BlockedApprovalRequest,
         rule: &CommandRule,
     ) -> Result<()> {
-        let project_root = self.project_root_for_approval(approval);
-        if let Some(record) = self
-            .project_trust_store()
-            .as_ref()
-            .and_then(|store| store.get(&project_root))
-        {
-            match record.state {
-                TrustDecision::Trusted => {}
-                TrustDecision::Pending => {
-                    return Err(MezError::conflict(
-                        "project approval persistence is blocked until project trust is decided",
-                    ));
-                }
-                TrustDecision::Rejected | TrustDecision::Revoked => {
-                    return Err(MezError::forbidden(
-                        "project approval persistence requires a trusted project root",
-                    ));
-                }
-            }
-        }
+        let project_root = self.validate_project_shell_approval_persistence(approval)?;
         let config_path = project_root.join(".mezzanine/config.toml");
         let parent = config_path.parent().ok_or_else(|| {
             MezError::invalid_args(format!(
@@ -287,6 +300,71 @@ impl RuntimeSessionService {
             fs::write(&config_path, updated.clone())?;
         }
         self.upsert_project_config_layer(config_path, updated, project_root)
+    }
+
+    /// Verifies that a queued approval remains bound to one explicitly trusted project root.
+    fn validate_project_shell_approval_persistence(
+        &self,
+        approval: &BlockedApprovalRequest,
+    ) -> Result<PathBuf> {
+        let project_root = self.project_root_for_approval(approval)?;
+        let trust_store = self.project_trust_store().ok_or_else(|| {
+            MezError::invalid_state("project approval persistence requires a project trust store")
+        })?;
+        let record = trust_store.get(&project_root).ok_or_else(|| {
+            MezError::forbidden("project approval persistence requires a trusted project root")
+        })?;
+        match record.state {
+            TrustDecision::Trusted => Ok(project_root),
+            TrustDecision::Pending => Err(MezError::conflict(
+                "project approval persistence is blocked until project trust is decided",
+            )),
+            TrustDecision::Rejected | TrustDecision::Revoked => Err(MezError::forbidden(
+                "project approval persistence requires a trusted project root",
+            )),
+        }
+    }
+
+    /// Rejects client scope assertions that do not narrow to the captured project root.
+    fn validate_project_approval_scope_assertions(
+        &self,
+        params: &str,
+        approval: &BlockedApprovalRequest,
+    ) -> Result<()> {
+        let params = serde_json::from_str::<serde_json::Value>(params).map_err(|error| {
+            MezError::invalid_args(format!("approval/decide params are invalid JSON: {error}"))
+        })?;
+        let Some(scope) = params.get("scope").and_then(serde_json::Value::as_object) else {
+            return Ok(());
+        };
+        let binding = self.approval_binding_for(approval)?;
+        if let Some(project_root) = scope
+            .get("project_root")
+            .and_then(serde_json::Value::as_str)
+            && !paths_equivalent(Path::new(project_root), &binding.project_root)
+        {
+            Err(MezError::forbidden(
+                "approval/decide scope project_root does not match the captured project root",
+            ))
+        } else if let Some(working_directory) = scope
+            .get("working_directory")
+            .and_then(serde_json::Value::as_str)
+            && !paths_equivalent(Path::new(working_directory), &binding.working_directory)
+        {
+            Err(MezError::forbidden(
+                "approval/decide scope working_directory does not match the captured working directory",
+            ))
+        } else if let Some(command_sha256) = scope
+            .get("exact_sha256")
+            .and_then(serde_json::Value::as_str)
+            && command_sha256 != binding.command_sha256
+        {
+            Err(MezError::forbidden(
+                "approval/decide scope exact_sha256 does not match the captured command",
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Runs the project config text for update operation for this subsystem.
@@ -312,20 +390,25 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Returns the runtime-owned facts captured when an approval was queued.
+    fn approval_binding_for(
+        &self,
+        approval: &BlockedApprovalRequest,
+    ) -> Result<&super::component::ApprovalBinding> {
+        self.control.approval_binding(&approval.id).ok_or_else(|| {
+            MezError::invalid_state(
+                "project approval persistence requires the approval's captured binding",
+            )
+        })
+    }
+
     /// Runs the project root for approval operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn project_root_for_approval(&self, approval: &BlockedApprovalRequest) -> PathBuf {
-        self.pane_current_working_directory(&approval.pane_id)
-            .map(|path| discover_project_root(&path))
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|path| discover_project_root(&path))
-            })
-            .unwrap_or_else(|| PathBuf::from("."))
+    fn project_root_for_approval(&self, approval: &BlockedApprovalRequest) -> Result<PathBuf> {
+        Ok(self.approval_binding_for(approval)?.project_root.clone())
     }
 
     /// Runs the upsert project config layer operation for this subsystem.
@@ -341,9 +424,8 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let trusted = self
             .project_trust_store()
-            .as_ref()
             .and_then(|store| store.get(&project_root))
-            .is_none_or(|record| record.state == TrustDecision::Trusted);
+            .is_some_and(|record| record.state == TrustDecision::Trusted);
         if let Some(layer) = self
             .integration
             .config_layers_mut()
@@ -513,5 +595,33 @@ fn project_rule_scope_name(scope: CommandRuleScope) -> &'static str {
         CommandRuleScope::Project => "project",
         CommandRuleScope::User => "user",
         CommandRuleScope::Managed => "managed",
+    }
+}
+
+/// Returns whether a control response is a successful JSON-RPC envelope.
+///
+/// Approval follow-up effects must only run for a top-level `result` response;
+/// strings inside an error payload cannot authorize persistence or resumption.
+fn approval_decision_response_succeeded(response: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(response)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .is_some_and(|object| object.contains_key("result") && !object.contains_key("error"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::approval_decision_response_succeeded;
+
+    /// Verifies only a top-level JSON-RPC result authorizes approval follow-up effects.
+    #[test]
+    fn approval_response_gate_rejects_error_payloads_that_mention_result() {
+        assert!(approval_decision_response_succeeded(
+            r#"{"jsonrpc":"2.0","id":"approval","result":{"state":"approved"}}"#
+        ));
+        assert!(!approval_decision_response_succeeded(
+            r#"{"jsonrpc":"2.0","id":"result","error":{"message":"result was rejected"}}"#
+        ));
+        assert!(!approval_decision_response_succeeded("not JSON"));
     }
 }

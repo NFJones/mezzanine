@@ -298,6 +298,7 @@ impl RuntimeSessionService {
         self.clear_all_shell_transaction_state();
         self.clear_pane_readiness_state_and_overrides();
         self.integration.reset_blocked_approvals();
+        self.control.clear_approval_bindings();
         self.integration.reset_session_approvals();
 
         self.session = prepared_session;
