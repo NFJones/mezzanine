@@ -1728,9 +1728,9 @@ fn runtime_missing_primary_authority_requests_path_resolution() {
             matches!(
                 &transaction.kind,
                 RunningShellTransactionKind::PathResolution {
-                    action_id: Some(action_id),
+                    waiters,
                     ..
-                } if action_id == "action-1"
+                } if waiters == &vec![("path-resolution-turn".to_string(), "action-1".to_string())]
             )
         })
         .unwrap();
@@ -1784,15 +1784,14 @@ bootstrap\tcomplete\t1714500000\n",
             matches!(
                 &transaction.kind,
                 RunningShellTransactionKind::PathResolution {
-                    action_id: Some(pending_action_id),
+                    waiters,
                     ..
-                } if pending_action_id == &action_id
+                } if waiters.contains(&(turn_id.clone(), action_id.clone()))
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(transactions.len(), 1);
-    let RunningShellTransactionKind::PathResolution { cache_key, .. } =
-        &transactions[0].kind
+    let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transactions[0].kind
     else {
         unreachable!();
     };
@@ -1808,6 +1807,208 @@ bootstrap\tcomplete\t1714500000\n",
                 RunningShellTransactionKind::AgentAction { .. }
                     | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
             ))
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies two actions share one exact primary resolver, duplicate joins are
+/// idempotent, and successful evidence resumes their owning turn exactly once.
+#[test]
+fn runtime_path_resolution_success_resumes_all_waiters() {
+    let root = temp_root("runtime-path-resolution-success-waiters");
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+    add_sandbox_fallback_probe_waiter(&mut service, &turn_id, "second-waiter");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+
+    for pending_action_id in [&action_id, "second-waiter", &action_id] {
+        let evaluation = service
+            .agent_turn_executions()
+            .get(&turn_id)
+            .and_then(|execution| {
+                execution
+                    .action_results
+                    .iter()
+                    .find(|result| result.action_id == pending_action_id)
+            })
+            .and_then(|result| result.permission_evaluation.as_deref())
+            .cloned();
+        assert!(
+            !service
+                .ensure_bubblewrap_path_resolution_for_action(
+                    &turn,
+                    pending_action_id,
+                    evaluation.as_ref(),
+                )
+                .unwrap()
+        );
+    }
+    let (marker, transaction) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find(|(_, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::PathResolution { .. }
+            )
+        })
+        .map(|(marker, transaction)| (marker.clone(), transaction.clone()))
+        .unwrap();
+    let RunningShellTransactionKind::PathResolution { cache_key, waiters } = &transaction.kind
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        waiters,
+        &vec![
+            (turn_id.clone(), action_id.clone()),
+            (turn_id.clone(), "second-waiter".to_string()),
+        ]
+    );
+    let command = mez_agent::shell::pane_path_resolution_command(
+        &cache_key.request,
+        mez_agent::ShellClassification::PosixSh,
+    )
+    .unwrap();
+    let output = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let resolved_output = String::from_utf8(output.stdout).unwrap();
+    service
+        .running_shell_transactions_mut_for_tests()
+        .remove(&marker)
+        .unwrap();
+    service
+        .observe_path_resolution_transaction_end(
+            &marker,
+            "%1",
+            0,
+            cache_key.clone(),
+            &resolved_output,
+            false,
+        )
+        .unwrap();
+    service
+        .settle_action_path_resolution_transaction(&marker, &transaction, cache_key, waiters)
+        .unwrap();
+
+    assert!(
+        service
+            .path_scopes_for_pane_request("%1", &cache_key.request)
+            .unwrap()
+            .is_some()
+    );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert_eq!(
+        trace
+            .matches("pending shell dispatch resume started")
+            .count(),
+        1,
+        "{trace}"
+    );
+    assert!(!trace.contains("path-resolution request is already retained"));
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a failed shared resolver settles every live action while an
+/// already-stale waiter is ignored without blocking the remaining failures.
+#[test]
+fn runtime_path_resolution_failure_settles_all_live_waiters() {
+    let root = temp_root("runtime-path-resolution-failure-waiters");
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+    add_sandbox_fallback_probe_waiter(&mut service, &turn_id, "second-waiter");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+
+    for pending_action_id in [&action_id, "second-waiter"] {
+        let evaluation = service
+            .agent_turn_executions()
+            .get(&turn_id)
+            .and_then(|execution| {
+                execution
+                    .action_results
+                    .iter()
+                    .find(|result| result.action_id == pending_action_id)
+            })
+            .and_then(|result| result.permission_evaluation.as_deref())
+            .cloned();
+        assert!(
+            !service
+                .ensure_bubblewrap_path_resolution_for_action(
+                    &turn,
+                    pending_action_id,
+                    evaluation.as_ref(),
+                )
+                .unwrap()
+        );
+    }
+    let marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find(|(_, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::PathResolution { .. }
+            )
+        })
+        .map(|(marker, _)| marker.clone())
+        .unwrap();
+    let mut transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .remove(&marker)
+        .unwrap();
+    let RunningShellTransactionKind::PathResolution { waiters, .. } = &mut transaction.kind else {
+        unreachable!();
+    };
+    waiters.push((turn_id.clone(), "already-finished".to_string()));
+
+    service
+        .fail_path_resolution_for_pane_write_failure(
+            &marker,
+            transaction,
+            "simulated resolver write failure",
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(trace.contains(&action_id), "{trace}");
+    assert!(trace.contains("second-waiter"), "{trace}");
+    assert!(
+        trace.contains("bubblewrap_path_resolution_write_failed"),
+        "{trace}"
     );
 
     service.terminate_all_pane_processes().unwrap();
@@ -1861,9 +2062,9 @@ fn runtime_complete_effects_request_action_specific_path_resolution() {
             matches!(
                 &transaction.kind,
                 RunningShellTransactionKind::PathResolution {
-                    action_id: Some(action_id),
+                    waiters,
                     ..
-                } if action_id == "action-1"
+                } if waiters == &vec![("path-resolution-turn".to_string(), "action-1".to_string())]
             )
         })
         .unwrap();
@@ -1964,9 +2165,9 @@ fn runtime_user_home_authority_resolves_credential_mask_paths() {
             matches!(
                 &transaction.kind,
                 RunningShellTransactionKind::PathResolution {
-                    action_id: Some(action_id),
+                    waiters,
                     ..
-                } if action_id == "action-1"
+                } if waiters == &vec![("path-resolution-turn".to_string(), "action-1".to_string())]
             )
         })
         .unwrap();
@@ -2124,7 +2325,7 @@ fn runtime_path_resolution_failure_is_terminal_for_exact_identity() {
         turn_id: "path-resolution-turn".to_string(),
         kind: RunningShellTransactionKind::PathResolution {
             cache_key: cache_key.clone(),
-            action_id: None,
+            waiters: Vec::new(),
         },
         pane_id: "%1".to_string(),
         command: "path resolution".to_string(),

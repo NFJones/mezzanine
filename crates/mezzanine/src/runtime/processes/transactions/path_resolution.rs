@@ -111,25 +111,17 @@ impl RuntimeSessionService {
                 })
         {
             if let Some((turn, action_id)) = continuation {
-                let RunningShellTransactionKind::PathResolution {
-                    action_id: pending_action_id,
-                    ..
-                } = &mut transaction.kind
+                let RunningShellTransactionKind::PathResolution { waiters, .. } =
+                    &mut transaction.kind
                 else {
                     return Err(MezError::invalid_state(
                         "matching path-resolution transaction has the wrong kind",
                     ));
                 };
-                if pending_action_id
-                    .as_deref()
-                    .is_some_and(|pending| pending != action_id)
-                {
-                    return Err(MezError::conflict(
-                        "path-resolution request is already retained for another action",
-                    ));
+                let waiter = (turn.turn_id.clone(), action_id.to_string());
+                if !waiters.contains(&waiter) {
+                    waiters.push(waiter);
                 }
-                *pending_action_id = Some(action_id.to_string());
-                transaction.turn_id = turn.turn_id.clone();
             }
             return Ok(false);
         }
@@ -138,19 +130,19 @@ impl RuntimeSessionService {
         let classification = self.shell_classification_for_pane(pane_id);
         let command = mez_agent::shell::pane_path_resolution_command(&request, classification)
             .map_err(|error| MezError::invalid_args(error.message()))?;
-        let (turn_id, agent_id, action_id) = continuation.map_or_else(
+        let (turn_id, agent_id, waiters) = continuation.map_or_else(
             || {
                 (
                     format!("path-resolution-{pane_id}-{}", current_unix_seconds()),
                     format!("agent-{pane_id}"),
-                    None,
+                    Vec::new(),
                 )
             },
             |(turn, action_id)| {
                 (
                     turn.turn_id.clone(),
                     turn.agent_id.clone(),
-                    Some(action_id.to_string()),
+                    vec![(turn.turn_id.clone(), action_id.to_string())],
                 )
             },
         );
@@ -179,10 +171,7 @@ impl RuntimeSessionService {
             marker_id.clone(),
             RunningShellTransactionRef {
                 turn_id,
-                kind: RunningShellTransactionKind::PathResolution {
-                    cache_key,
-                    action_id,
-                },
+                kind: RunningShellTransactionKind::PathResolution { cache_key, waiters },
                 pane_id: pane_id.to_string(),
                 command,
                 started_at_unix_ms: current_unix_millis(),
@@ -211,32 +200,38 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
-    /// Resumes a waiting action after successful exact resolution or fails it
-    /// closed when the resolver produced no trusted evidence.
+    /// Resumes every waiting action after successful exact resolution or fails
+    /// them closed when the resolver produced no trusted evidence.
     pub(crate) fn settle_action_path_resolution_transaction(
         &mut self,
         marker: &str,
         transaction: &RunningShellTransactionRef,
         cache_key: &RuntimePathResolutionCacheKey,
-        action_id: &str,
+        waiters: &[(String, String)],
     ) -> Result<usize> {
         match self.path_scopes_for_pane_request(&transaction.pane_id, &cache_key.request) {
             Ok(Some(_)) => {
-                let _ = self.dispatch_stored_running_shell_actions(&transaction.turn_id)?;
+                for turn_id in waiters
+                    .iter()
+                    .map(|(turn_id, _)| turn_id)
+                    .collect::<std::collections::BTreeSet<_>>()
+                {
+                    let _ = self.dispatch_stored_running_shell_actions(turn_id)?;
+                }
                 Ok(1)
             }
-            Ok(None) => self.fail_action_path_resolution_transaction(
+            Ok(None) => self.fail_action_path_resolution_waiters(
                 marker,
                 transaction,
-                action_id,
+                waiters,
                 ActionStatus::Failed,
                 "bubblewrap_path_resolution_stale",
                 "Bubblewrap action path resolution completed for a stale pane environment",
             ),
-            Err(error) => self.fail_action_path_resolution_transaction(
+            Err(error) => self.fail_action_path_resolution_waiters(
                 marker,
                 transaction,
-                action_id,
+                waiters,
                 ActionStatus::Failed,
                 "bubblewrap_path_resolution_failed",
                 error.message(),
@@ -244,39 +239,54 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Settles an action whose prerequisite path-resolution transaction failed.
-    pub(crate) fn fail_action_path_resolution_transaction(
+    /// Settles all actions whose shared path-resolution prerequisite failed.
+    pub(crate) fn fail_action_path_resolution_waiters(
         &mut self,
         marker: &str,
         transaction: &RunningShellTransactionRef,
-        action_id: &str,
+        waiters: &[(String, String)],
         status: ActionStatus,
         code: &str,
         message: &str,
     ) -> Result<usize> {
         let timed_out = status == ActionStatus::TimedOut;
-        self.fail_running_shell_transaction_action(
-            transaction,
-            marker,
-            RuntimeShellTransactionActionFailure {
-                action_id: action_id.to_string(),
-                status,
-                code: code.to_string(),
-                message: message.to_string(),
-                sent_to_pane: false,
-                terminal_observation: serde_json::json!({
-                    "source": "pty",
-                    "stream": "pty_combined",
-                    "marker": marker,
-                    "exit_code": null,
-                    "timed_out": timed_out,
-                    "combined_output_bytes": transaction.observed_output_bytes,
-                    "boundary_state": "bubblewrap-path-resolution-failed",
-                    "output_truncated": transaction.observed_output_truncated
-                }),
-                trace_reason: code.to_string(),
-            },
-        )
+        let terminal_observation = serde_json::json!({
+            "source": "pty",
+            "stream": "pty_combined",
+            "marker": marker,
+            "exit_code": null,
+            "timed_out": timed_out,
+            "combined_output_bytes": transaction.observed_output_bytes,
+            "boundary_state": "bubblewrap-path-resolution-failed",
+            "output_truncated": transaction.observed_output_truncated
+        });
+        let mut waiters_by_turn = std::collections::BTreeMap::<String, Vec<String>>::new();
+        for (turn_id, action_id) in waiters {
+            waiters_by_turn
+                .entry(turn_id.clone())
+                .or_default()
+                .push(action_id.clone());
+        }
+        let mut settled = 0;
+        for (turn_id, action_ids) in waiters_by_turn {
+            let mut waiter_transaction = transaction.clone();
+            waiter_transaction.turn_id = turn_id;
+            let failures = action_ids
+                .into_iter()
+                .map(|action_id| RuntimeShellTransactionActionFailure {
+                    action_id,
+                    status,
+                    code: code.to_string(),
+                    message: message.to_string(),
+                    sent_to_pane: false,
+                    terminal_observation: terminal_observation.clone(),
+                    trace_reason: code.to_string(),
+                })
+                .collect();
+            settled +=
+                self.fail_running_shell_transaction_actions(&waiter_transaction, marker, failures)?;
+        }
+        Ok(settled)
     }
 
     /// Settles one internal path-resolution transaction and caches only fresh,
@@ -410,15 +420,11 @@ impl RuntimeSessionService {
                 marker
             ),
         )?;
-        if let RunningShellTransactionKind::PathResolution {
-            action_id: Some(action_id),
-            ..
-        } = &transaction.kind
-        {
-            self.fail_action_path_resolution_transaction(
+        if let RunningShellTransactionKind::PathResolution { waiters, .. } = &transaction.kind {
+            self.fail_action_path_resolution_waiters(
                 marker,
                 &transaction,
-                action_id,
+                waiters,
                 ActionStatus::TimedOut,
                 "bubblewrap_path_resolution_timeout",
                 &format!(
@@ -452,15 +458,11 @@ impl RuntimeSessionService {
                 marker
             ),
         )?;
-        if let RunningShellTransactionKind::PathResolution {
-            action_id: Some(action_id),
-            ..
-        } = &transaction.kind
-        {
-            self.fail_action_path_resolution_transaction(
+        if let RunningShellTransactionKind::PathResolution { waiters, .. } = &transaction.kind {
+            self.fail_action_path_resolution_waiters(
                 marker,
                 &transaction,
-                action_id,
+                waiters,
                 ActionStatus::Failed,
                 "bubblewrap_path_resolution_write_failed",
                 &format!(

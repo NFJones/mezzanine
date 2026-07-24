@@ -197,10 +197,8 @@ impl RuntimeSessionService {
                 transaction_ref.observed_output_truncated,
             );
         }
-        if let RunningShellTransactionKind::PathResolution {
-            cache_key,
-            action_id,
-        } = transaction_ref.kind.clone()
+        if let RunningShellTransactionKind::PathResolution { cache_key, waiters } =
+            transaction_ref.kind.clone()
         {
             let observed = self.observe_path_resolution_transaction_end(
                 marker,
@@ -210,12 +208,12 @@ impl RuntimeSessionService {
                 &transaction_ref.observed_output_preview,
                 transaction_ref.observed_output_truncated,
             )?;
-            if let Some(action_id) = action_id {
+            if !waiters.is_empty() {
                 return self.settle_action_path_resolution_transaction(
                     marker,
                     &transaction_ref,
                     &cache_key,
-                    &action_id,
+                    &waiters,
                 );
             }
             return Ok(observed);
