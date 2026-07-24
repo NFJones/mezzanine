@@ -285,6 +285,7 @@ impl RuntimeSessionService {
                     length: width,
                     rendition: runtime_pane_agent_selector_rendition(
                         selector.field,
+                        value,
                         active,
                         &self.presentation.settings.ui_theme,
                     ),

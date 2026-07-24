@@ -20,8 +20,12 @@ fn pane_agent_selector_overlay_clips_underlying_pane_styling() {
         inverse: true,
         ..GraphicRendition::default()
     };
-    let selector_rendition =
-        runtime_pane_agent_selector_rendition(PaneAgentStatusField::Model, false, &ui_theme);
+    let selector_rendition = runtime_pane_agent_selector_rendition(
+        PaneAgentStatusField::Model,
+        "default",
+        false,
+        &ui_theme,
+    );
     let mut spans = vec![TerminalStyleSpan {
         start: 0,
         length: 16,
@@ -60,6 +64,32 @@ fn pane_agent_selector_overlay_clips_underlying_pane_styling() {
         after_overlay, pane_rendition,
         "right pane styling was clipped too broadly: {spans:?}"
     );
+}
+
+/// Verifies persistent host execution uses the theme's failure/warning color
+/// rather than the ordinary approval-policy selector styling.
+#[test]
+fn host_access_selector_uses_warning_rendition() {
+    let ui_theme = mez_mux::theme::deepforest_ui_theme();
+
+    let host_access = runtime_pane_agent_selector_rendition(
+        PaneAgentStatusField::ApprovalPolicy,
+        "host-access",
+        true,
+        &ui_theme,
+    );
+    let full_access = runtime_pane_agent_selector_rendition(
+        PaneAgentStatusField::ApprovalPolicy,
+        "full-access",
+        true,
+        &ui_theme,
+    );
+
+    assert_eq!(
+        host_access.foreground,
+        ui_theme.colors.agent_status_failed.rendition().foreground
+    );
+    assert_ne!(host_access, full_access);
 }
 
 /// Verifies pager search highlighting is limited to the matched range.

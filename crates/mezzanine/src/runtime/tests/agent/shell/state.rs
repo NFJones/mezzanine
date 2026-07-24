@@ -133,6 +133,38 @@ fn runtime_policy_only_shell_audit_omits_plan_metadata() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies persistent host access records the configured and effective
+/// execution boundaries with a marker distinct from one-shot fallback approval.
+#[test]
+fn runtime_host_access_shell_audit_records_distinct_policy_bypass() {
+    let root = temp_root("runtime-host-access-sandbox-audit");
+    let audit_path = root.join("audit.jsonl");
+    let mut service = test_runtime_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    let turn = path_resolution_turn();
+    let action = sandbox_audit_action();
+
+    service
+        .append_agent_shell_command_audit(&turn, &action, "pwd", None, None, "sent")
+        .unwrap();
+
+    let record: serde_json::Value =
+        serde_json::from_str(fs::read_to_string(&audit_path).unwrap().trim()).unwrap();
+    assert_eq!(record["approval_state"], "host-policy-bypass");
+    assert_eq!(record["metadata"]["sandbox_bypass"], "host-policy-bypass");
+    assert_eq!(record["metadata"]["sandbox_configured"], "bubblewrap");
+    assert_eq!(record["metadata"]["sandbox_effective"], "host");
+    assert!(record["metadata"].get("sandbox_fallback").is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies Bubblewrap shell audit records retain only the compiler's redacted
 /// profile identity, authority source, counts, and deterministic plan digest.
 #[test]

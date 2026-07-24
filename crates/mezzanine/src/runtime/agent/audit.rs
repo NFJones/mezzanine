@@ -34,12 +34,21 @@ impl RuntimeSessionService {
             .sandbox_fallback_audits
             .get(&(turn.turn_id.clone(), action.id.clone()))
             .cloned();
-        let fallback_bypass = fallback_audit.is_some()
+        let configured_sandbox = self.configured_permissions().sandbox.as_str().to_string();
+        let host_policy_bypass = self
+            .integration
+            .permission_policy()
+            .approval_policy
+            .bypasses_sandbox();
+        let fallback_bypass = !host_policy_bypass
+            && fallback_audit.is_some()
             && self.sandbox_bypass_active_for_action(&turn.turn_id, &action.id);
-        let sandbox_backend = if fallback_bypass {
+        let sandbox_effective = if host_policy_bypass {
+            "host".to_string()
+        } else if fallback_bypass {
             "policy-only".to_string()
         } else {
-            self.configured_permissions().sandbox.as_str().to_string()
+            configured_sandbox.clone()
         };
         let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
@@ -61,7 +70,9 @@ impl RuntimeSessionService {
             "command_sha256",
             exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, command),
         )
-        .with_metadata("sandbox_backend", sandbox_backend);
+        .with_metadata("sandbox_backend", sandbox_effective.clone())
+        .with_metadata("sandbox_configured", configured_sandbox)
+        .with_metadata("sandbox_effective", sandbox_effective);
         if let Some(summary) = sandbox_summary {
             record = record
                 .with_metadata("sandbox_profile_version", summary.runtime_profile_version)
@@ -116,7 +127,10 @@ impl RuntimeSessionService {
                     evaluation.effects.writes.len().to_string(),
                 );
         }
-        if let Some(fallback) = fallback_audit {
+        if host_policy_bypass {
+            record = record.with_metadata("sandbox_bypass", "host-policy-bypass");
+            record.approval_state = "host-policy-bypass".to_string();
+        } else if let Some(fallback) = fallback_audit {
             record = record
                 .with_metadata("sandbox_fallback", "approved_exact_retry")
                 .with_metadata("sandbox_fallback_origin_backend", "bubblewrap")

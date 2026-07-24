@@ -359,7 +359,9 @@ pub(in crate::host::terminal::render) fn pane_frame_policy_mode_rendition(
     value: &str,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
-    if value == "full-access" {
+    if value == "host-access" {
+        ui_theme.colors.agent_status_failed.rendition()
+    } else if value == "full-access" {
         ui_theme.colors.agent_status_running.rendition()
     } else if value == "auto-allow" {
         ui_theme.colors.agent_reasoning.rendition()
@@ -561,4 +563,22 @@ pub(in crate::host::terminal::render) fn themed_frame_rendition(
     }
     rendition.bold |= bold;
     rendition
+}
+
+#[cfg(test)]
+mod policy_mode_tests {
+    use super::*;
+
+    /// Verifies persistent host execution uses the failure/warning theme slot
+    /// and remains visually distinct from sandboxed full access.
+    #[test]
+    fn host_access_policy_mode_uses_warning_rendition() {
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
+
+        let host = pane_frame_policy_mode_rendition("host-access", &ui_theme);
+        let full = pane_frame_policy_mode_rendition("full-access", &ui_theme);
+
+        assert_eq!(host, ui_theme.colors.agent_status_failed.rendition());
+        assert_ne!(host, full);
+    }
 }

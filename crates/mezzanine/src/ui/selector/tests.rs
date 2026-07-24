@@ -818,6 +818,28 @@ fn selector_shadow_hint_completes_additional_agent_command_values() {
     }
 }
 
+/// Verifies the persistent host-execution candidate carries conspicuous
+/// warning copy that distinguishes it from sandboxed full access.
+#[test]
+fn selector_host_access_candidate_warns_about_host_execution() {
+    let plan = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/approval host",
+        "/approval host".len(),
+    )
+    .unwrap();
+    let candidate = plan
+        .candidates
+        .iter()
+        .find(|candidate| candidate.value == "host-access")
+        .unwrap();
+
+    assert_eq!(
+        candidate.detail.as_deref(),
+        Some("No prompts; execute on host outside configured sandbox.")
+    );
+}
+
 /// Verifies `/routing policy` exposes nested policy values through Tab
 /// completion and transient prompt shadow hints.
 #[test]

@@ -869,7 +869,8 @@ Pane frames MUST support the following fields:
   provider response input-token count and Mezzanine's effective model
   context-window token budget rather than cumulative conversation token usage
   or a provider-supplied percentage, and saturated at `100%` for display.
-- `policy.mode`: Active approval policy as `ask`, `auto-allow`, or `full-access`.
+- `policy.mode`: Active approval policy as `ask`, `auto-allow`, `full-access`,
+  or `host-access`. `host-access` MUST use conspicuous warning styling.
 - `observer.pending_count`: Number of read-only observer attach requests
   waiting for primary-client approval.
 - `history.position`: Scrollback position when the pane is not at the live
@@ -6251,9 +6252,9 @@ supported, and maximum payload size for methods that return captured content.
 size with non-positive values MUST be rejected with `invalid-params`.
 
 `PermissionSummary` MUST include `preset`, `approval_policy`,
-`bypass_active`, `trusted_project`, `trusted_directories`, `read_scopes`,
-`write_scopes`, and `command_rule_generation`. It MUST NOT include secret
-configuration values.
+`bypass_active`, configured and effective sandbox boundaries, `trusted_project`,
+`trusted_directories`, `read_scopes`, `write_scopes`, and
+`command_rule_generation`. It MUST NOT include secret configuration values.
 
 `ActionEffects` MUST include `reads`, `writes`, `creates`, `deletes`, and
 `touches` as arrays of shell-path strings, plus Boolean fields `network`,
@@ -7504,6 +7505,16 @@ than hard command denials; configured deny rules remain authoritative. If the
 parent agent already has an inherited subagent scope, that inherited scope MAY
 still be exposed for coordination, but full-access MUST NOT deny commands solely
 because a model-emitted child scope is narrower than the parent.
+
+The approval policy `host-access` MUST allow local shell actions without fresh
+prompts and MUST execute them on the host outside any configured sandbox. Only
+the primary user MAY select it; project overlays, model profiles, agents, and
+subagents MUST NOT select or broaden into it. Hooks and explicit command denies
+MUST remain active. Child agents MUST NOT infer Bubblewrap authority while the
+parent executes at the host boundary. Status MUST report the configured and
+effective sandbox independently, and audit records MUST use the distinct
+`host-policy-bypass` marker rather than `approved_exact_sandbox_bypass`, which
+remains reserved for one exact user-approved sandbox fallback retry.
 
 Mezzanine v1 MUST NOT support an approval policy that attempts an action before
 approval and asks for approval only after failure. Because v1 relies on

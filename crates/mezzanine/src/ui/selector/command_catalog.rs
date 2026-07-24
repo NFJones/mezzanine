@@ -344,6 +344,13 @@ pub(super) fn agent_argument_candidates(
         "approval" | "permissions" => {
             let mut candidates =
                 value_candidates(&["ask", "auto-allow", "full-access", "host-access"]);
+            if let Some(host_access) = candidates
+                .iter_mut()
+                .find(|candidate| candidate.value == "host-access")
+            {
+                host_access.detail =
+                    Some("No prompts; execute on host outside configured sandbox.".to_string());
+            }
             candidates.extend(value_candidates(&[
                 "add", "remove", "list", "rules", "allow", "deny", "prompt", "bypass",
             ]));

@@ -675,6 +675,7 @@ impl RuntimeSessionService {
 /// Returns a selector row rendition, highlighting the hovered item.
 pub(crate) fn runtime_pane_agent_selector_rendition(
     field: PaneAgentStatusField,
+    value: &str,
     active: bool,
     ui_theme: &mez_mux::theme::UiTheme,
 ) -> mez_terminal::GraphicRendition {
@@ -684,6 +685,9 @@ pub(crate) fn runtime_pane_agent_selector_rendition(
             PaneAgentStatusField::Reasoning => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::Thinking => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::Routing => ui_theme.colors.agent_reasoning,
+            PaneAgentStatusField::ApprovalPolicy if value == "host-access" => {
+                ui_theme.colors.agent_status_failed
+            }
             PaneAgentStatusField::ApprovalPolicy => ui_theme.colors.agent_status_blocked,
             PaneAgentStatusField::Latency => ui_theme.colors.agent_reasoning,
             PaneAgentStatusField::Preset => ui_theme.colors.agent_model,

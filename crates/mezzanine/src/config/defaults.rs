@@ -460,6 +460,9 @@ auto_sizing_large_model_profile = "anthropic-default"
 allowed_reasoning_efforts = ["high"]
 
 [permissions]
+# ask prompts when required; auto-allow uses the model gate; full-access skips
+# prompts but stays sandboxed. host-access is primary-user-only and executes
+# local shell actions on the host outside the configured sandbox.
 approval_policy = "ask"
 sandbox = "policy-only"
 trusted_directories = []

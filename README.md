@@ -377,6 +377,10 @@ Current support reflects behavior implemented in the repository today.
   conversation context, and explicit action results.
 - Shell, network, destructive, configuration, and some MCP actions may require
   approval depending on the active runtime mode.
+- `full-access` skips fresh whitelist prompts but still uses the configured
+  sandbox. `host-access` skips prompts and executes local shell actions on the
+  host outside that sandbox; it is primary-user-only, remains subject to hooks
+  and explicit denies, and is distinct from a one-shot approved sandbox retry.
 - Bubblewrap subagents inherit their parent's effective filesystem authority;
   omitted scopes inherit, explicit scopes may only narrow, and explicit empty
   scope arrays remain empty.

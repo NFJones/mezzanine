@@ -694,7 +694,7 @@ Provider options under a model profile:
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `permissions.approval_policy` | string | `"ask"` | Default approval policy: `ask`, `auto-allow`, or `full-access`. |
+| `permissions.approval_policy` | string | `"ask"` | Default approval policy: `ask`, `auto-allow`, `full-access`, or primary-user-only `host-access`. `full-access` remains sandboxed; `host-access` executes local shell actions on the host outside the configured sandbox. |
 | `permissions.preset` | string | omitted | Optional preset, such as `read-only` or `auto`. |
 | `permissions.sandbox` | string | `"policy-only"` | Additive confinement backend: `policy-only` or `bubblewrap`. |
 | `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. |

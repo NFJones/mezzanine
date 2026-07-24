@@ -831,7 +831,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
     match name {
         "help" => "show this command guide.",
         "permissions" => "inspect permission preset and approval policy.",
-        "approval" => "inspect or change the session approval mode.",
+        "approval" => {
+            "inspect or change approval mode; host-access means no prompts and host execution outside the configured sandbox."
+        }
         "approve" => "approve a pending pane-local agent action.",
         "trust" => "inspect or decide pending project trust requests.",
         "list-macros" => "list available macros and their #macro prompt names.",
@@ -1036,6 +1038,19 @@ pub fn agent_shell_visibility_name(visibility: AgentShellVisibility) -> &'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies command help warns that host access bypasses the configured
+    /// sandbox instead of presenting it as an ordinary prompt policy.
+    #[test]
+    fn agent_shell_help_warns_about_host_access_boundary() {
+        let help = agent_shell_help_display();
+
+        assert!(help.contains("host-access means no prompts"), "{help}");
+        assert!(
+            help.contains("host execution outside the configured sandbox"),
+            "{help}"
+        );
+    }
 
     /// Verifies agent shell rejects mismatched turn completion.
     ///
