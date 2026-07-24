@@ -518,7 +518,45 @@ impl RuntimeSessionService {
                 "Bubblewrap path resolution requires the retained permission evaluation",
             )
         })?;
-        let maximum = self.bubblewrap_maximum_path_scopes_for_turn(turn)?;
+        let primary = match self.primary_path_resolution_request(&turn.pane_id)? {
+            Some(request) => match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
+                Some(scopes) => scopes,
+                None => {
+                    let _ =
+                        self.dispatch_action_path_resolution_to_pane(turn, action_id, request)?;
+                    return Ok(false);
+                }
+            },
+            None => self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
+                MezError::invalid_state("Bubblewrap path resolution requires the pane environment")
+            })?,
+        };
+        let maximum = match self.subagent_scope_declaration_for_turn(turn) {
+            None => primary,
+            Some(scope) => match Self::subagent_path_resolution_request(&scope)? {
+                None => PathScopes::try_shell_resolved(
+                    scope.current_directory,
+                    Vec::new(),
+                    Vec::new(),
+                    Default::default(),
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?,
+                Some(request) => {
+                    let child = match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
+                        Some(scopes) => scopes,
+                        None => {
+                            let _ = self.dispatch_action_path_resolution_to_pane(
+                                turn, action_id, request,
+                            )?;
+                            return Ok(false);
+                        }
+                    };
+                    primary
+                        .intersection(&child)
+                        .map_err(|error| MezError::invalid_state(error.message()))?
+                }
+            },
+        };
         let Some(request) = bubblewrap_action_path_resolution_request(&maximum, evaluation)? else {
             return Ok(true);
         };
@@ -556,13 +594,24 @@ impl RuntimeSessionService {
         &self,
         turn: &AgentTurnRecord,
     ) -> Result<PathScopes> {
-        let primary = self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
-            MezError::invalid_state("Bubblewrap dispatch requires resolved primary path authority")
-        })?;
+        let primary = match self.primary_path_resolution_request(&turn.pane_id)? {
+            Some(request) => self
+                .path_scopes_for_pane_request(&turn.pane_id, &request)?
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "Bubblewrap dispatch requires resolved primary path authority",
+                    )
+                })?,
+            None => self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
+                MezError::invalid_state(
+                    "Bubblewrap dispatch requires resolved primary path authority",
+                )
+            })?,
+        };
         let Some(scope) = self.subagent_scope_declaration_for_turn(turn) else {
             return Ok(primary);
         };
-        if scope.read_scopes.is_empty() && scope.write_scopes.is_empty() {
+        let Some(request) = Self::subagent_path_resolution_request(&scope)? else {
             return PathScopes::try_shell_resolved(
                 scope.current_directory,
                 Vec::new(),
@@ -570,13 +619,7 @@ impl RuntimeSessionService {
                 Default::default(),
             )
             .map_err(|error| MezError::invalid_state(error.message()));
-        }
-        let request = mez_agent::shell::PanePathResolutionRequest::new(
-            scope.read_scopes,
-            scope.write_scopes,
-            Vec::new(),
-        )
-        .map_err(|error| MezError::invalid_args(error.message()))?;
+        };
         let child = self
             .path_scopes_for_pane_request(&turn.pane_id, &request)?
             .ok_or_else(|| {
@@ -612,6 +655,36 @@ impl RuntimeSessionService {
     pub(crate) fn primary_path_scope_paths(&self, pane_id: &str) -> (Vec<String>, Vec<String>) {
         let status = self.primary_path_scope_status(pane_id);
         (status.read_scopes, status.write_scopes)
+    }
+
+    /// Builds the canonical resolver request for one pane's primary authority.
+    pub(crate) fn primary_path_resolution_request(
+        &self,
+        pane_id: &str,
+    ) -> Result<Option<mez_agent::shell::PanePathResolutionRequest>> {
+        let (read_scopes, write_scopes) = self.primary_path_scope_paths(pane_id);
+        if read_scopes.is_empty() && write_scopes.is_empty() {
+            return Ok(None);
+        }
+        mez_agent::shell::PanePathResolutionRequest::new(read_scopes, write_scopes, Vec::new())
+            .map(Some)
+            .map_err(|error| MezError::invalid_args(error.message()))
+    }
+
+    /// Builds the canonical resolver request for nonempty subagent authority.
+    pub(crate) fn subagent_path_resolution_request(
+        scope: &SubagentScopeDeclaration,
+    ) -> Result<Option<mez_agent::shell::PanePathResolutionRequest>> {
+        if scope.read_scopes.is_empty() && scope.write_scopes.is_empty() {
+            return Ok(None);
+        }
+        mez_agent::shell::PanePathResolutionRequest::new(
+            scope.read_scopes.clone(),
+            scope.write_scopes.clone(),
+            Vec::new(),
+        )
+        .map(Some)
+        .map_err(|error| MezError::invalid_args(error.message()))
     }
 
     /// Returns effective primary authority together with its stable provenance.
@@ -666,14 +739,7 @@ impl RuntimeSessionService {
     /// resolved in the pane environment. When no configured authority exists,
     /// a trusted project root is used as the bounded primary authority.
     pub(crate) fn path_scopes_for_pane(&self, pane_id: &str) -> Option<PathScopes> {
-        let (read_scopes, write_scopes) = self.primary_path_scope_paths(pane_id);
-        if !read_scopes.is_empty() || !write_scopes.is_empty() {
-            let request = mez_agent::shell::PanePathResolutionRequest::new(
-                read_scopes,
-                write_scopes,
-                Vec::new(),
-            )
-            .ok()?;
+        if let Some(request) = self.primary_path_resolution_request(pane_id).ok()? {
             return self
                 .path_scopes_for_pane_request(pane_id, &request)
                 .ok()

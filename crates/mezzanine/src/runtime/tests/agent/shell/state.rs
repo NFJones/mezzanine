@@ -1691,6 +1691,129 @@ fn cache_path_resolution_maximum(service: &mut RuntimeSessionService, root: &Pat
         .unwrap();
 }
 
+/// Verifies an ordinary missing primary-authority cache entry retains the
+/// Bubblewrap action behind a resolver instead of failing dispatch.
+#[test]
+fn runtime_missing_primary_authority_requests_path_resolution() {
+    let root = temp_root("runtime-missing-primary-path-resolution");
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Unknown,
+        path_resolution_effects(),
+    );
+
+    assert!(
+        !service
+            .ensure_bubblewrap_path_resolution_for_action(
+                &path_resolution_turn(),
+                "action-1",
+                Some(&evaluation),
+            )
+            .unwrap()
+    );
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find(|transaction| {
+            matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::PathResolution {
+                    action_id: Some(action_id),
+                    ..
+                } if action_id == "action-1"
+            )
+        })
+        .unwrap();
+    let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind else {
+        unreachable!();
+    };
+    assert_eq!(cache_key.request.read_scopes, vec!["."]);
+    assert_eq!(cache_key.request.write_scopes, vec!["."]);
+    assert!(cache_key.request.additional_paths.is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies bootstrap environment replacement invalidates stale authority and
+/// resumes a retained Bubblewrap action behind fresh primary path resolution.
+#[test]
+fn runtime_bootstrap_resumption_rebuilds_primary_path_authority() {
+    let root = temp_root("runtime-bootstrap-primary-path-resolution");
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    cache_path_resolution_maximum(&mut service, &root);
+    assert!(service.path_scopes_for_pane("%1").is_some());
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+
+    let output = format!(
+        "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t{}\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n",
+        root.to_string_lossy()
+    );
+
+    service
+        .observe_bootstrap_transaction_end("bootstrap-marker", "%1", 0, &output, false)
+        .unwrap();
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    let transactions = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .filter(|transaction| {
+            matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::PathResolution {
+                    action_id: Some(pending_action_id),
+                    ..
+                } if pending_action_id == &action_id
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(transactions.len(), 1);
+    let RunningShellTransactionKind::PathResolution { cache_key, .. } =
+        &transactions[0].kind
+    else {
+        unreachable!();
+    };
+    assert_eq!(cache_key.request.read_scopes, vec!["."]);
+    assert_eq!(cache_key.request.write_scopes, vec!["."]);
+    assert!(cache_key.request.additional_paths.is_empty());
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| !matches!(
+                transaction.kind,
+                RunningShellTransactionKind::AgentAction { .. }
+                    | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+            ))
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies complete read, write, create, delete, and touch effects are
 /// deduplicated into one action-specific resolver request before execution.
 #[test]

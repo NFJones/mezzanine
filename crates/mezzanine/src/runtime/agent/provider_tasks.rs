@@ -443,16 +443,8 @@ impl RuntimeSessionService {
             return Ok(None);
         }
 
-        let (primary_read_scopes, primary_write_scopes) =
-            self.primary_path_scope_paths(&turn.pane_id);
         let resolved_primary_path_scopes =
-            if !primary_read_scopes.is_empty() || !primary_write_scopes.is_empty() {
-                let request = mez_agent::shell::PanePathResolutionRequest::new(
-                    primary_read_scopes,
-                    primary_write_scopes,
-                    Vec::new(),
-                )
-                .map_err(|error| MezError::invalid_args(error.message()))?;
+            if let Some(request) = self.primary_path_resolution_request(&turn.pane_id)? {
                 match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
                     Some(scopes) => Some(scopes),
                     None => {
@@ -466,23 +458,7 @@ impl RuntimeSessionService {
 
         let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
         let resolved_subagent_path_scopes = if let Some(scope) = subagent_scope.as_ref() {
-            if scope.read_scopes.is_empty() && scope.write_scopes.is_empty() {
-                Some(
-                    mez_agent::permissions::PathScopes::try_shell_resolved(
-                        scope.current_directory.clone(),
-                        Vec::new(),
-                        Vec::new(),
-                        Default::default(),
-                    )
-                    .map_err(|error| MezError::invalid_state(error.message()))?,
-                )
-            } else {
-                let request = mez_agent::shell::PanePathResolutionRequest::new(
-                    scope.read_scopes.clone(),
-                    scope.write_scopes.clone(),
-                    Vec::new(),
-                )
-                .map_err(|error| MezError::invalid_args(error.message()))?;
+            if let Some(request) = Self::subagent_path_resolution_request(scope)? {
                 match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
                     Some(scopes) => Some(if let Some(primary) = &resolved_primary_path_scopes {
                         primary
@@ -496,6 +472,16 @@ impl RuntimeSessionService {
                         return Ok(None);
                     }
                 }
+            } else {
+                Some(
+                    mez_agent::permissions::PathScopes::try_shell_resolved(
+                        scope.current_directory.clone(),
+                        Vec::new(),
+                        Vec::new(),
+                        Default::default(),
+                    )
+                    .map_err(|error| MezError::invalid_state(error.message()))?,
+                )
             }
         } else {
             None

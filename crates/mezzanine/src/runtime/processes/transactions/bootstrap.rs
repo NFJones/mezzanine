@@ -108,6 +108,9 @@ impl RuntimeSessionService {
 
             if let Some(sig) = signature.clone() {
                 bootstrap_parsed = true;
+                // Authority resolved under the previous environment must be
+                // discarded before retained actions resume. Bubblewrap
+                // preflight rebuilds each missing prerequisite under `sig`.
                 self.process
                     .pane_path_scopes
                     .retain(|key, _| key.pane_id != pane_id);
