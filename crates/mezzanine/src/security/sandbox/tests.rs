@@ -115,6 +115,7 @@ fn request<'a>(
         permission_evaluation: evaluation,
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
+        managed_home_host_path: None,
         stateful: false,
         interactive: false,
     }
@@ -547,4 +548,44 @@ fn unresolved_and_forbidden_authority_fail_closed() {
             .kind(),
         SandboxCompileErrorKind::ForbiddenHostPath
     );
+}
+
+/// A managed project home replaces the ephemeral home with one writable bind
+/// and publishes deterministic XDG directories inside that synthetic home.
+#[test]
+fn managed_home_is_bound_with_expected_xdg_environment() {
+    let config = config();
+    let authority = authority();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let managed_home = Path::new("/private/mez/cache-home");
+    let mut compile_request = request(&config, &authority, &evaluation);
+    compile_request.managed_home_host_path = Some(managed_home);
+
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--bind", "/private/mez/cache-home", "/home/mez"])
+    );
+    assert!(
+        !plan
+            .arguments
+            .windows(2)
+            .any(|args| args == ["--tmpfs", "/home/mez"])
+    );
+    for (name, value) in [
+        ("HOME", "/home/mez"),
+        ("XDG_CACHE_HOME", "/home/mez/.cache"),
+        ("XDG_CONFIG_HOME", "/home/mez/.config"),
+        ("XDG_DATA_HOME", "/home/mez/.local/share"),
+        ("XDG_STATE_HOME", "/home/mez/.local/state"),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--setenv", name, value]),
+            "missing {name}={value}"
+        );
+    }
 }

@@ -235,6 +235,7 @@ fn real_plan(
         permission_evaluation: evaluation,
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
+        managed_home_host_path: None,
         stateful: false,
         interactive: false,
     })

@@ -27,6 +27,10 @@ use crate::runtime::{
     SandboxUnavailablePolicy,
 };
 
+mod managed_home;
+
+pub(crate) use managed_home::{prepare_bubblewrap_managed_home, remove_bubblewrap_managed_home};
+
 /// Version of the fixed runtime projection emitted by this compiler.
 pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v1";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
@@ -70,6 +74,8 @@ pub(crate) struct BubblewrapCompileRequest<'a> {
     pub(crate) child_shell_path: &'a str,
     /// Absolute harness-owned command-file path in the pane environment.
     pub(crate) command_file_host_path: &'a str,
+    /// Optional Mezzanine-owned persistent home mounted at `/home/mez`.
+    pub(crate) managed_home_host_path: Option<&'a Path>,
     /// Whether the command must mutate persistent shell state.
     pub(crate) stateful: bool,
     /// Whether the command requires direct terminal interaction.
@@ -565,6 +571,9 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
     validate_printable_absolute_path(&request.config.executable, "Bubblewrap executable")?;
     validate_canonical_path(request.command_file_host_path, "sandbox command file")?;
     validate_canonical_path(request.child_shell_path, "sandbox child shell")?;
+    if let Some(managed_home) = request.managed_home_host_path {
+        validate_canonical_path(&managed_home.to_string_lossy(), "managed Bubblewrap home")?;
+    }
     if !Path::new(request.child_shell_path).starts_with("/bin")
         && !Path::new(request.child_shell_path).starts_with("/usr")
     {
@@ -970,8 +979,6 @@ fn bubblewrap_arguments(
         "/tmp",
         "--dir",
         "/home",
-        "--tmpfs",
-        SANDBOX_HOME,
         "--dir",
         "/run",
         "--dir",
@@ -985,6 +992,14 @@ fn bubblewrap_arguments(
     .into_iter()
     .map(str::to_string)
     .collect::<Vec<_>>();
+    if let Some(managed_home) = request.managed_home_host_path {
+        arguments.push("--bind".to_string());
+        arguments.push(managed_home.to_string_lossy().into_owned());
+        arguments.push(SANDBOX_HOME.to_string());
+    } else {
+        arguments.push("--tmpfs".to_string());
+        arguments.push(SANDBOX_HOME.to_string());
+    }
     for mount in &policy.mounts {
         arguments.push(
             match mount.access {
@@ -1007,6 +1022,18 @@ fn bubblewrap_arguments(
             "--setenv",
             "HOME",
             SANDBOX_HOME,
+            "--setenv",
+            "XDG_CACHE_HOME",
+            "/home/mez/.cache",
+            "--setenv",
+            "XDG_CONFIG_HOME",
+            "/home/mez/.config",
+            "--setenv",
+            "XDG_DATA_HOME",
+            "/home/mez/.local/share",
+            "--setenv",
+            "XDG_STATE_HOME",
+            "/home/mez/.local/state",
             "--setenv",
             "PATH",
             MINIMAL_PATH,

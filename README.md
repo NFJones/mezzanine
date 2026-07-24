@@ -384,6 +384,10 @@ Current support reflects behavior implemented in the repository today.
   came from explicit configuration, a trusted project, or no authority. It also
   reports stable restriction identifiers for the synthetic home, minimal PATH,
   isolated network, authority-only mounts, and hidden host credentials.
+- Trusted-project Bubblewrap runs reuse a private Mezzanine-managed home with
+  persistent XDG cache, config, data, and state directories. Homes are isolated
+  by project and sandbox profile, never copy the real user home, and are removed
+  when project trust is revoked.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks

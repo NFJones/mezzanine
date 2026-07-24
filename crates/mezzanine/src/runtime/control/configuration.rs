@@ -943,6 +943,14 @@ impl RuntimeSessionService {
         self.integration
             .clear_project_trust_root_announcement(&project_root);
         let report = self.apply_runtime_config_layers()?;
+        if decision == TrustDecision::Revoked
+            && let Some(config_root) = self.integration.config_root()
+        {
+            let _ = crate::security::sandbox::remove_bubblewrap_managed_home(
+                config_root,
+                &project_root,
+            );
+        }
         self.append_lifecycle_event(
             EventKind::ConfigChanged,
             runtime_config_apply_event_payload(method, &report),

@@ -594,7 +594,9 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
         .unwrap();
     let root = temp_root("runtime-project-trust");
     let audit_root = temp_root("runtime-project-trust-audit");
+    let config_root = audit_root.join("config-root");
     let audit_path = audit_root.join("audit.jsonl");
+    service.set_config_root(config_root.clone());
     service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
@@ -708,6 +710,14 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     assert_eq!(service.terminal_history_limit(), 7);
     assert!(service.config_layers()[1].trusted);
     assert!(trust_path.exists());
+    let managed_home =
+        crate::security::sandbox::prepare_bubblewrap_managed_home(&config_root, &root).unwrap();
+    fs::write(
+        managed_home.host_path.join(".cache/revocation-marker"),
+        "cache",
+    )
+    .unwrap();
+    assert!(managed_home.host_path.exists());
 
     let trusted_list = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"trusted-list","method":"project/trust/list","params":{"state":"trusted"}}"#,
@@ -761,6 +771,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
 
     assert_eq!(service.terminal_history_limit(), 3);
     assert!(!service.config_layers()[1].trusted);
+    assert!(!managed_home.host_path.exists());
 
     let audit = fs::read_to_string(&audit_path).unwrap();
     assert!(audit.contains(r#""event_type":"configuration""#), "{audit}");

@@ -2827,6 +2827,19 @@ mounts, the synthetic home, the minimal executable path, isolated networking,
 and hidden host credentials. Diagnostics MUST NOT expose raw Bubblewrap
 arguments, environment values, or unrelated host paths.
 
+When Bubblewrap authority comes from a trusted project and a private Mezzanine
+configuration root is available, Mezzanine MUST create or reuse a private
+managed home keyed by the canonical project root and sandbox runtime profile.
+It MUST mount that directory read-write at `/home/mez` and set `HOME`,
+`XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME` to
+paths within it. Managed homes MUST be shared across concurrent panes for the
+same key, isolated between projects and profile versions, and created with
+user-only permissions. Mezzanine MUST NOT copy or mount the host user's home,
+credentials, or configuration into a managed home. Revoking project trust MUST
+best-effort remove the matching managed home without removing other projects'
+homes. Implementations MAY leave cleanup or storage quotas to external private
+filesystem policy; status and documentation MUST disclose that limitation.
+
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`
 with a minimal `[permissions]` table and `approval_policy = "ask"` when a
 project-scoped mutation needs a file that does not yet exist.

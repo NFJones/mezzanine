@@ -18,6 +18,7 @@ use crate::runtime::{RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, Sandb
 use crate::security::project::TrustDecision;
 use mez_agent::permissions::{EffectCompleteness, PermissionEvaluation};
 use mez_agent::{SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch};
+use std::path::PathBuf;
 
 /// Effective primary filesystem authority and its user-visible provenance.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +174,19 @@ impl RuntimeSessionService {
                 )
             })?;
             let maximum_authority = self.bubblewrap_path_scopes_for_turn(turn, evaluation)?;
+            let managed_home = match (
+                self.integration.config_root(),
+                self.trusted_project_root_for_pane(&turn.pane_id),
+            ) {
+                (Some(config_root), Some(project_root)) => Some(
+                    crate::security::sandbox::prepare_bubblewrap_managed_home(
+                        config_root,
+                        &project_root,
+                    )
+                    .map_err(|error| MezError::invalid_state(error.message()))?,
+                ),
+                _ => None,
+            };
             let launch_plan = match crate::security::sandbox::compile_bubblewrap_launch_plan(
                 crate::security::sandbox::BubblewrapCompileRequest {
                     config: &config,
@@ -184,6 +198,9 @@ impl RuntimeSessionService {
                     child_shell_path: &signature.shell_path,
                     command_file_host_path:
                         crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
+                    managed_home_host_path: managed_home
+                        .as_ref()
+                        .map(|home| home.host_path.as_path()),
                     stateful,
                     interactive,
                 },
@@ -499,27 +516,7 @@ impl RuntimeSessionService {
                 trusted_project_root: None,
             };
         }
-        let Some(working_directory) = self.pane_current_working_directory(pane_id) else {
-            return RuntimePrimaryPathScopeStatus {
-                read_scopes: Vec::new(),
-                write_scopes: Vec::new(),
-                provenance: "none",
-                trusted_project_root: None,
-            };
-        };
-        let Some(project_root) = self.integration.project_trust_store().and_then(|store| {
-            store
-                .records()
-                .filter(|record| record.state == TrustDecision::Trusted)
-                .filter(|record| {
-                    crate::runtime::runtime_path_under_project_root(
-                        &working_directory,
-                        &record.project_root,
-                    )
-                })
-                .max_by_key(|record| record.project_root.components().count())
-                .map(|record| record.project_root.clone())
-        }) else {
+        let Some(project_root) = self.trusted_project_root_for_pane(pane_id) else {
             return RuntimePrimaryPathScopeStatus {
                 read_scopes: Vec::new(),
                 write_scopes: Vec::new(),
@@ -534,6 +531,24 @@ impl RuntimeSessionService {
             provenance: "trusted-project",
             trusted_project_root: Some(project_root),
         }
+    }
+
+    /// Returns the deepest trusted project containing the pane directory.
+    pub(crate) fn trusted_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
+        let working_directory = self.pane_current_working_directory(pane_id)?;
+        self.integration.project_trust_store().and_then(|store| {
+            store
+                .records()
+                .filter(|record| record.state == TrustDecision::Trusted)
+                .filter(|record| {
+                    crate::runtime::runtime_path_under_project_root(
+                        &working_directory,
+                        &record.project_root,
+                    )
+                })
+                .max_by_key(|record| record.project_root.components().count())
+                .map(|record| record.project_root.clone())
+        })
     }
 
     /// Builds the best-available `PathScopes` for a pane.
