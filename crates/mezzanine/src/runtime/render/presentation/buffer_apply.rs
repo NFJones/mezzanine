@@ -30,7 +30,7 @@ use crate::runtime::render::{
     TerminalScreen, current_unix_seconds, default_runtime_agent_prompt_input,
 };
 use mez_agent::{
-    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, agent_output_content_type_is_diff,
+    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentShellVisibility, agent_output_content_type_is_diff,
     agent_output_content_type_is_markdown,
 };
 use mez_mux::render::markdown_block_copy_lines;
@@ -478,6 +478,9 @@ impl RuntimeSessionService {
         let Some(session) = self.agent_shell_store().get(pane_id) else {
             return Ok(false);
         };
+        if session.visibility != AgentShellVisibility::Visible {
+            return Ok(false);
+        }
         let Some(store) = self.persistence.transcript_store() else {
             return Ok(false);
         };

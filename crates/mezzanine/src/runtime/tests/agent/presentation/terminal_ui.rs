@@ -875,6 +875,79 @@ fn runtime_agent_resize_rebuilds_source_backed_presentation_at_new_width() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies resizing a pane after its agent session is hidden preserves the
+/// shell-owned screen instead of replaying retained agent presentation.
+///
+/// Hidden sessions retain durable transcript records for a later resume, but
+/// their pane screen belongs to the shell. A width resize must therefore use
+/// ordinary terminal resizing without replacing the shell prompt.
+#[test]
+fn runtime_agent_resize_does_not_replay_hidden_session_over_shell_prompt() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("agent-hidden-resize-source"));
+    let primary = service
+        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            pane_id: "%1".to_string(),
+            turn_id: None,
+            terminal_width: 28,
+            style_names: vec!["assistant".to_string()],
+            display_lines: vec!["mez> stale agent transcript".to_string()],
+            copy_lines: vec!["stale agent transcript".to_string()],
+            ansi_text: None,
+            source_text: Some("# Retained agent source".to_string()),
+            source_content_type: Some("text/markdown; charset=utf-8".to_string()),
+        })
+        .unwrap();
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    let mut shell_screen = TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap();
+    shell_screen.feed(b"distinct-shell$ ");
+    service.set_pane_screen("%1".to_string(), shell_screen);
+
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(20, 12).unwrap())
+        .unwrap();
+
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(pane_text.contains("distinct-shell$"), "{pane_text}");
+    assert!(!pane_text.contains("Retained agent source"), "{pane_text}");
+    assert_eq!(
+        service.agent_shell_store().get("%1").unwrap().visibility,
+        AgentShellVisibility::Hidden
+    );
+    assert_eq!(
+        transcript_store
+            .inspect_presentation(&conversation_id)
+            .unwrap()
+            .len(),
+        1
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies pane-divider dragging defers expensive source-backed agent replay
 /// until the resize gesture finishes at its final pane size.
 ///
