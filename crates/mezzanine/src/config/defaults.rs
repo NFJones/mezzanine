@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 24
+version = 25
 
 [terminal]
 profile = "xterm-compatible"
@@ -470,6 +470,9 @@ sandbox = "policy-only"
 # [permissions.bubblewrap]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
+# Opt-in read-only Rust projection; enable with
+# `mez sandbox toolchains enable rust --yes` after reviewing detected roots.
+# toolchains = ["rust"]
 trusted_directories = []
 trusted_projects = []
 command_rules = []

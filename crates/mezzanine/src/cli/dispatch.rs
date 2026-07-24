@@ -241,7 +241,7 @@ pub async fn run_with<W: Write, E: Write>(
             run_memory(args, env, output_format, stdout)?;
         }
         Some(CliCommand::Sandbox(args)) => {
-            exit_code = run_sandbox(args, env, output_format, stdout)?;
+            exit_code = run_sandbox(args, env, interactive, output_format, stdout)?;
         }
     }
 

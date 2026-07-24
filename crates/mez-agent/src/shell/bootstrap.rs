@@ -123,8 +123,15 @@ fi\n\
 if [ -n \"$NODE_VIRTUAL_ENV\" ]; then\n\
   mez_bootstrap_field env_manager \"node:$NODE_VIRTUAL_ENV\"\n\
 fi\n\
-if [ -n \"$RUSTUP_HOME\" ]; then\n\
-  mez_bootstrap_field env_manager \"rustup\"\n\
+mez_rustup_home=${RUSTUP_HOME:-$HOME/.rustup}\n\
+if [ -d \"$mez_rustup_home\" ]; then\n\
+  mez_rustup_home=$(CDPATH= cd -P -- \"$mez_rustup_home\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_rustup_home\" ] && mez_bootstrap_field env_manager \"rustup:$mez_rustup_home\"\n\
+fi\n\
+mez_cargo_home=${CARGO_HOME:-$HOME/.cargo}\n\
+if [ -d \"$mez_cargo_home/bin\" ]; then\n\
+  mez_cargo_bin=$(CDPATH= cd -P -- \"$mez_cargo_home/bin\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_cargo_bin\" ] && mez_bootstrap_field env_manager \"cargo-bin:$mez_cargo_bin\"\n\
 fi\n\
 if [ -n \"$GOPATH\" ]; then\n\
   mez_bootstrap_field env_manager \"go\"\n\
@@ -230,8 +237,21 @@ end\n\
 if test -n \"$NODE_VIRTUAL_ENV\"\n\
   mez_bootstrap_field env_manager \"node:$NODE_VIRTUAL_ENV\"\n\
 end\n\
-if test -n \"$RUSTUP_HOME\"\n\
-  mez_bootstrap_field env_manager rustup\n\
+set -l mez_rustup_home \"$RUSTUP_HOME\"\n\
+if test -z \"$mez_rustup_home\"\n\
+  set mez_rustup_home \"$HOME/.rustup\"\n\
+end\n\
+if test -d \"$mez_rustup_home\"\n\
+  set mez_rustup_home (cd \"$mez_rustup_home\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_rustup_home\"; and mez_bootstrap_field env_manager \"rustup:$mez_rustup_home\"\n\
+end\n\
+set -l mez_cargo_home \"$CARGO_HOME\"\n\
+if test -z \"$mez_cargo_home\"\n\
+  set mez_cargo_home \"$HOME/.cargo\"\n\
+end\n\
+if test -d \"$mez_cargo_home/bin\"\n\
+  set -l mez_cargo_bin (cd \"$mez_cargo_home/bin\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_cargo_bin\"; and mez_bootstrap_field env_manager \"cargo-bin:$mez_cargo_bin\"\n\
 end\n\
 if test -n \"$GOPATH\"\n\
   mez_bootstrap_field env_manager go\n\

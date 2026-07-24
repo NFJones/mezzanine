@@ -403,6 +403,10 @@ Current support reflects behavior implemented in the repository today.
   a paired sanitized Git name and email; only those identity values are
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
+- `mez sandbox toolchains detect [PATH]` previews canonical Rust roots without
+  mutation. `mez sandbox toolchains enable rust --yes` stores only the typed
+  selection; Bubblewrap mounts Cargo and Rustup read-only with deterministic
+  PATH precedence and never exposes the complete home or credential state.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks

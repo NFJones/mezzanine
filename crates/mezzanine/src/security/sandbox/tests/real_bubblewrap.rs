@@ -236,6 +236,7 @@ fn real_plan(
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
         managed_home_host_path: None,
+        rust_toolchain: None,
         stateful: false,
         interactive: false,
     })
@@ -303,6 +304,77 @@ fn real_bubblewrap_enforces_maximum_authority_and_isolation() {
         "visible\n"
     );
     assert!(!fixture.host_home.join("inside.txt").exists());
+}
+
+#[test]
+/// Proves the production Bubblewrap launch can execute the selected host Rust
+/// toolchain while Cargo credentials and configuration remain outside the
+/// projected filesystem.
+fn real_bubblewrap_projects_read_only_rust_toolchain() {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        eprintln!("skipping real Bubblewrap Rust test: HOME is unavailable");
+        return;
+    };
+    let cargo_bin = home.join(".cargo/bin");
+    let rustup_home = home.join(".rustup");
+    if !cargo_bin.join("cargo").exists() || !rustup_home.is_dir() {
+        eprintln!("skipping real Bubblewrap Rust test: rustup-managed Cargo is unavailable");
+        return;
+    }
+    let Ok(cargo_bin) = cargo_bin.canonicalize() else {
+        eprintln!("skipping real Bubblewrap Rust test: Cargo bin cannot be canonicalized");
+        return;
+    };
+    let Ok(rustup_home) = rustup_home.canonicalize() else {
+        eprintln!("skipping real Bubblewrap Rust test: Rustup home cannot be canonicalized");
+        return;
+    };
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Rust];
+    let Some(capability) = verified_capability(&config) else {
+        return;
+    };
+    let fixture = RealBubblewrapFixture::new("rust-toolchain");
+    let mut unknown = effects();
+    unknown.unknown = true;
+    let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
+    let roots = BubblewrapRustToolchainRoots {
+        cargo_bin,
+        rustup_home,
+    };
+    let plan = compile_bubblewrap_launch_plan(BubblewrapCompileRequest {
+        config: &config,
+        capability,
+        pane_environment_signature: "real-linux-pane-environment",
+        network_policy: NetworkPolicy::Prompt,
+        maximum_authority: &fixture.authority(),
+        permission_evaluation: &evaluation,
+        child_shell_path: "/bin/sh",
+        command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
+        managed_home_host_path: None,
+        rust_toolchain: Some(&roots),
+        stateful: false,
+        interactive: false,
+    })
+    .unwrap();
+    let output = execute_plan(
+        plan,
+        "set -eu\n\
+         cargo --version\n\
+         rustc --version\n\
+         test \"$CARGO_HOME\" = /home/mez/.cargo\n\
+         test \"$RUSTUP_HOME\" = /opt/mez/toolchains/rust/rustup\n\
+         test ! -e \"$CARGO_HOME/credentials.toml\"\n\
+         test ! -e \"$CARGO_HOME/config.toml\"\n\
+         printf '%s\\n' REAL_BWRAP_RUST_TOOLCHAIN_OK",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("REAL_BWRAP_RUST_TOOLCHAIN_OK"),
+        "status={:?} stdout={stdout:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

@@ -14,7 +14,7 @@ fn sandbox_status_is_structured_and_strictly_read_only() {
     let config_root = home.join(".config/mezzanine");
     fs::create_dir_all(&config_root).unwrap();
     let config_path = config_root.join("config.toml");
-    let config_text = "version = 24\n[permissions]\napproval_policy = \"full-access\"\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\nwrite_scopes = []\n[permissions.bubblewrap]\nexecutable = \"/bin/sh\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n";
+    let config_text = "version = 25\n[permissions]\napproval_policy = \"full-access\"\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\nwrite_scopes = []\n[permissions.bubblewrap]\nexecutable = \"/bin/sh\"\nunavailable = \"fail\"\nnetwork = \"isolated\"\nenvironment = \"minimal\"\n";
     fs::write(&config_path, config_text).unwrap();
     let project = home.join("project");
     fs::create_dir_all(project.join(".git")).unwrap();
@@ -100,7 +100,7 @@ fn sandbox_doctor_uses_stable_zero_one_two_exit_semantics() {
     fs::create_dir_all(&config_root).unwrap();
     fs::write(
         config_root.join("config.toml"),
-        "version = 24\n[permissions]\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\n[permissions.bubblewrap]\nexecutable = \"/definitely/missing/bwrap\"\n",
+        "version = 25\n[permissions]\nsandbox = \"bubblewrap\"\nread_scopes = [\"/tmp\"]\n[permissions.bubblewrap]\nexecutable = \"/definitely/missing/bwrap\"\n",
     )
     .unwrap();
     let error_project = error_home.join("project");
@@ -138,4 +138,118 @@ fn sandbox_doctor_uses_stable_zero_one_two_exit_semantics() {
 
     let _ = fs::remove_dir_all(warning_home);
     let _ = fs::remove_dir_all(error_home);
+}
+
+/// Toolchain detection reports canonical roots without creating or mutating
+/// configuration, trust, managed-home, or runtime state.
+#[test]
+fn sandbox_toolchain_detection_is_strictly_read_only() {
+    let (env, home) = test_env("sandbox-toolchain-detect");
+    fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+    fs::create_dir_all(home.join(".rustup")).unwrap();
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "detect".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 0);
+    let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(output["kind"], "rust");
+    assert_eq!(output["available"], true);
+    assert_eq!(output["read_only"], true);
+    assert_eq!(output["applied"], false);
+    assert_eq!(output["confirmation_required"], false);
+    assert!(
+        output["cargo_bin"]
+            .as_str()
+            .unwrap()
+            .ends_with("/.cargo/bin")
+    );
+    assert!(
+        output["rustup_home"]
+            .as_str()
+            .unwrap()
+            .ends_with("/.rustup")
+    );
+    assert!(stderr.is_empty());
+    assert!(!home.join(".config/mezzanine").exists());
+    assert!(!home.join("runtime/mez-0").exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Rust activation requires explicit confirmation and atomically persists only
+/// the typed selection, never the discovered host roots.
+#[test]
+fn sandbox_toolchain_enable_requires_confirmation_and_persists_only_kind() {
+    let (env, home) = test_env("sandbox-toolchain-enable");
+    fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+    fs::create_dir_all(home.join(".rustup")).unwrap();
+    fs::create_dir_all(home.join("project/.git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let preview_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "enable".to_string(),
+            "rust".to_string(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(preview_code, 1);
+    let preview: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(preview["confirmation_required"], true);
+    assert!(!config_path.exists());
+
+    stdout.clear();
+    let applied_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "enable".to_string(),
+            "rust".to_string(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(applied_code, 0);
+    let applied: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(applied["applied"], true);
+    let config = fs::read_to_string(&config_path).unwrap();
+    assert!(config.contains("toolchains = [\"rust\"]"), "{config}");
+    assert!(
+        !config.contains(&home.to_string_lossy().into_owned()),
+        "{config}"
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
 }

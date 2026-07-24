@@ -150,7 +150,8 @@ env\tproject_root\t/home/me/project\n\
 env\tgit_repo\t1\n\
 env\tcontainer\tdocker\n\
 env\tenv_manager\tvirtualenv:/home/me/.venv\n\
-env\tenv_manager\trustup\n\
+env\tenv_manager\trustup:/home/me/.rustup\n\
+env\tenv_manager\tcargo-bin:/home/me/.cargo/bin\n\
 bootstrap\tcomplete\t1714500000\n\
 tool\tsed\t1\t/usr/bin/sed\tGNU sed 4.9\tcommand -v sed\t0\t/usr/bin/sed --version\t0\t1714500000\n\
 tool\tgrep\t1\t/usr/bin/grep\tGNU grep 3.11\tcommand -v grep\t0\t/usr/bin/grep --version\t0\t1714500000\n\
@@ -179,7 +180,8 @@ tool\tpython\t1\t/usr/bin/python3\tPython 3.12.3\tcommand -v python3 || command 
     assert_eq!(
         sig.environment_managers,
         vec![
-            "rustup".to_string(),
+            "cargo-bin:/home/me/.cargo/bin".to_string(),
+            "rustup:/home/me/.rustup".to_string(),
             "virtualenv:/home/me/.venv".to_string()
         ]
     );

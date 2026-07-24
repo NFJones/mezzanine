@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 24
+version = 25
 
 [terminal]
 profile = "xterm-compatible"
@@ -458,6 +458,9 @@ sandbox = "policy-only"
 # [permissions.bubblewrap]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
+# Opt-in read-only Rust projection; enable with
+# `mez sandbox toolchains enable rust --yes` after reviewing detected roots.
+# toolchains = ["rust"]
 trusted_directories = []
 trusted_projects = []
 command_rules = []

@@ -257,10 +257,18 @@ impl EnvironmentSignature {
             fields.push(format!("container={container}"));
         }
         if !self.environment_managers.is_empty() {
-            fields.push(format!(
-                "environment_managers={}",
-                self.environment_managers.join(",")
-            ));
+            let mut manager_kinds = self
+                .environment_managers
+                .iter()
+                .map(|manager| {
+                    manager
+                        .split_once(':')
+                        .map_or(manager.as_str(), |(kind, _)| kind)
+                })
+                .collect::<Vec<_>>();
+            manager_kinds.sort_unstable();
+            manager_kinds.dedup();
+            fields.push(format!("environment_managers={}", manager_kinds.join(",")));
         }
         if let Some(ref path) = self.path {
             fields.push(format!(

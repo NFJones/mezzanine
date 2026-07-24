@@ -87,6 +87,42 @@ fn runtime_materializes_only_paired_sanitized_git_identity() {
     assert!(error.message().contains("must be configured together"));
 }
 
+/// Verifies the Bubblewrap toolchain selection accepts only one allowlisted
+/// Rust kind and rejects unsupported or duplicate entries.
+#[test]
+fn runtime_materializes_only_allowlisted_unique_toolchains() {
+    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "sandbox": "bubblewrap",
+            "bubblewrap": {"toolchains": ["rust"]}
+        }
+    }))
+    .unwrap();
+    let SandboxConfig::Bubblewrap(bubblewrap) = configured.sandbox else {
+        panic!("expected Bubblewrap configuration");
+    };
+    assert_eq!(bubblewrap.toolchains.len(), 1);
+    assert_eq!(bubblewrap.toolchains[0].as_str(), "rust");
+
+    for toolchains in [
+        serde_json::json!(["python"]),
+        serde_json::json!(["rust", "rust"]),
+    ] {
+        let error = runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "bubblewrap": {"toolchains": toolchains}
+            }
+        }))
+        .unwrap_err();
+        assert!(
+            error.message().contains("supports only rust")
+                || error.message().contains("must not contain duplicate kinds"),
+            "{error}"
+        );
+    }
+}
+
 /// Verifies configured Bubblewrap remains active for full access but becomes
 /// ineffective only while the primary-user host-access policy is selected.
 #[test]
@@ -666,7 +702,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 24\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 25\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     let trust_path = root.join("trust.tsv");
@@ -861,7 +897,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 24\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 25\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);

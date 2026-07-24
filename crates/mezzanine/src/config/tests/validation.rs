@@ -825,14 +825,14 @@ fn validates_root_auto_sizing_routing_policy() {
 fn validates_paired_sanitized_bubblewrap_git_identity() {
     let valid = validate_config_text(
         ConfigFormat::Toml,
-        "version = 24\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngit_user_name = \"Sandbox Author\"\ngit_user_email = \"sandbox@example.invalid\"\n",
+        "version = 25\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngit_user_name = \"Sandbox Author\"\ngit_user_email = \"sandbox@example.invalid\"\n",
         ConfigScope::Primary,
     );
     assert!(valid.valid, "{:?}", valid.diagnostics);
 
     let incomplete = validate_config_text(
         ConfigFormat::Toml,
-        "version = 24\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngit_user_name = \"Sandbox Author\"\n",
+        "version = 25\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngit_user_name = \"Sandbox Author\"\n",
         ConfigScope::Primary,
     );
     assert!(incomplete.diagnostics.iter().any(|diagnostic| {
@@ -842,7 +842,7 @@ fn validates_paired_sanitized_bubblewrap_git_identity() {
 
     let blank = validate_config_text(
         ConfigFormat::Toml,
-        "version = 24\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngit_user_name = \"   \"\ngit_user_email = \"sandbox@example.invalid\"\n",
+        "version = 25\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngit_user_name = \"   \"\ngit_user_email = \"sandbox@example.invalid\"\n",
         ConfigScope::Primary,
     );
     assert!(blank.diagnostics.iter().any(|diagnostic| {

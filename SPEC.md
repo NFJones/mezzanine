@@ -2852,6 +2852,23 @@ When the pair is omitted, repository-local identity MAY remain effective.
 Schema v23 to v24 migration MUST preserve omission and MUST NOT discover or
 invent identity values.
 
+Schema v25 MAY configure an allowlisted read-only toolchain selection. The
+initial supported kind is `rust`. Configuration MUST persist only the typed
+kind and MUST NOT persist arbitrary host paths. `mez sandbox toolchains detect
+[PATH]` MUST be read-only. Enabling a toolchain MUST require direct-user
+confirmation, and noninteractive or JSON mutation MUST require `--yes`.
+Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
+derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
+evidence, reject missing, symlinked, overlapping, unexpected, credential, and
+runtime roots, and mount only those roots read-only at fixed sandbox paths.
+Only Cargo's `bin` directory MAY be mounted; Cargo credentials, registry
+configuration, and caches MUST remain hidden. Cargo binaries MUST precede
+`/usr/bin:/bin` deterministically. The projection
+MUST NOT expose a complete home, credentials, sockets, user runtime paths, or
+unrelated configuration. Host-access MUST remain visibly distinct because it
+bypasses the configured Bubblewrap projection. Schema v24 to v25 migration
+MUST preserve omission and MUST NOT infer a toolchain from ambient state.
+
 When Bubblewrap authority comes from a trusted project and a private Mezzanine
 configuration root is available, Mezzanine MUST create or reuse a private
 managed home keyed by the canonical project root and sandbox runtime profile.

@@ -132,6 +132,24 @@ pub(crate) struct BubblewrapConfig {
     pub(crate) git_user_name: Option<String>,
     /// Optional non-secret Git author email projected without host Git config.
     pub(crate) git_user_email: Option<String>,
+    /// Direct-user-selected, allowlisted read-only toolchain projections.
+    pub(crate) toolchains: Vec<SandboxToolchainKind>,
+}
+
+/// Allowlisted developer toolchains that may be projected read-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SandboxToolchainKind {
+    /// Rustup and Cargo roots discovered from the active pane environment.
+    Rust,
+}
+
+impl SandboxToolchainKind {
+    /// Returns the stable configuration spelling for this toolchain kind.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+        }
+    }
 }
 
 /// Behavior when the configured sandbox backend is unavailable.
@@ -472,6 +490,26 @@ pub(crate) fn runtime_configured_permissions_from_config(
                     )));
                 }
             }
+            let configured_toolchains =
+                runtime_json_string_array(bubblewrap.and_then(|config| config.get("toolchains")))?
+                    .unwrap_or_default();
+            let mut toolchains = Vec::new();
+            for toolchain in configured_toolchains {
+                let toolchain = match toolchain.as_str() {
+                    "rust" => SandboxToolchainKind::Rust,
+                    _ => {
+                        return Err(MezError::config(
+                            "permissions.bubblewrap.toolchains supports only rust",
+                        ));
+                    }
+                };
+                if toolchains.contains(&toolchain) {
+                    return Err(MezError::config(
+                        "permissions.bubblewrap.toolchains must not contain duplicate kinds",
+                    ));
+                }
+                toolchains.push(toolchain);
+            }
             SandboxConfig::Bubblewrap(BubblewrapConfig {
                 executable,
                 unavailable,
@@ -479,6 +517,7 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 environment,
                 git_user_name,
                 git_user_email,
+                toolchains,
             })
         }
         _ => return Err(MezError::config("unsupported permissions.sandbox backend")),

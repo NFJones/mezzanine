@@ -63,7 +63,10 @@ fn environment_signature_model_fields_use_hashed_identity() {
         Some("/repo".to_string()),
         true,
         None,
-        vec!["mise".to_string()],
+        vec![
+            "cargo-bin:/private/home/.cargo/bin".to_string(),
+            "rustup:/private/home/.rustup".to_string(),
+        ],
     )
     .expect("test environment signature should be valid");
 
@@ -77,6 +80,11 @@ fn environment_signature_model_fields_use_hashed_identity() {
     assert!(!joined.contains("host=myhost"), "{joined}");
     assert!(!joined.contains("user=me"), "{joined}");
     assert!(!joined.contains("/very/long/tool/path"), "{joined}");
+    assert!(
+        joined.contains("environment_managers=cargo-bin,rustup"),
+        "{joined}"
+    );
+    assert!(!joined.contains("/private/home"), "{joined}");
     assert_eq!(sig.stable_hash().len(), 64);
 }
 

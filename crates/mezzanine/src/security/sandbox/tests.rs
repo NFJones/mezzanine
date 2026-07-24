@@ -20,6 +20,7 @@ fn config() -> BubblewrapConfig {
         environment: SandboxEnvironmentPolicy::Minimal,
         git_user_name: None,
         git_user_email: None,
+        toolchains: Vec::new(),
     }
 }
 
@@ -118,6 +119,7 @@ fn request<'a>(
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
         managed_home_host_path: None,
+        rust_toolchain: None,
         stateful: false,
         interactive: false,
     }
@@ -648,4 +650,79 @@ fn omitted_git_identity_does_not_invent_author_values() {
             || argument == "GIT_CONFIG_KEY_0"
             || argument == "GIT_CONFIG_VALUE_0"
     }));
+}
+
+/// A selected Rust toolchain projects only the two canonical allowlisted roots
+/// read-only and gives Cargo binaries deterministic precedence over system PATH.
+#[test]
+fn rust_toolchain_projection_is_read_only_and_deterministic() {
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Rust];
+    let authority = authority();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let roots = BubblewrapRustToolchainRoots {
+        cargo_bin: PathBuf::from("/home/alice/.cargo/bin"),
+        rustup_home: PathBuf::from("/home/alice/.rustup"),
+    };
+    let mut compile_request = request(&config, &authority, &evaluation);
+    compile_request.rust_toolchain = Some(&roots);
+
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+
+    for (source, destination) in [
+        (
+            "/home/alice/.cargo/bin",
+            "/opt/mez/toolchains/rust/cargo-bin",
+        ),
+        ("/home/alice/.rustup", "/opt/mez/toolchains/rust/rustup"),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--ro-bind", source, destination])
+        );
+        assert!(
+            !plan
+                .arguments
+                .windows(3)
+                .any(|args| { args == ["--bind", source, destination] })
+        );
+    }
+    for (name, value) in [
+        ("CARGO_HOME", "/home/mez/.cargo"),
+        ("RUSTUP_HOME", "/opt/mez/toolchains/rust/rustup"),
+        ("PATH", "/opt/mez/toolchains/rust/cargo-bin:/usr/bin:/bin"),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--setenv", name, value]),
+            "missing {name}={value}"
+        );
+    }
+}
+
+/// Rust selection fails closed unless bootstrap evidence supplies both
+/// canonical allowlisted roots and never accepts an arbitrary host directory.
+#[test]
+fn rust_toolchain_resolution_rejects_missing_and_arbitrary_roots() {
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Rust];
+
+    let missing = bubblewrap_rust_toolchain_roots(&config, &["rustup:/home/alice/.rustup".into()])
+        .unwrap_err();
+    assert_eq!(
+        missing.kind(),
+        SandboxCompileErrorKind::UnsupportedRequirement
+    );
+
+    let arbitrary = bubblewrap_rust_toolchain_roots(
+        &config,
+        &[
+            "cargo-bin:/home/alice/tools/bin".into(),
+            "rustup:/home/alice/.rustup".into(),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(arbitrary.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
 }

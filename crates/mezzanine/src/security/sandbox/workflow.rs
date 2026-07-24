@@ -90,6 +90,8 @@ pub(crate) struct SandboxConfiguredState {
     pub(crate) write_scopes: Vec<String>,
     /// Source layer for configured write scopes.
     pub(crate) write_scopes_source: String,
+    /// Direct-user-selected allowlisted toolchain kinds.
+    pub(crate) toolchains: Vec<String>,
 }
 
 /// Effective sandbox boundary and local read-only readiness evidence.
@@ -111,6 +113,8 @@ pub(crate) struct SandboxEffectiveState {
     pub(crate) bubblewrap_probe_state: String,
     /// Managed-home readiness without creating a home.
     pub(crate) managed_home_state: String,
+    /// Standalone readiness state for configured toolchain projections.
+    pub(crate) toolchain_state: String,
     /// Whether Bubblewrap uses an isolated network namespace.
     pub(crate) network_isolated: bool,
     /// Stable restriction identifiers for the configured backend.
@@ -224,6 +228,22 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
     let effective_sandbox =
         effective_sandbox_boundary(&request.permissions.sandbox, approval_policy).to_string();
 
+    let configured_toolchains = match &request.permissions.sandbox {
+        SandboxConfig::PolicyOnly => Vec::new(),
+        SandboxConfig::Bubblewrap(config) => config
+            .toolchains
+            .iter()
+            .map(|toolchain| toolchain.as_str().to_string())
+            .collect::<Vec<_>>(),
+    };
+    let toolchain_state = if configured_toolchains.is_empty() {
+        "not-configured"
+    } else if approval_policy.bypasses_sandbox() {
+        "host-bypassed"
+    } else {
+        "pane-bootstrap-required"
+    };
+
     let (bubblewrap_executable, executable_state, managed_home_state, network_isolated) =
         match &request.permissions.sandbox {
             SandboxConfig::PolicyOnly => (None, "not-configured", "not-applicable", false),
@@ -296,7 +316,15 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             id: "sandbox.minimal-path",
             severity: SandboxDiagnosticSeverity::Info,
             summary: "Bubblewrap uses a minimal executable path".to_string(),
-            details: "Only system runtime paths are projected unless a typed toolchain projection is configured.".to_string(),
+            details: if configured_toolchains.is_empty() {
+                "Only system runtime paths are projected because no typed toolchain is configured."
+                    .to_string()
+            } else {
+                format!(
+                    "Configured typed toolchains are resolved from canonical pane bootstrap evidence: {}.",
+                    configured_toolchains.join(",")
+                )
+            },
             remedy: "As the direct user, enable only the typed read-only toolchains required by the project.".to_string(),
             affected_path: None,
             source: "bubblewrap",
@@ -348,6 +376,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             read_scopes_source: request.read_scopes_source.to_string(),
             write_scopes: request.permissions.resources.write_scopes.clone(),
             write_scopes_source: request.write_scopes_source.to_string(),
+            toolchains: configured_toolchains,
         },
         effective: SandboxEffectiveState {
             sandbox: effective_sandbox,
@@ -366,6 +395,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             }
             .to_string(),
             managed_home_state: managed_home_state.to_string(),
+            toolchain_state: toolchain_state.to_string(),
             network_isolated,
             restrictions: if matches!(request.permissions.sandbox, SandboxConfig::Bubblewrap(_)) {
                 BUBBLEWRAP_RESTRICTION_IDS
@@ -451,6 +481,7 @@ mod tests {
             environment: SandboxEnvironmentPolicy::Minimal,
             git_user_name: None,
             git_user_email: None,
+            toolchains: Vec::new(),
         });
         let discovery = ProjectRootDiscovery {
             canonical_start: project.clone(),
@@ -474,6 +505,8 @@ mod tests {
         assert_eq!(plan.effective.sandbox, "bubblewrap");
         assert_eq!(plan.effective.scope_provenance, "trusted-project");
         assert_eq!(plan.effective.managed_home_state, "absent");
+        assert!(plan.configured.toolchains.is_empty());
+        assert_eq!(plan.effective.toolchain_state, "not-configured");
         assert_eq!(plan.doctor_exit_code(), 0);
         assert!(!config_root.exists());
         let _ = fs::remove_dir_all(root);
@@ -494,6 +527,7 @@ mod tests {
             environment: SandboxEnvironmentPolicy::Minimal,
             git_user_name: None,
             git_user_email: None,
+            toolchains: vec![crate::runtime::SandboxToolchainKind::Rust],
         });
         let discovery = ProjectRootDiscovery {
             canonical_start: root.to_path_buf(),
@@ -513,6 +547,9 @@ mod tests {
             read_scopes_source: "primary",
             write_scopes_source: "default",
         });
+
+        assert_eq!(plan.configured.toolchains, vec!["rust"]);
+        assert_eq!(plan.effective.toolchain_state, "host-bypassed");
 
         assert_eq!(plan.configured.sandbox, "bubblewrap");
         assert_eq!(plan.effective.sandbox, "host");

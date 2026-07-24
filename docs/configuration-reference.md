@@ -705,6 +705,7 @@ Provider options under a model profile:
 | `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
 | `permissions.bubblewrap.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
+| `permissions.bubblewrap.toolchains` | string array | omitted | Direct-user-selected read-only toolchains. Schema v25 supports only `rust`; arbitrary host paths are not accepted or persisted. |
 | `permissions.trusted_directories` | string array | `[]` | Trusted directory roots; never converted into mounts. |
 | `permissions.trusted_projects` | string array | `[]` | Trusted project roots for command authorization. A current project trust decision supplies default read-write authority when explicit scopes are omitted. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
@@ -781,6 +782,16 @@ identity fields are configured, Mezzanine projects only `user.name` and
 over repository-local identity. It never imports credential helpers, signing
 keys, includes, URL rewrites, hooks, or arbitrary host Git settings. When the
 fields are omitted, repository-local Git identity may still apply.
+
+`mez sandbox toolchains detect [PATH]` performs read-only Rust discovery and
+reports canonical Cargo and Rustup roots without changing configuration.
+`mez sandbox toolchains enable rust --yes` persists only the allowlisted
+`rust` selection in the primary user config. At execution time Mezzanine uses
+canonical pane-bootstrap evidence, mounts only Cargo's executable directory
+and the Rustup root read-only below `/opt/mez/toolchains/rust`, and sets PATH to Cargo binaries
+before `/usr/bin:/bin`. It does not mount the complete home, credentials,
+sockets, runtime directories, Cargo credentials/configuration, or unrelated configuration. Project trust alone
+never enables a toolchain, and `host-access` bypasses the configured projection.
 
 For a trusted project, Bubblewrap uses a persistent managed home below
 `<config-root>/sandbox/cache-homes/<project-profile-key>/home`. The key hashes
