@@ -1786,6 +1786,13 @@ automatically bind its panes to checkpointed conversations from another session,
 and newly created panes MUST receive fresh agent session identities until the
 user explicitly resumes or forks a saved conversation.
 
+The checkpoint MUST persist only permission-preset and approval-policy
+overrides explicitly owned by that pane. It MUST NOT serialize inherited
+ancestor values or configured session defaults as pane overrides. Restoring a
+checkpoint MUST bind those explicit fields to the restored pane without
+mutating the session default, and removing a pane or replacing a session MUST
+remove the corresponding pane-owned override state.
+
 When an agent task is running, agent shell input MUST support interactive task
 management: non-slash prompt input submitted while a pane-local turn is active
 MUST be injected into the current turn as mid-turn steering. Slash commands
@@ -5641,12 +5648,14 @@ The baseline command capabilities are:
 - `/help`: Show available commands as human-readable, aligned rows with a
   concise description for every listed command. Help output MUST omit internal
   effect-type names.
-- `/permissions`: Inspect and change the active permission preset and approval
-  policy.
+- `/permissions`: Inspect and change the pane-subtree permission preset and
+  approval policy, and inspect or change separately scoped command rules and
+  approval bypass state.
 - `/show-approvals`: Browse pending approvals for the live session. It MAY
   accept one approval id to open that request directly.
-- `/approval`: Inspect or set the session approval mode. It MUST accept `ask`,
-  `auto-allow`, or `full-access`.
+- `/approval`: Inspect or set the pane-subtree approval mode. It MUST accept
+  `ask`, `auto-allow`, `full-access`, or `host-access`, and MUST accept
+  `inherit` or `clear` to remove the issuing pane's explicit override.
 - `/directive`: Inspect or set a pane-local session directive that is appended
   to the existing developer instructions for future turns without mutating user
   configuration. Invoking it with text MUST replace the current directive for
@@ -5888,18 +5897,27 @@ turn.
 Commands that mutate policy, credentials, session state, or files MUST be
 subject to the permission model.
 
-The `/permissions` command MUST allow the user to inspect the active preset,
+The `/permissions` command MUST allow the user to inspect the effective preset,
 approval policy, bypass state, matched command prefix rules, and available
-session/global/project rule scopes. When policy permits mutation, it MUST allow
-adding, removing, and persisting command prefix rules.
+session/global/project rule scopes. The preset and approval-policy fields MUST
+be pane-subtree scoped. Command rules and dangerous approval bypass MUST retain
+their separately documented session, project, or global scope. When policy
+permits mutation, `/permissions` MUST allow adding, removing, and persisting
+command prefix rules, and MUST accept `inherit` or `clear` for either
+pane-subtree field.
 
-The `/approval` command MUST set the approval policy for the entire live session
-without changing project or user configuration by itself. After an approval
-policy or effective permission-policy change, Mezzanine MUST re-evaluate
-pending blocked agent approvals against the new live policy. Pending blocked
-actions that are now allowed by the active policy MUST be decided and resumed
-through the normal blocked-action resume path rather than remaining in
-`waiting_approval`.
+The `/approval` command MUST set an explicit approval-policy override for the
+issuing pane and its existing and future delegation descendants without
+changing unrelated root panes, project configuration, or user configuration.
+Each field MUST resolve dynamically from the nearest pane override toward the
+delegation root and then from the configured session default; a descendant MAY
+shadow one field while inheriting the other. `inherit` or `clear` MUST remove
+the issuing pane's explicit approval override and restore dynamic ancestor or
+session lookup. After a pane-subtree approval-policy or effective permission
+change, Mezzanine MUST re-evaluate only pending blocked agent approvals in that
+delegation subtree. Pending blocked actions that are now allowed MUST be
+decided and resumed through the normal blocked-action resume path rather than
+remaining in `waiting_approval`; unrelated roots MUST remain unchanged.
 
 The `/show-approvals` browser MUST route approve-once and deny decisions through
 the `approval/decide` control method. After each decision it MUST refresh the
@@ -8426,8 +8444,11 @@ conversation MAY have an active turn that can issue shell input at a time; other
 turns MUST wait, be queued, or run only non-shell planning work according to
 policy.
 
-Subagents MUST inherit the parent approval policy unless a stricter policy is
-configured for the subagent.
+Subagents MUST dynamically inherit each pane-subtree permission field from the
+nearest ancestor override or the configured session default. A descendant's
+explicit field override MUST shadow only that field for its subtree. A stricter
+permission preset configured for a subagent profile MUST remain a
+non-broadenable restriction even when an ancestor later broadens its policy.
 
 The default maximum number of concurrently running agents in a session MUST be
 4.

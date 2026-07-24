@@ -296,8 +296,8 @@ Useful slash commands include:
 | `/status`      | Show the current pane agent session, pane-lifetime token usage, and mez-session totals. |
 | `/model`       | Inspect or change model selection.                    |
 | `/thinking`    | Toggle provider thinking mode when supported.         |
-| `/approval`    | Inspect or change approval mode.                      |
-| `/permissions` | Inspect or change permission policy.                  |
+| `/approval`    | Inspect or change pane-subtree approval mode; `inherit` clears the pane override. |
+| `/permissions` | Inspect pane-subtree preset/approval fields and session-scoped rules/bypass. |
 | `/directive`   | Show or set a session-scoped developer addendum.      |
 | `/list-skills` | Show the skills available to the active pane.         |
 | `/sync-builtin-skills` | Resync managed built-in skill copies in the user config root. |
@@ -388,6 +388,12 @@ Current support reflects behavior implemented in the repository today.
   came from explicit configuration, a trusted project, or no authority. It also
   reports stable restriction identifiers for the synthetic home, minimal PATH,
   isolated network, authority-only mounts, and hidden host credentials.
+- Permission preset and approval-policy overrides apply to the issuing pane and
+  its existing and future subagents. The nearest override wins independently
+  for each field; unrelated root panes remain isolated. `/approval inherit` and
+  `/permissions preset clear` remove explicit pane fields and resume dynamic
+  ancestor or session-default inheritance. Command rules and dangerous approval
+  bypass retain their separately reported session, project, or global scope.
 - `mez sandbox status [PATH] [--verbose]` reports configured and effective
   sandbox state, project discovery and trust provenance, local executable and
   managed-home readiness, pane-specific probe freshness, and stable
@@ -576,7 +582,7 @@ Common tasks:
 | Trust a project root              | `mez config trust trust PATH`      |
 | Change model selection at runtime | `/model`                           |
 | Toggle supported thinking mode    | `/thinking`                        |
-| Change approval mode at runtime   | `/approval`                        |
+| Change pane-subtree approval mode | `/approval`                        |
 
 Credentials belong in `mez auth`, not in config files.
 

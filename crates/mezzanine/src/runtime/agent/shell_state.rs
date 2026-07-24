@@ -38,6 +38,26 @@ pub(crate) struct RuntimePrimaryPathScopeStatus {
     pub(crate) trusted_project_root: Option<String>,
 }
 
+/// Identifies where one effective pane permission field was resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePermissionFieldSource {
+    /// Stable source name for user-visible policy diagnostics.
+    pub(crate) source: &'static str,
+    /// Pane that owns the selected override, when the source is pane-owned.
+    pub(crate) owner_pane_id: Option<String>,
+}
+
+/// Carries one pane's effective policy and independent field provenance.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimePanePermissionPolicyStatus {
+    /// Effective permission policy after sparse ancestor resolution.
+    pub(crate) policy: PermissionPolicy,
+    /// Provenance for the effective permission preset.
+    pub(crate) preset_source: RuntimePermissionFieldSource,
+    /// Provenance for the effective approval policy.
+    pub(crate) approval_policy_source: RuntimePermissionFieldSource,
+}
+
 /// Returns the bounded raw-output ceiling for one generated shell transaction.
 ///
 /// Apply-patch read phases carry complete file snapshots required by Rust-side
@@ -789,30 +809,71 @@ impl RuntimeSessionService {
 
     /// Resolves the effective policy for one pane through active delegation lineage.
     pub(crate) fn permission_policy_for_pane(&self, pane_id: &str) -> PermissionPolicy {
-        self.permission_policy_for_agent(&format!("agent-{pane_id}"))
+        self.permission_policy_status_for_pane(pane_id).policy
     }
 
     /// Resolves sparse overrides from the target agent toward its root.
     pub(crate) fn permission_policy_for_agent(&self, agent_id: &str) -> PermissionPolicy {
+        self.permission_policy_status_for_agent(agent_id).policy
+    }
+
+    /// Resolves effective policy and field-specific ownership for one pane.
+    pub(crate) fn permission_policy_status_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> RuntimePanePermissionPolicyStatus {
+        self.permission_policy_status_for_agent(&format!("agent-{pane_id}"))
+    }
+
+    /// Resolves sparse overrides and field-specific ownership toward one root.
+    fn permission_policy_status_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> RuntimePanePermissionPolicyStatus {
         let mut policy = self.permission_policy().clone();
         let mut preset = None;
         let mut approval_policy = None;
+        let mut preset_owner = None;
+        let mut approval_policy_owner = None;
+        let target_pane_id = agent_id.strip_prefix("agent-").map(ToOwned::to_owned);
         let mut current_agent_id = agent_id.to_string();
         let mut visited = std::collections::BTreeSet::new();
         loop {
             if !visited.insert(current_agent_id.clone()) {
                 policy.preset = PermissionPreset::ReadOnly;
                 policy.approval_policy = mez_agent::ApprovalPolicy::Ask;
-                return policy;
+                let fail_closed = RuntimePermissionFieldSource {
+                    source: "fail-closed",
+                    owner_pane_id: None,
+                };
+                return RuntimePanePermissionPolicyStatus {
+                    policy,
+                    preset_source: fail_closed.clone(),
+                    approval_policy_source: fail_closed,
+                };
             }
             let Some(pane_id) = current_agent_id.strip_prefix("agent-") else {
                 policy.preset = PermissionPreset::ReadOnly;
                 policy.approval_policy = mez_agent::ApprovalPolicy::Ask;
-                return policy;
+                let fail_closed = RuntimePermissionFieldSource {
+                    source: "fail-closed",
+                    owner_pane_id: None,
+                };
+                return RuntimePanePermissionPolicyStatus {
+                    policy,
+                    preset_source: fail_closed.clone(),
+                    approval_policy_source: fail_closed,
+                };
             };
             if let Some(override_fields) = self.integration.pane_permission_override(pane_id) {
-                preset = preset.or(override_fields.preset);
-                approval_policy = approval_policy.or(override_fields.approval_policy);
+                if preset.is_none() && override_fields.preset.is_some() {
+                    preset = override_fields.preset;
+                    preset_owner = Some(pane_id.to_string());
+                }
+                if approval_policy.is_none() && override_fields.approval_policy.is_some() {
+                    approval_policy = override_fields.approval_policy;
+                    approval_policy_owner = Some(pane_id.to_string());
+                }
             }
             let Some(lineage) = self.subagent_lineage(&current_agent_id) else {
                 break;
@@ -825,7 +886,22 @@ impl RuntimeSessionService {
         if let Some(approval_policy) = approval_policy {
             policy.approval_policy = approval_policy;
         }
-        policy
+        let field_source = |owner_pane_id: Option<String>| {
+            let source = match owner_pane_id.as_deref() {
+                Some(owner) if Some(owner) == target_pane_id.as_deref() => "pane-override",
+                Some(_) => "ancestor-pane-override",
+                None => "session-config",
+            };
+            RuntimePermissionFieldSource {
+                source,
+                owner_pane_id,
+            }
+        };
+        RuntimePanePermissionPolicyStatus {
+            policy,
+            preset_source: field_source(preset_owner),
+            approval_policy_source: field_source(approval_policy_owner),
+        }
     }
 
     /// Resolves one turn's pane-subtree policy and profile restriction.

@@ -196,7 +196,18 @@ impl RuntimeSessionService {
             .model_profile_thinking_enabled(&model_profile)
             .map(|enabled| if enabled { "enabled" } else { "disabled" })
             .unwrap_or("unsupported");
-        let permission_policy = self.permission_policy_for_pane(pane_id);
+        let permission_status = self.permission_policy_status_for_pane(pane_id);
+        let permission_policy = &permission_status.policy;
+        let preset_owner = permission_status
+            .preset_source
+            .owner_pane_id
+            .as_deref()
+            .unwrap_or("none");
+        let approval_owner = permission_status
+            .approval_policy_source
+            .owner_pane_id
+            .as_deref()
+            .unwrap_or("none");
         let rows = vec![
             vec!["Pane".to_string(), session.pane_id.clone()],
             vec!["Session".to_string(), session.session_id.clone()],
@@ -241,9 +252,13 @@ impl RuntimeSessionService {
             vec![
                 "Permissions".to_string(),
                 format!(
-                    "preset {}, approval {}, bypass {}",
+                    "preset {} ({}; owner {}), approval {} ({}; owner {}), bypass {} (session)",
                     runtime_permission_preset_name(permission_policy.preset),
+                    permission_status.preset_source.source,
+                    preset_owner,
                     runtime_approval_policy_name(permission_policy.approval_policy),
+                    permission_status.approval_policy_source.source,
+                    approval_owner,
                     permission_policy.approval_bypass()
                 ),
             ],

@@ -200,11 +200,17 @@ pub(crate) fn runtime_approval_command(
 ) -> Result<String> {
     let args = runtime_positional_args(invocation);
     if args.is_empty() || matches!(args.as_slice(), ["status"] | ["show"]) {
+        let status = service.permission_policy_status_for_pane(pane_id);
+        let owner = status
+            .approval_policy_source
+            .owner_pane_id
+            .as_deref()
+            .unwrap_or("none");
         return Ok(format!(
-            "approval_policy={} source=runtime-policy",
-            runtime_approval_policy_name(
-                service.permission_policy_for_pane(pane_id).approval_policy
-            )
+            "approval_policy={} scope=pane-subtree source={} owner_pane={}",
+            runtime_approval_policy_name(status.policy.approval_policy),
+            status.approval_policy_source.source,
+            owner
         ));
     }
     let [requested] = args.as_slice() else {
@@ -267,7 +273,18 @@ pub(crate) fn runtime_permission_policy_display(
     service: &RuntimeSessionService,
     pane_id: &str,
 ) -> String {
-    let policy = service.permission_policy_for_pane(pane_id);
+    let policy_status = service.permission_policy_status_for_pane(pane_id);
+    let policy = &policy_status.policy;
+    let preset_owner = policy_status
+        .preset_source
+        .owner_pane_id
+        .as_deref()
+        .unwrap_or("none");
+    let approval_owner = policy_status
+        .approval_policy_source
+        .owner_pane_id
+        .as_deref()
+        .unwrap_or("none");
     let configured = service.configured_permissions();
     let effective = Some(service.primary_path_scope_status(pane_id));
     let effective_read_scopes = effective
@@ -296,9 +313,13 @@ pub(crate) fn runtime_permission_policy_display(
         policy.approval_policy,
     );
     format!(
-        "preset={} approval_policy={} bypass={} rules={} sandbox={} sandbox_effective={} network_policy={} read_scopes={} write_scopes={} effective_scope_provenance={} effective_read_scopes={} effective_write_scopes={} trusted_project_root={} sandbox_restrictions={} source=runtime-policy",
+        "preset={} preset_scope=pane-subtree preset_source={} preset_owner_pane={} approval_policy={} approval_scope=pane-subtree approval_source={} approval_owner_pane={} bypass={} bypass_scope=session rules={} rules_scope=session sandbox={} sandbox_effective={} network_policy={} read_scopes={} write_scopes={} effective_scope_provenance={} effective_read_scopes={} effective_write_scopes={} trusted_project_root={} sandbox_restrictions={} source=runtime-policy",
         runtime_permission_preset_name(policy.preset),
+        policy_status.preset_source.source,
+        preset_owner,
         runtime_approval_policy_name(policy.approval_policy),
+        policy_status.approval_policy_source.source,
+        approval_owner,
         policy.approval_bypass(),
         policy.rules().len(),
         configured.sandbox.as_str(),

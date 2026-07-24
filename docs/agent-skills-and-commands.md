@@ -108,8 +108,8 @@ Common slash commands:
 | `/status` | Inspect the current pane agent session, separately labelled cumulative and latest-request cache reuse, immutable-context continuity, pane-lifetime token usage across conversation switches, and mez-session retained-conversation token totals; pager output supports `/` search and empty `/` repeats. |
 | `/model` | Inspect or change the active model selection. |
 | `/thinking` | Toggle provider thinking mode when supported. |
-| `/approval` | Inspect or change the session approval mode. |
-| `/permissions` | Inspect or change permission policy. |
+| `/approval` | Inspect or change the pane-subtree approval mode; use `inherit` or `clear` to remove the pane override. |
+| `/permissions` | Inspect or change pane-subtree preset/approval fields and separately scoped command rules or approval bypass. |
 | `/directive` | Show or set a session-scoped developer-instruction addendum. |
 | `/list-skills` | Show the effective skill catalog available to the pane. |
 | `/sync-builtin-skills` | Resync Mez-managed built-in skill copies in the user config root and report created, replaced, preserved, and current entries. |

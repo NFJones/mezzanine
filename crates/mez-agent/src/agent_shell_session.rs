@@ -830,9 +830,11 @@ fn agent_shell_help_alias_suffix(aliases: &[&str]) -> String {
 fn agent_shell_command_description(name: &str) -> &'static str {
     match name {
         "help" => "show this command guide.",
-        "permissions" => "inspect permission preset and approval policy.",
+        "permissions" => {
+            "inspect pane-subtree preset/approval fields and session-scoped rules/bypass."
+        }
         "approval" => {
-            "inspect or change approval mode; host-access means no prompts and host execution outside the configured sandbox."
+            "inspect or change pane-subtree approval mode; inherit clears the pane override; host-access means no prompts and host execution outside the configured sandbox."
         }
         "approve" => "approve a pending pane-local agent action.",
         "trust" => "inspect or decide pending project trust requests.",

@@ -224,7 +224,9 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| Permissions | preset auto, approval full-access"),
+        response.contains(
+            "| Permissions | preset auto (session-config; owner none), approval full-access (session-config; owner none), bypass false (session) |"
+        ),
         "{response}"
     );
     assert!(
@@ -611,6 +613,26 @@ fn runtime_pane_permission_overrides_inherit_and_shadow_by_field() {
     assert_eq!(child.approval_policy, ApprovalPolicy::Ask);
     assert_eq!(grandchild.preset, mez_agent::PermissionPreset::Auto);
     assert_eq!(grandchild.approval_policy, ApprovalPolicy::Ask);
+    let grandchild_status = service.permission_policy_status_for_pane("%3");
+    assert_eq!(
+        grandchild_status.preset_source.source,
+        "ancestor-pane-override"
+    );
+    assert_eq!(
+        grandchild_status.preset_source.owner_pane_id.as_deref(),
+        Some("%1")
+    );
+    assert_eq!(
+        grandchild_status.approval_policy_source.source,
+        "ancestor-pane-override"
+    );
+    assert_eq!(
+        grandchild_status
+            .approval_policy_source
+            .owner_pane_id
+            .as_deref(),
+        Some("%2")
+    );
     assert_eq!(
         service.permission_policy_for_pane("%1").approval_policy,
         ApprovalPolicy::FullAccess
@@ -628,6 +650,9 @@ fn runtime_pane_permission_overrides_inherit_and_shadow_by_field() {
         service.permission_policy_for_agent("agent-%3").preset,
         mez_agent::PermissionPreset::ReadOnly
     );
+    let grandchild_status = service.permission_policy_status_for_pane("%3");
+    assert_eq!(grandchild_status.preset_source.source, "session-config");
+    assert_eq!(grandchild_status.preset_source.owner_pane_id, None);
 }
 
 /// Verifies pane cleanup removes only that pane's explicit permission fields.
