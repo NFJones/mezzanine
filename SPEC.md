@@ -2958,6 +2958,22 @@ initial supported kind is `rust`. Configuration MUST persist only the typed
 kind and MUST NOT persist arbitrary host paths. `mez sandbox toolchains detect
 [PATH]` MUST be read-only. Enabling a toolchain MUST require direct-user
 confirmation, and noninteractive or JSON mutation MUST require `--yes`.
+Toolchain projection MUST be descriptor-driven. Each supported kind MUST own
+code-defined evidence names, structural root validation, fixed read-only
+sandbox destinations, deterministic PATH entries, synthesized child
+environment, managed-state locations, platform constraints, forbidden
+credential/configuration descendants, and required or optional companion
+kinds. Runtime/SDK roots, project environments, separately confirmed user-tool
+bins, managed writable state, and credentials MUST remain distinct authority
+classes. Selection of one class MUST NOT implicitly authorize another.
+Descriptor composition MUST reject duplicate kinds, ambiguous evidence,
+overlapping host roots unless explicitly modeled, duplicate fixed
+destinations, conflicting PATH entries, conflicting synthesized variables, and
+managed state outside `/home/mez`. Final launch compilation MUST revalidate the
+composed projection and require every host root to remain beneath the
+pane-resolved maximum read authority. Toolchain configuration MUST NOT become
+an arbitrary PATH, environment-variable, mount, version-manager-hook, or
+credential-import surface.
 The agent shell `/toolchain` command and `/toolchain status` MUST report
 supported, configured, discoverable, and effective state for the active pane.
 `/toolchain detect [rust]` MUST be read-only and MUST use active-pane bootstrap

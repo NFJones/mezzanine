@@ -138,7 +138,7 @@ pub(crate) struct BubblewrapConfig {
 }
 
 /// Allowlisted developer toolchains that may be projected read-only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum SandboxToolchainKind {
     /// Rustup and Cargo roots discovered from the active pane environment.
     Rust,

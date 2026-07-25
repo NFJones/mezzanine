@@ -261,9 +261,10 @@ impl RuntimeSessionService {
                 }
                 _ => None,
             };
-            let rust_toolchain = crate::security::sandbox::bubblewrap_rust_toolchain_roots(
-                &config,
+            let toolchain_projection = crate::security::sandbox::resolve_toolchain_projection(
+                &config.toolchains,
                 &signature.environment_managers,
+                &signature.os,
             )
             .map_err(|error| MezError::invalid_state(error.message()))?;
             let launch_plan = match crate::security::sandbox::compile_bubblewrap_launch_plan(
@@ -280,7 +281,7 @@ impl RuntimeSessionService {
                     managed_home_host_path: managed_home
                         .as_ref()
                         .map(|home| home.host_path.as_path()),
-                    rust_toolchain: rust_toolchain.as_ref(),
+                    toolchain_projection: toolchain_projection.as_ref(),
                     stateful,
                     interactive,
                 },

@@ -257,7 +257,7 @@ fn real_plan(
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
         managed_home_host_path: None,
-        rust_toolchain: None,
+        toolchain_projection: None,
         stateful: false,
         interactive: false,
     })
@@ -438,12 +438,15 @@ fn real_bubblewrap_projects_read_only_rust_toolchain() {
     let mut unknown = effects();
     unknown.unknown = true;
     let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
-    let roots = BubblewrapRustToolchainRoots {
-        cargo_bin,
-        rustup_home,
-    };
-    let authority = fixture
-        .authority_with_additional_reads(&[roots.cargo_bin.as_path(), roots.rustup_home.as_path()]);
+    let managers = [
+        format!("cargo-bin:{}", cargo_bin.display()),
+        format!("rustup:{}", rustup_home.display()),
+    ];
+    let projection = resolve_toolchain_projection(&config.toolchains, &managers, "linux")
+        .unwrap()
+        .unwrap();
+    let authority =
+        fixture.authority_with_additional_reads(&[cargo_bin.as_path(), rustup_home.as_path()]);
     let plan = compile_bubblewrap_launch_plan(BubblewrapCompileRequest {
         config: &config,
         capability,
@@ -454,7 +457,7 @@ fn real_bubblewrap_projects_read_only_rust_toolchain() {
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
         managed_home_host_path: None,
-        rust_toolchain: Some(&roots),
+        toolchain_projection: Some(&projection),
         stateful: false,
         interactive: false,
     })

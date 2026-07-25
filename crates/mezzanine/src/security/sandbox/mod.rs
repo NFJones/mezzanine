@@ -22,9 +22,11 @@ use mez_agent::permissions::{
 };
 use sha2::{Digest, Sha256};
 
+#[cfg(test)]
+use crate::runtime::SandboxToolchainKind;
 use crate::runtime::{
     BubblewrapConfig, BubblewrapNetworkMode, NetworkPolicy, SandboxEnvironmentPolicy,
-    SandboxToolchainKind, SandboxUnavailablePolicy,
+    SandboxUnavailablePolicy,
 };
 
 mod managed_home;
@@ -40,9 +42,14 @@ pub(crate) use managed_home::{
     remove_bubblewrap_managed_home,
 };
 pub(crate) use toolchains::{
-    RustToolchainDiscovery, RustToolchainHomeDiscovery, SANDBOX_RUST_CARGO_BIN, SANDBOX_RUST_PATH,
-    SANDBOX_RUSTUP_HOME, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
-    discover_rust_from_environment_managers, discover_rust_from_home, parse_sandbox_toolchain_kind,
+    ResolvedToolchainProjection, RustToolchainHomeDiscovery, SANDBOX_RUST_PATH,
+    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, discover_rust_from_environment_managers,
+    discover_rust_from_home, parse_sandbox_toolchain_kind, resolve_toolchain_projection,
+};
+#[cfg(test)]
+pub(crate) use toolchains::{
+    SANDBOX_RUST_CARGO_BIN, SANDBOX_RUSTUP_HOME, ToolchainAuthorityClass, ToolchainPlatform,
+    toolchain_descriptor,
 };
 pub(crate) use workflow::{
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
@@ -94,29 +101,12 @@ pub(crate) struct BubblewrapCompileRequest<'a> {
     pub(crate) command_file_host_path: &'a str,
     /// Optional Mezzanine-owned persistent home mounted at `/home/mez`.
     pub(crate) managed_home_host_path: Option<&'a Path>,
-    /// Canonical read-only Rust roots resolved from the active pane bootstrap.
-    pub(crate) rust_toolchain: Option<&'a BubblewrapRustToolchainRoots>,
+    /// Descriptor-composed toolchain projection resolved from pane bootstrap.
+    pub(crate) toolchain_projection: Option<&'a ResolvedToolchainProjection>,
     /// Whether the command must mutate persistent shell state.
     pub(crate) stateful: bool,
     /// Whether the command requires direct terminal interaction.
     pub(crate) interactive: bool,
-}
-
-/// Backwards-compatible compiler name for validated Rust discovery evidence.
-pub(crate) type BubblewrapRustToolchainRoots = RustToolchainDiscovery;
-
-/// Resolves a selected Rust toolchain from execution-only pane bootstrap data.
-///
-/// Configuration stores only the allowlisted `rust` kind. Host paths must come
-/// from canonical bootstrap records and are validated again before compilation.
-pub(crate) fn bubblewrap_rust_toolchain_roots(
-    config: &BubblewrapConfig,
-    environment_managers: &[String],
-) -> Result<Option<BubblewrapRustToolchainRoots>, SandboxCompileError> {
-    if !config.toolchains.contains(&SandboxToolchainKind::Rust) {
-        return Ok(None);
-    }
-    discover_rust_from_environment_managers(environment_managers).map(Some)
 }
 
 /// Identifies whether command effects narrowed maximum filesystem authority.
@@ -629,9 +619,9 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
     if let Some(managed_home) = request.managed_home_host_path {
         validate_canonical_path(&managed_home.to_string_lossy(), "managed Bubblewrap home")?;
     }
-    if let Some(rust) = request.rust_toolchain {
-        rust.validate()?;
-        validate_toolchain_authority(rust, request.maximum_authority)?;
+    if let Some(toolchains) = request.toolchain_projection {
+        toolchains.validate()?;
+        toolchains.validate_authority(request.maximum_authority)?;
     }
     if !Path::new(request.child_shell_path).starts_with("/bin")
         && !Path::new(request.child_shell_path).starts_with("/usr")
@@ -1056,23 +1046,15 @@ fn bubblewrap_arguments(
         arguments.push("--tmpfs".to_string());
         arguments.push(SANDBOX_HOME.to_string());
     }
-    if let Some(rust) = request.rust_toolchain {
-        for directory in [
-            "/opt",
-            "/opt/mez",
-            "/opt/mez/toolchains",
-            "/opt/mez/toolchains/rust",
-        ] {
+    if let Some(toolchains) = request.toolchain_projection {
+        for directory in &toolchains.sandbox_directories {
             arguments.push("--dir".to_string());
-            arguments.push(directory.to_string());
+            arguments.push((*directory).to_string());
         }
-        for (source, destination) in [
-            (&rust.cargo_bin, SANDBOX_RUST_CARGO_BIN),
-            (&rust.rustup_home, SANDBOX_RUSTUP_HOME),
-        ] {
+        for root in &toolchains.roots {
             arguments.push("--ro-bind".to_string());
-            arguments.push(source.to_string_lossy().into_owned());
-            arguments.push(destination.to_string());
+            arguments.push(root.host_path.to_string_lossy().into_owned());
+            arguments.push(root.sandbox_destination.to_string());
         }
     }
     for mount in &policy.mounts {
@@ -1127,24 +1109,14 @@ fn bubblewrap_arguments(
                 .map(str::to_string),
         );
     }
-    let executable_path = if request.rust_toolchain.is_some() {
-        SANDBOX_RUST_PATH.to_string()
-    } else {
-        MINIMAL_PATH.to_string()
-    };
-    if request.rust_toolchain.is_some() {
-        arguments.extend(
-            [
-                "--setenv",
-                "CARGO_HOME",
-                "/home/mez/.cargo",
-                "--setenv",
-                "RUSTUP_HOME",
-                SANDBOX_RUSTUP_HOME,
-            ]
-            .into_iter()
-            .map(str::to_string),
-        );
+    let executable_path = request
+        .toolchain_projection
+        .map(ResolvedToolchainProjection::executable_path)
+        .unwrap_or_else(|| MINIMAL_PATH.to_string());
+    if let Some(toolchains) = request.toolchain_projection {
+        for (name, value) in &toolchains.environment {
+            arguments.extend(["--setenv", *name, *value].into_iter().map(str::to_string));
+        }
     }
     arguments.extend(
         [
@@ -1273,30 +1245,6 @@ fn validate_canonical_path(path: &str, label: &str) -> Result<(), SandboxCompile
             SandboxCompileErrorKind::InvalidInput,
             format!("{label} must not contain lexical traversal components"),
         ));
-    }
-    Ok(())
-}
-
-/// Requires every convenience toolchain projection to remain within the
-/// pane-resolved maximum read authority instead of adding host access.
-fn validate_toolchain_authority(
-    roots: &BubblewrapRustToolchainRoots,
-    authority: &PathScopes,
-) -> Result<(), SandboxCompileError> {
-    for (path, label) in [
-        (&roots.cargo_bin, "Cargo bin"),
-        (&roots.rustup_home, "Rustup home"),
-    ] {
-        if !authority
-            .read_scopes
-            .iter()
-            .any(|scope| path.starts_with(Path::new(scope)))
-        {
-            return Err(SandboxCompileError::new(
-                SandboxCompileErrorKind::ToolchainOutsideAuthority,
-                format!("{label} falls outside maximum sandbox read authority"),
-            ));
-        }
     }
     Ok(())
 }

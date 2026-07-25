@@ -123,7 +123,7 @@ fn request<'a>(
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
         managed_home_host_path: None,
-        rust_toolchain: None,
+        toolchain_projection: None,
         stateful: false,
         interactive: false,
     }
@@ -747,12 +747,18 @@ fn rust_toolchain_projection_is_read_only_and_deterministic() {
     config.toolchains = vec![SandboxToolchainKind::Rust];
     let authority = home_authority("/home/alice");
     let evaluation = evaluation(EffectCompleteness::Unknown, effects());
-    let roots = BubblewrapRustToolchainRoots {
-        cargo_bin: PathBuf::from("/home/alice/.cargo/bin"),
-        rustup_home: PathBuf::from("/home/alice/.rustup"),
-    };
+    let projection = resolve_toolchain_projection(
+        &config.toolchains,
+        &[
+            "cargo-bin:/home/alice/.cargo/bin".to_string(),
+            "rustup:/home/alice/.rustup".to_string(),
+        ],
+        "linux",
+    )
+    .unwrap()
+    .unwrap();
     let mut compile_request = request(&config, &authority, &evaluation);
-    compile_request.rust_toolchain = Some(&roots);
+    compile_request.toolchain_projection = Some(&projection);
 
     let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
 
@@ -789,6 +795,98 @@ fn rust_toolchain_projection_is_read_only_and_deterministic() {
     }
 }
 
+/// The Rust descriptor preserves the established fixed projection contract
+/// while explicitly classifying host roots and supported pane platforms.
+#[test]
+fn rust_toolchain_descriptor_matches_existing_projection_metadata() {
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Rust);
+
+    assert_eq!(descriptor.aliases, ["rust"]);
+    assert_eq!(descriptor.roots.len(), 2);
+    assert_eq!(descriptor.roots[0].evidence_kind, "cargo-bin");
+    assert_eq!(
+        descriptor.roots[0].sandbox_destination,
+        SANDBOX_RUST_CARGO_BIN
+    );
+    assert_eq!(
+        descriptor.roots[0].authority_class,
+        ToolchainAuthorityClass::UserTools
+    );
+    assert_eq!(descriptor.roots[1].evidence_kind, "rustup");
+    assert_eq!(descriptor.roots[1].sandbox_destination, SANDBOX_RUSTUP_HOME);
+    assert_eq!(
+        descriptor.roots[1].authority_class,
+        ToolchainAuthorityClass::Runtime
+    );
+    assert_eq!(descriptor.path_entries, [SANDBOX_RUST_CARGO_BIN]);
+    assert!(descriptor.coupling.required.is_empty());
+    assert!(descriptor.coupling.optional.is_empty());
+    assert!(descriptor.platform.supports("linux"));
+    assert!(ToolchainPlatform::Linux.supports("linux"));
+    assert!(ToolchainPlatform::MacOs.supports("darwin"));
+    assert!(ToolchainPlatform::Windows.supports("windows"));
+    assert!(!ToolchainPlatform::Linux.supports("windows"));
+}
+
+/// Descriptor resolution and final launch validation reject ambiguous
+/// selection and any mutation of code-owned projection metadata or classes.
+#[test]
+fn toolchain_projection_rejects_duplicates_and_tampered_metadata() {
+    let managers = [
+        "cargo-bin:/home/alice/.cargo/bin".to_string(),
+        "rustup:/home/alice/.rustup".to_string(),
+    ];
+    let duplicate = resolve_toolchain_projection(
+        &[SandboxToolchainKind::Rust, SandboxToolchainKind::Rust],
+        &managers,
+        "linux",
+    )
+    .unwrap_err();
+    assert_eq!(duplicate.kind(), SandboxCompileErrorKind::InvalidInput);
+
+    let projection =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Rust], &managers, "linux")
+            .unwrap()
+            .unwrap();
+
+    let mut invalid_class = projection.clone();
+    invalid_class.roots[0].authority_class = ToolchainAuthorityClass::Credential;
+    assert_eq!(
+        invalid_class.validate().unwrap_err().kind(),
+        SandboxCompileErrorKind::InvalidInput
+    );
+
+    let mut invalid_path = projection.clone();
+    invalid_path.path_entries.push(SANDBOX_RUST_CARGO_BIN);
+    assert_eq!(
+        invalid_path.validate().unwrap_err().kind(),
+        SandboxCompileErrorKind::InvalidInput
+    );
+
+    let mut invalid_environment = projection.clone();
+    invalid_environment
+        .environment
+        .insert("RUSTUP_HOME", "/unexpected");
+    assert_eq!(
+        invalid_environment.validate().unwrap_err().kind(),
+        SandboxCompileErrorKind::InvalidInput
+    );
+
+    let mut invalid_state = projection.clone();
+    invalid_state.managed_state[0].sandbox_path = "/tmp/cargo";
+    assert_eq!(
+        invalid_state.validate().unwrap_err().kind(),
+        SandboxCompileErrorKind::InvalidInput
+    );
+
+    let mut colliding_mount = projection;
+    colliding_mount.roots.push(colliding_mount.roots[0].clone());
+    assert_eq!(
+        colliding_mount.validate().unwrap_err().kind(),
+        SandboxCompileErrorKind::InvalidInput
+    );
+}
+
 /// Toolchain convenience must not project either bootstrap-derived root from
 /// outside the pane-resolved maximum read authority.
 #[test]
@@ -798,22 +896,25 @@ fn rust_toolchain_projection_rejects_roots_outside_maximum_authority() {
     let authority = authority();
     let evaluation = evaluation(EffectCompleteness::Unknown, effects());
 
-    for roots in [
-        BubblewrapRustToolchainRoots {
-            cargo_bin: PathBuf::from("/outside/.cargo/bin"),
-            rustup_home: PathBuf::from("/outside/.rustup"),
-        },
-        BubblewrapRustToolchainRoots {
-            cargo_bin: PathBuf::from("/workspace/.cargo/bin"),
-            rustup_home: PathBuf::from("/outside/.rustup"),
-        },
-        BubblewrapRustToolchainRoots {
-            cargo_bin: PathBuf::from("/workspace2/.cargo/bin"),
-            rustup_home: PathBuf::from("/workspace2/.rustup"),
-        },
+    for managers in [
+        [
+            "cargo-bin:/outside/.cargo/bin".to_string(),
+            "rustup:/outside/.rustup".to_string(),
+        ],
+        [
+            "cargo-bin:/workspace/.cargo/bin".to_string(),
+            "rustup:/outside/.rustup".to_string(),
+        ],
+        [
+            "cargo-bin:/workspace2/.cargo/bin".to_string(),
+            "rustup:/workspace2/.rustup".to_string(),
+        ],
     ] {
+        let projection = resolve_toolchain_projection(&config.toolchains, &managers, "linux")
+            .unwrap()
+            .unwrap();
         let mut compile_request = request(&config, &authority, &evaluation);
-        compile_request.rust_toolchain = Some(&roots);
+        compile_request.toolchain_projection = Some(&projection);
 
         let error = compile_bubblewrap_launch_plan(compile_request).unwrap_err();
         assert_eq!(
@@ -831,19 +932,24 @@ fn rust_toolchain_resolution_rejects_missing_and_arbitrary_roots() {
     let mut config = config();
     config.toolchains = vec![SandboxToolchainKind::Rust];
 
-    let missing = bubblewrap_rust_toolchain_roots(&config, &["rustup:/home/alice/.rustup".into()])
-        .unwrap_err();
+    let missing = resolve_toolchain_projection(
+        &config.toolchains,
+        &["rustup:/home/alice/.rustup".into()],
+        "linux",
+    )
+    .unwrap_err();
     assert_eq!(
         missing.kind(),
         SandboxCompileErrorKind::UnsupportedRequirement
     );
 
-    let arbitrary = bubblewrap_rust_toolchain_roots(
-        &config,
+    let arbitrary = resolve_toolchain_projection(
+        &config.toolchains,
         &[
             "cargo-bin:/home/alice/tools/bin".into(),
             "rustup:/home/alice/.rustup".into(),
         ],
+        "linux",
     )
     .unwrap_err();
     assert_eq!(arbitrary.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
