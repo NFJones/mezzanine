@@ -1097,12 +1097,6 @@ impl RuntimeSessionService {
             .iter()
             .filter(|observer| observer.state == ObserverDecisionState::Pending)
             .count();
-        let approval_policy = self
-            .active_pane_id()
-            .ok()
-            .map(|pane_id| self.permission_policy_for_pane(&pane_id).approval_policy)
-            .unwrap_or_else(|| self.permission_policy().approval_policy);
-        let policy_mode = Self::runtime_frame_policy_mode_name(approval_policy).to_string();
         let shell_process_name = self
             .session
             .shell
@@ -1111,7 +1105,6 @@ impl RuntimeSessionService {
             .map(|name| name.to_string_lossy().to_string());
         let mut context = TerminalFrameContext {
             session_id: Some(self.session.id.to_string()),
-            policy_mode: Some(policy_mode),
             pending_observer_count,
             pressed_window_action: self.presentation.pressed_window_action.clone(),
             animation_tick_ms: self.runtime_frame_animation_tick_ms(),
@@ -1329,6 +1322,12 @@ impl RuntimeSessionService {
                             .map(|status| status.frame_value()),
                         current_working_directory,
                         mode: Some(mode.to_string()),
+                        policy_mode: Some(
+                            Self::runtime_frame_policy_mode_name(
+                                self.permission_policy_for_pane(&pane_id).approval_policy,
+                            )
+                            .to_string(),
+                        ),
                         agent_id,
                         agent_name,
                         agent_status,

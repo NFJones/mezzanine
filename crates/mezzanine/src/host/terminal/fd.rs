@@ -49,8 +49,6 @@ pub struct PaneRenderInput {
 pub struct TerminalFrameContext {
     /// Stable session identity shown by `session.id`.
     pub session_id: Option<String>,
-    /// Active approval or permission mode shown by `policy.mode`.
-    pub policy_mode: Option<String>,
     /// Number of pending observer attach requests shown by `observer.pending_count`.
     pub pending_observer_count: usize,
     /// Running-agent counts keyed by stable window id for `agent.active_count`.

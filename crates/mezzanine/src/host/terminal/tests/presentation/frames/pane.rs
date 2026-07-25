@@ -92,7 +92,6 @@ fn render_frame_templates_use_runtime_context_fields() {
     }];
     let mut frame_context = TerminalFrameContext {
         session_id: Some("$1".to_string()),
-        policy_mode: Some("full-access".to_string()),
         pending_observer_count: 1,
         ..TerminalFrameContext::default()
     };
@@ -113,6 +112,7 @@ fn render_frame_templates_use_runtime_context_fields() {
             agent_name: Some("manager".to_string()),
             agent_status: Some("running".to_string()),
             agent_model: Some("default".to_string()),
+            policy_mode: Some("full-access".to_string()),
             history_position: Some("scroll:4".to_string()),
             ..TerminalPaneFrameContext::default()
         },
@@ -292,10 +292,10 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
             agent_thinking: Some("on".to_string()),
             agent_routing: Some("auto:on".to_string()),
             agent_context_usage: Some("42%".to_string()),
+            policy_mode: Some("full-access".to_string()),
             ..TerminalPaneFrameContext::default()
         },
     );
-    frame_context.policy_mode = Some("full-access".to_string());
     let plan = plan_window_presentation(
         &window,
         WindowPresentationOptions {

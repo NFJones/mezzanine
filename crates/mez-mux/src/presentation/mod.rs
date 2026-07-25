@@ -597,6 +597,8 @@ pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
     pub current_working_directory: Option<String>,
     /// Current pane interaction mode shown by `pane.mode`.
     pub mode: Option<String>,
+    /// Effective approval or permission mode shown by `policy.mode`.
+    pub policy_mode: Option<String>,
     /// Opaque agent identity shown by `agent.id`.
     pub agent_id: Option<String>,
     /// Human-readable agent label shown by `agent.name`.
@@ -633,6 +635,7 @@ impl<Prompt, DisplayLines: Default> Default for TerminalPaneFrameContext<Prompt,
             exit_status: None,
             current_working_directory: None,
             mode: None,
+            policy_mode: None,
             agent_id: None,
             agent_name: None,
             agent_status: None,

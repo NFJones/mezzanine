@@ -566,6 +566,21 @@ fn runtime_agent_shell_permission_commands_isolate_root_panes() {
         service.permission_policy().preset,
         mez_agent::PermissionPreset::ReadOnly
     );
+    let frame_context = service.terminal_frame_context();
+    assert_eq!(
+        frame_context
+            .panes
+            .get("%1")
+            .and_then(|context| context.policy_mode.as_deref()),
+        Some("full-access")
+    );
+    assert_eq!(
+        frame_context
+            .panes
+            .get(second_pane.as_str())
+            .and_then(|context| context.policy_mode.as_deref()),
+        Some("ask")
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 

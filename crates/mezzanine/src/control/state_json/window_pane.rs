@@ -445,7 +445,9 @@ pub(super) fn frame_read_fields(
         ),
         (
             "policy.mode",
-            frame_context.policy_mode.clone().unwrap_or_default(),
+            pane_context
+                .and_then(|context| context.policy_mode.clone())
+                .unwrap_or_default(),
         ),
         ("observer.pending_count", pending_observer_count.to_string()),
         (
