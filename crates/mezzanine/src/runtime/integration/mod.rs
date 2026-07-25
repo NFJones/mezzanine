@@ -14,7 +14,7 @@ use crate::host::async_runtime::AsyncRuntimeActorMetrics;
 use crate::integrations::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
 use crate::runtime::config::ConfiguredPermissions;
 use crate::security::auth::AuthStore;
-use crate::security::project::ProjectTrustStore;
+use crate::security::project::{ProjectTrustRevision, ProjectTrustStore};
 use mez_agent::ApprovalPolicy;
 use mez_agent::mcp::McpRegistry;
 use mez_agent::memory::SessionMemoryStore;
@@ -379,6 +379,16 @@ impl RuntimeIntegrationComponent {
         self.credentials.set_project_trust_store(store);
     }
 
+    /// Returns the persisted revision represented by the live trust store.
+    pub(crate) fn project_trust_revision(&self) -> Option<&ProjectTrustRevision> {
+        self.credentials.project_trust_revision()
+    }
+
+    /// Replaces the persisted revision represented by the live trust store.
+    pub(crate) fn set_project_trust_revision(&mut self, revision: Option<ProjectTrustRevision>) {
+        self.credentials.set_project_trust_revision(revision);
+    }
+
     /// Returns the optional project-trust database path.
     pub(crate) fn project_trust_database_path(&self) -> Option<&Path> {
         self.credentials.project_trust_database_path()
@@ -397,6 +407,11 @@ impl RuntimeIntegrationComponent {
     /// Clears a project-trust root announcement marker.
     pub(crate) fn clear_project_trust_root_announcement(&mut self, root: &Path) -> bool {
         self.credentials.clear_project_trust_root_announcement(root)
+    }
+
+    /// Clears all retained project-trust prompt announcement markers.
+    pub(crate) fn clear_project_trust_root_announcements(&mut self) {
+        self.credentials.clear_project_trust_root_announcements();
     }
 
     /// Returns configured hook definitions.

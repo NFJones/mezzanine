@@ -850,19 +850,20 @@ fn run_sandbox_setup<W: Write>(
     if trust_current_project {
         let trust_path = default_trust_database_path(paths.root());
         let trust_result = (|| -> Result<()> {
-            let mut store = ProjectTrustStore::load_from_file(&trust_path)?;
             let git_marker = match discovery.marker_kind {
                 ProjectRootMarkerKind::GitDirectory | ProjectRootMarkerKind::GitFile => {
                     Some(discovery.canonical_root.join(".git"))
                 }
                 ProjectRootMarkerKind::Fallback => None,
             };
-            store.decide(
-                discovery.canonical_root.clone(),
-                TrustDecision::Trusted,
-                git_marker,
-            )?;
-            store.save_to_file(&trust_path)
+            ProjectTrustStore::update_file(&trust_path, |store| {
+                store.decide(
+                    discovery.canonical_root.clone(),
+                    TrustDecision::Trusted,
+                    git_marker,
+                )
+            })?;
+            Ok(())
         })();
         if let Err(error) = trust_result {
             let rollback = if original_exists {

@@ -833,7 +833,7 @@ pub(super) fn run_config_trust<W: Write>(
     stdout: &mut W,
 ) -> Result<()> {
     let trust_path = default_trust_database_path(paths.root());
-    let mut store = ProjectTrustStore::load_from_file(&trust_path)?;
+    let store = ProjectTrustStore::load_from_file(&trust_path)?;
     match args.command.unwrap_or(ConfigTrustCliCommand::List) {
         ConfigTrustCliCommand::List => {
             let output = project_records_json(store.records())?;
@@ -851,7 +851,6 @@ pub(super) fn run_config_trust<W: Write>(
         }
         ConfigTrustCliCommand::Trust { root } => {
             persist_config_trust_decision(
-                &mut store,
                 &trust_path,
                 root,
                 TrustDecision::Trusted,
@@ -861,7 +860,6 @@ pub(super) fn run_config_trust<W: Write>(
         }
         ConfigTrustCliCommand::Reject { root } => {
             persist_config_trust_decision(
-                &mut store,
                 &trust_path,
                 root,
                 TrustDecision::Rejected,
@@ -871,7 +869,6 @@ pub(super) fn run_config_trust<W: Write>(
         }
         ConfigTrustCliCommand::Revoke { root } => {
             persist_config_trust_decision(
-                &mut store,
                 &trust_path,
                 root,
                 TrustDecision::Revoked,
@@ -886,14 +883,12 @@ pub(super) fn run_config_trust<W: Write>(
 /// Persists one project trust decision and writes the resulting record.
 ///
 /// # Parameters
-/// - `store`: The trust store to mutate.
 /// - `trust_path`: The trust database path to save.
 /// - `root`: The project root whose trust state changes.
 /// - `decision`: The requested trust decision.
 /// - `output_format`: The CLI output format.
 /// - `stdout`: The output sink for the response.
 fn persist_config_trust_decision<W: Write>(
-    store: &mut ProjectTrustStore,
     trust_path: &std::path::Path,
     root: PathBuf,
     decision: TrustDecision,
@@ -902,9 +897,10 @@ fn persist_config_trust_decision<W: Write>(
 ) -> Result<()> {
     let git_marker = root.join(".git");
     let git_marker = git_marker.exists().then_some(git_marker);
-    store.decide(root.clone(), decision, git_marker)?;
-    store.save_to_file(trust_path)?;
-    let record = store.get(&root).ok_or_else(|| {
+    let snapshot = ProjectTrustStore::update_file(trust_path, |store| {
+        store.decide(root.clone(), decision, git_marker)
+    })?;
+    let record = snapshot.store.get(&root).ok_or_else(|| {
         MezError::new(
             crate::error::MezErrorKind::NotFound,
             "project trust record not found after decision",

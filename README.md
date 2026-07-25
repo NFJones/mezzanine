@@ -411,8 +411,10 @@ Current support reflects behavior implemented in the repository today.
 - `mez sandbox plan`, `enable`, `preset apply`, `disable`, and
   `trust-current-project` provide direct-user guided setup. Plans and
   `--dry-run` never write; mutations require confirmation and noninteractive
-  use requires `--yes`. Code-owned presets provide safe, automatic,
-  read-only, and off modes without exposing these policy changes to agents.
+  use requires `--yes`. Persisted project-trust changes become visible to
+  already-running services at their next trust-sensitive configuration or
+  agent operation. Code-owned presets provide safe, automatic, read-only, and
+  off modes without exposing these policy changes to agents.
 - `mez sandbox profile export` emits a deterministic versioned JSON recipe
   containing only a code-owned preset, authority strategy, and allowlisted
   toolchains. `profile import FILE` previews against an independently resolved

@@ -359,6 +359,28 @@ fn configure_path_resolution_bubblewrap(service: &mut RuntimeSessionService) {
         .replace_configured_permissions(configured);
 }
 
+/// Configures Bubblewrap without explicit scopes so project trust is the only
+/// possible source of primary filesystem authority.
+fn configure_trusted_project_bubblewrap(service: &mut RuntimeSessionService) {
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "network_policy": "deny",
+                "bubblewrap": {
+                    "executable": "/usr/bin/bwrap",
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal"
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+}
+
 /// Verifies an explicitly trusted project supplies bounded read-write primary
 /// authority when Bubblewrap has no configured filesystem scopes.
 #[test]
@@ -407,6 +429,237 @@ fn missing_primary_authority_does_not_fabricate_unresolved_scopes() {
             .is_none()
     );
     assert!(service.path_scopes_for_pane("%1").is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies Bubblewrap distinguishes a valid pane environment with no primary
+/// filesystem authority from a missing pane environment signature.
+#[test]
+fn runtime_missing_primary_authority_reports_targeted_bubblewrap_error() {
+    let root = temp_root("runtime-no-primary-authority-diagnostic");
+    fs::create_dir_all(&root).unwrap();
+    let mut service = test_runtime_service();
+    configure_trusted_project_bubblewrap(&mut service);
+    service.set_project_trust_store(ProjectTrustStore::default(), None);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    service.set_pane_current_working_directory("%1".to_string(), root.clone());
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Unknown,
+        path_resolution_effects(),
+    );
+
+    let error = service
+        .ensure_bubblewrap_path_resolution_for_action(
+            &path_resolution_turn(),
+            "action-1",
+            Some(&evaluation),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or trust a project containing the pane working directory"
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a trust decision persisted after daemon initialization becomes
+/// Bubblewrap authority at the next action preflight and invalidates caches.
+#[test]
+fn runtime_bubblewrap_preflight_refreshes_external_project_trust() {
+    let root = temp_root("runtime-external-project-trust-refresh");
+    let project_root = root.join("project");
+    let working_directory = project_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let trust_path = root.join("project-trust.tsv");
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_trusted_project_bubblewrap(&mut service);
+    service.set_project_trust_store(ProjectTrustStore::default(), Some(trust_path.clone()));
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        path_resolution_environment(&working_directory),
+    );
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+    mark_test_pane_ready(&mut service, "%1");
+    let initial_generation = service.session.config_generation;
+    ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(
+            project_root.clone(),
+            TrustDecision::Trusted,
+            Some(project_root.join(".git")),
+            100,
+        )
+    })
+    .unwrap();
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Unknown,
+        path_resolution_effects(),
+    );
+
+    assert!(
+        !service
+            .ensure_bubblewrap_path_resolution_for_action(
+                &path_resolution_turn(),
+                "action-1",
+                Some(&evaluation),
+            )
+            .unwrap()
+    );
+    assert_eq!(service.session.config_generation, initial_generation + 1);
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find(|transaction| {
+            matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::PathResolution { waiters, .. }
+                    if waiters.contains(&(
+                        "path-resolution-turn".to_string(),
+                        "action-1".to_string()
+                    ))
+            )
+        })
+        .unwrap();
+    let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind else {
+        unreachable!();
+    };
+    let expected = project_root.to_string_lossy().into_owned();
+    assert_eq!(cache_key.request.read_scopes, vec![expected.clone()]);
+    assert_eq!(cache_key.request.write_scopes, vec![expected]);
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies rereading an unchanged persisted trust revision preserves the
+/// configuration generation and its generation-keyed sandbox evidence.
+#[test]
+fn runtime_unchanged_project_trust_revision_preserves_config_generation() {
+    let root = temp_root("runtime-unchanged-project-trust-refresh");
+    let project_root = root.join("project");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    let trust_path = root.join("project-trust.tsv");
+    let snapshot = ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(project_root, TrustDecision::Trusted, None, 100)
+    })
+    .unwrap();
+    let mut service = test_runtime_service();
+    service.set_project_trust_store(snapshot.store, Some(trust_path));
+    let initial_generation = service.session.config_generation;
+
+    assert!(
+        !service
+            .refresh_project_trust_store_from_disk_if_changed()
+            .unwrap()
+    );
+    assert_eq!(service.session.config_generation, initial_generation);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies malformed externally changed trust data removes stale authority
+/// before reporting the reload failure to the trust-dependent caller.
+#[test]
+fn runtime_malformed_external_project_trust_fails_closed() {
+    let root = temp_root("runtime-malformed-project-trust-refresh");
+    let project_root = root.join("project");
+    let working_directory = project_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let trust_path = root.join("project-trust.tsv");
+    let snapshot = ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(
+            project_root.clone(),
+            TrustDecision::Trusted,
+            Some(project_root.join(".git")),
+            100,
+        )
+    })
+    .unwrap();
+    let mut service = test_runtime_service();
+    service.set_project_trust_store(snapshot.store, Some(trust_path.clone()));
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+    assert_eq!(
+        service.primary_path_scope_status("%1").provenance,
+        "trusted-project"
+    );
+    let initial_generation = service.session.config_generation;
+    fs::write(&trust_path, "malformed\ttrust\trecord\n").unwrap();
+
+    let error = service
+        .refresh_project_trust_store_from_disk_if_changed()
+        .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("failed to reload project trust database"),
+        "{error}"
+    );
+    assert_eq!(service.session.config_generation, initial_generation + 1);
+    assert_eq!(service.primary_path_scope_status("%1").provenance, "none");
+    assert!(
+        service
+            .project_trust_store()
+            .unwrap()
+            .records()
+            .next()
+            .is_none()
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies an external revocation contracts Bubblewrap authority, advances
+/// the cache generation, and removes that project's managed sandbox home.
+#[test]
+fn runtime_external_project_trust_revocation_contracts_authority() {
+    let root = temp_root("runtime-external-project-trust-revocation");
+    let config_root = root.join("config");
+    let project_root = root.join("project");
+    let working_directory = project_root.join("src");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&working_directory).unwrap();
+    let trust_path = root.join("project-trust.tsv");
+    let snapshot = ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(
+            project_root.clone(),
+            TrustDecision::Trusted,
+            Some(project_root.join(".git")),
+            100,
+        )
+    })
+    .unwrap();
+    let managed_home =
+        crate::security::sandbox::prepare_bubblewrap_managed_home(&config_root, &project_root)
+            .unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(config_root);
+    service.set_project_trust_store(snapshot.store, Some(trust_path.clone()));
+    service.set_pane_current_working_directory("%1".to_string(), working_directory);
+    let initial_generation = service.session.config_generation;
+    ProjectTrustStore::update_file(&trust_path, |store| {
+        store.decide_at(project_root, TrustDecision::Revoked, None, 101)
+    })
+    .unwrap();
+
+    assert!(
+        service
+            .refresh_project_trust_store_from_disk_if_changed()
+            .unwrap()
+    );
+    assert_eq!(service.session.config_generation, initial_generation + 1);
+    assert_eq!(service.primary_path_scope_status("%1").provenance, "none");
+    assert!(!managed_home.host_path.exists());
 
     fs::remove_dir_all(root).unwrap();
 }

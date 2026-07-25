@@ -159,3 +159,4 @@ mod mcp_runtime;
 mod persistence;
 mod stores;
 mod transcript_restore;
+mod trust_refresh;

@@ -851,6 +851,7 @@ impl RuntimeSessionService {
                 "project trust methods require the primary client",
             ));
         }
+        self.refresh_project_trust_store_from_disk_if_changed()?;
         match method {
             "project/trust/list" => {
                 let state = project_trust_state_filter_from_params(
@@ -904,46 +905,56 @@ impl RuntimeSessionService {
                 "project trust mutations require the primary client",
             ));
         }
+        self.refresh_project_trust_store_from_disk_if_changed()?;
         let project_root = runtime_project_root_param(params, method)?;
         let decision = if method == "project/trust/revoke" {
             TrustDecision::Revoked
         } else {
             runtime_trust_decision_param(params)?
         };
-        let record = {
-            let database_path = self
-                .integration
-                .project_trust_database_path()
-                .map(Path::to_path_buf)
-                .or_else(|| {
-                    self.integration
-                        .config_root()
-                        .map(default_trust_database_path)
-                });
-            if self.integration.project_trust_database_path().is_none() {
+        let database_path = self
+            .integration
+            .project_trust_database_path()
+            .map(Path::to_path_buf)
+            .or_else(|| {
                 self.integration
-                    .set_project_trust_database_path(database_path.clone());
-            }
-            let store = self.runtime_project_trust_store_mut()?;
-            store.decide_with_client(
+                    .config_root()
+                    .map(default_trust_database_path)
+            });
+        if self.integration.project_trust_database_path().is_none() {
+            self.integration
+                .set_project_trust_database_path(database_path.clone());
+        }
+        let changed_layers = if let Some(path) = database_path.as_ref() {
+            let client_id = caller_client_id.to_string();
+            let snapshot = ProjectTrustStore::update_file(path, |store| {
+                store.decide_with_client(project_root.clone(), decision, None, Some(client_id))
+            })?;
+            self.reconcile_project_trust_snapshot(snapshot)?
+                .unwrap_or_default()
+        } else {
+            self.runtime_project_trust_store_mut()?.decide_with_client(
                 project_root.clone(),
                 decision,
                 None,
                 Some(caller_client_id.to_string()),
             )?;
-            if let Some(path) = database_path.as_ref() {
-                store.save_to_file(path)?;
-            }
-            store
-                .get(&project_root)
-                .cloned()
-                .ok_or_else(|| MezError::invalid_state("project trust record was not retained"))?
+            self.integration.set_project_trust_revision(None);
+            self.integration
+                .clear_project_trust_root_announcement(&project_root);
+            self.session.advance_config_generation();
+            self.reconcile_project_overlay_trust()
         };
-        let changed_layers = self.apply_project_trust_decision_to_layers(&project_root, decision);
+        let record = self
+            .runtime_project_trust_store()?
+            .get(&project_root)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("project trust record was not retained"))?;
         self.integration
             .clear_project_trust_root_announcement(&project_root);
         let report = self.apply_runtime_config_layers()?;
-        if decision == TrustDecision::Revoked
+        if database_path.is_none()
+            && decision != TrustDecision::Trusted
             && let Some(config_root) = self.integration.config_root()
         {
             let _ = crate::security::sandbox::remove_bubblewrap_managed_home(
@@ -1000,32 +1011,5 @@ impl RuntimeSessionService {
         self.integration
             .project_trust_store_mut()
             .ok_or_else(|| MezError::invalid_state("runtime project trust store is not configured"))
-    }
-
-    /// Runs the apply project trust decision to layers operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn apply_project_trust_decision_to_layers(
-        &mut self,
-        project_root: &Path,
-        decision: TrustDecision,
-    ) -> Vec<String> {
-        let trusted = matches!(decision, TrustDecision::Trusted);
-        let mut changed = Vec::new();
-        for layer in self.integration.config_layers_mut() {
-            if layer.scope != ConfigScope::ProjectOverlay {
-                continue;
-            }
-            let Some(path) = layer.path.as_ref() else {
-                continue;
-            };
-            if runtime_path_under_project_root(path, project_root) && layer.trusted != trusted {
-                layer.trusted = trusted;
-                changed.push(layer.name.clone());
-            }
-        }
-        changed
     }
 }

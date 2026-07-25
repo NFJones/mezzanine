@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::security::auth::{AuthStore, DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS};
-use crate::security::project::ProjectTrustStore;
+use crate::security::project::{ProjectTrustRevision, ProjectTrustStore};
 
 /// Owns credential and trust-store bindings used by product integrations.
 #[derive(Debug)]
@@ -13,6 +13,7 @@ pub(super) struct RuntimeCredentialState {
     provider_auth_refresh_leeway_seconds: u64,
     project_trust_store: Option<ProjectTrustStore>,
     project_trust_database_path: Option<PathBuf>,
+    project_trust_revision: Option<ProjectTrustRevision>,
     announced_project_trust_roots: BTreeSet<PathBuf>,
 }
 
@@ -23,6 +24,7 @@ impl Default for RuntimeCredentialState {
             provider_auth_refresh_leeway_seconds: DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
             project_trust_store: None,
             project_trust_database_path: None,
+            project_trust_revision: None,
             announced_project_trust_roots: BTreeSet::new(),
         }
     }
@@ -57,6 +59,14 @@ impl RuntimeCredentialState {
         self.project_trust_store = store;
     }
 
+    pub(super) fn project_trust_revision(&self) -> Option<&ProjectTrustRevision> {
+        self.project_trust_revision.as_ref()
+    }
+
+    pub(super) fn set_project_trust_revision(&mut self, revision: Option<ProjectTrustRevision>) {
+        self.project_trust_revision = revision;
+    }
+
     pub(super) fn project_trust_database_path(&self) -> Option<&Path> {
         self.project_trust_database_path.as_deref()
     }
@@ -71,5 +81,9 @@ impl RuntimeCredentialState {
 
     pub(super) fn clear_project_trust_root_announcement(&mut self, root: &Path) -> bool {
         self.announced_project_trust_roots.remove(root)
+    }
+
+    pub(super) fn clear_project_trust_root_announcements(&mut self) {
+        self.announced_project_trust_roots.clear();
     }
 }

@@ -43,7 +43,10 @@ pub use discovery::{
 };
 #[cfg(test)]
 pub use types::ProjectTrustPrompt;
-pub use types::{OVERLAY_FILENAMES, ProjectTrustRecord, ProjectTrustStore, TrustDecision};
+pub use types::{
+    OVERLAY_FILENAMES, ProjectTrustRecord, ProjectTrustRevision, ProjectTrustSnapshot,
+    ProjectTrustStore, TrustDecision,
+};
 
 use encoding::{
     canonicalize_existing_or_original, parse_record_line, set_private_file_permissions,

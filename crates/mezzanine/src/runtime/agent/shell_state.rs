@@ -516,6 +516,7 @@ impl RuntimeSessionService {
         ) {
             return Ok(true);
         }
+        self.refresh_project_trust_store_from_disk_if_changed()?;
         let evaluation = evaluation.ok_or_else(|| {
             MezError::invalid_state(
                 "Bubblewrap path resolution requires the retained permission evaluation",
@@ -545,7 +546,9 @@ impl RuntimeSessionService {
                 }
             },
             None => self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
-                MezError::invalid_state("Bubblewrap path resolution requires the pane environment")
+                MezError::invalid_state(
+                    "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or trust a project containing the pane working directory",
+                )
             })?,
         };
         let maximum = match self.subagent_scope_declaration_for_turn(turn) {

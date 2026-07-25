@@ -419,3 +419,38 @@ fn trust_database_escapes_special_path_characters() {
 
     let _ = fs::remove_dir_all(root);
 }
+
+/// Verifies serialized trust updates reload the latest database while holding
+/// the writer lock so independent decisions cannot overwrite prior records.
+#[test]
+fn trust_database_serialized_updates_preserve_existing_records() {
+    let root = temp_root("trust-serialized-updates");
+    let first = root.join("first");
+    let second = root.join("second");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    let path = default_trust_database_path(&root.join("config"));
+
+    let first_snapshot = ProjectTrustStore::update_file(&path, |store| {
+        store.decide_at(first.clone(), TrustDecision::Trusted, None, 100)
+    })
+    .unwrap();
+    let second_snapshot = ProjectTrustStore::update_file(&path, |store| {
+        store.decide_at(second.clone(), TrustDecision::Rejected, None, 101)
+    })
+    .unwrap();
+
+    assert_ne!(first_snapshot.revision, second_snapshot.revision);
+    assert_eq!(
+        second_snapshot.store.get(&first).unwrap().state,
+        TrustDecision::Trusted
+    );
+    assert_eq!(
+        second_snapshot.store.get(&second).unwrap().state,
+        TrustDecision::Rejected
+    );
+    let persisted = ProjectTrustStore::load_snapshot_from_file(&path).unwrap();
+    assert_eq!(persisted, second_snapshot);
+
+    let _ = fs::remove_dir_all(root);
+}

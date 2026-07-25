@@ -22,7 +22,13 @@ impl RuntimeSessionService {
         store: ProjectTrustStore,
         database_path: Option<PathBuf>,
     ) {
+        let revision = database_path
+            .as_deref()
+            .and_then(|path| ProjectTrustStore::load_snapshot_from_file(path).ok())
+            .filter(|snapshot| snapshot.store == store)
+            .map(|snapshot| snapshot.revision);
         self.integration.set_project_trust_store(Some(store));
+        self.integration.set_project_trust_revision(revision);
         self.integration
             .set_project_trust_database_path(database_path);
     }

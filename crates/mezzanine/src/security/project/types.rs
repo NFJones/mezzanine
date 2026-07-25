@@ -130,11 +130,32 @@ pub struct ProjectTrustPrompt {
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProjectTrustStore {
     /// Stores the records value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) records: BTreeMap<PathBuf, ProjectTrustRecord>,
+}
+
+/// Identifies the exact persisted contents loaded for a project-trust store.
+///
+/// A missing database is distinct from an existing empty database so a
+/// long-running service can observe external deletion as an authority change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectTrustRevision {
+    /// The configured project-trust database does not exist.
+    Missing,
+    /// SHA-256 digest of the exact bytes read from the database.
+    Sha256(String),
+}
+
+/// Couples a parsed project-trust store to its stable persisted revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectTrustSnapshot {
+    /// Parsed trust records represented by the persisted database.
+    pub store: ProjectTrustStore,
+    /// Stable identity of the exact persisted database contents.
+    pub revision: ProjectTrustRevision,
 }

@@ -2391,6 +2391,15 @@ shown at approval time are diagnostic context only and MUST NOT be the only
 trusted paths. Future sessions MUST reload the trust record before applying
 project overlays.
 
+Long-running services MUST observe persisted project-trust changes before the
+next trust-dependent configuration operation or agent action. A semantic trust
+change MUST invalidate generation-keyed path-resolution and sandbox capability
+evidence before that evidence can authorize later work. If a changed trust
+database is unreadable or malformed, the service MUST fail closed and MUST NOT
+continue authorizing work from stale in-memory trust. Project-trust writers
+MUST serialize read-modify-write updates and atomically replace the persisted
+database so independent clients cannot lose records or expose partial content.
+
 If the primary client rejects trust, Mezzanine MUST ignore the project overlay
 and continue with lower-precedence configuration layers. Ignored overlays MUST
 be visible in configuration diagnostics.
@@ -2810,6 +2819,12 @@ NOT grant filesystem authority, request action-specific path resolution, or
 narrow Bubblewrap mounts. Ordinary outside, missing, symlink-escaping, globbed,
 tilde-prefixed, or otherwise shell-expanded operands MUST be attempted inside
 the bounded namespace and reported as sandboxed payload outcomes.
+
+Bubblewrap preflight MUST distinguish a missing pane environment signature
+from a valid pane environment that has no maximum filesystem authority. The
+latter MUST report that configured read/write scopes or a matching trusted
+project root are required; it MUST NOT be diagnosed as a missing pane
+environment.
 
 An explicit configured allow rule MAY declare complete or unknown read, write,
 network, credential, and process-control requirements; such declarations MAY
