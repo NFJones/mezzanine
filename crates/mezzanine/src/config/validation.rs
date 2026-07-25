@@ -12,11 +12,11 @@ use super::{
     ConfigMutationPlan, ConfigMutationValue, ConfigScope, ConfigValidation, ConfigValue,
     EffectiveConfig, MezError, Path, Result, contains_secret_material, extract_config_values,
     extract_json_paths, extract_toml_paths, extract_yaml_paths, format_diagnostics, fs,
-    mutate_json_text, mutate_toml_text, mutate_yaml_text, parse_config_schema_version,
-    parse_mutation_path, reject_container_target, reject_unsupported_mutation_path,
-    validate_command_rule_effects, validate_command_rule_examples, validate_known_schema_path,
-    validate_mcp_server_path, validate_permission_value, validate_permissions_path,
-    write_private_config_file,
+    mutate_json_text, mutate_toml_text, mutate_yaml_text, parse_config_json_value,
+    parse_config_schema_version, parse_mutation_path, reject_container_target,
+    reject_unsupported_mutation_path, validate_command_rule_effects,
+    validate_command_rule_examples, validate_known_schema_path, validate_mcp_server_path,
+    validate_permission_value, validate_permissions_path, write_private_config_file,
 };
 use mez_mux::theme::{parse_hex_color, valid_color_alias_name};
 
@@ -304,6 +304,7 @@ pub fn validate_config_text(
         ConfigFormat::Json => extract_json_paths(text),
     };
     let values = extract_config_values(format, text);
+    diagnostics.extend(validate_custom_toolchain_config(format, text, scope));
 
     let git_user_name = values.get("permissions.bubblewrap.git_user_name");
     let git_user_email = values.get("permissions.bubblewrap.git_user_email");
@@ -507,6 +508,303 @@ pub fn validate_config_text(
     diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
     diagnostics.dedup();
     ConfigValidation::from_diagnostics(diagnostics)
+}
+
+/// Validates schema-v32 custom toolchain definitions without inspecting the
+/// filesystem or ambient process environment.
+fn validate_custom_toolchain_config(
+    format: ConfigFormat,
+    text: &str,
+    scope: ConfigScope,
+) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(bubblewrap) = root
+        .get("permissions")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|permissions| permissions.get("bubblewrap"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let mut diagnostics = Vec::new();
+    let definitions = bubblewrap
+        .get("custom_toolchains")
+        .and_then(serde_json::Value::as_object);
+    let selections = bubblewrap
+        .get("toolchains")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    let custom_selected = selections
+        .iter()
+        .filter_map(|selection| selection.strip_prefix("custom:"))
+        .collect::<Vec<_>>();
+
+    if scope != ConfigScope::Primary && (definitions.is_some() || !custom_selected.is_empty()) {
+        let message = "primary_user_only_custom_toolchain: custom toolchain definitions and selections are allowed only in primary user configuration";
+        if definitions.is_some() {
+            diagnostics.push(ConfigDiagnostic {
+                path: "permissions.bubblewrap.custom_toolchains".to_string(),
+                message: message.to_string(),
+            });
+        }
+        if !custom_selected.is_empty() {
+            diagnostics.push(ConfigDiagnostic {
+                path: "permissions.bubblewrap.toolchains".to_string(),
+                message: message.to_string(),
+            });
+        }
+    }
+
+    let mut seen_selections = Vec::new();
+    for selection in &selections {
+        if seen_selections.contains(selection) {
+            diagnostics.push(ConfigDiagnostic {
+                path: "permissions.bubblewrap.toolchains".to_string(),
+                message: "toolchain selections must not contain duplicates".to_string(),
+            });
+        } else {
+            seen_selections.push(*selection);
+        }
+    }
+
+    for name in &custom_selected {
+        if !valid_custom_toolchain_name(name) {
+            diagnostics.push(ConfigDiagnostic {
+                path: "permissions.bubblewrap.toolchains".to_string(),
+                message:
+                    "custom toolchain name must match [a-z][a-z0-9_-]{0,31} and not be reserved"
+                        .to_string(),
+            });
+        }
+        if !definitions.is_some_and(|definitions| definitions.contains_key(*name)) {
+            diagnostics.push(ConfigDiagnostic {
+                path: "permissions.bubblewrap.toolchains".to_string(),
+                message: format!("missing custom toolchain definition for `{name}`"),
+            });
+        }
+    }
+
+    let Some(definitions) = definitions else {
+        return diagnostics;
+    };
+    if definitions.len() > 32 {
+        diagnostics.push(ConfigDiagnostic {
+            path: "permissions.bubblewrap.custom_toolchains".to_string(),
+            message: "custom toolchains must contain at most 32 definitions".to_string(),
+        });
+    }
+    for (name, definition) in definitions {
+        let base = format!("permissions.bubblewrap.custom_toolchains.{name}");
+        if !valid_custom_toolchain_name(name) {
+            diagnostics.push(ConfigDiagnostic {
+                path: base.clone(),
+                message:
+                    "custom toolchain name must match [a-z][a-z0-9_-]{0,31} and not be reserved"
+                        .to_string(),
+            });
+        }
+        let Some(definition) = definition.as_object() else {
+            diagnostics.push(ConfigDiagnostic {
+                path: base,
+                message: "custom toolchain definition must be a mapping".to_string(),
+            });
+            continue;
+        };
+        let roots = definition
+            .get("roots")
+            .and_then(serde_json::Value::as_array);
+        let root_count = roots.map_or(0, Vec::len);
+        if !(1..=8).contains(&root_count) {
+            diagnostics.push(ConfigDiagnostic {
+                path: format!("{base}.roots"),
+                message: "custom toolchain must declare 1 to 8 absolute printable roots"
+                    .to_string(),
+            });
+        }
+        for root in roots.into_iter().flatten() {
+            let valid = root.as_str().is_some_and(|root| {
+                let path = std::path::Path::new(root);
+                path.is_absolute()
+                    && !root.chars().any(char::is_control)
+                    && !path
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+            });
+            if !valid {
+                diagnostics.push(ConfigDiagnostic {
+                    path: format!("{base}.roots"),
+                    message: "custom toolchain root must be an absolute printable root without lexical traversal"
+                        .to_string(),
+                });
+            }
+        }
+        validate_custom_toolchain_references(
+            definition.get("path_entries"),
+            &format!("{base}.path_entries"),
+            root_count,
+            1,
+            16,
+            &mut diagnostics,
+        );
+        validate_custom_toolchain_references(
+            definition.get("required_executables"),
+            &format!("{base}.required_executables"),
+            root_count,
+            0,
+            16,
+            &mut diagnostics,
+        );
+        if let Some(description) = definition.get("description") {
+            let valid = description.as_str().is_some_and(|description| {
+                !description.trim().is_empty()
+                    && description.len() <= 256
+                    && !description.chars().any(char::is_control)
+            });
+            if !valid {
+                diagnostics.push(ConfigDiagnostic {
+                    path: format!("{base}.description"),
+                    message: "custom toolchain description must be non-empty printable text of at most 256 bytes"
+                        .to_string(),
+                });
+            }
+        }
+        if let Some(environment) = definition.get("environment") {
+            let Some(environment) = environment.as_object() else {
+                diagnostics.push(ConfigDiagnostic {
+                    path: format!("{base}.environment"),
+                    message: "custom toolchain environment must be a mapping".to_string(),
+                });
+                continue;
+            };
+            if environment.len() > 16 {
+                diagnostics.push(ConfigDiagnostic {
+                    path: format!("{base}.environment"),
+                    message: "custom toolchain environment must contain at most 16 entries"
+                        .to_string(),
+                });
+            }
+            for (variable, reference) in environment {
+                if !valid_custom_toolchain_environment_name(variable) {
+                    diagnostics.push(ConfigDiagnostic {
+                        path: format!("{base}.environment.{variable}"),
+                        message: "custom toolchain reserved environment name is not allowed"
+                            .to_string(),
+                    });
+                }
+                if !reference.as_str().is_some_and(|reference| {
+                    valid_custom_toolchain_reference(reference, root_count)
+                }) {
+                    diagnostics.push(ConfigDiagnostic {
+                        path: format!("{base}.environment.{variable}"),
+                        message: "custom toolchain environment value must be a valid root-relative reference"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+    }
+    diagnostics
+}
+
+/// Validates one bounded array of custom root-relative references.
+fn validate_custom_toolchain_references(
+    value: Option<&serde_json::Value>,
+    path: &str,
+    root_count: usize,
+    minimum: usize,
+    maximum: usize,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) {
+    let references = value.and_then(serde_json::Value::as_array);
+    let count = references.map_or(0, Vec::len);
+    if !(minimum..=maximum).contains(&count) {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: format!(
+                "custom toolchain references must contain {minimum} to {maximum} entries"
+            ),
+        });
+    }
+    for reference in references.into_iter().flatten() {
+        if !reference
+            .as_str()
+            .is_some_and(|reference| valid_custom_toolchain_reference(reference, root_count))
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path: path.to_string(),
+                message: "custom toolchain root-relative reference must use <root-index>:<relative-path> without traversal"
+                    .to_string(),
+            });
+        }
+    }
+}
+
+/// Reports whether one custom toolchain identity has the stable safe shape.
+fn valid_custom_toolchain_name(name: &str) -> bool {
+    let valid_shape = (1..=32).contains(&name.len())
+        && name.bytes().enumerate().all(|(index, byte)| match byte {
+            b'a'..=b'z' => true,
+            b'0'..=b'9' | b'_' | b'-' => index > 0,
+            _ => false,
+        });
+    valid_shape
+        && !matches!(
+            name,
+            "rust"
+                | "zig"
+                | "go"
+                | "deno"
+                | "bun"
+                | "node"
+                | "python"
+                | "system"
+                | "host"
+                | "default"
+        )
+}
+
+/// Reports whether one custom root reference is lexical, relative, and in range.
+fn valid_custom_toolchain_reference(reference: &str, root_count: usize) -> bool {
+    let Some((index, relative)) = reference.split_once(':') else {
+        return false;
+    };
+    let Ok(index) = index.parse::<usize>() else {
+        return false;
+    };
+    if index >= root_count || relative.is_empty() || relative.chars().any(char::is_control) {
+        return false;
+    }
+    let path = std::path::Path::new(relative);
+    !path.is_absolute()
+        && !path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+}
+
+/// Reports whether one synthesized variable name is narrow and non-reserved.
+fn valid_custom_toolchain_environment_name(name: &str) -> bool {
+    let shape = !name.is_empty()
+        && name.len() <= 64
+        && name.bytes().enumerate().all(|(index, byte)| match byte {
+            b'A'..=b'Z' | b'_' => true,
+            b'0'..=b'9' => index > 0,
+            _ => false,
+        });
+    shape
+        && !matches!(name, "PATH" | "HOME" | "SHELL" | "BASH_ENV" | "ENV")
+        && !["LD_", "DYLD_", "GIT_", "SSH_", "MEZ_", "MEZZANINE_"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
 }
 
 /// Runs the is approval policy value path operation for this subsystem.

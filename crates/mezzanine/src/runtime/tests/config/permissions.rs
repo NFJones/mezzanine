@@ -129,6 +129,44 @@ fn runtime_materializes_only_allowlisted_unique_toolchains() {
     }
 }
 
+/// Verifies schema-v32 custom selections retain closed built-in identities and
+/// materialize bounded root references without consulting the filesystem.
+#[test]
+fn runtime_materializes_typed_custom_toolchain_definitions() {
+    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "sandbox": "bubblewrap",
+            "bubblewrap": {
+                "toolchains": ["rust", "custom:acme"],
+                "custom_toolchains": {
+                    "acme": {
+                        "description": "Acme compiler SDK",
+                        "roots": ["/opt/acme-sdk"],
+                        "path_entries": ["0:bin", "0:tools/bin"],
+                        "required_executables": ["0:bin/acme"],
+                        "environment": {"ACME_HOME": "0:."}
+                    }
+                }
+            }
+        }
+    }))
+    .unwrap();
+    let SandboxConfig::Bubblewrap(bubblewrap) = configured.sandbox else {
+        panic!("expected Bubblewrap configuration");
+    };
+
+    assert_eq!(bubblewrap.toolchains.len(), 1);
+    assert_eq!(bubblewrap.toolchains[0].as_str(), "rust");
+    assert_eq!(bubblewrap.toolchain_selections.len(), 2);
+    assert_eq!(bubblewrap.toolchain_selections[0].as_str(), "rust");
+    assert_eq!(bubblewrap.toolchain_selections[1].as_str(), "custom:acme");
+    let definition = bubblewrap.custom_toolchains.get("acme").unwrap();
+    assert_eq!(definition.roots, vec!["/opt/acme-sdk"]);
+    assert_eq!(definition.path_entries[0].root_index, 0);
+    assert_eq!(definition.path_entries[0].relative_path, "bin");
+    assert_eq!(definition.environment["ACME_HOME"].relative_path, ".");
+}
+
 /// Verifies configured Bubblewrap remains active for full access but becomes
 /// ineffective only while the primary-user host-access policy is selected.
 #[test]
@@ -890,7 +928,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 31\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 32\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     let trust_path = root.join("trust.tsv");
@@ -1085,7 +1123,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 31\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 32\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);

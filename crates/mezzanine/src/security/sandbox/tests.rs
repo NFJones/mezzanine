@@ -22,6 +22,8 @@ fn config() -> BubblewrapConfig {
         git_user_name: None,
         git_user_email: None,
         toolchains: Vec::new(),
+        toolchain_selections: Vec::new(),
+        custom_toolchains: BTreeMap::new(),
     }
 }
 

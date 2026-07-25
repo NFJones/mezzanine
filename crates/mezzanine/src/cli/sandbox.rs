@@ -610,6 +610,13 @@ fn run_sandbox_profile<W: Write>(
             let (preset, authority, toolchains) = match permissions.sandbox {
                 crate::runtime::SandboxConfig::PolicyOnly => ("off", "explicit-scope", Vec::new()),
                 crate::runtime::SandboxConfig::Bubblewrap(config) => {
+                    if config.toolchain_selections.iter().any(|selection| {
+                        matches!(selection, crate::runtime::ToolchainSelection::Custom(_))
+                    }) {
+                        return Err(MezError::invalid_args(
+                            "sandbox profile export cannot include custom toolchains or host roots",
+                        ));
+                    }
                     let preset = if permissions.resources.write_scopes.is_empty()
                         && !permissions.resources.read_scopes.is_empty()
                     {
@@ -629,9 +636,9 @@ fn run_sandbox_profile<W: Write>(
                         "explicit-scope"
                     };
                     let toolchains = config
-                        .toolchains
+                        .toolchain_selections
                         .iter()
-                        .map(|kind| kind.as_str().to_string())
+                        .map(|selection| selection.as_str().to_string())
                         .collect();
                     (preset, authority, toolchains)
                 }

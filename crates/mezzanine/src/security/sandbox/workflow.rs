@@ -480,6 +480,8 @@ mod tests {
             git_user_name: None,
             git_user_email: None,
             toolchains: Vec::new(),
+            toolchain_selections: Vec::new(),
+            custom_toolchains: std::collections::BTreeMap::new(),
         });
         let discovery = ProjectRootDiscovery {
             canonical_start: project.clone(),
@@ -536,6 +538,8 @@ mod tests {
                 git_user_name: None,
                 git_user_email: None,
                 toolchains: Vec::new(),
+                toolchain_selections: Vec::new(),
+                custom_toolchains: std::collections::BTreeMap::new(),
             }),
             ..ConfiguredPermissions::default()
         };
@@ -582,6 +586,10 @@ mod tests {
             git_user_name: None,
             git_user_email: None,
             toolchains: vec![crate::runtime::SandboxToolchainKind::Rust],
+            toolchain_selections: vec![crate::runtime::ToolchainSelection::BuiltIn(
+                crate::runtime::SandboxToolchainKind::Rust,
+            )],
+            custom_toolchains: std::collections::BTreeMap::new(),
         });
         let discovery = ProjectRootDiscovery {
             canonical_start: root.to_path_buf(),

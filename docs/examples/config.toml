@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 31
+version = 32
 
 [terminal]
 profile = "xterm-compatible"
@@ -466,6 +466,17 @@ sandbox = "policy-only"
 # Existing services then require `/toolchain reload`, `config/reload`, or a
 # restart; `/toolchain enable KIND --yes` hot-applies subsequent actions.
 # toolchains = ["rust", "zig", "go", "deno", "bun", "node", "python"]
+# Custom toolchains are primary-config-only constrained definitions. They are
+# disabled by default and portable sandbox profiles reject them to avoid
+# serializing host roots. Runtime projection also requires existing pane read
+# authority; definitions never grant authority.
+# [permissions.bubblewrap.custom_toolchains.acme]
+# description = "Acme compiler SDK"
+# roots = ["/home/user/.local/share/acme-sdk"]
+# path_entries = ["0:bin"]
+# required_executables = ["0:bin/acme"]
+# [permissions.bubblewrap.custom_toolchains.acme.environment]
+# ACME_HOME = "0:."
 trusted_directories = []
 trusted_projects = []
 command_rules = []

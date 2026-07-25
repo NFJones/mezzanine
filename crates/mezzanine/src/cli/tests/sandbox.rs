@@ -908,6 +908,47 @@ fn sandbox_profile_export_is_deterministic_and_sanitized() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Profile export fails closed when the primary config enables a custom
+/// toolchain so no declared host root can enter a portable recipe.
+#[test]
+fn sandbox_profile_export_rejects_custom_toolchain_host_roots() {
+    let (env, home) = test_env("sandbox-profile-export-custom");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    fs::write(
+        config_root.join("config.toml"),
+        "version = 32\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = [\"custom:acme\"]\n[permissions.bubblewrap.custom_toolchains.acme]\nroots = [\"/private/acme\"]\npath_entries = [\"0:bin\"]\nrequired_executables = [\"0:bin/acme\"]\n",
+    )
+    .unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let error = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "profile".to_string(),
+            "export".to_string(),
+            "--path".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.message().contains("cannot include custom toolchains"));
+    assert!(!String::from_utf8_lossy(&stdout).contains("/private/acme"));
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Profile import rejects unknown or unsafe recipe fields before creating any
 /// configuration state.
 #[test]

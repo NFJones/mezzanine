@@ -6,6 +6,8 @@
 //! outside the config root separates permission-specific contracts from shared
 //! JSON and scalar parsing utilities.
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 
 use mez_agent::messaging::Recipient;
@@ -133,8 +135,87 @@ pub(crate) struct BubblewrapConfig {
     pub(crate) git_user_name: Option<String>,
     /// Optional non-secret Git author email projected without host Git config.
     pub(crate) git_user_email: Option<String>,
-    /// Direct-user-selected, allowlisted read-only toolchain projections.
+    /// Direct-user-selected built-in projections consumed by current resolvers.
     pub(crate) toolchains: Vec<SandboxToolchainKind>,
+    /// Ordered built-in and constrained custom persisted selections.
+    pub(crate) toolchain_selections: Vec<ToolchainSelection>,
+    /// Primary-user custom definitions keyed by validated stable name.
+    pub(crate) custom_toolchains: BTreeMap<String, CustomToolchainDefinition>,
+}
+
+/// One selected built-in or primary-user-defined sandbox toolchain.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ToolchainSelection {
+    /// One closed code-owned descriptor identity.
+    BuiltIn(SandboxToolchainKind),
+    /// One constrained custom definition identity.
+    Custom(CustomToolchainName),
+}
+
+impl ToolchainSelection {
+    /// Returns the stable persisted selector spelling.
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            Self::BuiltIn(kind) => kind.as_str(),
+            Self::Custom(name) => name.selector(),
+        }
+    }
+}
+
+/// Validated custom toolchain name and persisted selector.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CustomToolchainName {
+    name: String,
+    selector: String,
+}
+
+impl CustomToolchainName {
+    /// Parses one custom selector name using the schema-v32 identity contract.
+    fn parse(name: &str) -> Result<Self> {
+        if !valid_custom_toolchain_name(name) {
+            return Err(MezError::config(
+                "custom toolchain name must match [a-z][a-z0-9_-]{0,31} and not be reserved",
+            ));
+        }
+        Ok(Self {
+            name: name.to_string(),
+            selector: format!("custom:{name}"),
+        })
+    }
+
+    /// Returns the definition-map key without the selector prefix.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the stable `custom:<name>` selector.
+    pub(crate) fn selector(&self) -> &str {
+        &self.selector
+    }
+}
+
+/// One validated reference into a custom toolchain root.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CustomToolchainReference {
+    /// Zero-based index into the definition's roots.
+    pub(crate) root_index: usize,
+    /// Normalized lexical path relative to the selected root; `.` means root.
+    pub(crate) relative_path: String,
+}
+
+/// Structurally validated custom toolchain configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CustomToolchainDefinition {
+    /// Optional bounded user-facing description.
+    pub(crate) description: Option<String>,
+    /// Absolute host roots; runtime resolution canonicalizes and authorizes them.
+    pub(crate) roots: Vec<String>,
+    /// Ordered PATH entries relative to declared roots.
+    pub(crate) path_entries: Vec<CustomToolchainReference>,
+    /// Required executables relative to declared roots.
+    pub(crate) required_executables: Vec<CustomToolchainReference>,
+    /// Narrow synthesized environment references in deterministic key order.
+    pub(crate) environment: BTreeMap<String, CustomToolchainReference>,
 }
 
 /// Allowlisted developer toolchains that may be projected read-only.
@@ -169,6 +250,203 @@ impl SandboxToolchainKind {
             Self::Python => "python",
         }
     }
+}
+
+/// Materializes structurally validated custom definitions without consulting
+/// the filesystem or ambient process environment.
+fn runtime_custom_toolchains_from_config(
+    bubblewrap: Option<&serde_json::Map<String, Value>>,
+) -> Result<BTreeMap<String, CustomToolchainDefinition>> {
+    let Some(definitions) = bubblewrap
+        .and_then(|config| config.get("custom_toolchains"))
+        .and_then(Value::as_object)
+    else {
+        return Ok(BTreeMap::new());
+    };
+    if definitions.len() > 32 {
+        return Err(MezError::config(
+            "permissions.bubblewrap.custom_toolchains must contain at most 32 definitions",
+        ));
+    }
+    let mut parsed = BTreeMap::new();
+    for (name, definition) in definitions {
+        CustomToolchainName::parse(name)?;
+        let definition = definition
+            .as_object()
+            .ok_or_else(|| MezError::config("custom toolchain definition must be a mapping"))?;
+        let roots = runtime_json_string_array(definition.get("roots"))?.unwrap_or_default();
+        if !(1..=8).contains(&roots.len())
+            || roots.iter().any(|root| {
+                let path = std::path::Path::new(root);
+                !path.is_absolute()
+                    || root.chars().any(char::is_control)
+                    || path
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+            })
+        {
+            return Err(MezError::config(
+                "custom toolchain must declare 1 to 8 absolute printable roots without lexical traversal",
+            ));
+        }
+        let path_entries = runtime_custom_toolchain_references(
+            definition.get("path_entries"),
+            roots.len(),
+            1,
+            16,
+        )?;
+        let required_executables = runtime_custom_toolchain_references(
+            definition.get("required_executables"),
+            roots.len(),
+            0,
+            16,
+        )?;
+        let description = definition
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if description.as_deref().is_some_and(|description| {
+            description.trim().is_empty()
+                || description.len() > 256
+                || description.chars().any(char::is_control)
+        }) {
+            return Err(MezError::config(
+                "custom toolchain description must be non-empty printable text of at most 256 bytes",
+            ));
+        }
+        let mut environment = BTreeMap::new();
+        if let Some(values) = definition.get("environment") {
+            let values = values.as_object().ok_or_else(|| {
+                MezError::config("custom toolchain environment must be a mapping")
+            })?;
+            if values.len() > 16 {
+                return Err(MezError::config(
+                    "custom toolchain environment must contain at most 16 entries",
+                ));
+            }
+            for (variable, reference) in values {
+                if !valid_custom_toolchain_environment_name(variable) {
+                    return Err(MezError::config(
+                        "custom toolchain reserved environment name is not allowed",
+                    ));
+                }
+                let reference = reference.as_str().ok_or_else(|| {
+                    MezError::config(
+                        "custom toolchain environment values must be root-relative references",
+                    )
+                })?;
+                environment.insert(
+                    variable.clone(),
+                    parse_custom_toolchain_reference(reference, roots.len())?,
+                );
+            }
+        }
+        parsed.insert(
+            name.clone(),
+            CustomToolchainDefinition {
+                description,
+                roots,
+                path_entries,
+                required_executables,
+                environment,
+            },
+        );
+    }
+    Ok(parsed)
+}
+
+/// Parses one bounded array of root-relative custom definition references.
+fn runtime_custom_toolchain_references(
+    value: Option<&Value>,
+    root_count: usize,
+    minimum: usize,
+    maximum: usize,
+) -> Result<Vec<CustomToolchainReference>> {
+    let references = runtime_json_string_array(value)?.unwrap_or_default();
+    if !(minimum..=maximum).contains(&references.len()) {
+        return Err(MezError::config(format!(
+            "custom toolchain references must contain {minimum} to {maximum} entries"
+        )));
+    }
+    references
+        .iter()
+        .map(|reference| parse_custom_toolchain_reference(reference, root_count))
+        .collect()
+}
+
+/// Parses one lexical root-relative reference and validates its root index.
+fn parse_custom_toolchain_reference(
+    reference: &str,
+    root_count: usize,
+) -> Result<CustomToolchainReference> {
+    let (index, relative_path) = reference.split_once(':').ok_or_else(|| {
+        MezError::config(
+            "custom toolchain root-relative reference must use <root-index>:<relative-path>",
+        )
+    })?;
+    let root_index = index.parse::<usize>().map_err(|_| {
+        MezError::config("custom toolchain reference root index must be an integer")
+    })?;
+    let path = std::path::Path::new(relative_path);
+    if root_index >= root_count
+        || relative_path.is_empty()
+        || relative_path.chars().any(char::is_control)
+        || path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err(MezError::config(
+            "custom toolchain root-relative reference is invalid or outside its declared root",
+        ));
+    }
+    Ok(CustomToolchainReference {
+        root_index,
+        relative_path: relative_path.to_string(),
+    })
+}
+
+/// Reports whether one custom identity has the stable schema-v32 shape.
+fn valid_custom_toolchain_name(name: &str) -> bool {
+    (1..=32).contains(&name.len())
+        && name.bytes().enumerate().all(|(index, byte)| match byte {
+            b'a'..=b'z' => true,
+            b'0'..=b'9' | b'_' | b'-' => index > 0,
+            _ => false,
+        })
+        && !matches!(
+            name,
+            "rust"
+                | "zig"
+                | "go"
+                | "deno"
+                | "bun"
+                | "node"
+                | "python"
+                | "system"
+                | "host"
+                | "default"
+        )
+}
+
+/// Reports whether one synthesized variable name is narrow and non-reserved.
+fn valid_custom_toolchain_environment_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.bytes().enumerate().all(|(index, byte)| match byte {
+            b'A'..=b'Z' | b'_' => true,
+            b'0'..=b'9' => index > 0,
+            _ => false,
+        })
+        && !matches!(name, "PATH" | "HOME" | "SHELL" | "BASH_ENV" | "ENV")
+        && !["LD_", "DYLD_", "GIT_", "SSH_", "MEZ_", "MEZZANINE_"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
 }
 
 /// Behavior when the configured sandbox backend is unavailable.
@@ -525,18 +803,33 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 runtime_json_string_array(bubblewrap.and_then(|config| config.get("toolchains")))?
                     .unwrap_or_default();
             let mut toolchains = Vec::new();
-            for toolchain in configured_toolchains {
-                let toolchain = parse_sandbox_toolchain_kind(&toolchain).ok_or_else(|| {
-                    MezError::config(
-                        "permissions.bubblewrap.toolchains contains an unsupported kind",
-                    )
-                })?;
-                if toolchains.contains(&toolchain) {
+            let mut toolchain_selections = Vec::new();
+            let custom_toolchains = runtime_custom_toolchains_from_config(bubblewrap)?;
+            for selector in configured_toolchains {
+                let selection = if let Some(name) = selector.strip_prefix("custom:") {
+                    let name = CustomToolchainName::parse(name)?;
+                    if !custom_toolchains.contains_key(name.name()) {
+                        return Err(MezError::config(format!(
+                            "missing custom toolchain definition for `{}`",
+                            name.name()
+                        )));
+                    }
+                    ToolchainSelection::Custom(name)
+                } else {
+                    let kind = parse_sandbox_toolchain_kind(&selector).ok_or_else(|| {
+                        MezError::config(
+                            "permissions.bubblewrap.toolchains contains an unsupported kind",
+                        )
+                    })?;
+                    toolchains.push(kind);
+                    ToolchainSelection::BuiltIn(kind)
+                };
+                if toolchain_selections.contains(&selection) {
                     return Err(MezError::config(
                         "permissions.bubblewrap.toolchains must not contain duplicate kinds",
                     ));
                 }
-                toolchains.push(toolchain);
+                toolchain_selections.push(selection);
             }
             SandboxConfig::Bubblewrap(BubblewrapConfig {
                 executable,
@@ -546,6 +839,8 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 git_user_name,
                 git_user_email,
                 toolchains,
+                toolchain_selections,
+                custom_toolchains,
             })
         }
         _ => return Err(MezError::config("unsupported permissions.sandbox backend")),

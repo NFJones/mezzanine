@@ -2974,6 +2974,29 @@ and MUST NOT discover or enable Python. Direct-user detection MUST accept
 `--kind rust|zig|go|deno|bun|node|python`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state.
+Schema v32 MAY define constrained custom toolchains in the primary user layer
+under `permissions.bubblewrap.custom_toolchains.<name>` and select them with
+`custom:<name>`. Names MUST match `[a-z][a-z0-9_-]{0,31}` and MUST exclude
+built-in and reserved identities. A definition MUST contain one to eight
+absolute printable roots and one to sixteen root-relative PATH references in
+`<root-index>:<relative-path>` form. It MAY contain up to sixteen required
+executable references, a bounded printable description, and up to sixteen
+synthesized environment references. `0:.` denotes the declared root.
+References MUST reject absolute paths, lexical traversal, invalid root indexes,
+and control characters. Environment names MUST reject `PATH`, `HOME`, `SHELL`,
+`BASH_ENV`, `ENV`, `LD_*`, `DYLD_*`, `GIT_*`, `SSH_*`, and Mezzanine-owned
+variables. Commands, shell hooks, inherited host environment, user-selected
+sandbox destinations, writable mounts, network controls, devices, sockets,
+credentials, and raw Bubblewrap arguments MUST NOT be representable.
+Custom definitions and `custom:*` selections MUST be rejected from project
+overlays and live/model-authored configuration layers. Portable sandbox profile
+export MUST fail when a custom selection is enabled and MUST NOT serialize its
+host roots; profile import MUST reject custom selectors. Structural validation
+MUST NOT inspect ambient state. Filesystem existence, canonicalization,
+symlink containment, executable checks, forbidden canonical roots, and
+pane-resolved maximum-authority enforcement belong to runtime projection.
+Schema v31 to v32 migration MUST preserve built-in selections and omission and
+MUST NOT infer roots, definitions, or custom selections.
 Toolchain projection MUST be descriptor-driven. Each supported kind MUST own
 code-defined evidence names, structural root validation, fixed read-only
 sandbox destinations, deterministic PATH entries, synthesized child

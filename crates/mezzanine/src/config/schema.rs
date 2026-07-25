@@ -359,7 +359,7 @@ pub(super) const COMMAND_RULE_KEYS: &[&str] = &[
     "effects",
 ];
 
-/// Defines the typed Bubblewrap configuration keys accepted by schema v25.
+/// Defines the typed Bubblewrap configuration keys accepted by schema v32.
 pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] = &[
     "executable",
     "unavailable",
@@ -368,6 +368,16 @@ pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] = &[
     "git_user_name",
     "git_user_email",
     "toolchains",
+    "custom_toolchains",
+];
+
+/// Defines fields accepted by one constrained custom toolchain definition.
+pub(super) const CUSTOM_TOOLCHAIN_DEFINITION_KEYS: &[&str] = &[
+    "description",
+    "roots",
+    "path_entries",
+    "required_executables",
+    "environment",
 ];
 
 /// Reports whether a permission path controls sandbox confinement or authority.
