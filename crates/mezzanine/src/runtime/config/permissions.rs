@@ -146,6 +146,8 @@ pub(crate) enum SandboxToolchainKind {
     Zig,
     /// One self-contained Go SDK selected by the active pane.
     Go,
+    /// One self-contained Deno runtime selected by the active pane.
+    Deno,
 }
 
 impl SandboxToolchainKind {
@@ -155,6 +157,7 @@ impl SandboxToolchainKind {
             Self::Rust => "rust",
             Self::Zig => "zig",
             Self::Go => "go",
+            Self::Deno => "deno",
         }
     }
 }

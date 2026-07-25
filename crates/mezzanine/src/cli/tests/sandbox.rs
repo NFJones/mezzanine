@@ -308,6 +308,74 @@ fn sandbox_go_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Deno detection and activation use the captured CLI search path, keep host
+/// cache and authentication state out of the result, and persist only its kind.
+#[test]
+fn sandbox_deno_toolchain_detects_and_persists_only_kind() {
+    let (mut env, home) = test_env("sandbox-deno-toolchain");
+    let deno_root = home.join("deno-runtime");
+    fs::create_dir_all(&deno_root).unwrap();
+    fs::write(deno_root.join("deno"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(deno_root.join("deno"), fs::Permissions::from_mode(0o755)).unwrap();
+    let deno_root = deno_root.canonicalize().unwrap();
+    env.path = Some(deno_root.clone().into_os_string());
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let detect_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "detect".to_string(),
+            "--kind".to_string(),
+            "deno".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(detect_code, 0);
+    let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(detected["kind"], "deno");
+    assert_eq!(detected["available"], true);
+    assert_eq!(detected["deno_root"], deno_root.to_string_lossy().as_ref());
+    assert!(!config_path.exists());
+
+    stdout.clear();
+    let applied_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "enable".to_string(),
+            "deno".to_string(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(applied_code, 0);
+    let config = fs::read_to_string(&config_path).unwrap();
+    assert!(config.contains("toolchains = [\"deno\"]"), "{config}");
+    assert!(
+        !config.contains(&deno_root.to_string_lossy().into_owned()),
+        "{config}"
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]

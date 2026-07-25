@@ -144,6 +144,11 @@ if [ -n \"$mez_go_bin\" ] && [ -f \"$mez_go_bin\" ] && [ ! -L \"$mez_go_bin\" ];
   mez_go_root=$(CDPATH= cd -P -- \"$mez_go_bin_dir/..\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_go_root\" ] && [ \"$mez_go_bin\" = \"$mez_go_root/bin/go\" ] && mez_bootstrap_field env_manager \"go:$mez_go_root\"\n\
 fi\n\
+mez_deno_bin=$(command -v deno 2>/dev/null || true)\n\
+if [ -n \"$mez_deno_bin\" ] && [ -f \"$mez_deno_bin\" ] && [ ! -L \"$mez_deno_bin\" ]; then\n\
+  mez_deno_root=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_deno_bin\")\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_deno_root\" ] && [ \"$mez_deno_bin\" = \"$mez_deno_root/deno\" ] && mez_bootstrap_field env_manager \"deno:$mez_deno_root\"\n\
+fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -271,6 +276,11 @@ if test -n \"$mez_go_bin\"; and test -f \"$mez_go_bin\"; and not test -L \"$mez_
   set -l mez_go_bin_dir (cd (dirname \"$mez_go_bin\") 2>/dev/null; and pwd -P)\n\
   set -l mez_go_root (cd \"$mez_go_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_go_root\"; and test \"$mez_go_bin\" = \"$mez_go_root/bin/go\"; and mez_bootstrap_field env_manager \"go:$mez_go_root\"\n\
+end\n\
+set -l mez_deno_bin (command -s deno 2>/dev/null)\n\
+if test -n \"$mez_deno_bin\"; and test -f \"$mez_deno_bin\"; and not test -L \"$mez_deno_bin\"\n\
+  set -l mez_deno_root (cd (dirname \"$mez_deno_bin\") 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_deno_root\"; and test \"$mez_deno_bin\" = \"$mez_deno_root/deno\"; and mez_bootstrap_field env_manager \"deno:$mez_deno_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\

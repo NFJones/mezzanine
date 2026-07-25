@@ -28,6 +28,8 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains("env_manager \"zig:"));
     assert!(script.contains("command -v go"));
     assert!(script.contains("env_manager \"go:"));
+    assert!(script.contains("command -v deno"));
+    assert!(script.contains("env_manager \"deno:"));
     assert!(script.contains("bootstrap"));
     assert!(script.contains("complete"));
     assert!(script.contains("AGENTS.md"));
@@ -54,6 +56,8 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     assert!(script.contains("env_manager \"zig:"));
     assert!(script.contains("command -s go"));
     assert!(script.contains("env_manager \"go:"));
+    assert!(script.contains("command -s deno"));
+    assert!(script.contains("env_manager \"deno:"));
 }
 
 #[test]
