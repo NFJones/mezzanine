@@ -75,6 +75,7 @@ mod shell;
 mod show_records;
 mod slash;
 mod status;
+mod toolchain;
 
 pub(crate) use issues::{runtime_issue_database_path, runtime_issues_enabled};
 

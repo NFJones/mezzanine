@@ -811,6 +811,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "permissions"
         | "personality"
         | "refresh-provider-info"
+        | "toolchain"
         | "trust" => "configuration",
         "help" | "list-macros" | "list-sessions" | "list-skills" => "discovery",
         _ => "work control",
@@ -865,6 +866,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "memory" => "inspect or change persistent memory enablement.",
         "show-memories" => "browse durable memory records and open memory details.",
         "remember" => "generate durable memories from the current context or a statement.",
+        "toolchain" => "inspect or manage typed sandbox toolchain projections.",
         "model" => "inspect or change model and reasoning settings.",
         "thinking" => "inspect or toggle pane-local model reasoning visibility.",
         "latency" => "inspect or change latency/cost preference.",
@@ -1050,6 +1052,19 @@ mod tests {
         assert!(help.contains("host-access means no prompts"), "{help}");
         assert!(
             help.contains("host execution outside the configured sandbox"),
+            "{help}"
+        );
+    }
+
+    /// Verifies typed sandbox toolchain management is discoverable in the
+    /// configuration section of generated agent-shell help.
+    #[test]
+    fn agent_shell_help_lists_toolchain_command() {
+        let help = agent_shell_help_display();
+
+        assert!(help.contains("`/toolchain`"), "{help}");
+        assert!(
+            help.contains("inspect or manage typed sandbox toolchain projections"),
             "{help}"
         );
     }

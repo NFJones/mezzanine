@@ -2,6 +2,238 @@
 
 use super::*;
 
+/// Builds active-pane bootstrap evidence with optional Rust toolchain roots.
+fn toolchain_environment(environment_managers: Vec<String>) -> mez_agent::EnvironmentSignature {
+    mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "test-host",
+        "test-user",
+        "/bin/sh",
+        mez_agent::ShellClassification::PosixSh,
+        None,
+        Some("/usr/bin:/bin".to_string()),
+        "/workspace",
+        Some("/workspace".to_string()),
+        true,
+        None,
+        environment_managers,
+    )
+    .unwrap()
+}
+
+/// Creates a visible primary agent shell backed by one disk config layer.
+fn toolchain_command_service(
+    name: &str,
+    config_text: &str,
+) -> (RuntimeSessionService, mez_core::ids::ClientId, PathBuf) {
+    let root = temp_root(name);
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    fs::write(&path, config_text).unwrap();
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: config_text.to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    (service, primary, path)
+}
+
+/// Verifies `/toolchain` status and detection consume only active-pane
+/// bootstrap evidence and do not mutate config text or generation state.
+#[test]
+fn runtime_agent_shell_toolchain_status_and_detect_are_read_only() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-toolchain-read-only", config);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![
+            "cargo-bin:/home/test-user/.cargo/bin".to_string(),
+            "rustup:/home/test-user/.rustup".to_string(),
+        ]),
+    );
+    let generation = service.session.config_generation;
+    let before = fs::read_to_string(&path).unwrap();
+
+    let status = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-status","method":"agent/shell/command","params":{"idempotency_key":"toolchain-status","input":"/toolchain"}}"#,
+        &primary,
+    );
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-detect","method":"agent/shell/command","params":{"idempotency_key":"toolchain-detect","input":"/toolchain detect rust"}}"#,
+        &primary,
+    );
+
+    assert!(status.contains(r#""command":"toolchain""#), "{status}");
+    assert!(status.contains("effective=available-disabled"), "{status}");
+    assert!(status.contains("discovery=available"), "{status}");
+    assert!(detect.contains("operation=detect"), "{detect}");
+    assert!(detect.contains("available=true"), "{detect}");
+    assert!(detect.contains("source=active-pane-bootstrap"), "{detect}");
+    assert_eq!(service.session.config_generation, generation);
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// Verifies confirmed enable and disable persist only the typed kind, hot-apply
+/// to subsequent actions, and advance generation exactly once per real change.
+#[test]
+fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-toolchain-mutation", config);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![
+            "cargo-bin:/home/test-user/.cargo/bin".to_string(),
+            "rustup:/home/test-user/.rustup".to_string(),
+        ]),
+    );
+    let initial_generation = service.session.config_generation;
+
+    let missing_confirmation = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-unconfirmed","method":"agent/shell/command","params":{"idempotency_key":"toolchain-unconfirmed","input":"/toolchain enable rust"}}"#,
+        &primary,
+    );
+    assert!(
+        missing_confirmation.contains("expects status, list, detect"),
+        "{missing_confirmation}"
+    );
+    assert_eq!(service.session.config_generation, initial_generation);
+
+    let enabled = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-enable","method":"agent/shell/command","params":{"idempotency_key":"toolchain-enable","input":"/toolchain enable rust --yes"}}"#,
+        &primary,
+    );
+    assert!(enabled.contains(r#""kind":"mutated""#), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    assert!(enabled.contains("persisted_kind_only=true"), "{enabled}");
+    assert_eq!(service.session.config_generation, initial_generation + 1);
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("toolchains = [\"rust\"]"), "{persisted}");
+    assert!(!persisted.contains("/home/test-user"), "{persisted}");
+
+    let enabled_again = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-enable-again","method":"agent/shell/command","params":{"idempotency_key":"toolchain-enable-again","input":"/toolchain enable rust --yes"}}"#,
+        &primary,
+    );
+    assert!(enabled_again.contains("changed=false"), "{enabled_again}");
+    assert_eq!(service.session.config_generation, initial_generation + 1);
+
+    let disabled = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-disable","method":"agent/shell/command","params":{"idempotency_key":"toolchain-disable","input":"/toolchain disable rust --yes"}}"#,
+        &primary,
+    );
+    assert!(disabled.contains("changed=true"), "{disabled}");
+    assert_eq!(service.session.config_generation, initial_generation + 2);
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("toolchains = []")
+    );
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// Verifies `/toolchain reload` invokes the full disk-backed config reload and
+/// reports before/after typed state rather than applying only one field.
+#[test]
+fn runtime_agent_shell_toolchain_reload_reapplies_full_disk_config() {
+    let config = "[history]\nlines = 7\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-toolchain-reload", config);
+    fs::write(
+        &path,
+        "[history]\nlines = 13\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = [\"rust\"]\n",
+    )
+    .unwrap();
+
+    let reload = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-reload","method":"agent/shell/command","params":{"idempotency_key":"toolchain-reload","input":"/toolchain reload"}}"#,
+        &primary,
+    );
+
+    assert!(reload.contains("full_config_reload=true"), "{reload}");
+    assert!(reload.contains("before_configured=none"), "{reload}");
+    assert!(reload.contains("after_configured=rust"), "{reload}");
+    assert_eq!(service.terminal_history_limit(), 13);
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// Verifies the runtime executor defensively rejects a non-primary caller even
+/// when the caller bypasses the ordinary JSON-RPC authorization boundary.
+#[test]
+fn runtime_agent_shell_toolchain_rejects_non_primary_client() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, _primary, path) =
+        toolchain_command_service("runtime-toolchain-non-primary", config);
+    let non_primary = mez_core::ids::ClientId::opaque("c-observer").unwrap();
+
+    let error = service
+        .execute_agent_shell_command(&non_primary, "/toolchain status")
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(error.message().contains("primary client"), "{error}");
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// Verifies durable toolchain audit records retain typed operation and
+/// generation metadata without persisting bootstrap-derived host roots.
+#[test]
+fn runtime_agent_shell_toolchain_audit_redacts_discovered_roots() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) = toolchain_command_service("runtime-toolchain-audit", config);
+    let audit_path = path.parent().unwrap().join("audit.jsonl");
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
+        enabled: true,
+        path: audit_path.clone(),
+        hash_chain: false,
+        required: true,
+    }));
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![
+            "cargo-bin:/private/toolchains/.cargo/bin".to_string(),
+            "rustup:/private/toolchains/.rustup".to_string(),
+        ]),
+    );
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-audit","method":"agent/shell/command","params":{"idempotency_key":"toolchain-audit","input":"/toolchain detect rust"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains("available=true"), "{response}");
+    let audit = fs::read_to_string(&audit_path).unwrap();
+    assert!(audit.contains(r#""event_type":"toolchain""#), "{audit}");
+    assert!(audit.contains(r#""action":"detect""#), "{audit}");
+    assert!(audit.contains(r#""kind":"rust""#), "{audit}");
+    assert!(audit.contains("config_generation"), "{audit}");
+    assert!(!audit.contains("/private/toolchains"), "{audit}");
+    assert!(!audit.contains("cargo_bin"), "{audit}");
+    assert!(!audit.contains("rustup_home"), "{audit}");
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies that the runtime `agent/shell/command` `/list-mcp` path uses the live
 /// MCP registry and exposes unavailable or session-blacklisted details. This
 /// protects the spec requirement that agent-shell MCP visibility match control

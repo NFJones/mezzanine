@@ -136,6 +136,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("memory", &[], SlashCommandEffect::PolicyMutation, true),
         slash("show-memories", &[], SlashCommandEffect::ReadOnly, true),
         slash("remember", &[], SlashCommandEffect::SessionMutation, false),
+        slash("toolchain", &[], SlashCommandEffect::PolicyMutation, true),
         slash("model", &[], SlashCommandEffect::PolicyMutation, true),
         slash("thinking", &[], SlashCommandEffect::PolicyMutation, true),
         slash("latency", &[], SlashCommandEffect::PolicyMutation, true),
@@ -229,6 +230,18 @@ mod tests {
     }
 
     #[test]
+    /// Verifies the typed toolchain command is a queueable policy mutation so
+    /// live inspection and confirmed changes share one canonical identity.
+    fn slash_parser_registers_toolchain_as_queueable_policy_mutation() {
+        let invocation = parse_slash_command("/toolchain status").unwrap().unwrap();
+
+        assert_eq!(invocation.name, "toolchain");
+        assert_eq!(invocation.args, "status");
+        assert_eq!(invocation.effect, SlashCommandEffect::PolicyMutation);
+        assert!(invocation.queueable_while_running);
+    }
+
+    #[test]
     /// Verifies ordinary prompts bypass slash parsing and malformed or unknown
     /// slash commands fail through stable typed errors.
     fn slash_parser_rejects_invalid_commands() {
@@ -273,6 +286,7 @@ mod tests {
             "logout",
             "list-mcp",
             "memory",
+            "toolchain",
             "model",
             "loop",
             "stop",

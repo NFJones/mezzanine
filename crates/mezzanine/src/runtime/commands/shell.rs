@@ -596,6 +596,20 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "toolchain"
+                {
+                    let toolchain_outcome = self.execute_agent_shell_toolchain_command(
+                        primary_client_id,
+                        &pane_id,
+                        input,
+                    )?;
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&toolchain_outcome),
+                    )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "issue"
                 {
                     let issue_outcome =
