@@ -28,6 +28,7 @@ use crate::runtime::{
 };
 
 mod managed_home;
+mod toolchains;
 mod workflow;
 
 #[cfg(test)]
@@ -37,6 +38,11 @@ pub(crate) use managed_home::{
     clear_bubblewrap_managed_home, inspect_bubblewrap_managed_home,
     prepare_bubblewrap_managed_home_for_workload, prune_bubblewrap_managed_homes,
     remove_bubblewrap_managed_home,
+};
+pub(crate) use toolchains::{
+    RustToolchainDiscovery, RustToolchainHomeDiscovery, SANDBOX_RUST_CARGO_BIN, SANDBOX_RUST_PATH,
+    SANDBOX_RUSTUP_HOME, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    discover_rust_from_environment_managers, discover_rust_from_home, parse_sandbox_toolchain_kind,
 };
 pub(crate) use workflow::{
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
@@ -55,8 +61,6 @@ pub(crate) const BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER: &str =
     "/run/mez/host-command-placeholder";
 const SANDBOX_HOME: &str = "/home/mez";
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
-const SANDBOX_RUST_CARGO_BIN: &str = "/opt/mez/toolchains/rust/cargo-bin";
-const SANDBOX_RUSTUP_HOME: &str = "/opt/mez/toolchains/rust/rustup";
 const PROTECTED_CREDENTIAL_DIRECTORIES: [&str; 6] =
     [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"];
 
@@ -98,14 +102,8 @@ pub(crate) struct BubblewrapCompileRequest<'a> {
     pub(crate) interactive: bool,
 }
 
-/// Canonical host roots for one selected Rust toolchain projection.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BubblewrapRustToolchainRoots {
-    /// Canonical Cargo executable directory containing rustup shims.
-    pub(crate) cargo_bin: PathBuf,
-    /// Canonical Rustup home containing installed toolchains and metadata.
-    pub(crate) rustup_home: PathBuf,
-}
+/// Backwards-compatible compiler name for validated Rust discovery evidence.
+pub(crate) type BubblewrapRustToolchainRoots = RustToolchainDiscovery;
 
 /// Resolves a selected Rust toolchain from execution-only pane bootstrap data.
 ///
@@ -118,42 +116,7 @@ pub(crate) fn bubblewrap_rust_toolchain_roots(
     if !config.toolchains.contains(&SandboxToolchainKind::Rust) {
         return Ok(None);
     }
-    let manager_path = |kind: &str| {
-        environment_managers.iter().find_map(|manager| {
-            manager
-                .strip_prefix(kind)
-                .and_then(|path| path.strip_prefix(':'))
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from)
-        })
-    };
-    let cargo_bin = manager_path("cargo-bin").ok_or_else(|| {
-        SandboxCompileError::new(
-            SandboxCompileErrorKind::UnsupportedRequirement,
-            "selected Rust toolchain requires a canonical Cargo bin directory from pane bootstrap",
-        )
-    })?;
-    let rustup_home = manager_path("rustup").ok_or_else(|| {
-        SandboxCompileError::new(
-            SandboxCompileErrorKind::UnsupportedRequirement,
-            "selected Rust toolchain requires a canonical Rustup home from pane bootstrap",
-        )
-    })?;
-    validate_cargo_bin(&cargo_bin)?;
-    validate_toolchain_root(&rustup_home, "Rustup home", &[".rustup", "rustup"])?;
-    if cargo_bin == rustup_home
-        || cargo_bin.starts_with(&rustup_home)
-        || rustup_home.starts_with(&cargo_bin)
-    {
-        return Err(SandboxCompileError::new(
-            SandboxCompileErrorKind::ForbiddenHostPath,
-            "Cargo and Rustup homes must be distinct non-overlapping roots",
-        ));
-    }
-    Ok(Some(BubblewrapRustToolchainRoots {
-        cargo_bin,
-        rustup_home,
-    }))
+    discover_rust_from_environment_managers(environment_managers).map(Some)
 }
 
 /// Identifies whether command effects narrowed maximum filesystem authority.
@@ -667,8 +630,7 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
         validate_canonical_path(&managed_home.to_string_lossy(), "managed Bubblewrap home")?;
     }
     if let Some(rust) = request.rust_toolchain {
-        validate_cargo_bin(&rust.cargo_bin)?;
-        validate_toolchain_root(&rust.rustup_home, "Rustup home", &[".rustup", "rustup"])?;
+        rust.validate()?;
         validate_toolchain_authority(rust, request.maximum_authority)?;
     }
     if !Path::new(request.child_shell_path).starts_with("/bin")
@@ -1166,7 +1128,7 @@ fn bubblewrap_arguments(
         );
     }
     let executable_path = if request.rust_toolchain.is_some() {
-        format!("{SANDBOX_RUST_CARGO_BIN}:{MINIMAL_PATH}")
+        SANDBOX_RUST_PATH.to_string()
     } else {
         MINIMAL_PATH.to_string()
     };
@@ -1310,53 +1272,6 @@ fn validate_canonical_path(path: &str, label: &str) -> Result<(), SandboxCompile
         return Err(SandboxCompileError::new(
             SandboxCompileErrorKind::InvalidInput,
             format!("{label} must not contain lexical traversal components"),
-        ));
-    }
-    Ok(())
-}
-
-/// Validates one bootstrap-derived toolchain root without accepting a general
-/// host path or any credential, runtime, or multi-user home projection.
-fn validate_toolchain_root(
-    path: &Path,
-    label: &str,
-    allowed_names: &[&str],
-) -> Result<(), SandboxCompileError> {
-    let rendered = path.to_string_lossy();
-    validate_printable_absolute_path(&rendered, label)?;
-    let name = path.file_name().and_then(|name| name.to_str());
-    if !name.is_some_and(|name| allowed_names.contains(&name)) {
-        return Err(SandboxCompileError::new(
-            SandboxCompileErrorKind::ForbiddenHostPath,
-            format!("{label} must use an allowlisted toolchain directory name"),
-        ));
-    }
-    if rendered == "/"
-        || rendered == "/home"
-        || path_is_credential_directory(&rendered)
-        || path_overlaps(&rendered, "/run/user")
-        || path_overlaps(&rendered, "/var/run")
-    {
-        return Err(SandboxCompileError::new(
-            SandboxCompileErrorKind::ForbiddenHostPath,
-            format!("{label} overlaps a forbidden host path"),
-        ));
-    }
-    Ok(())
-}
-
-/// Validates the narrow Cargo executable projection without exposing Cargo
-/// credentials, registry configuration, caches, or unrelated home state.
-fn validate_cargo_bin(path: &Path) -> Result<(), SandboxCompileError> {
-    validate_toolchain_root(path, "Cargo bin", &["bin"])?;
-    let parent = path
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str());
-    if !matches!(parent, Some(".cargo" | "cargo")) {
-        return Err(SandboxCompileError::new(
-            SandboxCompileErrorKind::ForbiddenHostPath,
-            "Cargo bin must be directly beneath an allowlisted Cargo home",
         ));
     }
     Ok(())

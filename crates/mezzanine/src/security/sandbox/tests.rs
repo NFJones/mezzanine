@@ -848,3 +848,114 @@ fn rust_toolchain_resolution_rejects_missing_and_arbitrary_roots() {
     .unwrap_err();
     assert_eq!(arbitrary.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
 }
+
+/// Strict bootstrap discovery accepts exactly one canonical record for each
+/// Rust root while ignoring unrelated environment-manager evidence.
+///
+/// This protects all runtime callers from reimplementing manager parsing and
+/// proves the discovered roots use the same fixed projection metadata as the
+/// launch compiler and direct-user CLI.
+#[test]
+fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
+    let discovery = discover_rust_from_environment_managers(&[
+        "node:/home/alice/.local/node".to_string(),
+        "cargo-bin:/home/alice/.cargo/bin".to_string(),
+        "rustup:/home/alice/.rustup".to_string(),
+    ])
+    .unwrap();
+
+    assert_eq!(discovery.cargo_bin, PathBuf::from("/home/alice/.cargo/bin"));
+    assert_eq!(discovery.rustup_home, PathBuf::from("/home/alice/.rustup"));
+    assert_eq!(
+        SUPPORTED_SANDBOX_TOOLCHAIN_KINDS
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["rust"]
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("rust"),
+        Some(SandboxToolchainKind::Rust)
+    );
+    assert_eq!(parse_sandbox_toolchain_kind("python"), None);
+    assert_eq!(
+        SANDBOX_RUST_PATH,
+        format!("{SANDBOX_RUST_CARGO_BIN}:/usr/bin:/bin")
+    );
+    assert_eq!(SANDBOX_RUSTUP_HOME, "/opt/mez/toolchains/rust/rustup");
+}
+
+/// Strict bootstrap discovery rejects empty and duplicate Rust manager
+/// records instead of silently selecting the first ambiguous host path.
+#[test]
+fn rust_toolchain_discovery_rejects_malformed_and_duplicate_records() {
+    for managers in [
+        vec![
+            "cargo-bin".to_string(),
+            "rustup:/home/alice/.rustup".to_string(),
+        ],
+        vec![
+            "cargo-bin:/home/alice/.cargo/bin".to_string(),
+            "cargo-bin:/home/bob/.cargo/bin".to_string(),
+            "rustup:/home/alice/.rustup".to_string(),
+        ],
+        vec![
+            "cargo-bin:/home/alice/.cargo/bin".to_string(),
+            "rustup:".to_string(),
+        ],
+    ] {
+        let error = discover_rust_from_environment_managers(&managers).unwrap_err();
+        assert_eq!(error.kind(), SandboxCompileErrorKind::InvalidInput);
+    }
+}
+
+/// Shared Rust-root validation rejects overlap, runtime directories, and
+/// unexpected allowlist names before roots can reach launch compilation.
+#[test]
+fn rust_toolchain_discovery_rejects_overlapping_and_forbidden_roots() {
+    for managers in [
+        vec![
+            "cargo-bin:/home/alice/.rustup/.cargo/bin".to_string(),
+            "rustup:/home/alice/.rustup".to_string(),
+        ],
+        vec![
+            "cargo-bin:/home/alice/.cargo/bin".to_string(),
+            "rustup:/run/user/1000/.rustup".to_string(),
+        ],
+        vec![
+            "cargo-bin:/home/alice/tools/bin".to_string(),
+            "rustup:/home/alice/.rustup".to_string(),
+        ],
+    ] {
+        let error = discover_rust_from_environment_managers(&managers).unwrap_err();
+        assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+    }
+}
+
+/// Direct-user home discovery preserves partial availability while rejecting
+/// symlinked conventional roots without creating or modifying filesystem state.
+#[test]
+fn rust_toolchain_home_discovery_preserves_partial_state_and_rejects_symlinks() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-toolchain-home-discovery-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".cargo/bin")).unwrap();
+
+    let partial = discover_rust_from_home(Some(&root)).unwrap();
+    assert!(partial.cargo_bin.is_some());
+    assert!(partial.rustup_home.is_none());
+    assert!(!partial.available());
+
+    let external = root.with_extension("external-rustup");
+    let _ = std::fs::remove_dir_all(&external);
+    std::fs::create_dir_all(&external).unwrap();
+    std::os::unix::fs::symlink(&external, root.join(".rustup")).unwrap();
+    let error = discover_rust_from_home(Some(&root)).unwrap_err();
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(external);
+}

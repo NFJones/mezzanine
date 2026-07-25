@@ -26,9 +26,11 @@ use crate::security::project::{
     default_trust_database_path, discover_existing_overlays, discover_project_root_with_metadata,
 };
 use crate::security::sandbox::{
-    BubblewrapManagedHomeMaintenance, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
-    SandboxWorkflowRequest, clear_bubblewrap_managed_home, inspect_bubblewrap_managed_home,
-    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
+    BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_RUST_PATH,
+    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
+    SandboxWorkflowRequest, clear_bubblewrap_managed_home, discover_rust_from_home,
+    inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind, plan_sandbox_workflow,
+    prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -1085,7 +1087,10 @@ fn run_sandbox_toolchains<W: Write>(
             Ok(0)
         }
         SandboxToolchainsCommand::Enable { kinds, yes } => {
-            if kinds.iter().any(|kind| kind != "rust") {
+            if kinds
+                .iter()
+                .any(|kind| parse_sandbox_toolchain_kind(kind).is_none())
+            {
                 return Err(MezError::invalid_args(
                     "sandbox toolchains enable currently supports only rust",
                 ));
@@ -1095,7 +1100,7 @@ fn run_sandbox_toolchains<W: Write>(
                 ProjectRootInputSource::CurrentDirectory,
             )?;
             let detection = detect_rust_toolchain(env.home.as_deref())?;
-            if !detection.available {
+            if !detection.discovery.available() {
                 return Err(MezError::invalid_state(
                     "Rust toolchain detection requires canonical .cargo and .rustup directories",
                 ));
@@ -1131,45 +1136,13 @@ fn run_sandbox_toolchains<W: Write>(
 
 #[derive(Debug)]
 struct RustToolchainDetection {
-    available: bool,
-    cargo_bin: Option<PathBuf>,
-    rustup_home: Option<PathBuf>,
+    discovery: RustToolchainHomeDiscovery,
 }
 
 fn detect_rust_toolchain(home: Option<&Path>) -> Result<RustToolchainDetection> {
-    let Some(home) = home else {
-        return Ok(RustToolchainDetection {
-            available: false,
-            cargo_bin: None,
-            rustup_home: None,
-        });
-    };
-    let cargo_bin = canonical_toolchain_root(&home.join(".cargo/bin"), "bin")?;
-    let rustup_home = canonical_toolchain_root(&home.join(".rustup"), ".rustup")?;
-    Ok(RustToolchainDetection {
-        available: cargo_bin.is_some() && rustup_home.is_some(),
-        cargo_bin,
-        rustup_home,
-    })
-}
-
-fn canonical_toolchain_root(path: &Path, expected_name: &str) -> Result<Option<PathBuf>> {
-    let Ok(metadata) = fs::symlink_metadata(path) else {
-        return Ok(None);
-    };
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(MezError::invalid_state(format!(
-            "toolchain root {} must be a real directory, not a symlink",
-            path.display()
-        )));
-    }
-    let canonical = path.canonicalize()?;
-    if canonical.file_name().and_then(|name| name.to_str()) != Some(expected_name) {
-        return Err(MezError::invalid_state(
-            "detected toolchain root has an unexpected canonical directory name",
-        ));
-    }
-    Ok(Some(canonical))
+    discover_rust_from_home(home)
+        .map(|discovery| RustToolchainDetection { discovery })
+        .map_err(|error| MezError::invalid_state(error.to_string()))
 }
 
 fn toolchain_result(
@@ -1178,14 +1151,17 @@ fn toolchain_result(
     applied: bool,
     confirmation_required: bool,
 ) -> SandboxToolchainResult {
+    let available = detection.discovery.available();
+    let cargo_bin = detection.discovery.cargo_bin;
+    let rustup_home = detection.discovery.rustup_home;
     SandboxToolchainResult {
         version: 1,
         project_root,
-        kind: "rust",
-        available: detection.available,
-        cargo_bin: detection.cargo_bin,
-        rustup_home: detection.rustup_home,
-        sandbox_path: "/opt/mez/toolchains/rust/cargo-bin:/usr/bin:/bin",
+        kind: SUPPORTED_SANDBOX_TOOLCHAIN_KINDS[0].as_str(),
+        available,
+        cargo_bin,
+        rustup_home,
+        sandbox_path: SANDBOX_RUST_PATH,
         read_only: true,
         applied,
         confirmation_required,

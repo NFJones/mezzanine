@@ -18,6 +18,7 @@ use mez_agent::{ActionResult, AgentTurnRecord, SubagentScopeDeclaration};
 use mez_core::ids::{AgentId, PaneId, WindowId};
 
 use crate::error::{MezError, Result};
+use crate::security::sandbox::parse_sandbox_toolchain_kind;
 
 use super::{
     runtime_cooperation_mode_name, runtime_json_bool, runtime_json_object, runtime_json_string,
@@ -507,14 +508,9 @@ pub(crate) fn runtime_configured_permissions_from_config(
                     .unwrap_or_default();
             let mut toolchains = Vec::new();
             for toolchain in configured_toolchains {
-                let toolchain = match toolchain.as_str() {
-                    "rust" => SandboxToolchainKind::Rust,
-                    _ => {
-                        return Err(MezError::config(
-                            "permissions.bubblewrap.toolchains supports only rust",
-                        ));
-                    }
-                };
+                let toolchain = parse_sandbox_toolchain_kind(&toolchain).ok_or_else(|| {
+                    MezError::config("permissions.bubblewrap.toolchains supports only rust")
+                })?;
                 if toolchains.contains(&toolchain) {
                     return Err(MezError::config(
                         "permissions.bubblewrap.toolchains must not contain duplicate kinds",
