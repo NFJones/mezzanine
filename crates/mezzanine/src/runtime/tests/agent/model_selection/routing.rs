@@ -30,6 +30,31 @@ fn routed_path_resolution_environment(working_directory: &Path) -> mez_agent::En
     .unwrap()
 }
 
+/// Configures Bubblewrap with explicit filesystem authority for routed-worker
+/// provider path-resolution lifecycle tests.
+fn configure_routed_path_resolution_bubblewrap(service: &mut RuntimeSessionService, root: &Path) {
+    let root = root.to_string_lossy();
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "read_scopes": [root],
+                "write_scopes": [root],
+                "network_policy": "deny",
+                "bubblewrap": {
+                    "executable": "/usr/bin/bwrap",
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal"
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+}
+
 /// Starts a routed loop and returns its blocked parent plus selected worker turn.
 fn selected_routed_loop(
     command: &str,
@@ -1006,6 +1031,226 @@ fn runtime_routed_parent_continuation_reacquires_trusted_project_authority() {
     assert_eq!(cache_key.request.write_scopes, vec![expected]);
     assert!(cache_key.request.additional_paths.is_empty());
     assert!(waiters.is_empty());
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a routed worker provider task that requires pane-resolved
+/// filesystem authority remains pending while the fresh worker pane awaits its
+/// one-shot bootstrap. Repeated claims must be idempotent, and the same task
+/// must advance to canonical path resolution after environment evidence exists.
+#[test]
+fn runtime_routed_worker_provider_waits_for_bootstrap_before_path_resolution() {
+    let root = temp_root("runtime-routed-worker-provider-bootstrap");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 inspect routed worker bootstrap ordering");
+    configure_routed_path_resolution_bubblewrap(&mut service, &root);
+    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
+
+    assert!(service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
+    assert!(
+        service
+            .pane_environment_signature(&worker_turn.pane_id)
+            .is_none()
+    );
+    for _ in 0..2 {
+        assert!(
+            service
+                .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| !matches!(
+                transaction.kind,
+                RunningShellTransactionKind::PathResolution { .. }
+            ))
+    );
+    assert_eq!(
+        service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
+    );
+
+    let (bootstrap_marker, bootstrap_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.pane_id == worker_turn.pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("fresh routed worker should retain its bootstrap transaction");
+    let bootstrap_output = format!(
+        "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t{}\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n",
+        root.to_string_lossy()
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&bootstrap_marker)
+        .unwrap();
+    transaction.observed_output_bytes = bootstrap_output.len();
+    transaction.observed_output_preview = bootstrap_output;
+    service
+        .observe_agent_shell_transaction_start(
+            &worker_turn.pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &worker_turn.agent_id,
+            &worker_turn.pane_id,
+        )
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end(
+            &worker_turn.pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &worker_turn.agent_id,
+            &worker_turn.pane_id,
+            0,
+        )
+        .unwrap();
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
+    assert!(
+        service
+            .pane_environment_signature(&worker_turn.pane_id)
+            .is_some()
+    );
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find(|transaction| {
+            transaction.pane_id == worker_turn.pane_id
+                && matches!(
+                    transaction.kind,
+                    RunningShellTransactionKind::PathResolution { .. }
+                )
+        })
+        .expect("bootstrap evidence should advance the worker to path resolution");
+    let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind else {
+        unreachable!();
+    };
+    let expected = root.to_string_lossy().into_owned();
+    assert_eq!(cache_key.request.read_scopes, vec![expected.clone()]);
+    assert_eq!(cache_key.request.write_scopes, vec![expected]);
+    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a routed worker retained for pending bootstrap still fails closed
+/// after that one-shot bootstrap settles without a usable environment
+/// signature. The provider task must be removed instead of deferring forever
+/// or proceeding without canonical sandbox authority.
+#[test]
+fn runtime_routed_worker_provider_fails_after_unparsed_bootstrap() {
+    let root = temp_root("runtime-routed-worker-provider-bootstrap-failure");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, _parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 inspect failed routed worker bootstrap");
+    configure_routed_path_resolution_bubblewrap(&mut service, &root);
+    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    let (bootstrap_marker, bootstrap_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.pane_id == worker_turn.pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("fresh routed worker should retain its bootstrap transaction");
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&bootstrap_marker)
+        .unwrap();
+    transaction.observed_output_bytes = 49;
+    transaction.observed_output_preview =
+        "bootstrap output without an environment signature".to_string();
+    service
+        .observe_agent_shell_transaction_start(
+            &worker_turn.pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &worker_turn.agent_id,
+            &worker_turn.pane_id,
+        )
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end(
+            &worker_turn.pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &worker_turn.agent_id,
+            &worker_turn.pane_id,
+            0,
+        )
+        .unwrap();
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| !matches!(
+                transaction.kind,
+                RunningShellTransactionKind::PathResolution { .. }
+            ))
+    );
 
     service.terminate_all_pane_processes().unwrap();
     fs::remove_dir_all(root).unwrap();

@@ -2826,6 +2826,15 @@ latter MUST report that configured read/write scopes or a matching trusted
 project root are required; it MUST NOT be diagnosed as a missing pane
 environment.
 
+A provider request that requires pane-resolved filesystem authority MUST remain
+pending while that pane's one-shot bootstrap is pending and no environment
+signature exists. Parsed bootstrap evidence MUST allow canonical path
+resolution to resume before provider dispatch. Bootstrap completion, timeout,
+protocol failure, or write failure without a usable signature MUST fail the
+waiting provider request closed; the runtime MUST NOT fall back to unresolved
+or unsandboxed execution. Repeated claims while bootstrap is pending MUST be
+idempotent.
+
 An explicit configured allow rule MAY declare complete or unknown read, write,
 network, credential, and process-control requirements; such declarations MAY
 only narrow maximum authority. Only explicit complete declared read, write,

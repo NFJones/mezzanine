@@ -443,22 +443,42 @@ impl RuntimeSessionService {
             return Ok(None);
         }
 
-        let resolved_primary_path_scopes =
-            if let Some(request) = self.primary_path_resolution_request(&turn.pane_id)? {
-                match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
-                    Some(scopes) => Some(scopes),
-                    None => {
-                        let _ = self.dispatch_path_resolution_to_pane(&turn.pane_id, request)?;
-                        return Ok(None);
-                    }
-                }
-            } else {
-                None
-            };
-
+        let primary_path_resolution_request =
+            self.primary_path_resolution_request(&turn.pane_id)?;
         let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
+        let subagent_path_resolution_request = subagent_scope
+            .as_ref()
+            .map(Self::subagent_path_resolution_request)
+            .transpose()?
+            .flatten();
+        let path_resolution_required =
+            primary_path_resolution_request.is_some() || subagent_path_resolution_request.is_some();
+        if path_resolution_required
+            && self.pane_environment_signature(&turn.pane_id).is_none()
+            && self.pane_bootstrap_is_pending(&turn.pane_id)
+        {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                "provider_task deferred reason=pane_bootstrap_pending",
+            )?;
+            return Ok(None);
+        }
+
+        let resolved_primary_path_scopes = if let Some(request) = primary_path_resolution_request {
+            match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
+                Some(scopes) => Some(scopes),
+                None => {
+                    let _ = self.dispatch_path_resolution_to_pane(&turn.pane_id, request)?;
+                    return Ok(None);
+                }
+            }
+        } else {
+            None
+        };
+
         let resolved_subagent_path_scopes = if let Some(scope) = subagent_scope.as_ref() {
-            if let Some(request) = Self::subagent_path_resolution_request(scope)? {
+            if let Some(request) = subagent_path_resolution_request {
                 match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
                     Some(scopes) => Some(if let Some(primary) = &resolved_primary_path_scopes {
                         primary
