@@ -201,6 +201,7 @@ struct RuntimeThemePersistenceReport {
 }
 
 /// Result of applying a persisted model-authored config mutation batch.
+#[derive(Debug)]
 pub(crate) struct RuntimePersistedConfigMutationBatchReport {
     /// Primary config file that received the batch.
     pub path: PathBuf,
@@ -425,7 +426,17 @@ pub(crate) fn runtime_apply_persisted_config_mutation_batch(
     let batch =
         runtime_plan_config_mutations(format, &current_text, ConfigScope::Primary, mutations)?;
     if batch.changed {
-        if !service.persistence.config_uses_adapter() {
+        let uses_adapter = service.persistence.config_uses_adapter();
+        let previous_disk_text = if uses_adapter {
+            None
+        } else {
+            match fs::read_to_string(&path) {
+                Ok(text) => Some(Some(text)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(None),
+                Err(error) => return Err(error.into()),
+            }
+        };
+        if !uses_adapter {
             persist_config_text(&path, ConfigScope::Primary, &batch.text)?;
         }
         let previous_layers = service.integration.config_layers().to_vec();
@@ -436,7 +447,7 @@ pub(crate) fn runtime_apply_persisted_config_mutation_batch(
                     EventKind::ConfigChanged,
                     runtime_config_apply_event_payload(event_source, &report),
                 )?;
-                if service.persistence.config_uses_adapter() {
+                if uses_adapter {
                     service
                         .persistence
                         .queue_config(RuntimeSideEffect::Persist {
@@ -450,7 +461,23 @@ pub(crate) fn runtime_apply_persisted_config_mutation_batch(
             }
             Err(error) => {
                 service.integration.replace_config_layers(previous_layers);
-                let _ = service.apply_runtime_config_layers();
+                let runtime_rollback_error = service.apply_runtime_config_layers().err();
+                let disk_rollback_error = previous_disk_text.as_ref().and_then(|previous_text| {
+                    runtime_restore_primary_config_disk_state(&path, previous_text.as_deref()).err()
+                });
+                if runtime_rollback_error.is_some() || disk_rollback_error.is_some() {
+                    return Err(MezError::config(format!(
+                        "persisted config mutation live apply failed: {error}; rollback failed: runtime={}; disk={}",
+                        runtime_rollback_error
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| "restored".to_string()),
+                        disk_rollback_error
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| "restored".to_string())
+                    )));
+                }
                 return Err(error);
             }
         }
@@ -463,6 +490,25 @@ pub(crate) fn runtime_apply_persisted_config_mutation_batch(
         mutation_changed: batch.mutation_changed,
         deferred: service.persistence.config_uses_adapter(),
     })
+}
+
+/// Restores the exact primary-config disk state captured before a mutation.
+///
+/// Existing text is atomically persisted through the normal private-config
+/// writer. A file created by the failed mutation is removed when the original
+/// path did not exist.
+fn runtime_restore_primary_config_disk_state(
+    path: &PathBuf,
+    previous_text: Option<&str>,
+) -> Result<()> {
+    if let Some(previous_text) = previous_text {
+        return persist_config_text(path, ConfigScope::Primary, previous_text);
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Finds or creates the primary config file used for persisted command changes.

@@ -2,6 +2,122 @@
 
 use super::*;
 
+/// Verifies a persisted mutation restores exact existing file contents when
+/// the candidate configuration cannot be applied to the live runtime.
+///
+/// The missing default personality passes document validation but fails the
+/// runtime relationship check after persistence. Rollback must restore both
+/// the prior file and effective runtime state without emitting a config event
+/// or advancing the generation.
+#[test]
+fn runtime_persisted_config_mutation_rolls_back_existing_file_on_apply_failure() {
+    let root = temp_root("runtime-config-mutation-existing-rollback");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    let previous_text = "# preserve this exact text\n[history]\nlines = 9\n";
+    fs::write(&path, previous_text).unwrap();
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: previous_text.to_string(),
+        }])
+        .unwrap();
+    let initial_generation = service.session.config_generation;
+    let initial_events = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::Primary)
+        .into_iter()
+        .filter(|event| event.kind == EventKind::ConfigChanged)
+        .count();
+
+    let error = runtime_apply_persisted_config_mutation_batch(
+        &mut service,
+        path.clone(),
+        &[ConfigMutation {
+            path: "agents.default_personality".to_string(),
+            operation: ConfigMutationOperation::Set(ConfigMutationValue::String(
+                "missing-profile".to_string(),
+            )),
+        }],
+        "test:existing-rollback",
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("is not defined"), "{error}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), previous_text);
+    assert_eq!(service.terminal_history_limit(), 9);
+    assert_eq!(service.session.config_generation, initial_generation);
+    let final_events = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::Primary)
+        .into_iter()
+        .filter(|event| event.kind == EventKind::ConfigChanged)
+        .count();
+    assert_eq!(final_events, initial_events);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies a persisted mutation removes a newly created primary config when
+/// live application rejects the candidate document.
+///
+/// A valid in-memory primary layer can precede creation of its backing file.
+/// If the first persisted candidate fails live application, rollback must
+/// return the disk to that original missing state and preserve generation and
+/// event accounting.
+#[test]
+fn runtime_persisted_config_mutation_removes_new_file_on_apply_failure() {
+    let root = temp_root("runtime-config-mutation-new-file-rollback");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[history]\nlines = 11\n".to_string(),
+        }])
+        .unwrap();
+    assert!(!path.exists());
+    let initial_generation = service.session.config_generation;
+
+    let error = runtime_apply_persisted_config_mutation_batch(
+        &mut service,
+        path.clone(),
+        &[ConfigMutation {
+            path: "agents.default_personality".to_string(),
+            operation: ConfigMutationOperation::Set(ConfigMutationValue::String(
+                "missing-profile".to_string(),
+            )),
+        }],
+        "test:new-file-rollback",
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("is not defined"), "{error}");
+    assert!(!path.exists());
+    assert_eq!(service.terminal_history_limit(), 11);
+    assert_eq!(service.session.config_generation, initial_generation);
+    assert!(
+        service
+            .event_log()
+            .unwrap()
+            .replay_for(&EventAudience::Primary)
+            .into_iter()
+            .all(|event| event.kind != EventKind::ConfigChanged)
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies runtime applies explicit host clipboard pipe commands from
 /// configuration. Users on systems where the default auto-detection order is
 /// wrong need deterministic copy and paste commands without replacing the
