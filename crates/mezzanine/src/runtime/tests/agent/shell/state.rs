@@ -459,7 +459,7 @@ fn runtime_missing_primary_authority_reports_targeted_bubblewrap_error() {
 
     assert_eq!(
         error.message(),
-        "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or trust a project containing the pane working directory"
+        "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or review the project and run /trust <project-root>"
     );
     assert!(service.running_shell_transactions_for_tests().is_empty());
     fs::remove_dir_all(root).unwrap();

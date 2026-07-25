@@ -547,7 +547,7 @@ impl RuntimeSessionService {
             },
             None => self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
                 MezError::invalid_state(
-                    "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or trust a project containing the pane working directory",
+                    "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or review the project and run /trust <project-root>",
                 )
             })?,
         };
