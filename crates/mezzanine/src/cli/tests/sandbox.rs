@@ -110,8 +110,40 @@ fn sandbox_toolchain_detection_is_strictly_read_only() {
     let _ = fs::remove_dir_all(home);
 }
 
-/// Rust activation requires explicit confirmation and atomically persists only
-/// the typed selection, never the discovered host roots.
+/// Verifies a confirmed CLI toolchain mutation cannot fall back to editing
+/// primary configuration when no live runtime and primary client are present.
+fn assert_toolchain_enable_requires_live_primary(
+    env: CliEnv,
+    kind: &str,
+    config_path: &std::path::Path,
+    stdout: &mut Vec<u8>,
+    stderr: &mut Vec<u8>,
+) {
+    stdout.clear();
+    let error = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "enable".to_string(),
+            kind.to_string(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        stdout,
+        stderr,
+    ))
+    .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Io);
+    assert!(!config_path.exists());
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+}
+
+/// Rust activation requires explicit confirmation and a live primary client;
+/// it never falls back to offline primary-config persistence.
 #[test]
 fn sandbox_toolchain_enable_requires_confirmation_and_persists_only_kind() {
     let (env, home) = test_env("sandbox-toolchain-enable");
@@ -141,32 +173,13 @@ fn sandbox_toolchain_enable_requires_confirmation_and_persists_only_kind() {
     assert_eq!(preview["confirmation_required"], true);
     assert!(!config_path.exists());
 
-    stdout.clear();
-    let applied_code = block_on_cli_code(crate::cli::run_with(
-        with_json_output(vec![
-            "mez".to_string(),
-            "sandbox".to_string(),
-            "toolchains".to_string(),
-            "enable".to_string(),
-            "rust".to_string(),
-            "--yes".to_string(),
-        ]),
+    assert_toolchain_enable_requires_live_primary(
         env,
-        false,
+        "rust",
+        &config_path,
         &mut stdout,
         &mut stderr,
-    ))
-    .unwrap();
-    assert_eq!(applied_code, 0);
-    let applied: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
-    assert_eq!(applied["applied"], true);
-    let config = fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("toolchains = [\"rust\"]"), "{config}");
-    assert!(
-        !config.contains(&home.to_string_lossy().into_owned()),
-        "{config}"
     );
-    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }
@@ -211,30 +224,13 @@ fn sandbox_zig_toolchain_detects_and_persists_only_kind() {
     assert_eq!(detected["zig_root"], zig_root.to_string_lossy().as_ref());
     assert!(!config_path.exists());
 
-    stdout.clear();
-    let applied_code = block_on_cli_code(crate::cli::run_with(
-        with_json_output(vec![
-            "mez".to_string(),
-            "sandbox".to_string(),
-            "toolchains".to_string(),
-            "enable".to_string(),
-            "zig".to_string(),
-            "--yes".to_string(),
-        ]),
+    assert_toolchain_enable_requires_live_primary(
         env,
-        false,
+        "zig",
+        &config_path,
         &mut stdout,
         &mut stderr,
-    ))
-    .unwrap();
-    assert_eq!(applied_code, 0);
-    let config = fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("toolchains = [\"zig\"]"), "{config}");
-    assert!(
-        !config.contains(&zig_root.to_string_lossy().into_owned()),
-        "{config}"
     );
-    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }
@@ -280,30 +276,13 @@ fn sandbox_go_toolchain_detects_and_persists_only_kind() {
     assert_eq!(detected["go_root"], go_root.to_string_lossy().as_ref());
     assert!(!config_path.exists());
 
-    stdout.clear();
-    let applied_code = block_on_cli_code(crate::cli::run_with(
-        with_json_output(vec![
-            "mez".to_string(),
-            "sandbox".to_string(),
-            "toolchains".to_string(),
-            "enable".to_string(),
-            "go".to_string(),
-            "--yes".to_string(),
-        ]),
+    assert_toolchain_enable_requires_live_primary(
         env,
-        false,
+        "go",
+        &config_path,
         &mut stdout,
         &mut stderr,
-    ))
-    .unwrap();
-    assert_eq!(applied_code, 0);
-    let config = fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("toolchains = [\"go\"]"), "{config}");
-    assert!(
-        !config.contains(&go_root.to_string_lossy().into_owned()),
-        "{config}"
     );
-    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }
@@ -348,30 +327,13 @@ fn sandbox_deno_toolchain_detects_and_persists_only_kind() {
     assert_eq!(detected["deno_root"], deno_root.to_string_lossy().as_ref());
     assert!(!config_path.exists());
 
-    stdout.clear();
-    let applied_code = block_on_cli_code(crate::cli::run_with(
-        with_json_output(vec![
-            "mez".to_string(),
-            "sandbox".to_string(),
-            "toolchains".to_string(),
-            "enable".to_string(),
-            "deno".to_string(),
-            "--yes".to_string(),
-        ]),
+    assert_toolchain_enable_requires_live_primary(
         env,
-        false,
+        "deno",
+        &config_path,
         &mut stdout,
         &mut stderr,
-    ))
-    .unwrap();
-    assert_eq!(applied_code, 0);
-    let config = fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("toolchains = [\"deno\"]"), "{config}");
-    assert!(
-        !config.contains(&deno_root.to_string_lossy().into_owned()),
-        "{config}"
     );
-    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }
@@ -416,30 +378,13 @@ fn sandbox_bun_toolchain_detects_and_persists_only_kind() {
     assert_eq!(detected["bun_root"], bun_root.to_string_lossy().as_ref());
     assert!(!config_path.exists());
 
-    stdout.clear();
-    let applied_code = block_on_cli_code(crate::cli::run_with(
-        with_json_output(vec![
-            "mez".to_string(),
-            "sandbox".to_string(),
-            "toolchains".to_string(),
-            "enable".to_string(),
-            "bun".to_string(),
-            "--yes".to_string(),
-        ]),
+    assert_toolchain_enable_requires_live_primary(
         env,
-        false,
+        "bun",
+        &config_path,
         &mut stdout,
         &mut stderr,
-    ))
-    .unwrap();
-    assert_eq!(applied_code, 0);
-    let config = fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("toolchains = [\"bun\"]"), "{config}");
-    assert!(
-        !config.contains(&bun_root.to_string_lossy().into_owned()),
-        "{config}"
     );
-    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }
@@ -489,30 +434,13 @@ fn sandbox_node_toolchain_detects_and_persists_only_kind() {
     assert_eq!(detected["node_root"], node_root.to_string_lossy().as_ref());
     assert!(!config_path.exists());
 
-    stdout.clear();
-    let applied_code = block_on_cli_code(crate::cli::run_with(
-        with_json_output(vec![
-            "mez".to_string(),
-            "sandbox".to_string(),
-            "toolchains".to_string(),
-            "enable".to_string(),
-            "node".to_string(),
-            "--yes".to_string(),
-        ]),
+    assert_toolchain_enable_requires_live_primary(
         env,
-        false,
+        "node",
+        &config_path,
         &mut stdout,
         &mut stderr,
-    ))
-    .unwrap();
-    assert_eq!(applied_code, 0);
-    let config = fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("toolchains = [\"node\"]"), "{config}");
-    assert!(
-        !config.contains(&node_root.to_string_lossy().into_owned()),
-        "{config}"
     );
-    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }
@@ -565,30 +493,13 @@ fn sandbox_python_toolchain_detects_and_persists_only_kind() {
     );
     assert!(!config_path.exists());
 
-    stdout.clear();
-    let applied_code = block_on_cli_code(crate::cli::run_with(
-        with_json_output(vec![
-            "mez".to_string(),
-            "sandbox".to_string(),
-            "toolchains".to_string(),
-            "enable".to_string(),
-            "python".to_string(),
-            "--yes".to_string(),
-        ]),
+    assert_toolchain_enable_requires_live_primary(
         env,
-        false,
+        "python",
+        &config_path,
         &mut stdout,
         &mut stderr,
-    ))
-    .unwrap();
-    assert_eq!(applied_code, 0);
-    let config = fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("toolchains = [\"python\"]"), "{config}");
-    assert!(
-        !config.contains(&python_root.to_string_lossy().into_owned()),
-        "{config}"
     );
-    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }

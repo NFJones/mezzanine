@@ -51,6 +51,7 @@ pub(crate) fn runtime_mutating_method(method: &str) -> bool {
             | "terminal/step"
             | "terminal/command"
             | "agent/shell/command"
+            | "toolchain/mutation/submit"
             | "agent/spawn"
             | "project/trust/decide"
             | "project/trust/revoke"

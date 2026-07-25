@@ -534,6 +534,7 @@ pub(crate) const AUTOMATION_CONTROL_METHODS: &[&str] = &[
     "control/cancel",
     "session/list",
     "event/list",
+    "toolchain/mutation/submit",
 ];
 
 /// Defines the UNAUTHENTICATED CONTROL METHODS const used by this subsystem.
@@ -577,6 +578,7 @@ pub(crate) const PRIMARY_CONTROL_METHODS: &[&str] = &[
     "agent/shell/show",
     "agent/shell/hide",
     "agent/shell/command",
+    "toolchain/mutation/submit",
     "agent/list",
     "agent/task/list",
     "agent/spawn",

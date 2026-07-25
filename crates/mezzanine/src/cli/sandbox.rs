@@ -14,11 +14,14 @@ use clap::{Args, Subcommand};
 use rustix::fs::{FlockOperation, flock};
 use serde::Deserialize;
 
-use super::{CliEnv, CliOutputFormat, MezError, Result, Serialize, serialize_json};
+use super::{
+    CliEnv, CliOutputFormat, MezError, Result, Serialize, SocketSelection, cli_idempotency_key,
+    json_escape, run_automation_control_request, serialize_json,
+};
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
-    ConfigScope, DEFAULT_CONFIG_TOML, compose_effective_config, persist_config_mutation,
-    persist_config_text, plan_config_mutations,
+    ConfigScope, DEFAULT_CONFIG_TOML, compose_effective_config, persist_config_text,
+    plan_config_mutations,
 };
 use crate::runtime::{
     SandboxToolchainKind, runtime_configured_permissions_from_config,
@@ -269,6 +272,7 @@ enum SandboxToolchainsCommand {
 /// Runs one read-only sandbox workflow command and returns its process status.
 pub(super) fn run_sandbox<W: Write>(
     args: SandboxCliArgs,
+    socket_selection: &SocketSelection,
     env: CliEnv,
     interactive: bool,
     output_format: CliOutputFormat,
@@ -279,7 +283,14 @@ pub(super) fn run_sandbox<W: Write>(
             return run_sandbox_cache(command, env, output_format, stdout);
         }
         Some(SandboxCliCommand::Toolchains { command }) => {
-            return run_sandbox_toolchains(command, env, interactive, output_format, stdout);
+            return run_sandbox_toolchains(
+                command,
+                socket_selection,
+                env,
+                interactive,
+                output_format,
+                stdout,
+            );
         }
         Some(SandboxCliCommand::Profile { command }) => {
             return run_sandbox_profile(command, env, interactive, output_format, stdout);
@@ -1094,6 +1105,7 @@ struct SandboxToolchainResult {
 
 fn run_sandbox_toolchains<W: Write>(
     command: SandboxToolchainsCommand,
+    socket_selection: &SocketSelection,
     env: CliEnv,
     interactive: bool,
     output_format: CliOutputFormat,
@@ -1144,20 +1156,20 @@ fn run_sandbox_toolchains<W: Write>(
                 write_toolchain_result(stdout, output_format, &result)?;
                 return Ok(1);
             }
-            let paths = env.config_paths()?;
-            let config_path = paths.ensure_default_config()?;
-            persist_config_mutation(
-                &config_path,
-                ConfigScope::Primary,
-                ConfigMutation {
-                    path: "permissions.bubblewrap.toolchains".to_string(),
-                    operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(
-                        vec![kind.as_str().to_string()],
-                    )),
-                },
+            let digest = crate::runtime::normalized_toolchain_mutation_digest("enable", kind);
+            let params = format!(
+                r#"{{"operation":"enable","kind":"{}","request_digest":"{}","idempotency_key":"{}"}}"#,
+                json_escape(kind.as_str()),
+                digest,
+                cli_idempotency_key("toolchain-mutation-submit"),
+            );
+            run_automation_control_request(
+                socket_selection,
+                "toolchain/mutation/submit",
+                &params,
+                output_format,
+                stdout,
             )?;
-            let result = toolchain_result(project.canonical_root, detection, true, false);
-            write_toolchain_result(stdout, output_format, &result)?;
             Ok(0)
         }
     }

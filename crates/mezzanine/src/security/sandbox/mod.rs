@@ -75,8 +75,15 @@ pub(crate) const BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER: &str =
     "/run/mez/host-command-placeholder";
 const SANDBOX_HOME: &str = "/home/mez";
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
-const PROTECTED_CREDENTIAL_DIRECTORIES: [&str; 6] =
-    [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"];
+const PROTECTED_HOST_DIRECTORIES: [&str; 7] = [
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker",
+    ".config/mezzanine",
+];
 
 /// Stable, non-sensitive restriction identifiers used by status and failure diagnostics.
 pub(crate) const BUBBLEWRAP_RESTRICTION_IDS: [&str; 5] = [
@@ -784,7 +791,7 @@ pub(crate) fn bubblewrap_protected_path_resolution_candidates(
         .chain(&authority.write_scopes)
         .filter(|path| path_is_deterministic_user_home(path))
         .flat_map(|home| {
-            PROTECTED_CREDENTIAL_DIRECTORIES.map(|protected| {
+            PROTECTED_HOST_DIRECTORIES.map(|protected| {
                 Path::new(home)
                     .join(protected)
                     .to_string_lossy()
@@ -814,7 +821,7 @@ fn protected_masks_for_mounts(
         if !path_is_deterministic_user_home(&mount.destination) {
             continue;
         }
-        for protected in PROTECTED_CREDENTIAL_DIRECTORIES {
+        for protected in PROTECTED_HOST_DIRECTORIES {
             let destination = Path::new(&mount.destination)
                 .join(protected)
                 .to_string_lossy()
@@ -1311,7 +1318,8 @@ fn protected_path_evidence(
 }
 
 fn path_is_credential_directory(path: &str) -> bool {
-    Path::new(path).components().any(|component| {
+    let path = Path::new(path);
+    path.components().any(|component| {
         let Component::Normal(component) = component else {
             return false;
         };
@@ -1319,7 +1327,17 @@ fn path_is_credential_directory(path: &str) -> bool {
             component.to_str(),
             Some(".ssh" | ".gnupg" | ".aws" | ".azure" | ".kube" | ".docker")
         )
-    })
+    }) || path
+        .components()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|components| {
+            matches!(
+                components,
+                [Component::Normal(config), Component::Normal(mezzanine)]
+                    if *config == ".config" && *mezzanine == "mezzanine"
+            )
+        })
 }
 
 #[cfg(test)]

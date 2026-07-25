@@ -98,7 +98,15 @@ fn authority() -> PathScopes {
 /// Builds pane-resolved authority rooted at one synthetic user home.
 fn home_authority(home: &str) -> PathScopes {
     let mut evidence = BTreeMap::new();
-    for protected in [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"] {
+    for protected in [
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".azure",
+        ".kube",
+        ".docker",
+        ".config/mezzanine",
+    ] {
         let canonical = format!("{home}/{protected}");
         evidence.insert(
             canonical.clone(),
@@ -276,13 +284,21 @@ fn user_home_authority_emits_credential_masks_after_host_mounts() {
     let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
 
     let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
-    assert_eq!(plan.audit_summary.protected_mask_count, 6);
+    assert_eq!(plan.audit_summary.protected_mask_count, 7);
     let parent_mount = plan
         .arguments
         .windows(3)
         .position(|args| args == ["--ro-bind", "/home/alice", "/home/alice"])
         .unwrap();
-    for protected in [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"] {
+    for protected in [
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".azure",
+        ".kube",
+        ".docker",
+        ".config/mezzanine",
+    ] {
         let destination = format!("/home/alice/{protected}");
         let mask = plan
             .arguments

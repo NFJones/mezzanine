@@ -7,6 +7,7 @@
 //! Discovered host roots are shown only in direct pane-local status output and
 //! are never written to config or durable audit metadata.
 
+use super::shell::AgentShellCommandOrigin;
 use super::{
     AgentShellCommandOutcome, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     MezError, Result, RuntimeSessionService, current_unix_seconds, json_escape,
@@ -14,6 +15,7 @@ use super::{
     runtime_effective_config_value, runtime_primary_config_path,
 };
 use crate::integrations::agent::slash::AgentShellPresentation;
+use crate::runtime::control::normalized_toolchain_mutation_digest;
 use crate::runtime::{SandboxConfig, SandboxToolchainKind};
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
@@ -94,6 +96,7 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &str,
+        origin: AgentShellCommandOrigin,
     ) -> Result<AgentShellCommandOutcome> {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden(
@@ -107,7 +110,24 @@ impl RuntimeSessionService {
                 "toolchain executor received another slash command",
             ));
         }
+        if let Some(settlement) = parse_toolchain_settlement(&invocation.args)? {
+            if !origin.is_authenticated_primary_input() {
+                return Err(MezError::forbidden(
+                    "toolchain mutation settlement requires authenticated primary-client input",
+                ));
+            }
+            return self.settle_pending_toolchain_mutation(primary_client_id, pane_id, settlement);
+        }
         let operation = parse_toolchain_command(&invocation.args)?;
+        if matches!(
+            operation,
+            ToolchainCommand::Enable(_) | ToolchainCommand::Disable(_) | ToolchainCommand::Reload
+        ) && !origin.is_authenticated_primary_input()
+        {
+            return Err(MezError::forbidden(
+                "toolchain mutations require authenticated primary-client input",
+            ));
+        }
         match operation {
             ToolchainCommand::Status => {
                 let status = self.toolchain_status_for_pane(pane_id)?;
@@ -206,6 +226,140 @@ impl RuntimeSessionService {
                 })
             }
         }
+    }
+
+    /// Settles one exact external mutation request through direct primary
+    /// input. Successful confirmation is one-shot; stale, changed-generation,
+    /// wrong-pane, mismatched-digest, and replay attempts fail closed.
+    fn settle_pending_toolchain_mutation(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        settlement: ToolchainMutationSettlement,
+    ) -> Result<AgentShellCommandOutcome> {
+        let pending = self
+            .control
+            .pending_toolchain_mutation(&settlement.request_id)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::invalid_state("toolchain mutation request is missing or already settled")
+            })?;
+        if pending.pane_id != pane_id {
+            return Err(MezError::forbidden(
+                "toolchain mutation request belongs to another pane",
+            ));
+        }
+        if current_unix_seconds() > pending.expires_at_unix_seconds {
+            self.control
+                .remove_pending_toolchain_mutation(&settlement.request_id);
+            return Err(MezError::invalid_state(
+                "toolchain mutation request has expired",
+            ));
+        }
+        if self.session.config_generation != pending.config_generation {
+            self.control
+                .remove_pending_toolchain_mutation(&settlement.request_id);
+            return Err(MezError::conflict(
+                "toolchain mutation request is stale because configuration changed",
+            ));
+        }
+        let normalized_digest =
+            normalized_toolchain_mutation_digest(&pending.operation, pending.kind);
+        if settlement.digest != pending.digest || pending.digest != normalized_digest {
+            return Err(MezError::forbidden(
+                "toolchain mutation confirmation digest does not match the pending request",
+            ));
+        }
+        if !settlement.approve {
+            self.append_pending_toolchain_settlement_audit(
+                primary_client_id,
+                &pending,
+                "rejected",
+            )?;
+            self.control
+                .remove_pending_toolchain_mutation(&settlement.request_id);
+            return Ok(AgentShellCommandOutcome::Presented {
+                command: "toolchain".to_string(),
+                body: format!(
+                    "Rejected pending toolchain {} request for {}; no configuration changed.",
+                    pending.operation,
+                    pending.kind.as_str(),
+                ),
+                presentation: AgentShellPresentation::Notice,
+            });
+        }
+
+        let operation = match pending.operation.as_str() {
+            "enable" => {
+                let signature = self.pane_environment_signature(pane_id).ok_or_else(|| {
+                    MezError::invalid_state(
+                        "toolchain enable requires active-pane bootstrap evidence",
+                    )
+                })?;
+                resolve_toolchain_projection(
+                    &[pending.kind],
+                    &signature.environment_managers,
+                    &signature.os,
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+                ToolchainCommand::Enable(pending.kind)
+            }
+            "disable" => ToolchainCommand::Disable(pending.kind),
+            _ => {
+                return Err(MezError::invalid_state(
+                    "pending toolchain mutation contains an unsupported operation",
+                ));
+            }
+        };
+        let outcome = self.mutate_toolchain(
+            primary_client_id,
+            pane_id,
+            operation,
+            pending.kind,
+            pending.operation == "enable",
+        )?;
+        self.append_pending_toolchain_settlement_audit(primary_client_id, &pending, "applied")?;
+        self.control
+            .remove_pending_toolchain_mutation(&settlement.request_id);
+        Ok(outcome)
+    }
+
+    /// Appends redacted provenance for one primary-input settlement without
+    /// retaining host roots or other discovery evidence.
+    fn append_pending_toolchain_settlement_audit(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pending: &crate::runtime::control::PendingToolchainMutation,
+        outcome: &str,
+    ) -> Result<()> {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
+            return Ok(());
+        };
+        let mut record = AuditRecord::new(
+            self.session.id.to_string(),
+            AuditActor {
+                kind: "client".to_string(),
+                id: primary_client_id.to_string(),
+            },
+            "toolchain_mutation",
+            "settle",
+        )
+        .with_pane_id(pending.pane_id.clone())
+        .with_metadata("origin", "authenticated_primary_input")
+        .with_metadata(
+            "submitted_by_client_id",
+            pending.submitted_by_client_id.clone(),
+        )
+        .with_metadata("operation", pending.operation.clone())
+        .with_metadata("kind", pending.kind.as_str())
+        .with_metadata("request_digest_prefix", pending.digest[..24].to_string())
+        .with_metadata(
+            "config_generation",
+            self.session.config_generation.to_string(),
+        );
+        record.outcome = outcome.to_string();
+        audit_log.append(record.sanitized())?;
+        Ok(())
     }
 
     /// Applies one confirmed typed selection mutation transactionally.
@@ -563,6 +717,36 @@ impl RuntimeSessionService {
         record.outcome = outcome.to_string();
         audit_log.append(record.sanitized())?;
         Ok(())
+    }
+}
+
+/// Exact primary-input decision for one externally submitted mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ToolchainMutationSettlement {
+    request_id: String,
+    digest: String,
+    approve: bool,
+}
+
+/// Parses confirmation and rejection separately from ordinary toolchain
+/// operations so the established typed operation enum remains copyable.
+fn parse_toolchain_settlement(args: &str) -> Result<Option<ToolchainMutationSettlement>> {
+    let words = args.split_ascii_whitespace().collect::<Vec<_>>();
+    match words.as_slice() {
+        ["confirm", request_id, digest, "--yes"] => Ok(Some(ToolchainMutationSettlement {
+            request_id: (*request_id).to_string(),
+            digest: (*digest).to_string(),
+            approve: true,
+        })),
+        ["reject", request_id, digest] => Ok(Some(ToolchainMutationSettlement {
+            request_id: (*request_id).to_string(),
+            digest: (*digest).to_string(),
+            approve: false,
+        })),
+        ["confirm", ..] | ["reject", ..] => Err(MezError::invalid_args(
+            "toolchain settlement expects confirm request-id digest --yes or reject request-id digest",
+        )),
+        _ => Ok(None),
     }
 }
 

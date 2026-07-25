@@ -1,6 +1,7 @@
 //! Agent shell commands tests.
 
 use super::*;
+use crate::control::{decode_control_frame, encode_control_body};
 
 /// Builds active-pane bootstrap evidence with optional Rust toolchain roots.
 fn toolchain_environment(environment_managers: Vec<String>) -> mez_agent::EnvironmentSignature {
@@ -157,10 +158,19 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
     );
     assert_eq!(service.session.config_generation, initial_generation);
 
-    let enabled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-enable","method":"agent/shell/command","params":{"idempotency_key":"toolchain-enable","input":"/toolchain enable rust --yes"}}"#,
+    let control_attempt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-control-enable","method":"agent/shell/command","params":{"idempotency_key":"toolchain-control-enable","input":"/toolchain enable rust --yes"}}"#,
         &primary,
     );
+    assert!(
+        control_attempt.contains("require authenticated primary-client input"),
+        "{control_attempt}"
+    );
+    assert_eq!(service.session.config_generation, initial_generation);
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable rust --yes")
+        .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled rust; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -169,10 +179,9 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
     assert!(persisted.contains("toolchains = [\"rust\"]"), "{persisted}");
     assert!(!persisted.contains("/home/test-user"), "{persisted}");
 
-    let enabled_again = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-enable-again","method":"agent/shell/command","params":{"idempotency_key":"toolchain-enable-again","input":"/toolchain enable rust --yes"}}"#,
-        &primary,
-    );
+    let enabled_again = service
+        .execute_agent_shell_command(&primary, "/toolchain enable rust --yes")
+        .unwrap();
     assert!(
         enabled_again.contains("Enabled rust; no-op"),
         "{enabled_again}"
@@ -180,10 +189,9 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
     assert!(enabled_again.contains("changed=false"), "{enabled_again}");
     assert_eq!(service.session.config_generation, initial_generation + 1);
 
-    let disabled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-disable","method":"agent/shell/command","params":{"idempotency_key":"toolchain-disable","input":"/toolchain disable rust --yes"}}"#,
-        &primary,
-    );
+    let disabled = service
+        .execute_agent_shell_command(&primary, "/toolchain disable rust --yes")
+        .unwrap();
     assert!(disabled.contains("Disabled rust; updated"), "{disabled}");
     assert!(disabled.contains("changed=true"), "{disabled}");
     assert_eq!(service.session.config_generation, initial_generation + 2);
@@ -221,10 +229,9 @@ fn runtime_agent_shell_zig_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Kind | `zig` |"), "{detect}");
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
-    let enabled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"zig-enable","method":"agent/shell/command","params":{"idempotency_key":"zig-enable","input":"/toolchain enable zig --yes"}}"#,
-        &primary,
-    );
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable zig --yes")
+        .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled zig; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -265,10 +272,9 @@ fn runtime_agent_shell_go_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Kind | `go` |"), "{detect}");
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
-    let enabled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"go-enable","method":"agent/shell/command","params":{"idempotency_key":"go-enable","input":"/toolchain enable go --yes"}}"#,
-        &primary,
-    );
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable go --yes")
+        .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled go; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -308,10 +314,9 @@ fn runtime_agent_shell_deno_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Kind | `deno` |"), "{detect}");
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
-    let enabled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"deno-enable","method":"agent/shell/command","params":{"idempotency_key":"deno-enable","input":"/toolchain enable deno --yes"}}"#,
-        &primary,
-    );
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable deno --yes")
+        .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled deno; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -351,10 +356,9 @@ fn runtime_agent_shell_bun_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Kind | `bun` |"), "{detect}");
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
-    let enabled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"bun-enable","method":"agent/shell/command","params":{"idempotency_key":"bun-enable","input":"/toolchain enable bun --yes"}}"#,
-        &primary,
-    );
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable bun --yes")
+        .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled bun; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -399,10 +403,9 @@ fn runtime_agent_shell_node_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Kind | `node` |"), "{detect}");
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
-    let enabled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"node-enable","method":"agent/shell/command","params":{"idempotency_key":"node-enable","input":"/toolchain enable node --yes"}}"#,
-        &primary,
-    );
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable node --yes")
+        .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled node; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -447,10 +450,9 @@ fn runtime_agent_shell_python_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Kind | `python` |"), "{detect}");
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
-    let enabled = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"python-enable","method":"agent/shell/command","params":{"idempotency_key":"python-enable","input":"/toolchain enable python --yes"}}"#,
-        &primary,
-    );
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable python --yes")
+        .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled python; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -480,10 +482,9 @@ fn runtime_agent_shell_toolchain_reload_reapplies_full_disk_config() {
     )
     .unwrap();
 
-    let reload = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-reload","method":"agent/shell/command","params":{"idempotency_key":"toolchain-reload","input":"/toolchain reload"}}"#,
-        &primary,
-    );
+    let reload = service
+        .execute_agent_shell_command(&primary, "/toolchain reload")
+        .unwrap();
 
     assert!(reload.contains(r#""presentation":"notice""#), "{reload}");
     assert!(
@@ -515,6 +516,155 @@ fn runtime_agent_shell_toolchain_rejects_non_primary_client() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
     assert!(error.message().contains("primary client"), "{error}");
     let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// Verifies an authenticated automation client may queue one exact mutation,
+/// but cannot apply it; only matching direct primary input settles it once.
+#[test]
+fn runtime_toolchain_mutation_submission_requires_exact_primary_settlement() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-toolchain-pending-settlement", config);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![
+            "cargo-bin:/home/test-user/.cargo/bin".to_string(),
+            "rustup:/home/test-user/.rustup".to_string(),
+        ]),
+    );
+    let digest = crate::runtime::normalized_toolchain_mutation_digest(
+        "enable",
+        crate::runtime::SandboxToolchainKind::Rust,
+    );
+    let mut connection = ControlConnectionState::new(true, false);
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"automation-init","method":"control/initialize","params":{"client_name":"toolchain-cli","requested_version":1,"requested_role":"automation","client":{"name":"toolchain-cli","interactive":false}}}"#,
+    );
+    let submit = encode_control_body(&format!(
+        r#"{{"jsonrpc":"2.0","id":"submit","method":"toolchain/mutation/submit","params":{{"operation":"enable","kind":"rust","request_digest":"{digest}","idempotency_key":"submit-rust"}}}}"#,
+    ));
+    let mut input = initialize;
+    input.extend_from_slice(&submit);
+
+    let (output, consumed) = service
+        .handle_control_input_for_connection(&input, 16 * 1024, &mut connection)
+        .unwrap();
+    let (_, initialized_bytes) = decode_control_frame(&output, 16 * 1024).unwrap();
+    let (submitted, _) = decode_control_frame(&output[initialized_bytes..], 16 * 1024).unwrap();
+    assert_eq!(consumed, input.len());
+    assert!(submitted.contains(r#""state":"pending""#), "{submitted}");
+    assert!(submitted.contains(r#""operation":"enable""#), "{submitted}");
+    assert!(submitted.contains(r#""kind":"rust""#), "{submitted}");
+    assert!(!fs::read_to_string(&path).unwrap().contains("\"rust\""));
+
+    let submitted_json: serde_json::Value = serde_json::from_str(&submitted).unwrap();
+    let request_id = submitted_json["result"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let tampered = service
+        .execute_agent_shell_command(
+            &primary,
+            &format!("/toolchain confirm {request_id} {} --yes", "0".repeat(64)),
+        )
+        .unwrap();
+    assert!(tampered.contains("digest does not match"), "{tampered}");
+    assert!(!fs::read_to_string(&path).unwrap().contains("\"rust\""));
+
+    let confirmed = service
+        .execute_agent_shell_command(
+            &primary,
+            &format!("/toolchain confirm {request_id} {digest} --yes"),
+        )
+        .unwrap();
+    assert!(confirmed.contains("Enabled rust; updated"), "{confirmed}");
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("toolchains = [\"rust\"]")
+    );
+
+    let replay = service
+        .execute_agent_shell_command(
+            &primary,
+            &format!("/toolchain confirm {request_id} {digest} --yes"),
+        )
+        .unwrap();
+    assert!(replay.contains("missing or already settled"), "{replay}");
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// Verifies pending mutation settlement fails closed after configuration
+/// generation changes, and submission itself fails without a live primary.
+#[test]
+fn runtime_toolchain_mutation_submission_rejects_stale_and_absent_primary() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-toolchain-pending-stale", config);
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![
+            "cargo-bin:/home/test-user/.cargo/bin".to_string(),
+            "rustup:/home/test-user/.rustup".to_string(),
+        ]),
+    );
+    let digest = crate::runtime::normalized_toolchain_mutation_digest(
+        "disable",
+        crate::runtime::SandboxToolchainKind::Rust,
+    );
+    let submitted = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"submit-stale","method":"toolchain/mutation/submit","params":{{"operation":"disable","kind":"rust","request_digest":"{digest}","idempotency_key":"submit-stale"}}}}"#,
+        ),
+        &primary,
+    );
+    assert!(submitted.contains(r#""state":"pending""#), "{submitted}");
+    let submitted_json: serde_json::Value = serde_json::from_str(&submitted).unwrap();
+    let request_id = submitted_json["result"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let changed = service
+        .execute_agent_shell_command(&primary, "/toolchain enable rust --yes")
+        .unwrap();
+    assert!(changed.contains("Enabled rust; updated"), "{changed}");
+    let stale = service
+        .execute_agent_shell_command(
+            &primary,
+            &format!("/toolchain confirm {request_id} {digest} --yes"),
+        )
+        .unwrap();
+    assert!(stale.contains("configuration changed"), "{stale}");
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("toolchains = [\"rust\"]")
+    );
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+
+    let mut detached = test_runtime_service();
+    let mut connection = ControlConnectionState::new(true, false);
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"automation-init","method":"control/initialize","params":{"client_name":"toolchain-cli","requested_version":1,"requested_role":"automation","client":{"name":"toolchain-cli","interactive":false}}}"#,
+    );
+    let submit = encode_control_body(&format!(
+        r#"{{"jsonrpc":"2.0","id":"absent-primary","method":"toolchain/mutation/submit","params":{{"operation":"disable","kind":"rust","request_digest":"{digest}","idempotency_key":"absent-primary"}}}}"#,
+    ));
+    let mut input = initialize;
+    input.extend_from_slice(&submit);
+    let (output, _) = detached
+        .handle_control_input_for_connection(&input, 16 * 1024, &mut connection)
+        .unwrap();
+    let (_, initialized_bytes) = decode_control_frame(&output, 16 * 1024).unwrap();
+    let (absent, _) = decode_control_frame(&output[initialized_bytes..], 16 * 1024).unwrap();
+    assert!(
+        absent.contains(r#""mezzanine_code":"invalid_state""#),
+        "{absent}"
+    );
+    assert!(absent.contains("attached primary client"), "{absent}");
 }
 
 /// Verifies durable toolchain audit records retain typed operation and

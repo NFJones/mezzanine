@@ -160,7 +160,16 @@ fn runtime_config_change_rejects_user_only_sandbox_policy() {
 
     for (index, (setting_path, value)) in [
         ("permissions.sandbox", "bubblewrap"),
+        ("permissions.bubblewrap", r#"{\"toolchains\":[\"rust\"]}"#),
         ("permissions.bubblewrap.executable", "/tmp/bwrap"),
+        (
+            "permissions.bubblewrap.custom_toolchains.private.roots",
+            r#"[\"/private/toolchain\"]"#,
+        ),
+        (
+            "permissions.bubblewrap.custom_toolchains.private",
+            r#"{\"roots\":[\"/private/toolchain\"],\"path_entries\":[\"0:bin\"]}"#,
+        ),
         ("permissions.read_scopes", r#"[\"/\"]"#),
         ("permissions.write_scopes", r#"[\"/\"]"#),
         ("permissions.trusted_directories", r#"[\"/\"]"#),

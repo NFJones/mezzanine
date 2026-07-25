@@ -151,7 +151,8 @@ use attach::{run_attach, run_list};
 use auth::run_auth;
 use config::{json_string_array, run_config};
 use control_client::{
-    incomplete_control_response_error, read_control_response_frames, run_control_request,
+    incomplete_control_response_error, read_control_response_frames,
+    run_automation_control_request, run_control_request,
 };
 use env::{
     CliCommand, CliInvocation, CliInvocationParse, SocketSelection, cli_idempotency_key,

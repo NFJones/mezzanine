@@ -2632,9 +2632,17 @@ fn runtime_user_home_authority_resolves_credential_mask_paths() {
     let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind else {
         unreachable!();
     };
-    let expected = [".aws", ".azure", ".docker", ".gnupg", ".kube", ".ssh"]
-        .map(|protected| home.join(protected).to_string_lossy().into_owned())
-        .to_vec();
+    let expected = [
+        ".aws",
+        ".azure",
+        ".config/mezzanine",
+        ".docker",
+        ".gnupg",
+        ".kube",
+        ".ssh",
+    ]
+    .map(|protected| home.join(protected).to_string_lossy().into_owned())
+    .to_vec();
     assert_eq!(cache_key.request.additional_paths, expected);
 
     fs::remove_dir_all(root).unwrap();

@@ -814,13 +814,19 @@ fields are omitted, repository-local Git identity may still apply.
 
 `mez sandbox toolchains detect [PATH]` performs read-only Rust discovery and
 reports canonical Cargo and Rustup roots without changing configuration.
-`mez sandbox toolchains enable rust --yes` persists only the allowlisted
-`rust` selection in the primary user config. At execution time Mezzanine uses
+`mez sandbox toolchains enable rust --yes` submits a digest-bound request to a
+live service as a non-primary automation client. It does not persist or approve
+the selection. The displayed `/toolchain confirm REQUEST DIGEST --yes` command
+must then be entered directly in the attached primary client; missing, stale,
+tampered, expired, wrong-pane, and replayed confirmations fail closed. At
+execution time Mezzanine uses
 canonical pane-bootstrap evidence, mounts only Cargo's executable directory
 and the Rustup root read-only below `/opt/mez/toolchains/rust`, and sets PATH to Cargo binaries
 before `/usr/bin:/bin`. It does not mount the complete home, credentials,
-sockets, runtime directories, Cargo credentials/configuration, or unrelated configuration. Project trust alone
-never enables a toolchain, and `host-access` bypasses the configured projection.
+sockets, runtime directories, Cargo credentials/configuration, the Mezzanine
+config root, or unrelated configuration. Project trust alone never enables a
+toolchain. Explicit `host-access` bypasses the configured projection and is not
+a same-UID privilege boundary.
 
 For a trusted project, Bubblewrap uses a persistent managed home below
 `<config-root>/sandbox/cache-homes/<project-profile-key>/home`. The key hashes

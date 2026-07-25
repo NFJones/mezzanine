@@ -69,7 +69,15 @@ impl RealBubblewrapFixture {
         }
         fs::write(source.join("visible.txt"), "visible\n").unwrap();
         fs::write(workspace.join("root-only.txt"), "root-only\n").unwrap();
-        for protected in [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"] {
+        for protected in [
+            ".ssh",
+            ".gnupg",
+            ".aws",
+            ".azure",
+            ".kube",
+            ".docker",
+            ".config/mezzanine",
+        ] {
             fs::create_dir_all(workspace.join(protected)).unwrap();
         }
         fs::write(workspace.join(".ssh/id_test"), "credential-secret\n").unwrap();
@@ -104,7 +112,15 @@ impl RealBubblewrapFixture {
                 },
             );
         }
-        for protected in [".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"] {
+        for protected in [
+            ".ssh",
+            ".gnupg",
+            ".aws",
+            ".azure",
+            ".kube",
+            ".docker",
+            ".config/mezzanine",
+        ] {
             let canonical = self.workspace.join(protected);
             evidence.insert(
                 canonical.to_string_lossy().into_owned(),
@@ -548,13 +564,14 @@ fn real_bubblewrap_masks_credential_descendants_of_broad_authority() {
     let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
     let plan = real_plan(&config, capability, &fixture.authority(), &evaluation);
 
-    assert_eq!(plan.audit_summary.protected_mask_count, 6);
+    assert_eq!(plan.audit_summary.protected_mask_count, 7);
     let output = execute_plan(
         plan,
         "set -eu\n\
          test \"$(cat root-only.txt)\" = root-only\n\
          test ! -e .ssh/id_test\n\
          test -d .ssh\n\
+         test -d .config/mezzanine\n\
          printf '%s\\n' REAL_BWRAP_CREDENTIAL_MASK_OK",
     );
     let stdout = String::from_utf8_lossy(&output.stdout);

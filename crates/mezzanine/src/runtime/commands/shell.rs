@@ -18,6 +18,26 @@ use crate::integrations::agent::slash::AgentShellPresentation;
 use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::parse_macro_prompt_invocation;
 
+/// Authenticated provenance carried with one live agent-shell command.
+///
+/// This value is assigned by runtime ingress rather than parsed from command
+/// text. Security-sensitive commands must explicitly accept the origins that
+/// are allowed to mutate host-backed state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentShellCommandOrigin {
+    /// Input submitted through the attached primary terminal or its UI.
+    AuthenticatedPrimaryInput,
+    /// Input submitted through the authenticated control protocol.
+    AuthenticatedControlRequest,
+}
+
+impl AgentShellCommandOrigin {
+    /// Returns whether this origin proves a direct primary-client UI event.
+    pub(crate) const fn is_authenticated_primary_input(self) -> bool {
+        matches!(self, Self::AuthenticatedPrimaryInput)
+    }
+}
+
 /// Result of applying the live side effects for an agent-shell exit request.
 pub(crate) struct RuntimeAgentShellExit {
     /// Conversation id associated with the pane-local agent shell.
@@ -210,7 +230,28 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         input: &str,
     ) -> Result<String> {
-        self.execute_agent_shell_command_with_display(primary_client_id, input, input)
+        self.execute_agent_shell_command_with_origin(
+            primary_client_id,
+            input,
+            input,
+            AgentShellCommandOrigin::AuthenticatedPrimaryInput,
+            false,
+        )
+    }
+
+    /// Executes an agent-shell command submitted through the control protocol.
+    pub(crate) fn execute_agent_shell_control_command(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        input: &str,
+    ) -> Result<String> {
+        self.execute_agent_shell_command_with_origin(
+            primary_client_id,
+            input,
+            input,
+            AgentShellCommandOrigin::AuthenticatedControlRequest,
+            false,
+        )
     }
 
     /// Executes an agent prompt submission while allowing a collapsed display
@@ -221,21 +262,23 @@ impl RuntimeSessionService {
         input: &str,
         display_input: &str,
     ) -> Result<String> {
-        self.execute_agent_shell_command_with_display_inner(
+        self.execute_agent_shell_command_with_origin(
             primary_client_id,
             input,
             display_input,
+            AgentShellCommandOrigin::AuthenticatedPrimaryInput,
             false,
         )
     }
 
     /// Executes an agent prompt submission while allowing a collapsed display
     /// form for pane transcript rendering.
-    fn execute_agent_shell_command_with_display_inner(
+    fn execute_agent_shell_command_with_origin(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         input: &str,
         display_input: &str,
+        origin: AgentShellCommandOrigin,
         queue_external_effects_for_adapter: bool,
     ) -> Result<String> {
         self.require_live()?;
@@ -600,7 +643,12 @@ impl RuntimeSessionService {
                     && command == "toolchain"
                 {
                     let toolchain_outcome = self
-                        .execute_agent_shell_toolchain_command(primary_client_id, &pane_id, input)
+                        .execute_agent_shell_toolchain_command(
+                            primary_client_id,
+                            &pane_id,
+                            input,
+                            origin,
+                        )
                         .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
                             command: "toolchain".to_string(),
                             body: format!("Toolchain error: {}", error.message()),
@@ -807,10 +855,11 @@ impl RuntimeSessionService {
     ) -> Result<String> {
         let plan = agent_shell_command_plan(input);
         let AgentShellCommandPlan::Awaited(awaited_command) = plan else {
-            return self.execute_agent_shell_command_with_display_inner(
+            return self.execute_agent_shell_command_with_origin(
                 primary_client_id,
                 input,
                 input,
+                AgentShellCommandOrigin::AuthenticatedPrimaryInput,
                 true,
             );
         };

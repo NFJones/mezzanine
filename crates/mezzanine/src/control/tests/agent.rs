@@ -339,6 +339,15 @@ fn primary_control_method_fixture_request(
         "agent/shell/command" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"agent/shell/command","params":{"input":"summarize","idempotency_key":"agent-command"}}"#.to_string()
         }
+        "toolchain/mutation/submit" => {
+            let digest = crate::runtime::normalized_toolchain_mutation_digest(
+                "enable",
+                crate::runtime::SandboxToolchainKind::Rust,
+            );
+            format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"toolchain/mutation/submit","params":{{"operation":"enable","kind":"rust","request_digest":"{digest}","idempotency_key":"toolchain-submit"}}}}"#,
+            )
+        }
         "agent/list" => {
             r#"{"jsonrpc":"2.0","id":1,"method":"agent/list","params":{}}"#.to_string()
         }

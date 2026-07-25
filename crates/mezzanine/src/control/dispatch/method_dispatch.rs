@@ -557,6 +557,9 @@ pub(super) fn dispatch_parsed_request(
                 None,
             ))
         }
+        ControlDispatchKind::ToolchainMutationSubmit => Err(MezError::invalid_state(
+            "toolchain mutation submission requires an attached runtime",
+        )),
         ControlDispatchKind::EventList => {
             let event_log = EventLog::new(MAX_EVENT_REPLAY_RETENTION, 1_048_576)?;
             dispatch_event_list_request(request, session, primary_client_id, &event_log)

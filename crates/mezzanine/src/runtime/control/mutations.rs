@@ -8,20 +8,24 @@
 
 use super::{
     AgentId, AttachedTerminalClientStepPlan, ClientRole, ClientState, ClientViewRole, EventKind,
-    MezError, PaneCaptureSource, PaneId, Result, RuntimeLifecycleState, RuntimeSessionService,
-    SenderIdentity, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
-    destination_target_checked_resolved, dispatch_control_request_for_client_with_agent_state,
-    dispatch_control_request_with_captures, json_escape, layout_state_json, observer_json,
-    pane_id_from_runtime_agent_id, pane_target_checked_resolved, rendered_client_view_json,
-    route_client_input_actions, runtime_append_observer_decision_audit, runtime_json_bool_field,
-    runtime_json_creation_command, runtime_json_input_bytes, runtime_json_optional_client_size,
-    runtime_json_optional_size_field, runtime_json_optional_view_offset, runtime_json_rpc_error,
-    runtime_json_size, runtime_json_start_directory, runtime_json_string_field,
-    runtime_mcp_retry_event_payload, runtime_mcp_retry_result_json,
-    runtime_mutating_response_is_cacheable, runtime_pane_by_id, runtime_pane_readiness_state_name,
-    runtime_split_direction, runtime_terminal_step_result_json,
+    MezError, PaneCaptureSource, PaneId, PendingToolchainMutation, Result, RuntimeLifecycleState,
+    RuntimeSessionService, SenderIdentity, SplitDirection, TerminalClientLoopAction,
+    TerminalClientLoopConfig, current_unix_seconds, destination_target_checked_resolved,
+    dispatch_control_request_for_client_with_agent_state, dispatch_control_request_with_captures,
+    json_escape, layout_state_json, observer_json, pane_id_from_runtime_agent_id,
+    pane_target_checked_resolved, rendered_client_view_json, route_client_input_actions,
+    runtime_append_observer_decision_audit, runtime_json_bool_field, runtime_json_creation_command,
+    runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
+    runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
+    runtime_json_start_directory, runtime_json_string_field, runtime_mcp_retry_event_payload,
+    runtime_mcp_retry_result_json, runtime_mutating_response_is_cacheable, runtime_pane_by_id,
+    runtime_pane_readiness_state_name, runtime_split_direction, runtime_terminal_step_result_json,
     source_pane_target_checked_resolved, window_target_checked_resolved,
 };
+use crate::runtime::SandboxToolchainKind;
+use crate::security::audit::{AuditActor, AuditRecord};
+use crate::security::sandbox::parse_sandbox_toolchain_kind;
+use sha2::{Digest, Sha256};
 
 impl RuntimeSessionService {
     /// Runs the dispatch runtime mutating request operation for this subsystem.
@@ -112,6 +116,9 @@ impl RuntimeSessionService {
             "terminal/command" => self.dispatch_runtime_terminal_command(primary_client_id, params),
             "agent/shell/command" => {
                 self.dispatch_runtime_agent_shell_command(primary_client_id, params)
+            }
+            "toolchain/mutation/submit" => {
+                self.dispatch_runtime_toolchain_mutation_submit(primary_client_id, params)
             }
             "agent/spawn" => self.dispatch_runtime_agent_spawn(primary_client_id, params),
             "project/trust/decide" | "project/trust/revoke" => {
@@ -761,7 +768,102 @@ impl RuntimeSessionService {
     ) -> Result<String> {
         let input = runtime_json_string_field(params, "input")
             .ok_or_else(|| MezError::invalid_args("agent/shell/command requires input"))?;
-        self.execute_agent_shell_command(primary_client_id, &input)
+        self.execute_agent_shell_control_command(primary_client_id, &input)
+    }
+
+    /// Queues one normalized external toolchain mutation for direct settlement
+    /// by the attached primary client.
+    pub(super) fn dispatch_runtime_toolchain_mutation_submit(
+        &mut self,
+        submitting_client_id: &mez_core::ids::ClientId,
+        params: &str,
+    ) -> Result<String> {
+        if self.session.primary_client_id().is_none() {
+            return Err(MezError::invalid_state(
+                "toolchain mutation submission requires an attached primary client",
+            ));
+        }
+        let operation = runtime_json_string_field(params, "operation").ok_or_else(|| {
+            MezError::invalid_args("toolchain mutation submission requires operation")
+        })?;
+        if operation != "enable" && operation != "disable" {
+            return Err(MezError::invalid_args(
+                "toolchain mutation operation must be enable or disable",
+            ));
+        }
+        let kind_name = runtime_json_string_field(params, "kind")
+            .ok_or_else(|| MezError::invalid_args("toolchain mutation submission requires kind"))?;
+        let kind = parse_sandbox_toolchain_kind(&kind_name).ok_or_else(|| {
+            MezError::invalid_args("toolchain mutation submission received an unsupported kind")
+        })?;
+        let supplied_digest =
+            runtime_json_string_field(params, "request_digest").ok_or_else(|| {
+                MezError::invalid_args("toolchain mutation submission requires request_digest")
+            })?;
+        let digest = normalized_toolchain_mutation_digest(&operation, kind);
+        if supplied_digest != digest {
+            return Err(MezError::forbidden(
+                "toolchain mutation request digest does not match the normalized request",
+            ));
+        }
+        let pane_id = self.active_pane_id()?;
+        let idempotency_key =
+            runtime_json_string_field(params, "idempotency_key").ok_or_else(|| {
+                MezError::invalid_args("toolchain mutation submission requires idempotency_key")
+            })?;
+        let request_id = toolchain_mutation_request_id(
+            &digest,
+            submitting_client_id,
+            &pane_id,
+            self.session.config_generation,
+            &idempotency_key,
+        );
+        let expires_at_unix_seconds = current_unix_seconds().saturating_add(300);
+        if let Some(audit_log) = self.persistence.audit_log_mut() {
+            let mut record = AuditRecord::new(
+                self.session.id.to_string(),
+                AuditActor {
+                    kind: "client".to_string(),
+                    id: submitting_client_id.to_string(),
+                },
+                "toolchain_mutation",
+                "submit",
+            )
+            .with_pane_id(pane_id.clone())
+            .with_metadata("origin", "automation_control_request")
+            .with_metadata("operation", operation.clone())
+            .with_metadata("kind", kind.as_str())
+            .with_metadata("request_digest_prefix", digest[..24].to_string())
+            .with_metadata(
+                "config_generation",
+                self.session.config_generation.to_string(),
+            );
+            record.outcome = "pending".to_string();
+            audit_log.append(record.sanitized())?;
+        }
+        self.control
+            .insert_pending_toolchain_mutation(PendingToolchainMutation {
+                id: request_id.clone(),
+                operation: operation.clone(),
+                kind,
+                digest: digest.clone(),
+                config_generation: self.session.config_generation,
+                pane_id: pane_id.clone(),
+                submitted_by_client_id: submitting_client_id.to_string(),
+                expires_at_unix_seconds,
+            });
+        Ok(format!(
+            r#"{{"request_id":"{}","state":"pending","operation":"{}","kind":"{}","request_digest":"{}","pane_id":"{}","config_generation":{},"expires_at_unix_seconds":{},"confirmation":"Enter /toolchain confirm {} {} --yes in the attached primary client."}}"#,
+            json_escape(&request_id),
+            json_escape(&operation),
+            kind.as_str(),
+            digest,
+            json_escape(&pane_id),
+            self.session.config_generation,
+            expires_at_unix_seconds,
+            json_escape(&request_id),
+            digest,
+        ))
     }
 
     /// Ensures a runtime-created agent identity exists in the local MMP service.
@@ -908,4 +1010,51 @@ impl RuntimeSessionService {
             )),
         }
     }
+}
+
+/// Returns the versioned digest for one normalized built-in toolchain
+/// selection request.
+pub(crate) fn normalized_toolchain_mutation_digest(
+    operation: &str,
+    kind: SandboxToolchainKind,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"toolchain-mutation-v1\0");
+    digest.update(operation.as_bytes());
+    digest.update(b"\0");
+    digest.update(kind.as_str().as_bytes());
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Derives an opaque one-request identity that cannot be reused by a later
+/// identical operation submitted under a different authenticated request.
+fn toolchain_mutation_request_id(
+    request_digest: &str,
+    submitting_client_id: &mez_core::ids::ClientId,
+    pane_id: &str,
+    config_generation: u64,
+    idempotency_key: &str,
+) -> String {
+    let mut digest = Sha256::new();
+    for value in [
+        "toolchain-mutation-request-v1",
+        request_digest,
+        submitting_client_id.as_str(),
+        pane_id,
+        &config_generation.to_string(),
+        idempotency_key,
+    ] {
+        digest.update(value.len().to_le_bytes());
+        digest.update(value.as_bytes());
+    }
+    let encoded = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("tm-{}", &encoded[..24])
 }

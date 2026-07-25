@@ -254,7 +254,7 @@ pub(crate) use config::{
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod control;
-pub(crate) use control::RuntimeControlComponent;
+pub(crate) use control::{RuntimeControlComponent, normalized_toolchain_mutation_digest};
 /// Exposes deferred runtime side-effect value types.
 ///
 /// The nested module keeps side-effect planning records out of the central
