@@ -10,6 +10,8 @@ use mez_agent::{ProviderTranscriptEvent, TranscriptContextEvent};
 
 const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 256 * 1024;
 const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
+const LEGACY_MAAP_ASSISTANT_CONTEXT: &str =
+    "[legacy MAAP assistant execution omitted from transcript replay]";
 
 /// Builds model-context blocks from durable transcript entries for one runtime pane.
 pub(super) fn runtime_agent_transcript_context_blocks(
@@ -101,7 +103,7 @@ fn runtime_transcript_entry_context_content(entry: &TranscriptEntry) -> Option<S
         TranscriptRole::Assistant
             if transcript_content_looks_like_maap_action_json(&entry.content) =>
         {
-            None
+            Some(LEGACY_MAAP_ASSISTANT_CONTEXT.to_string())
         }
         _ => Some(entry.content.clone()),
     }

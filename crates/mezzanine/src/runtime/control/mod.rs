@@ -1353,4 +1353,76 @@ mod tests {
         assert!(context.chronology()[1].provider_owner().is_some());
         assert!(context.chronology()[2].provider_owner().is_some());
     }
+
+    /// Verifies a legacy raw-MAAP owner cannot collapse its result into the
+    /// preceding canonical assistant execution group.
+    ///
+    /// Legacy or alternate persistence can contain a raw action-batch JSON
+    /// assistant record followed by a generic action result. Replay omits the
+    /// protocol JSON, but it must retain a safe canonical assistant boundary:
+    /// otherwise the result is incorrectly represented as evidence owned by
+    /// the preceding canonical assistant execution.
+    #[test]
+    fn runtime_transcript_restoration_preserves_owner_for_legacy_raw_maap_result() {
+        let contents = [
+            (
+                TranscriptRole::Assistant,
+                "rationale: inspect repository\naction inspect-1: shell_command".to_string(),
+            ),
+            (
+                TranscriptRole::Tool,
+                "[action_result inspect-1 shell_command succeeded]".to_string(),
+            ),
+            (
+                TranscriptRole::Assistant,
+                serde_json::json!({
+                    "actions": [{
+                        "type": "shell_command",
+                        "action_id": "legacy-1"
+                    }]
+                })
+                .to_string(),
+            ),
+            (
+                TranscriptRole::Tool,
+                "[action_result legacy-1 shell_command succeeded]".to_string(),
+            ),
+        ];
+        let entries = contents
+            .into_iter()
+            .enumerate()
+            .map(|(index, (role, content))| TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: u64::try_from(index).unwrap().saturating_add(1),
+                created_at_unix_seconds: 100,
+                role,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content,
+            })
+            .collect::<Vec<_>>();
+
+        let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
+        let context = AgentContext::import_durable_blocks(blocks).unwrap();
+        let first_group = context.chronology()[0].execution_group_id().cloned();
+        let legacy_owner = &context.chronology()[2];
+        let legacy_result = &context.chronology()[3];
+
+        assert!(first_group.is_some());
+        assert_eq!(
+            context.chronology()[1].execution_group_id(),
+            first_group.as_ref()
+        );
+        assert_eq!(
+            legacy_owner.block().content,
+            "[legacy MAAP assistant execution omitted from transcript replay]"
+        );
+        assert_ne!(legacy_owner.execution_group_id(), first_group.as_ref());
+        assert_eq!(
+            legacy_result.execution_group_id(),
+            legacy_owner.execution_group_id()
+        );
+        context.validate_durable().unwrap();
+    }
 }
