@@ -19,8 +19,7 @@ use crate::runtime::{RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, Sandb
 use crate::security::project::TrustDecision;
 use mez_agent::PermissionPreset;
 use mez_agent::permissions::{
-    EffectCompleteness, PermissionAuthorityChange, PermissionEvaluation,
-    compare_permission_preset_authority,
+    PermissionAuthorityChange, PermissionEvaluation, compare_permission_preset_authority,
 };
 use mez_agent::{SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch};
 use std::path::PathBuf;
@@ -80,16 +79,15 @@ fn bubblewrap_action_path_resolution_request(
         crate::security::sandbox::bubblewrap_protected_path_resolution_candidates(maximum)
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
-    if evaluation.completeness == EffectCompleteness::Complete {
+    if let Some(effects) = evaluation.confinement_effects.as_ref() {
         additional_paths.extend(
-            evaluation
-                .effects
+            effects
                 .reads
                 .iter()
-                .chain(&evaluation.effects.writes)
-                .chain(&evaluation.effects.creates)
-                .chain(&evaluation.effects.deletes)
-                .chain(&evaluation.effects.touches)
+                .chain(&effects.writes)
+                .chain(&effects.creates)
+                .chain(&effects.deletes)
+                .chain(&effects.touches)
                 .cloned(),
         );
     }

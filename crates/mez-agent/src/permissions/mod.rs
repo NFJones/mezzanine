@@ -7,7 +7,6 @@
 //! authorization, trusted-directory facts, and audit side effects.
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
 
 use error::{PermissionError as MezError, PermissionResult as Result};
 
@@ -18,11 +17,6 @@ use error::{PermissionError as MezError, PermissionResult as Result};
 mod classification;
 mod error;
 mod identity;
-/// Exposes the paths module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod paths;
 /// Exposes the policy module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -63,7 +57,6 @@ use classification::{
     analyze_shell, classify_tokens, tokenize_shell_words, tokenize_single_candidate,
     validate_git_read_only_subcommand,
 };
-use paths::writes_escape_scopes;
 use rules::{decode_rule_record, encode_rule_record};
 
 /// Exposes the tests module boundary.

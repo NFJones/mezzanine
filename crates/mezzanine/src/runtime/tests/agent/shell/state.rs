@@ -45,6 +45,9 @@ fn path_resolution_evaluation(
     completeness: mez_agent::permissions::EffectCompleteness,
     effects: mez_agent::permissions::EffectiveCommandEffects,
 ) -> mez_agent::permissions::PermissionEvaluation {
+    let confinement_effects = (completeness
+        == mez_agent::permissions::EffectCompleteness::Complete)
+        .then_some(effects.clone());
     mez_agent::permissions::PermissionEvaluation {
         decision: RuleDecision::Allow,
         candidates: vec![mez_agent::permissions::CandidateEvaluation {
@@ -52,10 +55,12 @@ fn path_resolution_evaluation(
             decision: RuleDecision::Allow,
             matched_rule_ids: vec!["test-rule".to_string()],
             effects: effects.clone(),
+            confinement_effects: confinement_effects.clone(),
             completeness,
         }],
         matched_rule_ids: vec!["test-rule".to_string()],
         effects,
+        confinement_effects,
         completeness,
     }
 }
@@ -579,6 +584,7 @@ fn runtime_host_access_does_not_enforce_network_policy() {
 /// Builds one prompting shell evaluation retained by sandbox-first dispatch.
 fn sandbox_fallback_prompt_evaluation() -> mez_agent::permissions::PermissionEvaluation {
     let effects = path_resolution_effects();
+    let confinement_effects = Some(effects.clone());
     mez_agent::permissions::PermissionEvaluation {
         decision: RuleDecision::Prompt,
         candidates: vec![mez_agent::permissions::CandidateEvaluation {
@@ -586,10 +592,12 @@ fn sandbox_fallback_prompt_evaluation() -> mez_agent::permissions::PermissionEva
             decision: RuleDecision::Prompt,
             matched_rule_ids: vec!["sandbox-fallback-prompt".to_string()],
             effects: effects.clone(),
+            confinement_effects: confinement_effects.clone(),
             completeness: mez_agent::permissions::EffectCompleteness::Complete,
         }],
         matched_rule_ids: vec!["sandbox-fallback-prompt".to_string()],
         effects,
+        confinement_effects,
         completeness: mez_agent::permissions::EffectCompleteness::Complete,
     }
 }

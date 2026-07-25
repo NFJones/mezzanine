@@ -768,10 +768,14 @@ mod tests {
 
         assert_eq!(result.status, ActionStatus::Running);
         assert_eq!(result.permission_evaluation.as_deref(), Some(&evaluation));
-        assert_eq!(
-            result.permission_evaluation.as_ref().unwrap().effects.reads,
-            ["."]
-        );
+        let confinement = result
+            .permission_evaluation
+            .as_ref()
+            .unwrap()
+            .confinement_effects
+            .as_ref()
+            .unwrap();
+        assert_eq!(confinement.reads, ["."]);
         let structured = result.structured_content_json.as_deref().unwrap();
         assert!(structured.contains(r#""matched_rules":["repository-files"]"#));
     }

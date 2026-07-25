@@ -147,12 +147,17 @@ fn ls_policy_allows_common_read_only_listing_forms() {
     assert_eq!(effects.len(), 1);
     assert_eq!(effects[0].reads, vec![".".to_string()]);
     assert!(!effects[0].unknown);
+
+    let evaluation = policy.evaluate_shell_command_structured("ls /outside");
+    assert_eq!(evaluation.effects.reads, ["/outside"]);
+    assert!(evaluation.confinement_effects.is_none());
+    assert_eq!(evaluation.completeness, EffectCompleteness::Unknown);
 }
 
-/// Verifies that listing explicit paths still goes through the scoped path
-/// preflight instead of allowing arbitrary reads because `ls` itself is safe.
+/// Verifies that listing authorization depends on command semantics rather
+/// than whether Bubblewrap will project the requested runtime path.
 #[test]
-fn ls_path_arguments_must_stay_inside_read_scopes() {
+fn ls_path_arguments_are_authorized_independently_of_read_scopes() {
     let policy = PermissionPolicy::default();
     let scopes = shell_resolved_scopes(
         "/repo",
@@ -167,7 +172,7 @@ fn ls_path_arguments_must_stay_inside_read_scopes() {
     );
     assert_eq!(
         policy.evaluate_shell_command_in_scope("ls ../secret", &scopes),
-        RuleDecision::Prompt
+        RuleDecision::Allow
     );
 }
 
@@ -829,7 +834,7 @@ fn git_read_only_rules_allow_common_inspection_and_reject_writers() {
     );
     assert_eq!(
         policy.evaluate_shell_command_in_scope("git diff -- ../secret.txt", &scopes),
-        RuleDecision::Prompt
+        RuleDecision::Allow
     );
     assert_eq!(
         policy.evaluate_shell_command("git diff --output=patch.txt"),
@@ -999,13 +1004,11 @@ fn builtin_uname_allows_safe_system_probe_options() {
     );
 }
 
-/// Verifies read path arguments must stay inside read scopes.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// Verifies read-only commands retain their authorization for inaccessible,
+/// missing, globbed, and tilde-prefixed operands. Runtime filesystem access is
+/// enforced by the selected sandbox backend instead of the classifier.
 #[test]
-fn read_path_arguments_must_stay_inside_read_scopes() {
+fn read_path_arguments_are_authorized_independently_of_accessibility() {
     let policy = PermissionPolicy::default();
     let scopes = shell_resolved_scopes(
         "/repo",
@@ -1020,15 +1023,27 @@ fn read_path_arguments_must_stay_inside_read_scopes() {
     );
     assert_eq!(
         policy.evaluate_shell_command_in_scope("cat ../secrets.txt", &scopes),
-        RuleDecision::Prompt
+        RuleDecision::Allow
+    );
+    assert_eq!(
+        policy.evaluate_shell_command_in_scope("cat missing.txt", &scopes),
+        RuleDecision::Allow
+    );
+    assert_eq!(
+        policy.evaluate_shell_command_in_scope("cat '*.rs'", &scopes),
+        RuleDecision::Allow
+    );
+    assert_eq!(
+        policy.evaluate_shell_command_in_scope("cat ~/secrets.txt", &scopes),
+        RuleDecision::Allow
     );
 }
 
-/// Verifies that scoped read decisions use shell-canonical path evidence rather
-/// than lexical path prefixes. A symlink-like path that lexically sits under the
-/// read scope must still prompt when the shell-resolved target escapes.
+/// Verifies shell-canonical evidence about a symlink escape does not alter
+/// read-only command authorization; the sandbox mount namespace remains the
+/// authoritative runtime filesystem boundary.
 #[test]
-fn shell_resolved_canonical_escape_prompts_for_scoped_reads() {
+fn shell_resolved_canonical_escape_does_not_change_read_authorization() {
     let policy = PermissionPolicy::default();
     let scopes = shell_resolved_scopes(
         "/repo",
@@ -1039,15 +1054,14 @@ fn shell_resolved_canonical_escape_prompts_for_scoped_reads() {
 
     assert_eq!(
         policy.evaluate_shell_command_in_scope("cat link/secret.txt", &scopes),
-        RuleDecision::Prompt
+        RuleDecision::Allow
     );
 }
 
-/// Verifies that a previous command-prefix approval cannot suppress a fresh
-/// scoped path preflight. This keeps a changed cwd or canonical path from
-/// reusing stale approval state to escape active scopes.
+/// Verifies a stale command-prefix approval is irrelevant to the authorization
+/// of a built-in read-only command with an inaccessible operand.
 #[test]
-fn session_approval_does_not_override_scoped_path_prompt() {
+fn session_approval_does_not_control_read_operand_accessibility() {
     let policy = PermissionPolicy::default();
     let mut approvals = SessionApprovalStore::default();
     approvals
@@ -1066,16 +1080,15 @@ fn session_approval_does_not_override_scoped_path_prompt() {
             &approvals,
             Some(&scopes),
         ),
-        RuleDecision::Prompt
+        RuleDecision::Allow
     );
 }
 
-/// Verifies that scoped path checks fail closed when the pane shell has not
-/// provided canonical path evidence. Auto-allow must leave that prompt intact
-/// until the agent planner receives a structured model-side reasonableness
-/// assertion for the active request.
+/// Verifies missing canonical evidence does not turn an otherwise safe command
+/// into a policy prompt. Sandbox compilation owns maximum-authority validity;
+/// the command classifier owns only command semantics.
 #[test]
-fn unresolved_path_scopes_fail_closed_for_auto_allow() {
+fn unresolved_path_scopes_do_not_change_read_authorization() {
     let policy = PermissionPolicy::default();
     let scopes = PathScopes::unresolved(
         "/repo",
@@ -1085,13 +1098,13 @@ fn unresolved_path_scopes_fail_closed_for_auto_allow() {
 
     assert_eq!(
         policy.evaluate_shell_command_in_scope("cat src/lib.rs", &scopes),
-        RuleDecision::Prompt
+        RuleDecision::Allow
     );
     assert_eq!(
         policy
             .with_approval_policy(ApprovalPolicy::AutoAllow)
             .evaluate_shell_command_in_scope("cat src/lib.rs", &scopes),
-        RuleDecision::Prompt
+        RuleDecision::Allow
     );
 }
 
@@ -1198,8 +1211,11 @@ fn structured_evaluation_retains_complete_declared_effects() {
         evaluation.candidates[0].completeness,
         EffectCompleteness::Complete
     );
-    assert_eq!(evaluation.effects.reads, ["src"]);
-    assert_eq!(evaluation.effects.writes, ["target"]);
+    assert!(evaluation.effects.reads.is_empty());
+    assert!(evaluation.effects.writes.is_empty());
+    let confinement = evaluation.confinement_effects.as_ref().unwrap();
+    assert_eq!(confinement.reads, ["src"]);
+    assert_eq!(confinement.writes, ["target"]);
     assert!(!evaluation.effects.unknown);
 }
 
@@ -1275,8 +1291,11 @@ fn structured_permission_evaluation_uses_complete_declared_effects() {
     assert_eq!(evaluation.candidates.len(), 1);
     assert_eq!(evaluation.candidates[0].command, "cargo test --all-targets");
     assert_eq!(evaluation.candidates[0].matched_rule_ids, ["cargo-test"]);
-    assert_eq!(evaluation.effects.reads, ["."]);
-    assert_eq!(evaluation.effects.writes, ["target"]);
+    assert!(evaluation.effects.reads.is_empty());
+    assert!(evaluation.effects.writes.is_empty());
+    let confinement = evaluation.confinement_effects.as_ref().unwrap();
+    assert_eq!(confinement.reads, ["."]);
+    assert_eq!(confinement.writes, ["target"]);
     assert!(!evaluation.effects.unknown);
 }
 

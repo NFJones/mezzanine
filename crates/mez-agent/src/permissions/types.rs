@@ -234,7 +234,12 @@ pub struct CandidateEvaluation {
     pub matched_rule_ids: Vec<String>,
     /// Merged classified and declared resource effects for this candidate.
     pub effects: EffectiveCommandEffects,
-    /// Whether filesystem effects are complete enough to narrow authority.
+    /// Explicit complete confinement effects declared by configured allow rules.
+    ///
+    /// Classifier observations never populate this field and therefore cannot
+    /// become an authoritative mount manifest.
+    pub confinement_effects: Option<EffectiveCommandEffects>,
+    /// Whether explicit confinement effects are complete enough to narrow authority.
     pub completeness: EffectCompleteness,
 }
 
@@ -254,7 +259,12 @@ pub struct PermissionEvaluation {
     pub matched_rule_ids: Vec<String>,
     /// Union of known resource effects across all candidates.
     pub effects: EffectiveCommandEffects,
-    /// Complete only when every candidate has complete filesystem effects.
+    /// Union of explicit complete confinement effects across all candidates.
+    ///
+    /// This is present only when every candidate is authorized by configured
+    /// allow rules carrying complete declared effects.
+    pub confinement_effects: Option<EffectiveCommandEffects>,
+    /// Complete only when every candidate has explicit complete confinement effects.
     pub completeness: EffectCompleteness,
 }
 

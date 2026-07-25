@@ -4,10 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{
-    EffectiveCommandEffects, MezError, PathScopes, Result,
-    paths::{path_in_read_scope, resolved_read_path},
-};
+use super::{EffectiveCommandEffects, MezError, PathScopes, Result};
 
 // Shell candidate splitting, tokenization, and effect classification.
 
@@ -171,7 +168,7 @@ pub(super) fn tokenize_shell_words(command: &str) -> Option<Vec<String>> {
 pub(super) fn remaining_args_are_read_paths(
     remaining: &[String],
     allowed_options: &[String],
-    scopes: Option<&PathScopes>,
+    _scopes: Option<&PathScopes>,
 ) -> bool {
     let mut paths_only = false;
     let mut index = 0;
@@ -190,7 +187,7 @@ pub(super) fn remaining_args_are_read_paths(
             index += 1;
             continue;
         }
-        if token_has_shell_syntax(token) || !path_in_read_scope(token, scopes) {
+        if token_has_shell_syntax(token) {
             return false;
         }
         index += 1;
@@ -257,7 +254,7 @@ pub(super) fn remaining_args_are_script_then_read_paths(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn find_args_are_read_only(remaining: &[String], scopes: Option<&PathScopes>) -> bool {
+pub(super) fn find_args_are_read_only(remaining: &[String], _scopes: Option<&PathScopes>) -> bool {
     let dangerous = [
         "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint", "-fprintf",
     ];
@@ -270,9 +267,6 @@ pub(super) fn find_args_are_read_only(remaining: &[String], scopes: Option<&Path
 
     let mut index = 0;
     while index < remaining.len() && !remaining[index].starts_with('-') {
-        if !path_in_read_scope(&remaining[index], scopes) {
-            return false;
-        }
         index += 1;
     }
 
@@ -321,7 +315,7 @@ pub(super) fn literal_output_args_are_safe(remaining: &[String]) -> bool {
 pub(super) fn git_read_only_args_are_safe(
     subcommand: &str,
     remaining: &[String],
-    scopes: Option<&PathScopes>,
+    _scopes: Option<&PathScopes>,
 ) -> bool {
     if validate_git_read_only_subcommand(subcommand).is_err() {
         return false;
@@ -332,9 +326,6 @@ pub(super) fn git_read_only_args_are_safe(
             return false;
         }
         if pathspecs_only {
-            if !path_in_read_scope(token, scopes) {
-                return false;
-            }
             continue;
         }
         if token == "--" {
@@ -489,7 +480,7 @@ pub(super) fn uname_args_are_safe(remaining: &[String]) -> bool {
 /// on duplicated control-flow logic.
 pub(super) fn classify_tokens(
     tokens: &[String],
-    scopes: Option<&PathScopes>,
+    _scopes: Option<&PathScopes>,
 ) -> EffectiveCommandEffects {
     if tokens.is_empty() {
         return EffectiveCommandEffects::unknown();
@@ -500,23 +491,19 @@ pub(super) fn classify_tokens(
     match command {
         "pwd" | "test" | "command" | "type" | "which" | "uname" | "hostname" | "printf" => effects,
         "ls" => {
-            effects.reads = collect_listing_read_path_args(&tokens[1..], scopes);
-            effects.unknown = effects.reads.iter().any(|path| path == "<unknown>");
+            effects.reads = collect_listing_read_path_args(&tokens[1..]);
             effects
         }
         "cat" | "head" | "tail" | "wc" | "grep" | "rg" => {
-            effects.reads = collect_read_path_args(&tokens[1..], scopes);
-            effects.unknown = effects.reads.iter().any(|path| path == "<unknown>");
+            effects.reads = collect_read_path_args(&tokens[1..]);
             effects
         }
         "sed" | "awk" => {
-            effects.reads = collect_script_command_read_path_args(&tokens[1..], scopes);
-            effects.unknown = effects.reads.iter().any(|path| path == "<unknown>");
+            effects.reads = collect_script_command_read_path_args(&tokens[1..]);
             effects
         }
         "find" => {
-            effects.reads = collect_find_root_args(&tokens[1..], scopes);
-            effects.unknown = effects.reads.iter().any(|path| path == "<unknown>");
+            effects.reads = collect_find_root_args(&tokens[1..]);
             effects
         }
         "git"
@@ -525,11 +512,7 @@ pub(super) fn classify_tokens(
                 Some("status" | "diff" | "log" | "show" | "rev-parse")
             ) =>
         {
-            effects.reads = vec![
-                scopes
-                    .map(|scope| scope.current_directory.clone())
-                    .unwrap_or_else(|| ".".to_string()),
-            ];
+            effects.reads = vec![".".to_string()];
             effects
         }
         "rm" => {
@@ -593,10 +576,10 @@ impl EffectiveCommandEffects {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn collect_read_path_args(args: &[String], scopes: Option<&PathScopes>) -> Vec<String> {
+pub(super) fn collect_read_path_args(args: &[String]) -> Vec<String> {
     args.iter()
         .filter(|arg| !arg.starts_with('-'))
-        .map(|arg| resolved_read_path(arg, scopes).unwrap_or_else(|| "<unknown>".to_string()))
+        .cloned()
         .collect()
 }
 
@@ -605,10 +588,7 @@ pub(super) fn collect_read_path_args(args: &[String], scopes: Option<&PathScopes
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn collect_listing_read_path_args(
-    args: &[String],
-    scopes: Option<&PathScopes>,
-) -> Vec<String> {
+pub(super) fn collect_listing_read_path_args(args: &[String]) -> Vec<String> {
     let mut paths = Vec::new();
     let mut paths_only = false;
     for arg in args {
@@ -630,7 +610,7 @@ pub(super) fn collect_listing_read_path_args(
             if is_current_directory_reference(path) {
                 ".".to_string()
             } else {
-                resolved_read_path(path, scopes).unwrap_or_else(|| "<unknown>".to_string())
+                path.to_string()
             }
         })
         .collect()
@@ -650,10 +630,7 @@ pub(super) fn is_current_directory_reference(path: &str) -> bool {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn collect_script_command_read_path_args(
-    args: &[String],
-    scopes: Option<&PathScopes>,
-) -> Vec<String> {
+pub(super) fn collect_script_command_read_path_args(args: &[String]) -> Vec<String> {
     let mut index = 0;
     while index < args.len() && args[index].starts_with('-') {
         index += 1;
@@ -661,7 +638,7 @@ pub(super) fn collect_script_command_read_path_args(
     if index < args.len() {
         index += 1;
     }
-    collect_read_path_args(&args[index..], scopes)
+    collect_read_path_args(&args[index..])
 }
 
 /// Runs the collect find root args operation for this subsystem.
@@ -669,19 +646,15 @@ pub(super) fn collect_script_command_read_path_args(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn collect_find_root_args(args: &[String], scopes: Option<&PathScopes>) -> Vec<String> {
+pub(super) fn collect_find_root_args(args: &[String]) -> Vec<String> {
     let roots = args
         .iter()
         .take_while(|arg| !arg.starts_with('-'))
         .cloned()
         .collect::<Vec<_>>();
-    let roots = if roots.is_empty() {
+    if roots.is_empty() {
         vec![".".to_string()]
     } else {
         roots
-    };
-    roots
-        .iter()
-        .map(|root| resolved_read_path(root, scopes).unwrap_or_else(|| "<unknown>".to_string()))
-        .collect()
+    }
 }

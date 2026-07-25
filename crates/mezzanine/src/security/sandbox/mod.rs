@@ -17,7 +17,7 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
 use mez_agent::permissions::{
-    EffectCompleteness, PathResolutionStatus, PathScopes, PermissionEvaluation,
+    EffectiveCommandEffects, PathResolutionStatus, PathScopes, PermissionEvaluation,
     ResolvedPathEvidence, ResolvedPathKind, RuleDecision,
 };
 use sha2::{Digest, Sha256};
@@ -721,18 +721,18 @@ fn effective_sandbox_policy(
 ) -> Result<EffectiveSandboxPolicy, SandboxCompileError> {
     validate_maximum_authority(request.maximum_authority)?;
     let evaluation = request.permission_evaluation;
-    let (mounts, authority_source) =
-        if evaluation.completeness == EffectCompleteness::Complete && !evaluation.effects.unknown {
-            (
-                narrowed_mounts(request.maximum_authority, evaluation)?,
-                SandboxAuthoritySource::Narrowed,
-            )
-        } else {
-            (
-                maximum_mounts(request.maximum_authority),
-                SandboxAuthoritySource::Maximum,
-            )
-        };
+    let (mounts, authority_source) = if let Some(effects) = evaluation.confinement_effects.as_ref()
+    {
+        (
+            narrowed_mounts(request.maximum_authority, effects)?,
+            SandboxAuthoritySource::Narrowed,
+        )
+    } else {
+        (
+            maximum_mounts(request.maximum_authority),
+            SandboxAuthoritySource::Maximum,
+        )
+    };
     let protected_masks = protected_masks_for_mounts(&mounts, request.maximum_authority)?;
     Ok(EffectiveSandboxPolicy {
         working_directory: request.maximum_authority.current_directory.clone(),
@@ -876,9 +876,8 @@ fn protected_masks_for_mounts(
 
 fn narrowed_mounts(
     authority: &PathScopes,
-    evaluation: &PermissionEvaluation,
+    effects: &EffectiveCommandEffects,
 ) -> Result<Vec<SandboxMount>, SandboxCompileError> {
-    let effects = &evaluation.effects;
     let mut mounts = Vec::new();
     for path in &effects.reads {
         let resolved = resolve_effect_path(path, authority, false)?;

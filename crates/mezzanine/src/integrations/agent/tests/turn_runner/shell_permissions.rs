@@ -352,11 +352,10 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
 }
 
 #[test]
-/// Verifies that the turn planner consumes shell-resolved path scopes when
-/// deciding whether a shell action may auto-run. A command whose canonical path
-/// escapes the active read scope must become a blocked approval request rather
-/// than a running pane write.
-fn turn_runner_blocks_shell_actions_with_canonical_scope_escape() {
+/// Verifies that a canonical path escape does not change read-only command
+/// authorization. Bubblewrap owns runtime path accessibility after the turn
+/// planner accepts the shell action for local dispatch.
+fn turn_runner_allows_shell_actions_with_canonical_scope_escape() {
     let turn = turn();
     let provider = CapabilityBatchProvider::new(
         AgentCapability::Shell,
@@ -442,15 +441,15 @@ fn turn_runner_blocks_shell_actions_with_canonical_scope_escape() {
         )
         .unwrap();
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Blocked);
-    assert_eq!(execution.action_results[0].status, ActionStatus::Blocked);
-    assert!(
-        execution.action_results[0]
-            .structured_content_json
-            .as_deref()
-            .unwrap()
-            .contains(r#""state":"pending""#)
-    );
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(structured.contains(r#""execution_transport":"pending_local_dispatch""#));
+    assert!(structured.contains(r#""sent_to_pane":false"#));
+    assert!(structured.contains(r#""terminal_observation":{"state":"pending_dispatch"}"#));
 }
 
 #[test]

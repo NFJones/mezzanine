@@ -44,6 +44,8 @@ fn evaluation(
     completeness: EffectCompleteness,
     effects: EffectiveCommandEffects,
 ) -> PermissionEvaluation {
+    let confinement_effects =
+        (completeness == EffectCompleteness::Complete).then_some(effects.clone());
     PermissionEvaluation {
         decision: RuleDecision::Allow,
         candidates: vec![CandidateEvaluation {
@@ -51,10 +53,12 @@ fn evaluation(
             decision: RuleDecision::Allow,
             matched_rule_ids: vec!["cargo-test".to_string()],
             effects: effects.clone(),
+            confinement_effects: confinement_effects.clone(),
             completeness,
         }],
         matched_rule_ids: vec!["cargo-test".to_string()],
         effects,
+        confinement_effects,
         completeness,
     }
 }

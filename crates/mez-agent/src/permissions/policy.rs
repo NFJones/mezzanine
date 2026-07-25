@@ -12,7 +12,6 @@ use super::{
     PermissionPolicy, PermissionPreset, Result, RuleDecision, RuleMatch, SessionApprovalStore,
     analyze_shell, classify_tokens, decode_rule_record, encode_rule_record, exact_command_sha256,
     normalize_exact_command_text, tokenize_shell_words, tokenize_single_candidate,
-    writes_escape_scopes,
 };
 // Permission policy evaluation and authority comparisons.
 
@@ -381,16 +380,13 @@ impl PermissionPolicy {
                 DEFAULT_COMMAND_SHELL_CLASSIFICATION,
             ));
         }
-        let completeness = if !candidates.is_empty()
-            && candidates
-                .iter()
-                .all(|candidate| candidate.completeness == EffectCompleteness::Complete)
-        {
+        let effects = aggregate_candidate_effects(&candidates);
+        let confinement_effects = aggregate_candidate_confinement_effects(&candidates);
+        let completeness = if confinement_effects.is_some() {
             EffectCompleteness::Complete
         } else {
             EffectCompleteness::Unknown
         };
-        let effects = aggregate_candidate_effects(&candidates, completeness);
         let mut matched_rule_ids = candidates
             .iter()
             .flat_map(|candidate| candidate.matched_rule_ids.iter().cloned())
@@ -402,6 +398,7 @@ impl PermissionPolicy {
             candidates,
             matched_rule_ids,
             effects,
+            confinement_effects,
             completeness,
         }
     }
@@ -452,6 +449,7 @@ impl PermissionPolicy {
                 decision,
                 matched_rule_ids: stable_rule_ids(&matching_rules),
                 effects: EffectiveCommandEffects::unknown(),
+                confinement_effects: None,
                 completeness: EffectCompleteness::Unknown,
             };
         }
@@ -462,6 +460,7 @@ impl PermissionPolicy {
                 decision: RuleDecision::Prompt,
                 matched_rule_ids: Vec::new(),
                 effects: EffectiveCommandEffects::unknown(),
+                confinement_effects: None,
                 completeness: EffectCompleteness::Unknown,
             };
         };
@@ -752,7 +751,6 @@ impl PermissionPolicy {
             || effects.privilege_change
             || effects.credentials
             || effects.network
-            || writes_escape_scopes(&effects, scopes)
         {
             RuleDecision::Prompt
         } else {
@@ -784,12 +782,18 @@ fn candidate_evaluation_from_rules_with_decision(
     decision: RuleDecision,
 ) -> CandidateEvaluation {
     let matched_rule_ids = stable_rule_ids(&rules);
-    let (effects, completeness) = merge_candidate_effects(classified, &rules, decision);
+    let (effects, confinement_effects) = merge_candidate_effects(classified, &rules, decision);
+    let completeness = if confinement_effects.is_some() {
+        EffectCompleteness::Complete
+    } else {
+        EffectCompleteness::Unknown
+    };
     CandidateEvaluation {
         command,
         decision,
         matched_rule_ids,
         effects,
+        confinement_effects,
         completeness,
     }
 }
@@ -811,7 +815,7 @@ fn merge_candidate_effects(
     mut effects: EffectiveCommandEffects,
     rules: &[&CommandRule],
     decision: RuleDecision,
-) -> (EffectiveCommandEffects, EffectCompleteness) {
+) -> (EffectiveCommandEffects, Option<EffectiveCommandEffects>) {
     let configured_allow_rules = rules
         .iter()
         .copied()
@@ -820,12 +824,7 @@ fn merge_candidate_effects(
         })
         .collect::<Vec<_>>();
     if decision != RuleDecision::Allow || configured_allow_rules.is_empty() {
-        let completeness = if effects.unknown {
-            EffectCompleteness::Unknown
-        } else {
-            EffectCompleteness::Complete
-        };
-        return (effects, completeness);
+        return (effects, None);
     }
 
     let complete = configured_allow_rules.iter().all(|rule| {
@@ -837,38 +836,47 @@ fn merge_candidate_effects(
         .iter()
         .filter_map(|rule| rule.declared_effects.as_ref())
     {
-        merge_declared_effects(&mut effects, declared);
+        merge_declared_semantic_effects(&mut effects, declared);
     }
     effects.unknown = !complete;
     normalize_effect_paths(&mut effects);
-    (
-        effects,
-        if complete {
-            EffectCompleteness::Complete
-        } else {
-            EffectCompleteness::Unknown
-        },
-    )
+    let confinement_effects = complete.then(|| {
+        let mut confinement = EffectiveCommandEffects::empty();
+        for declared in configured_allow_rules
+            .iter()
+            .filter_map(|rule| rule.declared_effects.as_ref())
+        {
+            merge_declared_confinement_effects(&mut confinement, declared);
+        }
+        normalize_effect_paths(&mut confinement);
+        confinement
+    });
+    (effects, confinement_effects)
 }
 
-/// Adds one declaration to accumulated classifier facts.
-fn merge_declared_effects(
+/// Adds security-sensitive semantic declarations to advisory classifier facts.
+fn merge_declared_semantic_effects(
     effects: &mut EffectiveCommandEffects,
     declared: &DeclaredCommandEffects,
 ) {
-    effects.reads.extend(declared.read_scopes.iter().cloned());
-    effects.writes.extend(declared.write_scopes.iter().cloned());
     effects.network |= declared.network.unwrap_or(false);
     effects.credentials |= declared.credentials.unwrap_or(false);
     effects.process_control |= declared.process_control.unwrap_or(false);
 }
 
+/// Adds one complete declaration to the explicit confinement manifest.
+fn merge_declared_confinement_effects(
+    effects: &mut EffectiveCommandEffects,
+    declared: &DeclaredCommandEffects,
+) {
+    effects.reads.extend(declared.read_scopes.iter().cloned());
+    effects.writes.extend(declared.write_scopes.iter().cloned());
+    merge_declared_semantic_effects(effects, declared);
+}
+
 /// Unions candidate effects while retaining known facts from incomplete
 /// candidates and marking command-wide narrowing unknown when required.
-fn aggregate_candidate_effects(
-    candidates: &[CandidateEvaluation],
-    completeness: EffectCompleteness,
-) -> EffectiveCommandEffects {
+fn aggregate_candidate_effects(candidates: &[CandidateEvaluation]) -> EffectiveCommandEffects {
     let mut aggregate = EffectiveCommandEffects::empty();
     for candidate in candidates {
         aggregate
@@ -891,10 +899,36 @@ fn aggregate_candidate_effects(
         aggregate.process_control |= candidate.effects.process_control;
         aggregate.destructive |= candidate.effects.destructive;
         aggregate.privilege_change |= candidate.effects.privilege_change;
+        aggregate.unknown |= candidate.effects.unknown;
     }
-    aggregate.unknown = completeness == EffectCompleteness::Unknown;
     normalize_effect_paths(&mut aggregate);
     aggregate
+}
+
+/// Unions explicit confinement manifests only when every candidate has one.
+fn aggregate_candidate_confinement_effects(
+    candidates: &[CandidateEvaluation],
+) -> Option<EffectiveCommandEffects> {
+    if candidates.is_empty()
+        || candidates
+            .iter()
+            .any(|candidate| candidate.confinement_effects.is_none())
+    {
+        return None;
+    }
+    let mut aggregate = EffectiveCommandEffects::empty();
+    for effects in candidates
+        .iter()
+        .filter_map(|candidate| candidate.confinement_effects.as_ref())
+    {
+        aggregate.reads.extend(effects.reads.iter().cloned());
+        aggregate.writes.extend(effects.writes.iter().cloned());
+        aggregate.network |= effects.network;
+        aggregate.credentials |= effects.credentials;
+        aggregate.process_control |= effects.process_control;
+    }
+    normalize_effect_paths(&mut aggregate);
+    Some(aggregate)
 }
 
 /// Sorts and deduplicates path-like effect collections for deterministic
