@@ -95,6 +95,8 @@ pub(crate) enum RuntimeAgentShellDisplayOutput {
     Suppressed,
     /// One-line command feedback rendered through the transient status bar.
     TransientStatus(Vec<String>),
+    /// One-line recoverable command failure rendered through the error status bar.
+    TransientErrorStatus(Vec<String>),
     /// Preformatted display lines for plain text and diagnostic responses.
     Lines(Vec<String>),
     /// Display content rendered through the command overlay pager.
@@ -119,6 +121,39 @@ pub(crate) fn runtime_agent_shell_display_output(
         .get("command")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned);
+    if let Some(presentation) = parsed
+        .get("presentation")
+        .and_then(serde_json::Value::as_str)
+    {
+        let body = parsed
+            .get("body")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        return match presentation {
+            "pager" => Ok(RuntimeAgentShellDisplayOutput::Overlay(
+                runtime_agent_shell_markdown_overlay_content_for_layout(
+                    command,
+                    body,
+                    ui_theme,
+                    terminal_width,
+                    terminal_width.max(1),
+                ),
+            )),
+            "notice" => {
+                let mut lines = runtime_human_readable_display_lines(body);
+                lines.truncate(200);
+                Ok(RuntimeAgentShellDisplayOutput::TransientStatus(lines))
+            }
+            "error_notice" => {
+                let mut lines = runtime_human_readable_display_lines(body);
+                lines.truncate(200);
+                Ok(RuntimeAgentShellDisplayOutput::TransientErrorStatus(lines))
+            }
+            _ => Err(MezError::invalid_args(
+                "agent shell response has an unsupported presentation destination",
+            )),
+        };
+    }
     if kind == Some("mutated") {
         if command
             .as_deref()
@@ -255,6 +290,90 @@ fn initial_show_record_list_uses_full_overlay_width() {
             .all(|line| UnicodeWidthStr::width(line.as_str()) <= 80),
         "{content:?}"
     );
+}
+
+/// Explicit pager metadata opens the command overlay even when the rendered
+/// Markdown contains only one short line.
+#[cfg(test)]
+#[test]
+fn explicit_agent_shell_pager_ignores_rendered_line_count() {
+    let output = runtime_agent_shell_display_output(
+        r#"{"kind":"display","command":"inspect","content_type":"text/markdown; charset=utf-8","presentation":"pager","body":"one line"}"#,
+        &mez_mux::theme::deepforest_ui_theme(),
+        80,
+        32,
+    )
+    .expect("explicit pager response should render");
+
+    let RuntimeAgentShellDisplayOutput::Overlay(content) = output else {
+        panic!("explicit pager response must not become pane lines");
+    };
+    assert_eq!(content.command.as_deref(), Some("inspect"));
+    assert!(content.lines.iter().any(|line| line.contains("one line")));
+}
+
+/// Explicit success and error notices remain transient even when their bodies
+/// contain multiple lines that legacy inference would append to the pane log.
+#[cfg(test)]
+#[test]
+fn explicit_agent_shell_notices_never_become_pane_lines() {
+    let theme = mez_mux::theme::deepforest_ui_theme();
+    let notice = runtime_agent_shell_display_output(
+        r#"{"kind":"display","command":"mutate","presentation":"notice","body":"changed\nsubsequent actions only"}"#,
+        &theme,
+        80,
+        32,
+    )
+    .expect("explicit notice should decode");
+    assert!(matches!(
+        notice,
+        RuntimeAgentShellDisplayOutput::TransientStatus(ref lines)
+            if lines == &["changed".to_string(), "subsequent actions only".to_string()]
+    ));
+
+    let error = runtime_agent_shell_display_output(
+        r#"{"kind":"display","command":"mutate","presentation":"error_notice","body":"failed\nsee audit"}"#,
+        &theme,
+        80,
+        32,
+    )
+    .expect("explicit error notice should decode");
+    assert!(matches!(
+        error,
+        RuntimeAgentShellDisplayOutput::TransientErrorStatus(ref lines)
+            if lines == &["failed".to_string(), "see audit".to_string()]
+    ));
+}
+
+/// Runtime JSON preserves the typed presentation destination so decoding does
+/// not need to infer placement from command names or rendered body shape.
+#[cfg(test)]
+#[test]
+fn explicit_agent_shell_presentation_serializes_for_runtime_decoding() {
+    use crate::integrations::agent::slash::{AgentShellCommandOutcome, AgentShellPresentation};
+
+    for (presentation, expected) in [
+        (AgentShellPresentation::Pager, "pager"),
+        (AgentShellPresentation::Notice, "notice"),
+        (AgentShellPresentation::ErrorNotice, "error_notice"),
+    ] {
+        let response = crate::runtime::runtime_agent_shell_command_response_json(
+            "%1",
+            "/inspect",
+            Some(&AgentShellCommandOutcome::Presented {
+                command: "inspect".to_string(),
+                body: "body".to_string(),
+                presentation,
+            }),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            parsed
+                .get("presentation")
+                .and_then(serde_json::Value::as_str),
+            Some(expected)
+        );
+    }
 }
 
 /// Verifies `/show-*` Markdown is converted to physical pager rows before the

@@ -774,7 +774,9 @@ impl RuntimeSessionService {
 fn runtime_compaction_outcome_name(outcome: &AgentShellCommandOutcome) -> &'static str {
     match outcome {
         AgentShellCommandOutcome::Mutated { .. } => "queued",
-        AgentShellCommandOutcome::Display { .. } => "skipped",
+        AgentShellCommandOutcome::Display { .. } | AgentShellCommandOutcome::Presented { .. } => {
+            "skipped"
+        }
         AgentShellCommandOutcome::RequiresRuntime { .. } => "requires-runtime",
     }
 }

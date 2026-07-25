@@ -15,6 +15,32 @@ use mez_agent::{
 
 // Agent shell slash command registry and dispatch.
 
+/// Explicit user-interface destination for one agent-shell display response.
+///
+/// Commands use this contract when content shape must not decide whether the
+/// response opens a pager or appears as a transient status-bar message.
+#[allow(dead_code)] // Incremental command migrations consume this shared contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentShellPresentation {
+    /// Render the complete body in the command pager, even when it is one line.
+    Pager,
+    /// Render a transient successful status-bar notice.
+    Notice,
+    /// Render a transient recoverable error status-bar notice.
+    ErrorNotice,
+}
+
+impl AgentShellPresentation {
+    /// Returns the stable JSON spelling used across runtime/control boundaries.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pager => "pager",
+            Self::Notice => "notice",
+            Self::ErrorNotice => "error_notice",
+        }
+    }
+}
+
 /// Carries Agent Shell Command Outcome state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -36,6 +62,16 @@ pub enum AgentShellCommandOutcome {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         body: String,
+    },
+    /// Displays content through an explicit presentation destination.
+    #[allow(dead_code)] // Incremental command migrations follow this prerequisite.
+    Presented {
+        /// Stable command identity used by pager and compatibility adapters.
+        command: String,
+        /// Complete Markdown display body.
+        body: String,
+        /// Explicit destination that takes precedence over legacy inference.
+        presentation: AgentShellPresentation,
     },
     /// Represents the Mutated case for this enumeration.
     ///

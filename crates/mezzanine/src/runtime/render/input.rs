@@ -694,6 +694,15 @@ impl RuntimeSessionService {
                     .or_insert_with(default_runtime_agent_prompt_input);
                 state.display_lines.clear();
             }
+            RuntimeAgentShellDisplayOutput::TransientErrorStatus(display_lines) => {
+                self.show_primary_error_overlay(display_lines)?;
+                let state = self
+                    .presentation
+                    .agent_prompt_inputs
+                    .entry(pane_id.to_string())
+                    .or_insert_with(default_runtime_agent_prompt_input);
+                state.display_lines.clear();
+            }
             RuntimeAgentShellDisplayOutput::Lines(display_lines) => {
                 self.set_agent_prompt_display_lines(pane_id, display_lines)?;
             }

@@ -171,6 +171,18 @@ pub(in crate::control) fn agent_shell_command_response_json(
             json_escape(command),
             json_escape(body)
         ),
+        Some(AgentShellCommandOutcome::Presented {
+            command,
+            body,
+            presentation,
+        }) => format!(
+            r#"{{"pane_id":"{}","input":"{}","kind":"display","command":"{}","presentation":"{}","body":"{}","turn":null}}"#,
+            json_escape(pane_id),
+            json_escape(input),
+            json_escape(command),
+            presentation.as_str(),
+            json_escape(body)
+        ),
         Some(AgentShellCommandOutcome::Mutated {
             command,
             body,

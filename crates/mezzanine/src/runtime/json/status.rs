@@ -64,6 +64,18 @@ pub(crate) fn runtime_agent_shell_command_response_json(
             json_escape(command),
             json_escape(body)
         ),
+        Some(AgentShellCommandOutcome::Presented {
+            command,
+            body,
+            presentation,
+        }) => format!(
+            r#"{{"pane_id":"{}","input":"{}","kind":"display","command":"{}","content_type":"text/markdown; charset=utf-8","presentation":"{}","body":"{}","turn":null}}"#,
+            json_escape(pane_id),
+            json_escape(input),
+            json_escape(command),
+            presentation.as_str(),
+            json_escape(body)
+        ),
         Some(AgentShellCommandOutcome::Mutated {
             command,
             body,
