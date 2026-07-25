@@ -2960,7 +2960,9 @@ kind and MUST NOT persist arbitrary host paths. `mez sandbox toolchains detect
 confirmation, and noninteractive or JSON mutation MUST require `--yes`.
 Schema v26 adds the allowlisted `zig` kind. Schema v25 to v26 migration MUST
 preserve an existing selection or omission and MUST NOT discover or enable Zig.
-Direct-user detection MUST accept `--kind rust|zig`; omission MUST retain the
+Schema v27 adds the allowlisted `go` kind. Schema v26 to v27 migration MUST
+preserve an existing selection or omission and MUST NOT discover or enable Go.
+Direct-user detection MUST accept `--kind rust|zig|go`; omission MUST retain the
 existing Rust default. Active-pane detection, enablement, and status MUST use
 bootstrap evidence rather than ambient service process state.
 Toolchain projection MUST be descriptor-driven. Each supported kind MUST own
@@ -3003,6 +3005,14 @@ roots. The distribution MUST be mounted read-only at
 `zig-out` remain ordinary project state. Selection MUST NOT import a host Zig
 cache, manager metadata, credentials, unrelated versions, or authority for
 native SDKs and system integrations.
+The same detect, enable, and disable grammar MUST accept `go`. Go evidence MUST
+identify one canonical SDK containing a real executable `bin/go` file and real
+`src` directory. The SDK MUST be mounted read-only at
+`/opt/mez/toolchains/go/root`; its `bin` directory MUST precede
+`/usr/bin:/bin`; and `GOROOT` MUST name that fixed destination. `GOPATH`,
+`GOMODCACHE`, and `GOCACHE` MUST resolve beneath `/home/mez`. Selection MUST
+NOT import host module/build caches, `GOBIN`, `GOPATH/bin`, private-module
+configuration, credentials, unrelated SDK versions, or version-manager state.
 Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
 derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
 evidence, reject missing, symlinked, overlapping, unexpected, credential, and
@@ -5794,8 +5804,8 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig]`, `enable KIND --yes`, `disable KIND --yes`, and `reload`,
-  where `KIND` is `rust` or `zig`. Unknown kinds,
+  `detect [rust|zig|go]`, `enable KIND --yes`, `disable KIND --yes`, and
+  `reload`, where `KIND` is `rust`, `zig`, or `go`. Unknown kinds,
   missing confirmation, duplicate confirmation, and extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,

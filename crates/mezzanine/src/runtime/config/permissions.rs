@@ -144,6 +144,8 @@ pub(crate) enum SandboxToolchainKind {
     Rust,
     /// One self-contained Zig distribution selected by the active pane.
     Zig,
+    /// One self-contained Go SDK selected by the active pane.
+    Go,
 }
 
 impl SandboxToolchainKind {
@@ -152,6 +154,7 @@ impl SandboxToolchainKind {
         match self {
             Self::Rust => "rust",
             Self::Zig => "zig",
+            Self::Go => "go",
         }
     }
 }

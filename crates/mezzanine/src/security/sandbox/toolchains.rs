@@ -21,8 +21,11 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 2] =
-    [SandboxToolchainKind::Rust, SandboxToolchainKind::Zig];
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 3] = [
+    SandboxToolchainKind::Rust,
+    SandboxToolchainKind::Zig,
+    SandboxToolchainKind::Go,
+];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
 pub(crate) const SANDBOX_RUST_CARGO_BIN: &str = "/opt/mez/toolchains/rust/cargo-bin";
@@ -34,6 +37,10 @@ pub(crate) const SANDBOX_RUST_PATH: &str = "/opt/mez/toolchains/rust/cargo-bin:/
 pub(crate) const SANDBOX_ZIG_ROOT: &str = "/opt/mez/toolchains/zig";
 /// Fixed executable search path used when only Zig is projected.
 pub(crate) const SANDBOX_ZIG_PATH: &str = "/opt/mez/toolchains/zig:/usr/bin:/bin";
+/// Fixed Go SDK projection inside Bubblewrap.
+pub(crate) const SANDBOX_GO_ROOT: &str = "/opt/mez/toolchains/go/root";
+/// Fixed executable search path used when only Go is projected.
+pub(crate) const SANDBOX_GO_PATH: &str = "/opt/mez/toolchains/go/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,6 +251,70 @@ const ZIG_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const GO_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "go",
+    label: "Go SDK",
+    sandbox_destination: SANDBOX_GO_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/go"],
+    required_directories: &["src"],
+}];
+const GO_ENVIRONMENT: [ToolchainEnvironmentVariable; 4] = [
+    ToolchainEnvironmentVariable {
+        name: "GOROOT",
+        value: SANDBOX_GO_ROOT,
+    },
+    ToolchainEnvironmentVariable {
+        name: "GOPATH",
+        value: "/home/mez/go",
+    },
+    ToolchainEnvironmentVariable {
+        name: "GOMODCACHE",
+        value: "/home/mez/go/pkg/mod",
+    },
+    ToolchainEnvironmentVariable {
+        name: "GOCACHE",
+        value: "/home/mez/.cache/go-build",
+    },
+];
+const GO_MANAGED_STATE: [ManagedToolchainState; 3] = [
+    ManagedToolchainState {
+        purpose: "go-workspace",
+        sandbox_path: "/home/mez/go",
+    },
+    ManagedToolchainState {
+        purpose: "go-module-cache",
+        sandbox_path: "/home/mez/go/pkg/mod",
+    },
+    ManagedToolchainState {
+        purpose: "go-build-cache",
+        sandbox_path: "/home/mez/.cache/go-build",
+    },
+];
+const GO_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Go,
+    aliases: &["go", "golang"],
+    roots: &GO_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/go",
+    ],
+    path_entries: &["/opt/mez/toolchains/go/root/bin"],
+    environment: &GO_ENVIRONMENT,
+    managed_state: &GO_MANAGED_STATE,
+    forbidden_descendants: &["credentials", "config", "pkg/mod/cache/vcs"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -420,6 +491,7 @@ pub(crate) const fn toolchain_descriptor(
     match kind {
         SandboxToolchainKind::Rust => &RUST_DESCRIPTOR,
         SandboxToolchainKind::Zig => &ZIG_DESCRIPTOR,
+        SandboxToolchainKind::Go => &GO_DESCRIPTOR,
     }
 }
 
@@ -835,6 +907,57 @@ pub(crate) fn discover_zig_from_search_path(
                 )
             })?;
         validate_descriptor_root(&root, &ZIG_ROOTS[0])?;
+        return Ok(Some(root));
+    }
+    Ok(None)
+}
+
+/// Discovers the first Go SDK selected by an explicit search path.
+///
+/// The selected executable must be a real `<sdk>/bin/go` file. Discovery
+/// canonicalizes and validates the SDK root without consulting GOPATH, GOBIN,
+/// ambient process state, or version-manager hooks.
+pub(crate) fn discover_go_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    let Some(search_path) = search_path else {
+        return Ok(None);
+    };
+    for directory in std::env::split_paths(search_path) {
+        let executable = directory.join("go");
+        let metadata = match fs::symlink_metadata(&executable) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to inspect selected Go executable: {error}"),
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "selected Go executable must be a real file, not a shim or symlink",
+            ));
+        }
+        let root = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "selected Go executable has no SDK root",
+                )
+            })?
+            .canonicalize()
+            .map_err(|error| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to canonicalize selected Go SDK: {error}"),
+                )
+            })?;
+        validate_descriptor_root(&root, &GO_ROOTS[0])?;
         return Ok(Some(root));
     }
     Ok(None)

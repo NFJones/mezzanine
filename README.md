@@ -433,17 +433,18 @@ Current support reflects behavior implemented in the repository today.
   a paired sanitized Git name and email; only those identity values are
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
-- `mez sandbox toolchains detect [--kind rust|zig] [PATH]` previews canonical
+- `mez sandbox toolchains detect [--kind rust|zig|go] [PATH]` previews canonical
   roots without mutation. `mez sandbox toolchains enable KIND --yes` stores
-  only the typed selection. Rust mounts Cargo and Rustup read-only; Zig mounts
-  one self-contained distribution read-only and redirects its global cache to
-  `/home/mez/.cache/zig`. Neither projection imports host credentials or caches.
+  only the typed selection. Rust mounts Cargo and Rustup read-only; Zig and Go
+  mount one self-contained distribution or SDK read-only. Their writable cache
+  and package state is redirected beneath `/home/mez`; host credentials,
+  caches, `GOBIN`, and `GOPATH/bin` remain hidden.
   That standalone command updates disk configuration; an existing service
   requires `/toolchain reload`, `config/reload`, or a session restart before
   the change becomes effective.
 - In the agent shell, `/toolchain` and `/toolchain status` report supported,
   configured, discoverable, and effective state for the active pane.
-  `/toolchain detect [rust|zig]` is read-only and uses only active-pane bootstrap
+  `/toolchain detect [rust|zig|go]` is read-only and uses only active-pane bootstrap
   evidence. `/toolchain enable KIND --yes` and `/toolchain disable KIND --yes`
   persist only the typed kind and hot-apply real changes to subsequent
   sandboxed actions. Existing interactive shells and already-running actions

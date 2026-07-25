@@ -192,6 +192,48 @@ fn runtime_agent_shell_zig_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Confirmed Go detection and enablement consume only active-pane SDK
+/// evidence and never persist the discovered host root, GOPATH, or GOBIN.
+#[test]
+fn runtime_agent_shell_go_toolchain_detects_and_persists_only_kind() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-go-toolchain-mutation", config);
+    let go_root = path.parent().unwrap().join("go-sdk");
+    fs::create_dir_all(go_root.join("bin")).unwrap();
+    fs::create_dir_all(go_root.join("src")).unwrap();
+    fs::write(go_root.join("bin/go"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(go_root.join("bin/go"), fs::Permissions::from_mode(0o755)).unwrap();
+    let go_root = go_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("go:{}", go_root.display())]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"go-detect","method":"agent/shell/command","params":{"idempotency_key":"go-detect","input":"/toolchain detect go"}}"#,
+        &primary,
+    );
+    assert!(detect.contains("kind=go"), "{detect}");
+    assert!(detect.contains("available=true"), "{detect}");
+
+    let enabled = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"go-enable","method":"agent/shell/command","params":{"idempotency_key":"go-enable","input":"/toolchain enable go --yes"}}"#,
+        &primary,
+    );
+    assert!(enabled.contains("kind=go"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("toolchains = [\"go\"]"), "{persisted}");
+    assert!(
+        !persisted.contains(&go_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

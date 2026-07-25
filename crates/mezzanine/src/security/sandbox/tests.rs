@@ -950,6 +950,135 @@ fn zig_toolchain_discovery_rejects_malformed_and_symlinked_distributions() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A validated Go SDK is mounted read-only while all writable workspace,
+/// module, and build caches are redirected beneath the managed home.
+#[test]
+fn go_toolchain_projection_is_read_only_and_cache_isolated() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-go-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("go-sdk");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("bin/go"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(root.join("bin/go"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = root.canonicalize().unwrap();
+
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Go);
+    assert_eq!(descriptor.aliases, ["go", "golang"]);
+    assert_eq!(descriptor.roots[0].evidence_kind, "go");
+    assert_eq!(descriptor.roots[0].sandbox_destination, SANDBOX_GO_ROOT);
+    assert_eq!(descriptor.roots[0].required_executables, ["bin/go"]);
+    assert_eq!(descriptor.roots[0].required_directories, ["src"]);
+
+    let managers = [format!("go:{}", root.display())];
+    let projection = resolve_toolchain_projection(&[SandboxToolchainKind::Go], &managers, "linux")
+        .unwrap()
+        .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_GO_PATH);
+    for (name, value) in [
+        ("GOROOT", SANDBOX_GO_ROOT),
+        ("GOPATH", "/home/mez/go"),
+        ("GOMODCACHE", "/home/mez/go/pkg/mod"),
+        ("GOCACHE", "/home/mez/.cache/go-build"),
+    ] {
+        assert_eq!(projection.environment.get(name), Some(&value));
+    }
+    assert!(!projection.environment.contains_key("GOBIN"));
+
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Go];
+    let home_scope = home_authority(&base.canonicalize().unwrap().display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &home_scope, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    let source = root.display().to_string();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_GO_ROOT])
+    );
+    assert!(
+        !plan
+            .arguments
+            .windows(3)
+            .any(|args| args == ["--bind", source.as_str(), SANDBOX_GO_ROOT])
+    );
+    for (name, value) in [
+        ("GOROOT", SANDBOX_GO_ROOT),
+        ("GOPATH", "/home/mez/go"),
+        ("GOMODCACHE", "/home/mez/go/pkg/mod"),
+        ("GOCACHE", "/home/mez/.cache/go-build"),
+        ("PATH", SANDBOX_GO_PATH),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--setenv", name, value]),
+            "missing {name}={value}"
+        );
+    }
+
+    let outside = authority();
+    let mut outside_request = request(&config, &outside, &evaluation);
+    outside_request.toolchain_projection = Some(&projection);
+    assert_eq!(
+        compile_bubblewrap_launch_plan(outside_request)
+            .unwrap_err()
+            .kind(),
+        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Go discovery rejects incomplete SDK layouts, non-executable binaries, and
+/// symlink shims rather than treating GOPATH or an arbitrary bin as an SDK.
+#[test]
+fn go_toolchain_discovery_rejects_malformed_and_symlinked_sdks() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-go-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("go-sdk");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/go"), "not executable").unwrap();
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("go:{}", root.display())];
+
+    let missing_layout =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Go], &managers, "linux").unwrap_err();
+    assert!(matches!(
+        missing_layout.kind(),
+        SandboxCompileErrorKind::InvalidInput | SandboxCompileErrorKind::ForbiddenHostPath
+    ));
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    let non_executable =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Go], &managers, "linux").unwrap_err();
+    assert_eq!(
+        non_executable.kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    let external = base.join("external-go");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(root.join("bin/go")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("bin/go")).unwrap();
+    let search_path = std::env::join_paths([root.join("bin")]).unwrap();
+    let symlink = discover_go_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(symlink.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Descriptor resolution and final launch validation reject ambiguous
 /// selection and any mutation of code-owned projection metadata or classes.
 #[test]
@@ -1099,7 +1228,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .iter()
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
-        vec!["rust", "zig"]
+        vec!["rust", "zig", "go"]
     );
     assert_eq!(
         parse_sandbox_toolchain_kind("rust"),

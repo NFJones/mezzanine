@@ -16,7 +16,7 @@ use super::{
 use crate::runtime::{SandboxConfig, SandboxToolchainKind};
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
-    SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    SANDBOX_GO_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
     discover_rust_from_environment_managers, parse_sandbox_toolchain_kind,
     resolve_toolchain_projection,
 };
@@ -71,6 +71,7 @@ struct ToolchainStatus {
     cargo_bin: Option<String>,
     rustup_home: Option<String>,
     zig_root: Option<String>,
+    go_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -290,70 +291,103 @@ impl RuntimeSessionService {
     fn toolchain_status_for_pane(&self, pane_id: &str) -> Result<ToolchainStatus> {
         let configured = self.configured_toolchain_names()?;
         let backend = self.configured_permissions().sandbox.as_str();
-        let (discovery_state, discoverable, cargo_bin, rustup_home, zig_root, discovery_error) =
-            match self.pane_environment_signature(pane_id) {
-                None if self.pane_bootstrap_is_pending(pane_id) => {
-                    ("bootstrap-pending", Vec::new(), None, None, None, None)
-                }
-                None => (
-                    "environment-unavailable",
-                    Vec::new(),
-                    None,
-                    None,
-                    None,
-                    None,
-                ),
-                Some(signature) => {
-                    let mut discoverable = Vec::new();
-                    let mut errors = Vec::new();
-                    let (cargo_bin, rustup_home) = match discover_rust_from_environment_managers(
-                        &signature.environment_managers,
-                    ) {
-                        Ok(discovery) => {
-                            discoverable.push("rust".to_string());
-                            (
-                                Some(discovery.cargo_bin.display().to_string()),
-                                Some(discovery.rustup_home.display().to_string()),
-                            )
-                        }
-                        Err(error) => {
-                            errors.push(format!("rust:{}", error.message()));
-                            (None, None)
-                        }
-                    };
-                    let zig_root = match resolve_toolchain_projection(
-                        &[SandboxToolchainKind::Zig],
-                        &signature.environment_managers,
-                        &signature.os,
-                    ) {
-                        Ok(Some(projection)) => {
-                            discoverable.push("zig".to_string());
-                            projection
-                                .roots
-                                .first()
-                                .map(|root| root.host_path.display().to_string())
-                        }
-                        Ok(None) => None,
-                        Err(error) => {
-                            errors.push(format!("zig:{}", error.message()));
-                            None
-                        }
-                    };
-                    let state = if discoverable.is_empty() {
-                        "unavailable"
-                    } else {
-                        "available"
-                    };
-                    (
-                        state,
-                        discoverable,
-                        cargo_bin,
-                        rustup_home,
-                        zig_root,
-                        (!errors.is_empty()).then(|| errors.join(";")),
-                    )
-                }
-            };
+        let (
+            discovery_state,
+            discoverable,
+            cargo_bin,
+            rustup_home,
+            zig_root,
+            go_root,
+            discovery_error,
+        ) = match self.pane_environment_signature(pane_id) {
+            None if self.pane_bootstrap_is_pending(pane_id) => (
+                "bootstrap-pending",
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            None => (
+                "environment-unavailable",
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            Some(signature) => {
+                let mut discoverable = Vec::new();
+                let mut errors = Vec::new();
+                let (cargo_bin, rustup_home) = match discover_rust_from_environment_managers(
+                    &signature.environment_managers,
+                ) {
+                    Ok(discovery) => {
+                        discoverable.push("rust".to_string());
+                        (
+                            Some(discovery.cargo_bin.display().to_string()),
+                            Some(discovery.rustup_home.display().to_string()),
+                        )
+                    }
+                    Err(error) => {
+                        errors.push(format!("rust:{}", error.message()));
+                        (None, None)
+                    }
+                };
+                let zig_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Zig],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("zig".to_string());
+                        projection
+                            .roots
+                            .first()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("zig:{}", error.message()));
+                        None
+                    }
+                };
+                let go_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Go],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("go".to_string());
+                        projection
+                            .roots
+                            .first()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("go:{}", error.message()));
+                        None
+                    }
+                };
+                let state = if discoverable.is_empty() {
+                    "unavailable"
+                } else {
+                    "available"
+                };
+                (
+                    state,
+                    discoverable,
+                    cargo_bin,
+                    rustup_home,
+                    zig_root,
+                    go_root,
+                    (!errors.is_empty()).then(|| errors.join(";")),
+                )
+            }
+        };
         let selected = !configured.is_empty();
         let selected_discoverable = configured
             .iter()
@@ -386,6 +420,7 @@ impl RuntimeSessionService {
             cargo_bin,
             rustup_home,
             zig_root,
+            go_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -511,13 +546,29 @@ fn detect_toolchain_detail(
                 SANDBOX_ZIG_PATH,
             ))
         }
+        SandboxToolchainKind::Go => {
+            let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state("Go projection unexpectedly resolved empty")
+                })?;
+            let root = projection
+                .roots
+                .first()
+                .ok_or_else(|| MezError::invalid_state("Go projection is missing its SDK root"))?;
+            Ok(format!(
+                "go_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_GO_PATH,
+            ))
+        }
     }
 }
 
 /// Renders the complete pane-local status without ambient environment data.
 fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
     format!(
-        "pane={} backend={} supported={} configured={} discoverable={} discovery={} effective={} cargo_bin={} rustup_home={} zig_root={} discovery_error={} rust_sandbox_path={} zig_sandbox_path={} generation={} source=active-pane-bootstrap",
+        "pane={} backend={} supported={} configured={} discoverable={} discovery={} effective={} cargo_bin={} rustup_home={} zig_root={} go_root={} discovery_error={} rust_sandbox_path={} zig_sandbox_path={} go_sandbox_path={} generation={} source=active-pane-bootstrap",
         json_escape(pane_id),
         status.backend,
         supported_toolchain_names().join(","),
@@ -541,12 +592,18 @@ fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
             .map(json_escape)
             .unwrap_or_else(|| "none".to_string()),
         status
+            .go_root
+            .as_deref()
+            .map(json_escape)
+            .unwrap_or_else(|| "none".to_string()),
+        status
             .discovery_error
             .as_deref()
             .map(json_escape)
             .unwrap_or_else(|| "none".to_string()),
         SANDBOX_RUST_PATH,
         SANDBOX_ZIG_PATH,
+        SANDBOX_GO_PATH,
         status.generation,
     )
 }

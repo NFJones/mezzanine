@@ -239,6 +239,75 @@ fn sandbox_zig_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Go detection and activation use the captured CLI search path, keep host
+/// caches and user tool bins out of the result, and persist only the typed kind.
+#[test]
+fn sandbox_go_toolchain_detects_and_persists_only_kind() {
+    let (mut env, home) = test_env("sandbox-go-toolchain");
+    let go_root = home.join("go-sdk");
+    fs::create_dir_all(go_root.join("bin")).unwrap();
+    fs::create_dir_all(go_root.join("src")).unwrap();
+    fs::write(go_root.join("bin/go"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(go_root.join("bin/go"), fs::Permissions::from_mode(0o755)).unwrap();
+    let go_root = go_root.canonicalize().unwrap();
+    env.path = Some(go_root.join("bin").into_os_string());
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let detect_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "detect".to_string(),
+            "--kind".to_string(),
+            "go".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(detect_code, 0);
+    let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(detected["kind"], "go");
+    assert_eq!(detected["available"], true);
+    assert_eq!(detected["go_root"], go_root.to_string_lossy().as_ref());
+    assert!(!config_path.exists());
+
+    stdout.clear();
+    let applied_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "enable".to_string(),
+            "go".to_string(),
+            "--yes".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(applied_code, 0);
+    let config = fs::read_to_string(&config_path).unwrap();
+    assert!(config.contains("toolchains = [\"go\"]"), "{config}");
+    assert!(
+        !config.contains(&go_root.to_string_lossy().into_owned()),
+        "{config}"
+    );
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]

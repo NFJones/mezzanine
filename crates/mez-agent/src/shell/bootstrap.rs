@@ -138,8 +138,11 @@ if [ -n \"$mez_zig_bin\" ] && [ -f \"$mez_zig_bin\" ] && [ ! -L \"$mez_zig_bin\"
   mez_zig_root=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_zig_bin\")\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_zig_root\" ] && [ \"$mez_zig_bin\" = \"$mez_zig_root/zig\" ] && mez_bootstrap_field env_manager \"zig:$mez_zig_root\"\n\
 fi\n\
-if [ -n \"$GOPATH\" ]; then\n\
-  mez_bootstrap_field env_manager \"go\"\n\
+mez_go_bin=$(command -v go 2>/dev/null || true)\n\
+if [ -n \"$mez_go_bin\" ] && [ -f \"$mez_go_bin\" ] && [ ! -L \"$mez_go_bin\" ]; then\n\
+  mez_go_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_go_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_go_root=$(CDPATH= cd -P -- \"$mez_go_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_go_root\" ] && [ \"$mez_go_bin\" = \"$mez_go_root/bin/go\" ] && mez_bootstrap_field env_manager \"go:$mez_go_root\"\n\
 fi\n\
 \n\
 mez_inst_max=32768\n\
@@ -263,8 +266,11 @@ if test -n \"$mez_zig_bin\"; and test -f \"$mez_zig_bin\"; and not test -L \"$me
   set -l mez_zig_root (cd (dirname \"$mez_zig_bin\") 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_zig_root\"; and test \"$mez_zig_bin\" = \"$mez_zig_root/zig\"; and mez_bootstrap_field env_manager \"zig:$mez_zig_root\"\n\
 end\n\
-if test -n \"$GOPATH\"\n\
-  mez_bootstrap_field env_manager go\n\
+set -l mez_go_bin (command -s go 2>/dev/null)\n\
+if test -n \"$mez_go_bin\"; and test -f \"$mez_go_bin\"; and not test -L \"$mez_go_bin\"\n\
+  set -l mez_go_bin_dir (cd (dirname \"$mez_go_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_go_root (cd \"$mez_go_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_go_root\"; and test \"$mez_go_bin\" = \"$mez_go_root/bin/go\"; and mez_bootstrap_field env_manager \"go:$mez_go_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\
