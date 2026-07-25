@@ -2966,10 +2966,12 @@ Schema v28 adds the allowlisted `deno` kind. Schema v27 to v28 migration MUST
 preserve an existing selection or omission and MUST NOT discover or enable
 Deno. Schema v29 adds the allowlisted `bun` kind. Schema v28 to v29 migration
 MUST preserve an existing selection or omission and MUST NOT discover or
-enable Bun. Direct-user detection MUST accept `--kind rust|zig|go|deno|bun`;
-omission MUST retain the existing Rust default. Active-pane detection,
-enablement, and status MUST use bootstrap evidence rather than ambient service
-process state.
+enable Bun. Schema v30 adds the allowlisted `node` kind. Schema v29 to v30
+migration MUST preserve an existing selection or omission and MUST NOT
+discover or enable Node.js. Direct-user detection MUST accept
+`--kind rust|zig|go|deno|bun|node`; omission MUST retain the existing Rust
+default. Active-pane detection, enablement, and status MUST use bootstrap
+evidence rather than ambient service process state.
 Toolchain projection MUST be descriptor-driven. Each supported kind MUST own
 code-defined evidence names, structural root validation, fixed read-only
 sandbox destinations, deterministic PATH entries, synthesized child
@@ -3041,6 +3043,22 @@ import host package caches, global packages or executables, credentials,
 configuration, installation metadata, npm state, Node.js, unrelated runtimes,
 or version-manager state. Repository `node_modules/.bin` remains a separate
 project-environment authority and MUST NOT be implied by selecting Bun.
+The same detect, enable, and disable grammar MUST accept `node`. Node.js
+evidence MUST identify one canonical distribution root containing a real
+executable `bin/node` file and real `lib` directory selected by the active
+pane. Mezzanine MUST reject missing, non-executable, symlinked, shim,
+malformed, duplicate, and out-of-authority Node.js roots. The distribution
+MUST be mounted read-only at `/opt/mez/toolchains/node/root`, and its `bin`
+directory MUST precede `/usr/bin:/bin`. Bundled `npm`, `npx`, and `corepack`
+MAY be exposed only when they are contained in that selected distribution.
+`NPM_CONFIG_CACHE` MUST be `/home/mez/.cache/npm`, and `COREPACK_HOME` MUST be
+`/home/mez/.cache/node/corepack`. Selection MUST NOT import host `.npmrc`
+files, registry tokens, package-manager caches, global package prefixes or
+executables, manager roots or shims, unrelated runtime versions, or arbitrary
+Node environment variables. Repository `node_modules/.bin` remains a separate
+project-controlled authority and MUST NOT be implied by selecting Node.js.
+Corepack downloads and package-manager network activity remain subject to the
+normal action network policy.
 Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
 derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
 evidence, reject missing, symlinked, overlapping, unexpected, credential, and
@@ -5832,9 +5850,10 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun]`, `enable KIND --yes`, `disable KIND --yes`,
-  and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, or `bun`. Unknown kinds,
-  missing confirmation, duplicate confirmation, and extra arguments MUST
+  `detect [rust|zig|go|deno|bun|node]`, `enable KIND --yes`, `disable KIND
+  --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
+  `node`. Unknown kinds, missing confirmation, duplicate confirmation, and
+  extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,
   available-but-disabled, and disabled-and-unavailable states. Detection MUST

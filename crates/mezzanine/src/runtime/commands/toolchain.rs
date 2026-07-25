@@ -16,8 +16,8 @@ use super::{
 use crate::runtime::{SandboxConfig, SandboxToolchainKind};
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
-    SANDBOX_BUN_PATH, SANDBOX_DENO_PATH, SANDBOX_GO_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
-    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, discover_rust_from_environment_managers,
+    SANDBOX_BUN_PATH, SANDBOX_DENO_PATH, SANDBOX_GO_PATH, SANDBOX_NODE_PATH, SANDBOX_RUST_PATH,
+    SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, discover_rust_from_environment_managers,
     parse_sandbox_toolchain_kind, resolve_toolchain_projection,
 };
 
@@ -74,6 +74,7 @@ struct ToolchainStatus {
     go_root: Option<String>,
     deno_root: Option<String>,
     bun_root: Option<String>,
+    node_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -302,6 +303,7 @@ impl RuntimeSessionService {
             go_root,
             deno_root,
             bun_root,
+            node_root,
             discovery_error,
         ) = match self.pane_environment_signature(pane_id) {
             None if self.pane_bootstrap_is_pending(pane_id) => (
@@ -314,10 +316,12 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
                 None,
                 None,
                 None,
@@ -416,6 +420,24 @@ impl RuntimeSessionService {
                         None
                     }
                 };
+                let node_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Node],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("node".to_string());
+                        projection
+                            .roots
+                            .first()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("node:{}", error.message()));
+                        None
+                    }
+                };
                 let state = if discoverable.is_empty() {
                     "unavailable"
                 } else {
@@ -430,6 +452,7 @@ impl RuntimeSessionService {
                     go_root,
                     deno_root,
                     bun_root,
+                    node_root,
                     (!errors.is_empty()).then(|| errors.join(";")),
                 )
             }
@@ -469,6 +492,7 @@ impl RuntimeSessionService {
             go_root,
             deno_root,
             bun_root,
+            node_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -640,13 +664,28 @@ fn detect_toolchain_detail(
                 SANDBOX_BUN_PATH,
             ))
         }
+        SandboxToolchainKind::Node => {
+            let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state("Node.js projection unexpectedly resolved empty")
+                })?;
+            let root = projection.roots.first().ok_or_else(|| {
+                MezError::invalid_state("Node.js projection is missing its distribution root")
+            })?;
+            Ok(format!(
+                "node_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_NODE_PATH,
+            ))
+        }
     }
 }
 
 /// Renders the complete pane-local status without ambient environment data.
 fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
     format!(
-        "pane={} backend={} supported={} configured={} discoverable={} discovery={} effective={} cargo_bin={} rustup_home={} zig_root={} go_root={} deno_root={} bun_root={} discovery_error={} rust_sandbox_path={} zig_sandbox_path={} go_sandbox_path={} deno_sandbox_path={} bun_sandbox_path={} generation={} source=active-pane-bootstrap",
+        "pane={} backend={} supported={} configured={} discoverable={} discovery={} effective={} cargo_bin={} rustup_home={} zig_root={} go_root={} deno_root={} bun_root={} node_root={} discovery_error={} rust_sandbox_path={} zig_sandbox_path={} go_sandbox_path={} deno_sandbox_path={} bun_sandbox_path={} node_sandbox_path={} generation={} source=active-pane-bootstrap",
         json_escape(pane_id),
         status.backend,
         supported_toolchain_names().join(","),
@@ -685,6 +724,11 @@ fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
             .map(json_escape)
             .unwrap_or_else(|| "none".to_string()),
         status
+            .node_root
+            .as_deref()
+            .map(json_escape)
+            .unwrap_or_else(|| "none".to_string()),
+        status
             .discovery_error
             .as_deref()
             .map(json_escape)
@@ -694,6 +738,7 @@ fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
         SANDBOX_GO_PATH,
         SANDBOX_DENO_PATH,
         SANDBOX_BUN_PATH,
+        SANDBOX_NODE_PATH,
         status.generation,
     )
 }

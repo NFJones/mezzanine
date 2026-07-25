@@ -24,6 +24,7 @@ mod v25_v26;
 mod v26_v27;
 mod v27_v28;
 mod v28_v29;
+mod v29_v30;
 
 #[cfg(test)]
 pub use driver::migrate_config_text;

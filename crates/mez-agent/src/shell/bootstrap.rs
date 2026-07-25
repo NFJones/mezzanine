@@ -155,6 +155,12 @@ if [ -n \"$mez_bun_bin\" ] && [ -f \"$mez_bun_bin\" ] && [ ! -L \"$mez_bun_bin\"
   mez_bun_root=$(CDPATH= cd -P -- \"$mez_bun_bin_dir/..\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_bun_root\" ] && [ \"$mez_bun_bin\" = \"$mez_bun_root/bin/bun\" ] && mez_bootstrap_field env_manager \"bun:$mez_bun_root\"\n\
 fi\n\
+mez_node_bin=$(command -v node 2>/dev/null || true)\n\
+if [ -n \"$mez_node_bin\" ] && [ -f \"$mez_node_bin\" ] && [ ! -L \"$mez_node_bin\" ]; then\n\
+  mez_node_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_node_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_node_root=$(CDPATH= cd -P -- \"$mez_node_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_node_root\" ] && [ \"$mez_node_bin\" = \"$mez_node_root/bin/node\" ] && mez_bootstrap_field env_manager \"node-runtime:$mez_node_root\"\n\
+fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -293,6 +299,12 @@ if test -n \"$mez_bun_bin\"; and test -f \"$mez_bun_bin\"; and not test -L \"$me
   set -l mez_bun_bin_dir (cd (dirname \"$mez_bun_bin\") 2>/dev/null; and pwd -P)\n\
   set -l mez_bun_root (cd \"$mez_bun_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_bun_root\"; and test \"$mez_bun_bin\" = \"$mez_bun_root/bin/bun\"; and mez_bootstrap_field env_manager \"bun:$mez_bun_root\"\n\
+end\n\
+set -l mez_node_bin (command -s node 2>/dev/null)\n\
+if test -n \"$mez_node_bin\"; and test -f \"$mez_node_bin\"; and not test -L \"$mez_node_bin\"\n\
+  set -l mez_node_bin_dir (cd (dirname \"$mez_node_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_node_root (cd \"$mez_node_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_node_root\"; and test \"$mez_node_bin\" = \"$mez_node_root/bin/node\"; and mez_bootstrap_field env_manager \"node-runtime:$mez_node_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\

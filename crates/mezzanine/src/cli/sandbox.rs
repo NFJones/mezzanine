@@ -30,12 +30,12 @@ use crate::security::project::{
 };
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
-    SANDBOX_DENO_PATH, SANDBOX_GO_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
+    SANDBOX_DENO_PATH, SANDBOX_GO_PATH, SANDBOX_NODE_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
     clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_deno_from_search_path,
-    discover_go_from_search_path, discover_rust_from_home, discover_zig_from_search_path,
-    inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind, plan_sandbox_workflow,
-    prune_bubblewrap_managed_homes,
+    discover_go_from_search_path, discover_node_from_search_path, discover_rust_from_home,
+    discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
+    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -1076,6 +1076,7 @@ struct SandboxToolchainResult {
     go_root: Option<PathBuf>,
     deno_root: Option<PathBuf>,
     bun_root: Option<PathBuf>,
+    node_root: Option<PathBuf>,
     sandbox_path: &'static str,
     read_only: bool,
     applied: bool,
@@ -1166,6 +1167,7 @@ enum DirectToolchainDetection {
     Go(Option<PathBuf>),
     Deno(Option<PathBuf>),
     Bun(Option<PathBuf>),
+    Node(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1176,6 +1178,7 @@ impl DirectToolchainDetection {
             Self::Go(root) => root.is_some(),
             Self::Deno(root) => root.is_some(),
             Self::Bun(root) => root.is_some(),
+            Self::Node(root) => root.is_some(),
         }
     }
 
@@ -1186,6 +1189,7 @@ impl DirectToolchainDetection {
             Self::Go(_) => SandboxToolchainKind::Go,
             Self::Deno(_) => SandboxToolchainKind::Deno,
             Self::Bun(_) => SandboxToolchainKind::Bun,
+            Self::Node(_) => SandboxToolchainKind::Node,
         }
     }
 }
@@ -1210,6 +1214,9 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Bun => discover_bun_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Bun)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Node => discover_node_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Node)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
     }
 }
 
@@ -1221,7 +1228,7 @@ fn toolchain_result(
 ) -> SandboxToolchainResult {
     let available = detection.available();
     let kind = detection.kind();
-    let (cargo_bin, rustup_home, zig_root, go_root, deno_root, bun_root, sandbox_path) =
+    let (cargo_bin, rustup_home, zig_root, go_root, deno_root, bun_root, node_root, sandbox_path) =
         match detection {
             DirectToolchainDetection::Rust(detection) => (
                 detection.discovery.cargo_bin,
@@ -1230,19 +1237,23 @@ fn toolchain_result(
                 None,
                 None,
                 None,
+                None,
                 SANDBOX_RUST_PATH,
             ),
             DirectToolchainDetection::Zig(root) => {
-                (None, None, root, None, None, None, SANDBOX_ZIG_PATH)
+                (None, None, root, None, None, None, None, SANDBOX_ZIG_PATH)
             }
             DirectToolchainDetection::Go(root) => {
-                (None, None, None, root, None, None, SANDBOX_GO_PATH)
+                (None, None, None, root, None, None, None, SANDBOX_GO_PATH)
             }
             DirectToolchainDetection::Deno(root) => {
-                (None, None, None, None, root, None, SANDBOX_DENO_PATH)
+                (None, None, None, None, root, None, None, SANDBOX_DENO_PATH)
             }
             DirectToolchainDetection::Bun(root) => {
-                (None, None, None, None, None, root, SANDBOX_BUN_PATH)
+                (None, None, None, None, None, root, None, SANDBOX_BUN_PATH)
+            }
+            DirectToolchainDetection::Node(root) => {
+                (None, None, None, None, None, None, root, SANDBOX_NODE_PATH)
             }
         };
     SandboxToolchainResult {
@@ -1256,6 +1267,7 @@ fn toolchain_result(
         go_root,
         deno_root,
         bun_root,
+        node_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -1329,6 +1341,14 @@ fn write_toolchain_result<W: Write>(
             "bun_root: {}",
             result
                 .bun_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "node_root: {}",
+            result
+                .node_root
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;

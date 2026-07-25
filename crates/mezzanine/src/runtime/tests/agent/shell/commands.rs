@@ -316,6 +316,52 @@ fn runtime_agent_shell_bun_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Confirmed Node.js detection and enablement consume only active-pane
+/// distribution evidence and never persist its host root or package state.
+#[test]
+fn runtime_agent_shell_node_toolchain_detects_and_persists_only_kind() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-node-toolchain-mutation", config);
+    let node_root = path.parent().unwrap().join("node-runtime");
+    fs::create_dir_all(node_root.join("bin")).unwrap();
+    fs::create_dir_all(node_root.join("lib")).unwrap();
+    fs::write(node_root.join("bin/node"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        node_root.join("bin/node"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let node_root = node_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("node-runtime:{}", node_root.display())]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"node-detect","method":"agent/shell/command","params":{"idempotency_key":"node-detect","input":"/toolchain detect node"}}"#,
+        &primary,
+    );
+    assert!(detect.contains("kind=node"), "{detect}");
+    assert!(detect.contains("available=true"), "{detect}");
+
+    let enabled = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"node-enable","method":"agent/shell/command","params":{"idempotency_key":"node-enable","input":"/toolchain enable node --yes"}}"#,
+        &primary,
+    );
+    assert!(enabled.contains("kind=node"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("toolchains = [\"node\"]"), "{persisted}");
+    assert!(
+        !persisted.contains(&node_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

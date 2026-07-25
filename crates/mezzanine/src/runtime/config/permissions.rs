@@ -150,6 +150,8 @@ pub(crate) enum SandboxToolchainKind {
     Deno,
     /// One self-contained Bun distribution selected by the active pane.
     Bun,
+    /// One self-contained Node.js distribution selected by the active pane.
+    Node,
 }
 
 impl SandboxToolchainKind {
@@ -161,6 +163,7 @@ impl SandboxToolchainKind {
             Self::Go => "go",
             Self::Deno => "deno",
             Self::Bun => "bun",
+            Self::Node => "node",
         }
     }
 }

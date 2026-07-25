@@ -1316,6 +1316,150 @@ fn bun_toolchain_discovery_rejects_non_executable_and_symlinked_distributions() 
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A validated Node.js distribution is projected read-only with bundled
+/// executables contained in its runtime root and mutable package state managed.
+#[test]
+fn node_toolchain_projection_is_read_only_and_package_state_isolated() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-node-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("node-runtime");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    for executable in ["node", "npm", "npx", "corepack"] {
+        std::fs::write(root.join("bin").join(executable), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(
+            root.join("bin").join(executable),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Node);
+    assert_eq!(descriptor.aliases, ["node", "nodejs"]);
+    assert_eq!(descriptor.roots[0].evidence_kind, "node-runtime");
+    assert_eq!(descriptor.roots[0].sandbox_destination, SANDBOX_NODE_ROOT);
+    assert_eq!(descriptor.roots[0].required_executables, ["bin/node"]);
+    assert_eq!(descriptor.roots[0].required_directories, ["lib"]);
+
+    let managers = [format!("node-runtime:{}", root.display())];
+    let projection =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Node], &managers, "linux")
+            .unwrap()
+            .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_NODE_PATH);
+    assert_eq!(
+        projection.environment.get("NPM_CONFIG_CACHE"),
+        Some(&"/home/mez/.cache/npm")
+    );
+    assert_eq!(
+        projection.environment.get("COREPACK_HOME"),
+        Some(&"/home/mez/.cache/node/corepack")
+    );
+    for omitted in [
+        "NPM_CONFIG_USERCONFIG",
+        "NPM_TOKEN",
+        "NODE_PATH",
+        "npm_config_prefix",
+    ] {
+        assert!(!projection.environment.contains_key(omitted));
+    }
+    assert!(!projection.executable_path().contains("node_modules/.bin"));
+
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Node];
+    let home_scope = home_authority(&base.canonicalize().unwrap().display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &home_scope, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    let source = root.display().to_string();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_NODE_ROOT])
+    );
+    assert!(
+        !plan
+            .arguments
+            .windows(3)
+            .any(|args| args == ["--bind", source.as_str(), SANDBOX_NODE_ROOT])
+    );
+    for (name, value) in [
+        ("NPM_CONFIG_CACHE", "/home/mez/.cache/npm"),
+        ("COREPACK_HOME", "/home/mez/.cache/node/corepack"),
+        ("PATH", SANDBOX_NODE_PATH),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--setenv", name, value]),
+            "missing {name}={value}"
+        );
+    }
+
+    let outside = authority();
+    let mut outside_request = request(&config, &outside, &evaluation);
+    outside_request.toolchain_projection = Some(&projection);
+    assert_eq!(
+        compile_bubblewrap_launch_plan(outside_request)
+            .unwrap_err()
+            .kind(),
+        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Node.js discovery rejects incomplete distributions, non-executable runtime
+/// files, and manager shims without consulting npm or version-manager state.
+#[test]
+fn node_toolchain_discovery_rejects_malformed_and_symlinked_distributions() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-node-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("node-runtime");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/node"), "not executable").unwrap();
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("node-runtime:{}", root.display())];
+
+    let missing_layout =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Node], &managers, "linux")
+            .unwrap_err();
+    assert!(matches!(
+        missing_layout.kind(),
+        SandboxCompileErrorKind::InvalidInput | SandboxCompileErrorKind::ForbiddenHostPath
+    ));
+
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    let non_executable =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Node], &managers, "linux")
+            .unwrap_err();
+    assert_eq!(
+        non_executable.kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    let external = base.join("external-node");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(root.join("bin/node")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("bin/node")).unwrap();
+    let search_path = std::env::join_paths([root.join("bin")]).unwrap();
+    let symlink = discover_node_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(symlink.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Descriptor resolution and final launch validation reject ambiguous
 /// selection and any mutation of code-owned projection metadata or classes.
 #[test]
@@ -1465,7 +1609,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .iter()
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
-        vec!["rust", "zig", "go", "deno", "bun"]
+        vec!["rust", "zig", "go", "deno", "bun", "node"]
     );
     assert_eq!(
         parse_sandbox_toolchain_kind("rust"),

@@ -21,12 +21,13 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 5] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 6] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
     SandboxToolchainKind::Deno,
     SandboxToolchainKind::Bun,
+    SandboxToolchainKind::Node,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -51,6 +52,10 @@ pub(crate) const SANDBOX_DENO_PATH: &str = "/opt/mez/toolchains/deno:/usr/bin:/b
 pub(crate) const SANDBOX_BUN_ROOT: &str = "/opt/mez/toolchains/bun/root";
 /// Fixed executable search path used when only Bun is projected.
 pub(crate) const SANDBOX_BUN_PATH: &str = "/opt/mez/toolchains/bun/root/bin:/usr/bin:/bin";
+/// Fixed Node.js distribution projection inside Bubblewrap.
+pub(crate) const SANDBOX_NODE_ROOT: &str = "/opt/mez/toolchains/node/root";
+/// Fixed executable search path used when only Node.js is projected.
+pub(crate) const SANDBOX_NODE_PATH: &str = "/opt/mez/toolchains/node/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -406,6 +411,58 @@ const BUN_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const NODE_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "node-runtime",
+    label: "Node.js distribution",
+    sandbox_destination: SANDBOX_NODE_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/node"],
+    required_directories: &["lib"],
+}];
+const NODE_ENVIRONMENT: [ToolchainEnvironmentVariable; 2] = [
+    ToolchainEnvironmentVariable {
+        name: "NPM_CONFIG_CACHE",
+        value: "/home/mez/.cache/npm",
+    },
+    ToolchainEnvironmentVariable {
+        name: "COREPACK_HOME",
+        value: "/home/mez/.cache/node/corepack",
+    },
+];
+const NODE_MANAGED_STATE: [ManagedToolchainState; 2] = [
+    ManagedToolchainState {
+        purpose: "npm-cache",
+        sandbox_path: "/home/mez/.cache/npm",
+    },
+    ManagedToolchainState {
+        purpose: "corepack-cache",
+        sandbox_path: "/home/mez/.cache/node/corepack",
+    },
+];
+const NODE_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Node,
+    aliases: &["node", "nodejs"],
+    roots: &NODE_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/node",
+    ],
+    path_entries: &["/opt/mez/toolchains/node/root/bin"],
+    environment: &NODE_ENVIRONMENT,
+    managed_state: &NODE_MANAGED_STATE,
+    forbidden_descendants: &[".npmrc", "credentials", "cache", "global"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -585,6 +642,7 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Go => &GO_DESCRIPTOR,
         SandboxToolchainKind::Deno => &DENO_DESCRIPTOR,
         SandboxToolchainKind::Bun => &BUN_DESCRIPTOR,
+        SandboxToolchainKind::Node => &NODE_DESCRIPTOR,
     }
 }
 
@@ -1152,6 +1210,57 @@ pub(crate) fn discover_bun_from_search_path(
                 )
             })?;
         validate_descriptor_root(&root, &BUN_ROOTS[0])?;
+        return Ok(Some(root));
+    }
+    Ok(None)
+}
+
+/// Discovers the first Node.js distribution selected by an explicit search path.
+///
+/// The selected executable must be a real `<root>/bin/node` file. Discovery
+/// validates only that distribution root and does not execute nvm, fnm, Volta,
+/// asdf, mise, or other manager hooks or import ambient npm configuration.
+pub(crate) fn discover_node_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    let Some(search_path) = search_path else {
+        return Ok(None);
+    };
+    for directory in std::env::split_paths(search_path) {
+        let executable = directory.join("node");
+        let metadata = match fs::symlink_metadata(&executable) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to inspect selected Node.js executable: {error}"),
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "selected Node.js executable must be a real file, not a shim or symlink",
+            ));
+        }
+        let root = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "selected Node.js executable has no distribution root",
+                )
+            })?
+            .canonicalize()
+            .map_err(|error| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to canonicalize selected Node.js distribution: {error}"),
+                )
+            })?;
+        validate_descriptor_root(&root, &NODE_ROOTS[0])?;
         return Ok(Some(root));
     }
     Ok(None)

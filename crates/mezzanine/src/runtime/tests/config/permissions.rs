@@ -94,19 +94,20 @@ fn runtime_materializes_only_allowlisted_unique_toolchains() {
     let configured = runtime_configured_permissions_from_config(&serde_json::json!({
         "permissions": {
             "sandbox": "bubblewrap",
-            "bubblewrap": {"toolchains": ["rust", "zig", "go", "deno", "bun"]}
+            "bubblewrap": {"toolchains": ["rust", "zig", "go", "deno", "bun", "node"]}
         }
     }))
     .unwrap();
     let SandboxConfig::Bubblewrap(bubblewrap) = configured.sandbox else {
         panic!("expected Bubblewrap configuration");
     };
-    assert_eq!(bubblewrap.toolchains.len(), 5);
+    assert_eq!(bubblewrap.toolchains.len(), 6);
     assert_eq!(bubblewrap.toolchains[0].as_str(), "rust");
     assert_eq!(bubblewrap.toolchains[1].as_str(), "zig");
     assert_eq!(bubblewrap.toolchains[2].as_str(), "go");
     assert_eq!(bubblewrap.toolchains[3].as_str(), "deno");
     assert_eq!(bubblewrap.toolchains[4].as_str(), "bun");
+    assert_eq!(bubblewrap.toolchains[5].as_str(), "node");
 
     for toolchains in [
         serde_json::json!(["python"]),
@@ -888,7 +889,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 29\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 30\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     let trust_path = root.join("trust.tsv");
@@ -1083,7 +1084,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 29\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 30\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);
