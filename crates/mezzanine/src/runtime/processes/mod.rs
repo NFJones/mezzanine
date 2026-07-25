@@ -467,6 +467,12 @@ impl RuntimeSessionService {
         self.process.pane_environment_signatures.get(pane_id)
     }
 
+    /// Reports whether one pane is still awaiting its one-shot environment
+    /// bootstrap attempt.
+    pub(crate) fn pane_bootstrap_is_pending(&self, pane_id: &str) -> bool {
+        self.process.pane_bootstrap_pending.contains(pane_id)
+    }
+
     /// Clears pane readiness states and manual overrides for session replacement.
     pub(crate) fn clear_pane_readiness_state_and_overrides(&mut self) {
         self.process.pane_readiness_states.clear();
@@ -629,7 +635,7 @@ impl RuntimeSessionService {
 
     /// Reports whether bootstrap remains pending for a process fixture.
     pub(crate) fn pane_bootstrap_is_pending_for_tests(&self, pane_id: &str) -> bool {
-        self.process.pane_bootstrap_pending.contains(pane_id)
+        self.pane_bootstrap_is_pending(pane_id)
     }
     /// Returns the process manager for integration-test observation.
     pub(crate) fn pane_processes(&self) -> &PaneProcessManager {

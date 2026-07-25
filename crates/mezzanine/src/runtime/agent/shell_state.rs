@@ -523,6 +523,15 @@ impl RuntimeSessionService {
                 "Bubblewrap path resolution requires the retained permission evaluation",
             )
         })?;
+        if self.pane_environment_signature(&turn.pane_id).is_none() {
+            if self.pane_bootstrap_is_pending(&turn.pane_id) {
+                self.dispatch_bootstrap_to_pane(&turn.pane_id)?;
+                return Ok(false);
+            }
+            return Err(MezError::invalid_state(
+                "pane bootstrap did not produce an environment signature",
+            ));
+        }
         let primary = match self.primary_path_resolution_request(&turn.pane_id)? {
             Some(request) => match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
                 Some(scopes) => scopes,

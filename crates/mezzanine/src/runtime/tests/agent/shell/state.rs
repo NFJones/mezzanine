@@ -1690,6 +1690,123 @@ fn cache_path_resolution_maximum(service: &mut RuntimeSessionService, root: &Pat
         .unwrap();
 }
 
+/// Verifies a Bubblewrap action that reaches preflight before pane bootstrap
+/// is retained behind that bootstrap and resumes after environment discovery.
+#[test]
+fn runtime_missing_environment_defers_bubblewrap_action_for_pending_bootstrap() {
+    let root = temp_root("runtime-pending-bootstrap-bubblewrap-action");
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    configure_path_resolution_bubblewrap(&mut service);
+
+    assert!(service.pane_bootstrap_is_pending_for_tests("%1"));
+    service
+        .dispatch_stored_running_shell_actions(&turn_id)
+        .unwrap();
+    let (marker, bootstrap_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .unwrap();
+    let output = format!(
+        "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t{}\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n",
+        root.to_string_lossy()
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_bytes = output.len();
+    transaction.observed_output_preview = output;
+
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, &bootstrap_turn_id, "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, &bootstrap_turn_id, "agent-%1", "%1", 0)
+        .unwrap();
+
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    assert!(service.pane_environment_signature("%1").is_some());
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::PathResolution { waiters, .. }
+                    if waiters.contains(&(turn_id.clone(), action_id.clone()))
+            ))
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a completed but unparseable one-shot bootstrap makes Bubblewrap
+/// preflight fail closed without dispatching an action or retrying bootstrap.
+#[test]
+fn runtime_missing_environment_after_bootstrap_fails_bubblewrap_action_closed() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+    service
+        .observe_bootstrap_transaction_end(
+            "bootstrap-unparsed-marker",
+            "%1",
+            0,
+            "bootstrap output without an environment signature",
+            false,
+        )
+        .unwrap();
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Unknown,
+        path_resolution_effects(),
+    );
+
+    let error = service
+        .ensure_bubblewrap_path_resolution_for_action(
+            &path_resolution_turn(),
+            "action-1",
+            Some(&evaluation),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "pane bootstrap did not produce an environment signature"
+    );
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap)
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies an ordinary missing primary-authority cache entry retains the
 /// Bubblewrap action behind a resolver instead of failing dispatch.
 #[test]
