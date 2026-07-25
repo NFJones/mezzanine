@@ -690,13 +690,15 @@ fn selector_shadow_hint_completes_toolchain_command_name() {
 }
 
 /// Verifies `/toolchain` completion follows its strict grammar from operation
-/// through typed Rust selection and explicit mutation confirmation.
+/// through typed Rust or Zig selection and explicit mutation confirmation.
 #[test]
 fn selector_shadow_hint_completes_toolchain_grammar() {
     let cases = [
         ("/toolchain sta", "tus", SelectorCandidateKind::Value),
         ("/toolchain detect r", "ust", SelectorCandidateKind::Value),
+        ("/toolchain detect z", "ig", SelectorCandidateKind::Value),
         ("/toolchain enable r", "ust", SelectorCandidateKind::Value),
+        ("/toolchain enable z", "ig", SelectorCandidateKind::Value),
         ("/toolchain disable r", "ust", SelectorCandidateKind::Value),
         (
             "/toolchain enable rust --y",
@@ -705,6 +707,11 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ),
         (
             "/toolchain disable rust --y",
+            "es",
+            SelectorCandidateKind::Flag,
+        ),
+        (
+            "/toolchain enable zig --y",
             "es",
             SelectorCandidateKind::Flag,
         ),

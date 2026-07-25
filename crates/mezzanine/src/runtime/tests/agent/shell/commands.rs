@@ -151,6 +151,47 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Confirmed Zig detection and enablement consume only active-pane bootstrap
+/// evidence and persist no discovered host path into runtime configuration.
+#[test]
+fn runtime_agent_shell_zig_toolchain_detects_and_persists_only_kind() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-zig-toolchain-mutation", config);
+    let zig_root = path.parent().unwrap().join("zig-0.14.0");
+    fs::create_dir_all(zig_root.join("lib")).unwrap();
+    fs::write(zig_root.join("zig"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(zig_root.join("zig"), fs::Permissions::from_mode(0o755)).unwrap();
+    let zig_root = zig_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("zig:{}", zig_root.display())]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"zig-detect","method":"agent/shell/command","params":{"idempotency_key":"zig-detect","input":"/toolchain detect zig"}}"#,
+        &primary,
+    );
+    assert!(detect.contains("kind=zig"), "{detect}");
+    assert!(detect.contains("available=true"), "{detect}");
+
+    let enabled = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"zig-enable","method":"agent/shell/command","params":{"idempotency_key":"zig-enable","input":"/toolchain enable zig --yes"}}"#,
+        &primary,
+    );
+    assert!(enabled.contains("kind=zig"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("toolchains = [\"zig\"]"), "{persisted}");
+    assert!(
+        !persisted.contains(&zig_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

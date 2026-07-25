@@ -24,6 +24,8 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains(".git"));
     assert!(script.contains("VIRTUAL_ENV"));
     assert!(script.contains("CONDA_PREFIX"));
+    assert!(script.contains("command -v zig"));
+    assert!(script.contains("env_manager \"zig:"));
     assert!(script.contains("bootstrap"));
     assert!(script.contains("complete"));
     assert!(script.contains("AGENTS.md"));
@@ -46,6 +48,8 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     assert!(script.contains("bootstrap\\tcomplete"));
     assert!(script.contains("function mez_probe_tool"));
     assert!(script.contains("tool\\t%s"));
+    assert!(script.contains("command -s zig"));
+    assert!(script.contains("env_manager \"zig:"));
 }
 
 #[test]

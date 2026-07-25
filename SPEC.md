@@ -2958,6 +2958,11 @@ initial supported kind is `rust`. Configuration MUST persist only the typed
 kind and MUST NOT persist arbitrary host paths. `mez sandbox toolchains detect
 [PATH]` MUST be read-only. Enabling a toolchain MUST require direct-user
 confirmation, and noninteractive or JSON mutation MUST require `--yes`.
+Schema v26 adds the allowlisted `zig` kind. Schema v25 to v26 migration MUST
+preserve an existing selection or omission and MUST NOT discover or enable Zig.
+Direct-user detection MUST accept `--kind rust|zig`; omission MUST retain the
+existing Rust default. Active-pane detection, enablement, and status MUST use
+bootstrap evidence rather than ambient service process state.
 Toolchain projection MUST be descriptor-driven. Each supported kind MUST own
 code-defined evidence names, structural root validation, fixed read-only
 sandbox destinations, deterministic PATH entries, synthesized child
@@ -2988,6 +2993,16 @@ toolchain reload, and MUST disclose that all changed configuration was
 reapplied. A standalone `mez sandbox toolchains enable` mutation MUST require
 `/toolchain reload`, `config/reload`, or session restart before it affects an
 already-running service.
+The same detect, enable, and disable grammar MUST accept `zig`. Zig evidence
+MUST identify one canonical self-contained distribution containing a real
+executable `zig` file and real `lib` directory. Mezzanine MUST reject missing,
+non-executable, symlinked, shim, malformed, duplicate, and out-of-authority Zig
+roots. The distribution MUST be mounted read-only at
+`/opt/mez/toolchains/zig`, that path MUST precede `/usr/bin:/bin`, and
+`ZIG_GLOBAL_CACHE_DIR` MUST be `/home/mez/.cache/zig`. Project `.zig-cache` and
+`zig-out` remain ordinary project state. Selection MUST NOT import a host Zig
+cache, manager metadata, credentials, unrelated versions, or authority for
+native SDKs and system integrations.
 Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
 derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
 evidence, reject missing, symlinked, overlapping, unexpected, credential, and
@@ -5778,8 +5793,9 @@ The baseline command capabilities are:
   `latest`, or the only pending project trust request for the live session, and
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
-  active pane. It MUST accept no argument or `status`, `list`, `detect [rust]`,
-  `enable rust --yes`, `disable rust --yes`, and `reload`. Unknown kinds,
+  active pane. It MUST accept no argument or `status`, `list`,
+  `detect [rust|zig]`, `enable KIND --yes`, `disable KIND --yes`, and `reload`,
+  where `KIND` is `rust` or `zig`. Unknown kinds,
   missing confirmation, duplicate confirmation, and extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,

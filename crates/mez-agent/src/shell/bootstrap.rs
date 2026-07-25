@@ -133,6 +133,11 @@ if [ -d \"$mez_cargo_home/bin\" ]; then\n\
   mez_cargo_bin=$(CDPATH= cd -P -- \"$mez_cargo_home/bin\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_cargo_bin\" ] && mez_bootstrap_field env_manager \"cargo-bin:$mez_cargo_bin\"\n\
 fi\n\
+mez_zig_bin=$(command -v zig 2>/dev/null || true)\n\
+if [ -n \"$mez_zig_bin\" ] && [ -f \"$mez_zig_bin\" ] && [ ! -L \"$mez_zig_bin\" ]; then\n\
+  mez_zig_root=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_zig_bin\")\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_zig_root\" ] && [ \"$mez_zig_bin\" = \"$mez_zig_root/zig\" ] && mez_bootstrap_field env_manager \"zig:$mez_zig_root\"\n\
+fi\n\
 if [ -n \"$GOPATH\" ]; then\n\
   mez_bootstrap_field env_manager \"go\"\n\
 fi\n\
@@ -252,6 +257,11 @@ end\n\
 if test -d \"$mez_cargo_home/bin\"\n\
   set -l mez_cargo_bin (cd \"$mez_cargo_home/bin\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_cargo_bin\"; and mez_bootstrap_field env_manager \"cargo-bin:$mez_cargo_bin\"\n\
+end\n\
+set -l mez_zig_bin (command -s zig 2>/dev/null)\n\
+if test -n \"$mez_zig_bin\"; and test -f \"$mez_zig_bin\"; and not test -L \"$mez_zig_bin\"\n\
+  set -l mez_zig_root (cd (dirname \"$mez_zig_bin\") 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_zig_root\"; and test \"$mez_zig_bin\" = \"$mez_zig_root/zig\"; and mez_bootstrap_field env_manager \"zig:$mez_zig_root\"\n\
 end\n\
 if test -n \"$GOPATH\"\n\
   mez_bootstrap_field env_manager go\n\

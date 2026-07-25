@@ -4,6 +4,7 @@
 mod real_bubblewrap;
 
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 
 use mez_agent::permissions::{
     CandidateEvaluation, EffectCompleteness, EffectiveCommandEffects, PathScopes,
@@ -828,6 +829,127 @@ fn rust_toolchain_descriptor_matches_existing_projection_metadata() {
     assert!(!ToolchainPlatform::Linux.supports("windows"));
 }
 
+/// A validated self-contained Zig distribution is projected read-only with
+/// deterministic PATH precedence and managed global-cache redirection.
+#[test]
+fn zig_toolchain_projection_is_read_only_and_cache_isolated() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-zig-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("zig-0.14.0");
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::write(root.join("zig"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(root.join("zig"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = root.canonicalize().unwrap();
+
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Zig);
+    assert_eq!(descriptor.aliases, ["zig"]);
+    assert_eq!(descriptor.roots[0].evidence_kind, "zig");
+    assert_eq!(descriptor.roots[0].sandbox_destination, SANDBOX_ZIG_ROOT);
+    assert_eq!(descriptor.roots[0].required_executables, ["zig"]);
+    assert_eq!(descriptor.roots[0].required_directories, ["lib"]);
+
+    let managers = [format!("zig:{}", root.display())];
+    let projection = resolve_toolchain_projection(&[SandboxToolchainKind::Zig], &managers, "linux")
+        .unwrap()
+        .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_ZIG_PATH);
+    assert_eq!(
+        projection.environment.get("ZIG_GLOBAL_CACHE_DIR"),
+        Some(&"/home/mez/.cache/zig")
+    );
+
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Zig];
+    let home_scope = home_authority(&base.canonicalize().unwrap().display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &home_scope, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+
+    let source = root.display().to_string();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_ZIG_ROOT])
+    );
+    assert!(
+        !plan
+            .arguments
+            .windows(3)
+            .any(|args| args == ["--bind", source.as_str(), SANDBOX_ZIG_ROOT])
+    );
+    for (name, value) in [
+        ("ZIG_GLOBAL_CACHE_DIR", "/home/mez/.cache/zig"),
+        ("PATH", SANDBOX_ZIG_PATH),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--setenv", name, value]),
+            "missing {name}={value}"
+        );
+    }
+
+    let outside = authority();
+    let mut outside_request = request(&config, &outside, &evaluation);
+    outside_request.toolchain_projection = Some(&projection);
+    assert_eq!(
+        compile_bubblewrap_launch_plan(outside_request)
+            .unwrap_err()
+            .kind(),
+        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Zig discovery rejects missing distribution layout, non-executable files,
+/// and symlink shims instead of widening a selected executable directory.
+#[test]
+fn zig_toolchain_discovery_rejects_malformed_and_symlinked_distributions() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-zig-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("zig-invalid");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("zig"), "not executable").unwrap();
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("zig:{}", root.display())];
+
+    let missing_layout =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Zig], &managers, "linux").unwrap_err();
+    assert!(matches!(
+        missing_layout.kind(),
+        SandboxCompileErrorKind::InvalidInput | SandboxCompileErrorKind::ForbiddenHostPath
+    ));
+
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    let non_executable =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Zig], &managers, "linux").unwrap_err();
+    assert_eq!(
+        non_executable.kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    let external = base.join("external-zig");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(root.join("zig")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("zig")).unwrap();
+    let search_path = std::env::join_paths([root.as_path()]).unwrap();
+    let symlink = discover_zig_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(symlink.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Descriptor resolution and final launch validation reject ambiguous
 /// selection and any mutation of code-owned projection metadata or classes.
 #[test]
@@ -977,7 +1099,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .iter()
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
-        vec!["rust"]
+        vec!["rust", "zig"]
     );
     assert_eq!(
         parse_sandbox_toolchain_kind("rust"),

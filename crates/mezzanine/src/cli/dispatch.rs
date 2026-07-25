@@ -55,6 +55,8 @@ pub struct CliEnv {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub mez: Option<OsString>,
+    /// Captured executable search path used by direct-user toolchain discovery.
+    pub path: Option<OsString>,
     /// Stores the runtime value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -73,6 +75,7 @@ impl CliEnv {
             home: std::env::var_os("HOME").map(PathBuf::from),
             shell: std::env::var_os("SHELL"),
             mez: std::env::var_os("MEZ"),
+            path: std::env::var_os("PATH"),
             runtime: RuntimeEnv::from_process(),
         }
     }

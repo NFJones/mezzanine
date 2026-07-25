@@ -8,6 +8,7 @@
 //! validated roots against pane-resolved maximum read authority.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,8 +21,8 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 1] =
-    [SandboxToolchainKind::Rust];
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 2] =
+    [SandboxToolchainKind::Rust, SandboxToolchainKind::Zig];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
 pub(crate) const SANDBOX_RUST_CARGO_BIN: &str = "/opt/mez/toolchains/rust/cargo-bin";
@@ -29,6 +30,10 @@ pub(crate) const SANDBOX_RUST_CARGO_BIN: &str = "/opt/mez/toolchains/rust/cargo-
 pub(crate) const SANDBOX_RUSTUP_HOME: &str = "/opt/mez/toolchains/rust/rustup";
 /// Fixed executable search path used when Rust is projected.
 pub(crate) const SANDBOX_RUST_PATH: &str = "/opt/mez/toolchains/rust/cargo-bin:/usr/bin:/bin";
+/// Fixed Zig distribution projection inside Bubblewrap.
+pub(crate) const SANDBOX_ZIG_ROOT: &str = "/opt/mez/toolchains/zig";
+/// Fixed executable search path used when only Zig is projected.
+pub(crate) const SANDBOX_ZIG_PATH: &str = "/opt/mez/toolchains/zig:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +91,10 @@ pub(crate) struct ToolchainRootDescriptor {
     pub(crate) allowed_parent_names: &'static [&'static str],
     /// Security class governing this root.
     pub(crate) authority_class: ToolchainAuthorityClass,
+    /// Executables that must be real files directly beneath this root.
+    pub(crate) required_executables: &'static [&'static str],
+    /// Distribution directories that must be real directories beneath this root.
+    pub(crate) required_directories: &'static [&'static str],
 }
 
 /// One synthesized child environment value owned by a descriptor.
@@ -150,6 +159,8 @@ const RUST_ROOTS: [ToolchainRootDescriptor; 2] = [
         allowed_names: &["bin"],
         allowed_parent_names: &[".cargo", "cargo"],
         authority_class: ToolchainAuthorityClass::UserTools,
+        required_executables: &[],
+        required_directories: &[],
     },
     ToolchainRootDescriptor {
         evidence_kind: "rustup",
@@ -158,6 +169,8 @@ const RUST_ROOTS: [ToolchainRootDescriptor; 2] = [
         allowed_names: &[".rustup", "rustup"],
         allowed_parent_names: &[],
         authority_class: ToolchainAuthorityClass::Runtime,
+        required_executables: &[],
+        required_directories: &[],
     },
 ];
 const RUST_ENVIRONMENT: [ToolchainEnvironmentVariable; 2] = [
@@ -188,6 +201,41 @@ const RUST_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     environment: &RUST_ENVIRONMENT,
     managed_state: &RUST_MANAGED_STATE,
     forbidden_descendants: &["credentials", "credentials.toml", "config.toml"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
+const ZIG_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "zig",
+    label: "Zig distribution",
+    sandbox_destination: SANDBOX_ZIG_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["zig"],
+    required_directories: &["lib"],
+}];
+const ZIG_ENVIRONMENT: [ToolchainEnvironmentVariable; 1] = [ToolchainEnvironmentVariable {
+    name: "ZIG_GLOBAL_CACHE_DIR",
+    value: "/home/mez/.cache/zig",
+}];
+const ZIG_MANAGED_STATE: [ManagedToolchainState; 1] = [ManagedToolchainState {
+    purpose: "zig-global-cache",
+    sandbox_path: "/home/mez/.cache/zig",
+}];
+const ZIG_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Zig,
+    aliases: &["zig"],
+    roots: &ZIG_ROOTS,
+    sandbox_directories: &["/opt", "/opt/mez", "/opt/mez/toolchains"],
+    path_entries: &[SANDBOX_ZIG_ROOT],
+    environment: &ZIG_ENVIRONMENT,
+    managed_state: &ZIG_MANAGED_STATE,
+    forbidden_descendants: &["shims", "credentials", "config.toml"],
     platform: ToolchainPlatform::Any,
     coupling: ToolchainCoupling {
         required: &[],
@@ -371,6 +419,7 @@ pub(crate) const fn toolchain_descriptor(
 ) -> &'static ToolchainDescriptor {
     match kind {
         SandboxToolchainKind::Rust => &RUST_DESCRIPTOR,
+        SandboxToolchainKind::Zig => &ZIG_DESCRIPTOR,
     }
 }
 
@@ -615,6 +664,92 @@ fn validate_descriptor_root(
             ));
         }
     }
+    if !descriptor.required_executables.is_empty() {
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
+            SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                format!("failed to inspect {}: {error}", descriptor.label),
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                format!("{} must be a real directory", descriptor.label),
+            ));
+        }
+        let canonical = path.canonicalize().map_err(|error| {
+            SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                format!("failed to canonicalize {}: {error}", descriptor.label),
+            )
+        })?;
+        if canonical != path {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                format!("{} must use its canonical path", descriptor.label),
+            ));
+        }
+        for relative in descriptor.required_executables {
+            validate_distribution_executable(path, relative, descriptor.label)?;
+        }
+        for relative in descriptor.required_directories {
+            validate_distribution_directory(path, relative, descriptor.label)?;
+        }
+    }
+    Ok(())
+}
+
+/// Requires one descriptor-owned distribution directory to be real and contained.
+fn validate_distribution_directory(
+    root: &Path,
+    relative: &str,
+    label: &str,
+) -> Result<(), SandboxCompileError> {
+    let directory = root.join(relative);
+    let metadata = fs::symlink_metadata(&directory).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to inspect {label} directory {relative}: {error}"),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("{label} directory {relative} must be a real directory"),
+        ));
+    }
+    Ok(())
+}
+
+/// Requires one descriptor-owned executable to remain a real executable file.
+fn validate_distribution_executable(
+    root: &Path,
+    relative: &str,
+    label: &str,
+) -> Result<(), SandboxCompileError> {
+    let executable = root.join(relative);
+    let metadata = fs::symlink_metadata(&executable).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to inspect {label} executable {relative}: {error}"),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("{label} executable {relative} must be a real file"),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                format!("{label} executable {relative} must be executable"),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -652,6 +787,57 @@ pub(crate) fn parse_sandbox_toolchain_kind(value: &str) -> Option<SandboxToolcha
     SUPPORTED_SANDBOX_TOOLCHAIN_KINDS
         .into_iter()
         .find(|kind| kind.as_str() == value)
+}
+
+/// Discovers the first Zig distribution selected by an explicit search path.
+///
+/// This direct-user CLI adapter mirrors shell `command -v` ordering without
+/// consulting ambient process state, executing manager hooks, or accepting a
+/// shim/symlink executable. Missing Zig returns `None`; an invalid selected
+/// executable fails closed.
+pub(crate) fn discover_zig_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    let Some(search_path) = search_path else {
+        return Ok(None);
+    };
+    for directory in std::env::split_paths(search_path) {
+        let executable = directory.join("zig");
+        let metadata = match fs::symlink_metadata(&executable) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to inspect selected Zig executable: {error}"),
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "selected Zig executable must be a real file, not a shim or symlink",
+            ));
+        }
+        let root = executable
+            .parent()
+            .ok_or_else(|| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "selected Zig executable has no distribution root",
+                )
+            })?
+            .canonicalize()
+            .map_err(|error| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to canonicalize selected Zig distribution: {error}"),
+                )
+            })?;
+        validate_descriptor_root(&root, &ZIG_ROOTS[0])?;
+        return Ok(Some(root));
+    }
+    Ok(None)
 }
 
 /// Discovers Rust roots from explicit active-pane bootstrap records.
@@ -800,7 +986,7 @@ fn validate_toolchain_root(
     let rendered = path.to_string_lossy();
     validate_printable_absolute_path(&rendered, label)?;
     let name = path.file_name().and_then(|name| name.to_str());
-    if !name.is_some_and(|name| allowed_names.contains(&name)) {
+    if !allowed_names.is_empty() && !name.is_some_and(|name| allowed_names.contains(&name)) {
         return Err(SandboxCompileError::new(
             SandboxCompileErrorKind::ForbiddenHostPath,
             format!("{label} must use an allowlisted toolchain directory name"),

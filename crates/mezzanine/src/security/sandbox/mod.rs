@@ -42,14 +42,15 @@ pub(crate) use managed_home::{
     remove_bubblewrap_managed_home,
 };
 pub(crate) use toolchains::{
-    ResolvedToolchainProjection, RustToolchainHomeDiscovery, SANDBOX_RUST_PATH,
+    ResolvedToolchainProjection, RustToolchainHomeDiscovery, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
     SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, discover_rust_from_environment_managers,
-    discover_rust_from_home, parse_sandbox_toolchain_kind, resolve_toolchain_projection,
+    discover_rust_from_home, discover_zig_from_search_path, parse_sandbox_toolchain_kind,
+    resolve_toolchain_projection,
 };
 #[cfg(test)]
 pub(crate) use toolchains::{
-    SANDBOX_RUST_CARGO_BIN, SANDBOX_RUSTUP_HOME, ToolchainAuthorityClass, ToolchainPlatform,
-    toolchain_descriptor,
+    SANDBOX_RUST_CARGO_BIN, SANDBOX_RUSTUP_HOME, SANDBOX_ZIG_ROOT, ToolchainAuthorityClass,
+    ToolchainPlatform, toolchain_descriptor,
 };
 pub(crate) use workflow::{
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,

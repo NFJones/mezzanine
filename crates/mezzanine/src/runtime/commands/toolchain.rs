@@ -16,8 +16,9 @@ use super::{
 use crate::runtime::{SandboxConfig, SandboxToolchainKind};
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
-    SANDBOX_RUST_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, discover_rust_from_environment_managers,
-    parse_sandbox_toolchain_kind,
+    SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    discover_rust_from_environment_managers, parse_sandbox_toolchain_kind,
+    resolve_toolchain_projection,
 };
 
 /// Strict operation accepted by `/toolchain`.
@@ -27,12 +28,12 @@ enum ToolchainCommand {
     Status,
     /// Lists stable supported kinds.
     List,
-    /// Validates active-pane Rust discovery evidence without mutation.
-    Detect,
-    /// Enables the Rust projection after explicit confirmation.
-    Enable,
-    /// Disables the Rust projection after explicit confirmation.
-    Disable,
+    /// Validates active-pane discovery evidence without mutation.
+    Detect(SandboxToolchainKind),
+    /// Enables one typed projection after explicit confirmation.
+    Enable(SandboxToolchainKind),
+    /// Disables one typed projection after explicit confirmation.
+    Disable(SandboxToolchainKind),
     /// Runs the existing full disk-backed configuration reload.
     Reload,
 }
@@ -43,10 +44,18 @@ impl ToolchainCommand {
         match self {
             Self::Status => "status",
             Self::List => "list",
-            Self::Detect => "detect",
-            Self::Enable => "enable",
-            Self::Disable => "disable",
+            Self::Detect(_) => "detect",
+            Self::Enable(_) => "enable",
+            Self::Disable(_) => "disable",
             Self::Reload => "reload",
+        }
+    }
+
+    /// Returns the typed kind associated with a kind-specific operation.
+    const fn kind(self) -> Option<SandboxToolchainKind> {
+        match self {
+            Self::Detect(kind) | Self::Enable(kind) | Self::Disable(kind) => Some(kind),
+            Self::Status | Self::List | Self::Reload => None,
         }
     }
 }
@@ -56,10 +65,12 @@ impl ToolchainCommand {
 struct ToolchainStatus {
     backend: &'static str,
     configured: Vec<String>,
+    discoverable: Vec<String>,
     discovery_state: &'static str,
     effective_state: &'static str,
     cargo_bin: Option<String>,
     rustup_home: Option<String>,
+    zig_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -122,16 +133,15 @@ impl RuntimeSessionService {
                     ),
                 })
             }
-            ToolchainCommand::Detect => {
+            ToolchainCommand::Detect(kind) => {
                 let status = self.toolchain_status_for_pane(pane_id)?;
                 let signature = self.pane_environment_signature(pane_id).ok_or_else(|| {
                     MezError::invalid_state(
                         "toolchain detection requires active-pane bootstrap evidence",
                     )
                 })?;
-                let discovery =
-                    discover_rust_from_environment_managers(&signature.environment_managers)
-                        .map_err(|error| MezError::invalid_state(error.message()))?;
+                let detail =
+                    detect_toolchain_detail(kind, &signature.environment_managers, &signature.os)?;
                 self.append_toolchain_audit(
                     primary_client_id,
                     pane_id,
@@ -142,28 +152,31 @@ impl RuntimeSessionService {
                 Ok(AgentShellCommandOutcome::Display {
                     command: "toolchain".to_string(),
                     body: format!(
-                        "pane={} operation=detect kind=rust available=true cargo_bin={} rustup_home={} sandbox_path={} configured={} generation={} changed=false source=active-pane-bootstrap",
+                        "pane={} operation=detect kind={} available=true {} configured={} generation={} changed=false source=active-pane-bootstrap",
                         json_escape(pane_id),
-                        json_escape(&discovery.cargo_bin.display().to_string()),
-                        json_escape(&discovery.rustup_home.display().to_string()),
-                        SANDBOX_RUST_PATH,
-                        status.configured.iter().any(|kind| kind == "rust"),
+                        kind.as_str(),
+                        detail,
+                        status.configured.iter().any(|name| name == kind.as_str()),
                         status.generation,
                     ),
                 })
             }
-            ToolchainCommand::Enable => {
+            ToolchainCommand::Enable(kind) => {
                 let signature = self.pane_environment_signature(pane_id).ok_or_else(|| {
                     MezError::invalid_state(
                         "toolchain enable requires active-pane bootstrap evidence",
                     )
                 })?;
-                discover_rust_from_environment_managers(&signature.environment_managers)
-                    .map_err(|error| MezError::invalid_state(error.message()))?;
-                self.mutate_rust_toolchain(primary_client_id, pane_id, operation, true)
+                resolve_toolchain_projection(
+                    &[kind],
+                    &signature.environment_managers,
+                    &signature.os,
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+                self.mutate_toolchain(primary_client_id, pane_id, operation, kind, true)
             }
-            ToolchainCommand::Disable => {
-                self.mutate_rust_toolchain(primary_client_id, pane_id, operation, false)
+            ToolchainCommand::Disable(kind) => {
+                self.mutate_toolchain(primary_client_id, pane_id, operation, kind, false)
             }
             ToolchainCommand::Reload => {
                 let before = self.toolchain_status_for_pane(pane_id)?;
@@ -204,22 +217,23 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Applies one confirmed Rust selection mutation transactionally.
-    fn mutate_rust_toolchain(
+    /// Applies one confirmed typed selection mutation transactionally.
+    fn mutate_toolchain(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         operation: ToolchainCommand,
+        kind: SandboxToolchainKind,
         enable: bool,
     ) -> Result<AgentShellCommandOutcome> {
         let before = self.configured_toolchain_names()?;
         let mut after = before.clone();
         if enable {
-            if !after.iter().any(|kind| kind == "rust") {
-                after.push("rust".to_string());
+            if !after.iter().any(|name| name == kind.as_str()) {
+                after.push(kind.as_str().to_string());
             }
         } else {
-            after.retain(|kind| kind != "rust");
+            after.retain(|name| name != kind.as_str());
         }
         let changed = before != after;
         let path = runtime_primary_config_path(self)?.ok_or_else(|| {
@@ -258,9 +272,10 @@ impl RuntimeSessionService {
         Ok(AgentShellCommandOutcome::Mutated {
             command: "toolchain".to_string(),
             body: format!(
-                "pane={} operation={} kind=rust configured={} configured_kinds={} changed={} generation_before={} generation_after={} persisted_kind_only=true subsequent_actions=true existing_shells_unchanged=true running_actions_unchanged=true",
+                "pane={} operation={} kind={} configured={} configured_kinds={} changed={} generation_before={} generation_after={} persisted_kind_only=true subsequent_actions=true existing_shells_unchanged=true running_actions_unchanged=true",
                 json_escape(pane_id),
                 operation.as_str(),
+                kind.as_str(),
                 enable,
                 render_names(&after),
                 report.changed,
@@ -274,47 +289,103 @@ impl RuntimeSessionService {
     /// Builds status from effective config and active-pane bootstrap evidence.
     fn toolchain_status_for_pane(&self, pane_id: &str) -> Result<ToolchainStatus> {
         let configured = self.configured_toolchain_names()?;
-        let selected = configured.iter().any(|kind| kind == "rust");
         let backend = self.configured_permissions().sandbox.as_str();
-        let (discovery_state, cargo_bin, rustup_home, discovery_error) = match self
-            .pane_environment_signature(pane_id)
-        {
-            None if self.pane_bootstrap_is_pending(pane_id) => {
-                ("bootstrap-pending", None, None, None)
-            }
-            None => ("environment-unavailable", None, None, None),
-            Some(signature) => {
-                match discover_rust_from_environment_managers(&signature.environment_managers) {
-                    Ok(discovery) => (
-                        "available",
-                        Some(discovery.cargo_bin.display().to_string()),
-                        Some(discovery.rustup_home.display().to_string()),
-                        None,
-                    ),
-                    Err(error) => ("unavailable", None, None, Some(error.message().to_string())),
+        let (discovery_state, discoverable, cargo_bin, rustup_home, zig_root, discovery_error) =
+            match self.pane_environment_signature(pane_id) {
+                None if self.pane_bootstrap_is_pending(pane_id) => {
+                    ("bootstrap-pending", Vec::new(), None, None, None, None)
                 }
-            }
-        };
-        let discoverable = discovery_state == "available";
+                None => (
+                    "environment-unavailable",
+                    Vec::new(),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                Some(signature) => {
+                    let mut discoverable = Vec::new();
+                    let mut errors = Vec::new();
+                    let (cargo_bin, rustup_home) = match discover_rust_from_environment_managers(
+                        &signature.environment_managers,
+                    ) {
+                        Ok(discovery) => {
+                            discoverable.push("rust".to_string());
+                            (
+                                Some(discovery.cargo_bin.display().to_string()),
+                                Some(discovery.rustup_home.display().to_string()),
+                            )
+                        }
+                        Err(error) => {
+                            errors.push(format!("rust:{}", error.message()));
+                            (None, None)
+                        }
+                    };
+                    let zig_root = match resolve_toolchain_projection(
+                        &[SandboxToolchainKind::Zig],
+                        &signature.environment_managers,
+                        &signature.os,
+                    ) {
+                        Ok(Some(projection)) => {
+                            discoverable.push("zig".to_string());
+                            projection
+                                .roots
+                                .first()
+                                .map(|root| root.host_path.display().to_string())
+                        }
+                        Ok(None) => None,
+                        Err(error) => {
+                            errors.push(format!("zig:{}", error.message()));
+                            None
+                        }
+                    };
+                    let state = if discoverable.is_empty() {
+                        "unavailable"
+                    } else {
+                        "available"
+                    };
+                    (
+                        state,
+                        discoverable,
+                        cargo_bin,
+                        rustup_home,
+                        zig_root,
+                        (!errors.is_empty()).then(|| errors.join(";")),
+                    )
+                }
+            };
+        let selected = !configured.is_empty();
+        let selected_discoverable = configured
+            .iter()
+            .all(|kind| discoverable.iter().any(|available| available == kind));
+        let any_discoverable = !discoverable.is_empty();
         let sandbox_applies = matches!(
             self.configured_permissions().sandbox,
             SandboxConfig::Bubblewrap(_)
         ) && !self.permission_policy().approval_policy.bypasses_sandbox();
-        let effective_state = match (selected, discoverable, sandbox_applies, backend) {
-            (true, true, true, "bubblewrap") => "active",
-            (true, false, _, "bubblewrap") => "selected-unavailable",
-            (true, _, false, _) => "selected-inactive",
-            (false, true, _, _) => "available-disabled",
-            (false, false, _, _) => "disabled-unavailable",
+        let effective_state = match (
+            selected,
+            selected_discoverable,
+            any_discoverable,
+            sandbox_applies,
+            backend,
+        ) {
+            (true, true, _, true, "bubblewrap") => "active",
+            (true, false, _, _, "bubblewrap") => "selected-unavailable",
+            (true, _, _, false, _) => "selected-inactive",
+            (false, _, true, _, _) => "available-disabled",
+            (false, _, false, _, _) => "disabled-unavailable",
             _ => "selected-inactive",
         };
         Ok(ToolchainStatus {
             backend,
             configured,
+            discoverable,
             discovery_state,
             effective_state,
             cargo_bin,
             rustup_home,
+            zig_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -371,7 +442,10 @@ impl RuntimeSessionService {
             operation.as_str(),
         )
         .with_pane_id(pane_id.to_string())
-        .with_metadata("kind", "rust")
+        .with_metadata(
+            "kind",
+            operation.kind().map_or("all", SandboxToolchainKind::as_str),
+        )
         .with_metadata("changed", changed.to_string())
         .with_metadata("config_generation", generation.to_string());
         record.outcome = outcome.to_string();
@@ -386,24 +460,69 @@ fn parse_toolchain_command(args: &str) -> Result<ToolchainCommand> {
     match words.as_slice() {
         [] | ["status"] => Ok(ToolchainCommand::Status),
         ["list"] => Ok(ToolchainCommand::List),
-        ["detect"] | ["detect", "rust"] => Ok(ToolchainCommand::Detect),
-        ["enable", "rust", "--yes"] => Ok(ToolchainCommand::Enable),
-        ["disable", "rust", "--yes"] => Ok(ToolchainCommand::Disable),
+        ["detect"] => Ok(ToolchainCommand::Detect(SandboxToolchainKind::Rust)),
+        ["detect", name] => parse_sandbox_toolchain_kind(name)
+            .map(ToolchainCommand::Detect)
+            .ok_or_else(|| MezError::invalid_args("toolchain detect received an unsupported kind")),
+        ["enable", name, "--yes"] => parse_sandbox_toolchain_kind(name)
+            .map(ToolchainCommand::Enable)
+            .ok_or_else(|| MezError::invalid_args("toolchain enable received an unsupported kind")),
+        ["disable", name, "--yes"] => parse_sandbox_toolchain_kind(name)
+            .map(ToolchainCommand::Disable)
+            .ok_or_else(|| {
+                MezError::invalid_args("toolchain disable received an unsupported kind")
+            }),
         ["reload"] => Ok(ToolchainCommand::Reload),
         _ => Err(MezError::invalid_args(
-            "toolchain expects status, list, detect [rust], enable rust --yes, disable rust --yes, or reload",
+            "toolchain expects status, list, detect [kind], enable kind --yes, disable kind --yes, or reload",
         )),
+    }
+}
+
+/// Renders one successful pane-bootstrap detection without persisting roots.
+fn detect_toolchain_detail(
+    kind: SandboxToolchainKind,
+    environment_managers: &[String],
+    host_os: &str,
+) -> Result<String> {
+    match kind {
+        SandboxToolchainKind::Rust => {
+            let discovery = discover_rust_from_environment_managers(environment_managers)
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+            Ok(format!(
+                "cargo_bin={} rustup_home={} sandbox_path={}",
+                json_escape(&discovery.cargo_bin.display().to_string()),
+                json_escape(&discovery.rustup_home.display().to_string()),
+                SANDBOX_RUST_PATH,
+            ))
+        }
+        SandboxToolchainKind::Zig => {
+            let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state("Zig projection unexpectedly resolved empty")
+                })?;
+            let root = projection.roots.first().ok_or_else(|| {
+                MezError::invalid_state("Zig projection is missing its distribution root")
+            })?;
+            Ok(format!(
+                "zig_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_ZIG_PATH,
+            ))
+        }
     }
 }
 
 /// Renders the complete pane-local status without ambient environment data.
 fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
     format!(
-        "pane={} backend={} supported={} configured={} discovery={} effective={} cargo_bin={} rustup_home={} discovery_error={} sandbox_path={} generation={} source=active-pane-bootstrap",
+        "pane={} backend={} supported={} configured={} discoverable={} discovery={} effective={} cargo_bin={} rustup_home={} zig_root={} discovery_error={} rust_sandbox_path={} zig_sandbox_path={} generation={} source=active-pane-bootstrap",
         json_escape(pane_id),
         status.backend,
         supported_toolchain_names().join(","),
         render_names(&status.configured),
+        render_names(&status.discoverable),
         status.discovery_state,
         status.effective_state,
         status
@@ -417,11 +536,17 @@ fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
             .map(json_escape)
             .unwrap_or_else(|| "none".to_string()),
         status
+            .zig_root
+            .as_deref()
+            .map(json_escape)
+            .unwrap_or_else(|| "none".to_string()),
+        status
             .discovery_error
             .as_deref()
             .map(json_escape)
             .unwrap_or_else(|| "none".to_string()),
         SANDBOX_RUST_PATH,
+        SANDBOX_ZIG_PATH,
         status.generation,
     )
 }
@@ -462,6 +587,7 @@ fn reject_control_error(response: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{ToolchainCommand, parse_toolchain_command};
+    use crate::runtime::SandboxToolchainKind;
 
     /// Verifies the command grammar accepts only documented operations and
     /// requires explicit confirmation for every persisted mutation.
@@ -473,11 +599,15 @@ mod tests {
         );
         assert_eq!(
             parse_toolchain_command("detect rust").unwrap(),
-            ToolchainCommand::Detect
+            ToolchainCommand::Detect(SandboxToolchainKind::Rust)
         );
         assert_eq!(
             parse_toolchain_command("enable rust --yes").unwrap(),
-            ToolchainCommand::Enable
+            ToolchainCommand::Enable(SandboxToolchainKind::Rust)
+        );
+        assert_eq!(
+            parse_toolchain_command("enable zig --yes").unwrap(),
+            ToolchainCommand::Enable(SandboxToolchainKind::Zig)
         );
         for invalid in [
             "enable rust",

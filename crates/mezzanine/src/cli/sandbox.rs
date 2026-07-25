@@ -20,15 +20,18 @@ use crate::config::{
     ConfigScope, DEFAULT_CONFIG_TOML, compose_effective_config, persist_config_mutation,
     persist_config_text, plan_config_mutations,
 };
-use crate::runtime::{runtime_configured_permissions_from_config, runtime_effective_config_value};
+use crate::runtime::{
+    SandboxToolchainKind, runtime_configured_permissions_from_config,
+    runtime_effective_config_value,
+};
 use crate::security::project::{
     ProjectRootInputSource, ProjectRootMarkerKind, ProjectTrustStore, TrustDecision,
     default_trust_database_path, discover_existing_overlays, discover_project_root_with_metadata,
 };
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_RUST_PATH,
-    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
-    SandboxWorkflowRequest, clear_bubblewrap_managed_home, discover_rust_from_home,
+    SANDBOX_ZIG_PATH, SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
+    clear_bubblewrap_managed_home, discover_rust_from_home, discover_zig_from_search_path,
     inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind, plan_sandbox_workflow,
     prune_bubblewrap_managed_homes,
 };
@@ -240,19 +243,21 @@ struct SandboxSetupResult {
     warning: Option<String>,
 }
 
-/// Direct-user Rust toolchain discovery and activation commands.
+/// Direct-user typed toolchain discovery and activation commands.
 #[derive(Debug, Clone, Subcommand)]
 enum SandboxToolchainsCommand {
     /// Detects canonical allowlisted toolchain roots without changing config.
     Detect {
+        /// Allowlisted kind to inspect; omitted for backwards-compatible Rust detection.
+        #[arg(long, default_value = "rust")]
+        kind: String,
         /// Project path reported with the detection result.
         path: Option<PathBuf>,
     },
-    /// Enables one or more allowlisted toolchain kinds in user config.
+    /// Enables one allowlisted toolchain kind in user config.
     Enable {
-        /// Allowlisted toolchain kinds; currently only `rust` is supported.
-        #[arg(required = true)]
-        kinds: Vec<String>,
+        /// Allowlisted toolchain kind.
+        kind: String,
         /// Confirms the read-only host path projection.
         #[arg(long)]
         yes: bool,
@@ -689,10 +694,17 @@ fn validate_sandbox_profile_recipe(recipe: &SandboxProfileRecipe) -> Result<()> 
             "sandbox profile contains an unsupported authority",
         ));
     }
-    if recipe.toolchains.iter().any(|kind| kind != "rust") || recipe.toolchains.len() > 1 {
-        return Err(MezError::invalid_args(
-            "sandbox profile toolchains support only one rust selection",
-        ));
+    let mut selected = Vec::new();
+    for name in &recipe.toolchains {
+        let kind = parse_sandbox_toolchain_kind(name).ok_or_else(|| {
+            MezError::invalid_args("sandbox profile contains an unsupported toolchain kind")
+        })?;
+        if selected.contains(&kind) {
+            return Err(MezError::invalid_args(
+                "sandbox profile contains duplicate toolchain kinds",
+            ));
+        }
+        selected.push(kind);
     }
     Ok(())
 }
@@ -1049,7 +1061,7 @@ fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String 
     output
 }
 
-/// Stable direct-user projection for Rust toolchain detection and activation.
+/// Stable direct-user projection for typed toolchain detection and activation.
 #[derive(Debug, Serialize)]
 struct SandboxToolchainResult {
     version: u32,
@@ -1058,6 +1070,7 @@ struct SandboxToolchainResult {
     available: bool,
     cargo_bin: Option<PathBuf>,
     rustup_home: Option<PathBuf>,
+    zig_root: Option<PathBuf>,
     sandbox_path: &'static str,
     read_only: bool,
     applied: bool,
@@ -1073,7 +1086,10 @@ fn run_sandbox_toolchains<W: Write>(
     stdout: &mut W,
 ) -> Result<u8> {
     match command {
-        SandboxToolchainsCommand::Detect { path } => {
+        SandboxToolchainsCommand::Detect { kind, path } => {
+            let kind = parse_sandbox_toolchain_kind(&kind).ok_or_else(|| {
+                MezError::invalid_args("sandbox toolchains detect received an unsupported kind")
+            })?;
             let input_source = if path.is_some() {
                 ProjectRootInputSource::ExplicitPath
             } else {
@@ -1081,34 +1097,33 @@ fn run_sandbox_toolchains<W: Write>(
             };
             let path = path.unwrap_or(std::env::current_dir()?);
             let project = discover_project_root_with_metadata(&path, input_source)?;
-            let detection = detect_rust_toolchain(env.home.as_deref())?;
+            let detection = detect_direct_toolchain(kind, &env)?;
             let result = toolchain_result(project.canonical_root, detection, false, false);
             write_toolchain_result(stdout, output_format, &result)?;
             Ok(0)
         }
-        SandboxToolchainsCommand::Enable { kinds, yes } => {
-            if kinds
-                .iter()
-                .any(|kind| parse_sandbox_toolchain_kind(kind).is_none())
-            {
-                return Err(MezError::invalid_args(
-                    "sandbox toolchains enable currently supports only rust",
-                ));
-            }
+        SandboxToolchainsCommand::Enable { kind, yes } => {
+            let kind = parse_sandbox_toolchain_kind(&kind).ok_or_else(|| {
+                MezError::invalid_args("sandbox toolchains enable received an unsupported kind")
+            })?;
             let project = discover_project_root_with_metadata(
                 &std::env::current_dir()?,
                 ProjectRootInputSource::CurrentDirectory,
             )?;
-            let detection = detect_rust_toolchain(env.home.as_deref())?;
-            if !detection.discovery.available() {
-                return Err(MezError::invalid_state(
-                    "Rust toolchain detection requires canonical .cargo and .rustup directories",
-                ));
+            let detection = detect_direct_toolchain(kind, &env)?;
+            if !detection.available() {
+                return Err(MezError::invalid_state(format!(
+                    "{} toolchain detection did not find a canonical distribution",
+                    kind.as_str()
+                )));
             }
             if !yes {
                 let mut result = toolchain_result(project.canonical_root, detection, false, true);
                 result.message = if interactive {
-                    "Review the read-only roots and rerun with --yes to enable Rust.".to_string()
+                    format!(
+                        "Review the read-only roots and rerun with --yes to enable {}.",
+                        kind.as_str()
+                    )
                 } else {
                     "Noninteractive toolchain mutation requires --yes.".to_string()
                 };
@@ -1123,7 +1138,7 @@ fn run_sandbox_toolchains<W: Write>(
                 ConfigMutation {
                     path: "permissions.bubblewrap.toolchains".to_string(),
                     operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(
-                        vec!["rust".to_string()],
+                        vec![kind.as_str().to_string()],
                     )),
                 },
             )?;
@@ -1139,36 +1154,81 @@ struct RustToolchainDetection {
     discovery: RustToolchainHomeDiscovery,
 }
 
-fn detect_rust_toolchain(home: Option<&Path>) -> Result<RustToolchainDetection> {
-    discover_rust_from_home(home)
-        .map(|discovery| RustToolchainDetection { discovery })
-        .map_err(|error| MezError::invalid_state(error.to_string()))
+#[derive(Debug)]
+enum DirectToolchainDetection {
+    Rust(RustToolchainDetection),
+    Zig(Option<PathBuf>),
+}
+
+impl DirectToolchainDetection {
+    fn available(&self) -> bool {
+        match self {
+            Self::Rust(detection) => detection.discovery.available(),
+            Self::Zig(root) => root.is_some(),
+        }
+    }
+
+    const fn kind(&self) -> SandboxToolchainKind {
+        match self {
+            Self::Rust(_) => SandboxToolchainKind::Rust,
+            Self::Zig(_) => SandboxToolchainKind::Zig,
+        }
+    }
+}
+
+fn detect_direct_toolchain(
+    kind: SandboxToolchainKind,
+    env: &CliEnv,
+) -> Result<DirectToolchainDetection> {
+    match kind {
+        SandboxToolchainKind::Rust => discover_rust_from_home(env.home.as_deref())
+            .map(|discovery| DirectToolchainDetection::Rust(RustToolchainDetection { discovery }))
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Zig => discover_zig_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Zig)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+    }
 }
 
 fn toolchain_result(
     project_root: PathBuf,
-    detection: RustToolchainDetection,
+    detection: DirectToolchainDetection,
     applied: bool,
     confirmation_required: bool,
 ) -> SandboxToolchainResult {
-    let available = detection.discovery.available();
-    let cargo_bin = detection.discovery.cargo_bin;
-    let rustup_home = detection.discovery.rustup_home;
+    let available = detection.available();
+    let kind = detection.kind();
+    let (cargo_bin, rustup_home, zig_root, sandbox_path) = match detection {
+        DirectToolchainDetection::Rust(detection) => (
+            detection.discovery.cargo_bin,
+            detection.discovery.rustup_home,
+            None,
+            SANDBOX_RUST_PATH,
+        ),
+        DirectToolchainDetection::Zig(root) => (None, None, root, SANDBOX_ZIG_PATH),
+    };
     SandboxToolchainResult {
         version: 1,
         project_root,
-        kind: SUPPORTED_SANDBOX_TOOLCHAIN_KINDS[0].as_str(),
+        kind: kind.as_str(),
         available,
         cargo_bin,
         rustup_home,
-        sandbox_path: SANDBOX_RUST_PATH,
+        zig_root,
+        sandbox_path,
         read_only: true,
         applied,
         confirmation_required,
         message: if applied {
-            "Rust toolchain projection enabled; live sessions require reload.".to_string()
+            format!(
+                "{} toolchain projection enabled; live sessions require reload.",
+                kind.as_str()
+            )
         } else {
-            "Rust toolchain detection completed without changing configuration.".to_string()
+            format!(
+                "{} toolchain detection completed without changing configuration.",
+                kind.as_str()
+            )
         },
     }
 }
@@ -1196,6 +1256,14 @@ fn write_toolchain_result<W: Write>(
             "rustup_home: {}",
             result
                 .rustup_home
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "zig_root: {}",
+            result
+                .zig_root
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;

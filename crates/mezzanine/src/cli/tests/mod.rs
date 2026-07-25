@@ -60,6 +60,7 @@ fn test_env(name: &str) -> (CliEnv, PathBuf) {
             home: Some(home.clone()),
             shell: Some(OsString::from("/bin/sh")),
             mez: None,
+            path: Some(OsString::from("/usr/bin:/bin")),
             runtime: RuntimeEnv {
                 mez_tmpdir: Some(runtime_tmp.into_os_string()),
                 xdg_runtime_dir: None,

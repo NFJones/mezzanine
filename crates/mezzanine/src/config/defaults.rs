@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 25
+version = 26
 
 [terminal]
 profile = "xterm-compatible"
@@ -472,11 +472,11 @@ sandbox = "policy-only"
 # [permissions.bubblewrap]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
-# Opt-in read-only Rust projection; enable with
-# `mez sandbox toolchains enable rust --yes` after reviewing detected roots.
+# Opt-in read-only Rust or Zig projections; detect with `--kind rust|zig`, then
+# enable one typed kind with `mez sandbox toolchains enable KIND --yes`.
 # Existing services then require `/toolchain reload`, `config/reload`, or a
-# restart; `/toolchain enable rust --yes` hot-applies subsequent actions.
-# toolchains = ["rust"]
+# restart; `/toolchain enable KIND --yes` hot-applies subsequent actions.
+# toolchains = ["rust", "zig"]
 trusted_directories = []
 trusted_projects = []
 command_rules = []

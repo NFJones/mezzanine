@@ -142,6 +142,8 @@ pub(crate) struct BubblewrapConfig {
 pub(crate) enum SandboxToolchainKind {
     /// Rustup and Cargo roots discovered from the active pane environment.
     Rust,
+    /// One self-contained Zig distribution selected by the active pane.
+    Zig,
 }
 
 impl SandboxToolchainKind {
@@ -149,6 +151,7 @@ impl SandboxToolchainKind {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Rust => "rust",
+            Self::Zig => "zig",
         }
     }
 }
@@ -509,7 +512,9 @@ pub(crate) fn runtime_configured_permissions_from_config(
             let mut toolchains = Vec::new();
             for toolchain in configured_toolchains {
                 let toolchain = parse_sandbox_toolchain_kind(&toolchain).ok_or_else(|| {
-                    MezError::config("permissions.bubblewrap.toolchains supports only rust")
+                    MezError::config(
+                        "permissions.bubblewrap.toolchains contains an unsupported kind",
+                    )
                 })?;
                 if toolchains.contains(&toolchain) {
                     return Err(MezError::config(
