@@ -1,5 +1,7 @@
 //! Agent shell state tests.
 
+use crate::runtime::processes::RuntimeAgentSubshellCertificationRejection;
+
 use super::*;
 
 /// Builds one concrete pane environment identity for path-resolution tests.
@@ -1834,6 +1836,56 @@ fn runtime_missing_environment_after_bootstrap_fails_bubblewrap_action_closed() 
             .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap)
     );
 
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a rejected agent-subshell certification explains a later
+/// Bubblewrap preflight failure using its stable retained reason.
+///
+/// Ordinary one-shot bootstrap failures keep the generic missing-signature
+/// message, while a proof rejection must remain actionable without retrying.
+#[test]
+fn runtime_agent_subshell_certification_rejection_explains_bubblewrap_preflight() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+    service
+        .observe_bootstrap_transaction_end(
+            "bootstrap-rejected-marker",
+            "%1",
+            0,
+            "bootstrap output without an environment signature",
+            false,
+        )
+        .unwrap();
+    service.set_pane_agent_subshell_certification_rejection_for_tests(
+        "%1",
+        RuntimeAgentSubshellCertificationRejection::ForegroundProcessGroupChanged,
+    );
+    let evaluation = path_resolution_evaluation(
+        mez_agent::permissions::EffectCompleteness::Unknown,
+        path_resolution_effects(),
+    );
+
+    let error = service
+        .ensure_bubblewrap_path_resolution_for_action(
+            &path_resolution_turn(),
+            "action-1",
+            Some(&evaluation),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error.message(),
+        "pane agent-subshell bootstrap certification failed: foreground_process_group_changed"
+    );
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
     service.terminate_all_pane_processes().unwrap();
 }
 

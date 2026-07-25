@@ -91,6 +91,54 @@ impl RuntimeCertifiedShellSource {
     }
 }
 
+/// Stable reason that an agent-subshell bootstrap could not certify a shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeAgentSubshellCertificationRejection {
+    /// The registered bootstrap never produced start-boundary evidence.
+    MissingStartEvidence,
+    /// The pane primary process changed before certification settled.
+    PrimaryProcessChanged,
+    /// The shell-interaction generation changed before certification settled.
+    InteractionGenerationChanged,
+    /// The runtime could not observe the foreground process group.
+    ForegroundProcessUnavailable,
+    /// Start and completion boundaries reported different foreground groups.
+    ForegroundProcessGroupChanged,
+    /// The bootstrap transaction returned a non-zero status.
+    TransactionFailed,
+    /// Bootstrap output exceeded the bounded observation limit.
+    OutputTruncated,
+    /// Successful output did not contain a parseable environment signature.
+    EnvironmentSignatureMissing,
+}
+
+impl RuntimeAgentSubshellCertificationRejection {
+    /// Returns the stable machine-readable rejection code.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingStartEvidence => "missing_start_evidence",
+            Self::PrimaryProcessChanged => "primary_process_changed",
+            Self::InteractionGenerationChanged => "interaction_generation_changed",
+            Self::ForegroundProcessUnavailable => "foreground_process_unavailable",
+            Self::ForegroundProcessGroupChanged => "foreground_process_group_changed",
+            Self::TransactionFailed => "transaction_failed",
+            Self::OutputTruncated => "output_truncated",
+            Self::EnvironmentSignatureMissing => "environment_signature_missing",
+        }
+    }
+}
+
+/// Typed result of settling one possible agent-subshell certification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeAgentSubshellCertificationOutcome {
+    /// The completed bootstrap was not bound to an agent-subshell handoff.
+    NotApplicable,
+    /// Complete proof certified the persistent agent subshell.
+    Certified,
+    /// Proof was applicable but rejected for a stable reason.
+    Rejected(RuntimeAgentSubshellCertificationRejection),
+}
+
 /// Certified non-primary shell identity for one live pane-process epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimePaneCertifiedShellIdentity {
@@ -128,7 +176,7 @@ struct RuntimeBootstrapShellCertificationEvidence {
     /// Primary process identity captured for lifecycle fencing.
     primary_process_id: u32,
     /// Persistent receiver's foreground process group observed at transaction start.
-    process_group_id: u32,
+    process_group_id: Option<u32>,
     /// Shell-interaction generation associated with the bootstrap marker.
     interaction_generation: u64,
 }
@@ -205,6 +253,9 @@ pub(crate) struct RuntimeProcessComponent {
     /// Bootstrap-start foreground evidence keyed by exact transaction marker.
     bootstrap_shell_certification_evidence:
         std::collections::BTreeMap<String, RuntimeBootstrapShellCertificationEvidence>,
+    /// Latest actionable agent-subshell certification rejection per pane.
+    pane_agent_subshell_certification_rejections:
+        std::collections::BTreeMap<String, RuntimeAgentSubshellCertificationRejection>,
     /// Current shell-interaction generation keyed by pane id.
     pane_shell_interaction_generations: std::collections::BTreeMap<String, u64>,
     /// Next monotonic shell-interaction generation.
@@ -637,6 +688,17 @@ impl RuntimeSessionService {
         self.process
             .pane_environment_signatures
             .insert(pane_id.into(), signature);
+    }
+
+    /// Installs one certification rejection for lifecycle and preflight tests.
+    pub(crate) fn set_pane_agent_subshell_certification_rejection_for_tests(
+        &mut self,
+        pane_id: impl Into<String>,
+        rejection: RuntimeAgentSubshellCertificationRejection,
+    ) {
+        self.process
+            .pane_agent_subshell_certification_rejections
+            .insert(pane_id.into(), rejection);
     }
 
     /// Returns live shell transactions for integration-test observation.

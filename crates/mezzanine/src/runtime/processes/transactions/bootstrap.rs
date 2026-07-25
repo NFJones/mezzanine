@@ -2,6 +2,7 @@
 
 use mez_agent::AgentShellVisibility;
 
+use super::super::RuntimeAgentSubshellCertificationOutcome;
 use super::{
     AgentTurnState, DEFAULT_BOOTSTRAP_TIMEOUT_MS, EventKind, MezError, PaneReadinessState, Result,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
@@ -191,7 +192,16 @@ impl RuntimeSessionService {
             observed_output_truncated,
             bootstrap_signature.as_ref(),
         );
-        if certification == Some(false) {
+        if let RuntimeAgentSubshellCertificationOutcome::Rejected(reason) = certification {
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","bootstrap":"certification_failed","marker":"{}","reason":"{}"}}"#,
+                    json_escape(pane_id),
+                    json_escape(marker),
+                    reason.as_str()
+                ),
+            )?;
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
         } else if bootstrap_parsed || exit_code == 0 {
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);

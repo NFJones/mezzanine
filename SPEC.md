@@ -3391,6 +3391,12 @@ environment signature and the same foreground process group is observed at
 the transaction start and completion boundaries. Missing, contradictory,
 failed, timed-out, or stale proof MUST fail closed.
 
+When agent-subshell certification proof is rejected, the runtime MUST retain a
+stable machine-readable rejection reason for the current pane shell-interaction
+epoch and use it to explain later shell-action preflight failures. That reason
+MUST be cleared when certification succeeds or the pane process, shell
+handoff, or shell-interaction epoch changes.
+
 For streamed transaction wrappers, the start-boundary observation MUST occur
 after the registered start marker is received and before the runtime releases
 the deferred command payload. The persistent shell receiver waiting for that

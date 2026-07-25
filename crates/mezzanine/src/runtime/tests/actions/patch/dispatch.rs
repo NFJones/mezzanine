@@ -1,5 +1,7 @@
 //! Runtime tests for actions patch dispatch behavior.
 
+use crate::runtime::processes::RuntimeAgentSubshellCertificationRejection;
+
 use super::*;
 
 /// Verifies a pending shell action is recovered instead of failed when
@@ -467,6 +469,15 @@ fn certify_agent_subshell_foreground_group(
 ) {
     service.enter_agent_subshell("%1");
     service.begin_agent_subshell_shell_handoff("%1").unwrap();
+    assert!(
+        service
+            .pane_agent_subshell_certification_rejection("%1")
+            .is_none()
+    );
+    service.set_pane_agent_subshell_certification_rejection_for_tests(
+        "%1",
+        RuntimeAgentSubshellCertificationRejection::EnvironmentSignatureMissing,
+    );
     service.dispatch_bootstrap_to_pane("%1").unwrap();
     service
         .pane_processes_mut()
@@ -518,6 +529,10 @@ fn runtime_agent_subshell_bootstrap_accepts_transient_isolated_child_group() {
     wait_until_primary_shell_foreground(&mut service, "%1");
     let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
     let subshell_group = primary_pid.saturating_add(1);
+    service.set_pane_agent_subshell_certification_rejection_for_tests(
+        "%1",
+        RuntimeAgentSubshellCertificationRejection::TransactionFailed,
+    );
 
     certify_agent_subshell_foreground_group(&mut service, subshell_group);
 
@@ -534,6 +549,10 @@ fn runtime_agent_subshell_bootstrap_accepts_transient_isolated_child_group() {
     assert_eq!(
         diagnostic["certified_shell_source"],
         "agent-subshell-bootstrap"
+    );
+    assert_eq!(
+        diagnostic["agent_subshell_certification_rejection"],
+        serde_json::Value::Null
     );
     service.terminate_all_pane_processes().unwrap();
 }
@@ -665,6 +684,10 @@ fn runtime_agent_subshell_exit_invalidates_cached_certified_group() {
         service.pane_foreground_certified_shell_state("%1"),
         Some(true)
     );
+    service.set_pane_agent_subshell_certification_rejection_for_tests(
+        "%1",
+        RuntimeAgentSubshellCertificationRejection::TransactionFailed,
+    );
     assert!(service.exit_agent_subshell_if_active("%1").unwrap());
     assert!(!service.agent_subshell_is_active("%1"));
     assert_eq!(
@@ -676,6 +699,11 @@ fn runtime_agent_subshell_exit_invalidates_cached_certified_group() {
     assert_eq!(
         service.pane_readiness_state("%1"),
         PaneReadinessState::Unknown
+    );
+    assert!(
+        service
+            .pane_agent_subshell_certification_rejection("%1")
+            .is_none()
     );
 
     service
@@ -749,6 +777,27 @@ bootstrap\tcomplete\t1714500000\n";
         service.pane_readiness_state("%1"),
         PaneReadinessState::Degraded
     );
+    assert_eq!(
+        service.pane_agent_subshell_certification_rejection("%1"),
+        Some("foreground_process_group_changed")
+    );
+    let diagnostic = service.pane_foreground_process_diagnostic("%1").json();
+    assert_eq!(
+        diagnostic["agent_subshell_certification_rejection"],
+        "foreground_process_group_changed"
+    );
+    let events = service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::Primary);
+    assert!(events.iter().any(|event| {
+        event
+            .payload
+            .contains(r#""bootstrap":"certification_failed""#)
+            && event
+                .payload
+                .contains(r#""reason":"foreground_process_group_changed""#)
+    }));
     service.terminate_all_pane_processes().unwrap();
 }
 

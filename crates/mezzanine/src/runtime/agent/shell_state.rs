@@ -526,6 +526,11 @@ impl RuntimeSessionService {
                 self.dispatch_bootstrap_to_pane(&turn.pane_id)?;
                 return Ok(false);
             }
+            if let Some(reason) = self.pane_agent_subshell_certification_rejection(&turn.pane_id) {
+                return Err(MezError::invalid_state(format!(
+                    "pane agent-subshell bootstrap certification failed: {reason}"
+                )));
+            }
             return Err(MezError::invalid_state(
                 "pane bootstrap did not produce an environment signature",
             ));
