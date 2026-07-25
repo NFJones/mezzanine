@@ -75,19 +75,54 @@ fn runtime_agent_shell_toolchain_status_and_detect_are_read_only() {
         r#"{"jsonrpc":"2.0","id":"toolchain-status","method":"agent/shell/command","params":{"idempotency_key":"toolchain-status","input":"/toolchain"}}"#,
         &primary,
     );
+    let list = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-list","method":"agent/shell/command","params":{"idempotency_key":"toolchain-list","input":"/toolchain list"}}"#,
+        &primary,
+    );
     let detect = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"toolchain-detect","method":"agent/shell/command","params":{"idempotency_key":"toolchain-detect","input":"/toolchain detect rust"}}"#,
         &primary,
     );
 
     assert!(status.contains(r#""command":"toolchain""#), "{status}");
-    assert!(status.contains("effective=available-disabled"), "{status}");
-    assert!(status.contains("discovery=available"), "{status}");
-    assert!(detect.contains("operation=detect"), "{detect}");
-    assert!(detect.contains("available=true"), "{detect}");
-    assert!(detect.contains("source=active-pane-bootstrap"), "{detect}");
+    assert!(status.contains(r#""presentation":"pager""#), "{status}");
+    assert!(status.contains("# Toolchains"), "{status}");
+    assert!(status.contains("available-disabled"), "{status}");
+    assert!(status.contains("| `rust` | no | yes |"), "{status}");
+    assert!(list.contains(r#""presentation":"pager""#), "{list}");
+    assert!(list.contains("# Supported Toolchains"), "{list}");
+    assert!(list.contains("| `python` | any |"), "{list}");
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("# Toolchain Detection"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+    assert!(detect.contains("active-pane bootstrap"), "{detect}");
     assert_eq!(service.session.config_generation, generation);
     assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// Verifies missing active-pane bootstrap evidence is summarized through the
+/// transient error-notice route rather than returned as pane-history output.
+#[test]
+fn runtime_agent_shell_toolchain_detection_without_evidence_is_transient_error() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-toolchain-missing-evidence", config);
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"toolchain-missing-evidence","method":"agent/shell/command","params":{"idempotency_key":"toolchain-missing-evidence","input":"/toolchain detect rust"}}"#,
+        &primary,
+    );
+
+    assert!(
+        response.contains(r#""presentation":"error_notice""#),
+        "{response}"
+    );
+    assert!(
+        response.contains("requires active-pane bootstrap evidence"),
+        "{response}"
+    );
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
@@ -116,15 +151,19 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
         missing_confirmation.contains("expects status, list, detect"),
         "{missing_confirmation}"
     );
+    assert!(
+        missing_confirmation.contains(r#""presentation":"error_notice""#),
+        "{missing_confirmation}"
+    );
     assert_eq!(service.session.config_generation, initial_generation);
 
     let enabled = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"toolchain-enable","method":"agent/shell/command","params":{"idempotency_key":"toolchain-enable","input":"/toolchain enable rust --yes"}}"#,
         &primary,
     );
-    assert!(enabled.contains(r#""kind":"mutated""#), "{enabled}");
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled rust; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
-    assert!(enabled.contains("persisted_kind_only=true"), "{enabled}");
     assert_eq!(service.session.config_generation, initial_generation + 1);
     let persisted = fs::read_to_string(&path).unwrap();
     assert!(persisted.contains("toolchains = [\"rust\"]"), "{persisted}");
@@ -134,6 +173,10 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
         r#"{"jsonrpc":"2.0","id":"toolchain-enable-again","method":"agent/shell/command","params":{"idempotency_key":"toolchain-enable-again","input":"/toolchain enable rust --yes"}}"#,
         &primary,
     );
+    assert!(
+        enabled_again.contains("Enabled rust; no-op"),
+        "{enabled_again}"
+    );
     assert!(enabled_again.contains("changed=false"), "{enabled_again}");
     assert_eq!(service.session.config_generation, initial_generation + 1);
 
@@ -141,6 +184,7 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
         r#"{"jsonrpc":"2.0","id":"toolchain-disable","method":"agent/shell/command","params":{"idempotency_key":"toolchain-disable","input":"/toolchain disable rust --yes"}}"#,
         &primary,
     );
+    assert!(disabled.contains("Disabled rust; updated"), "{disabled}");
     assert!(disabled.contains("changed=true"), "{disabled}");
     assert_eq!(service.session.config_generation, initial_generation + 2);
     assert!(
@@ -173,14 +217,16 @@ fn runtime_agent_shell_zig_toolchain_detects_and_persists_only_kind() {
         r#"{"jsonrpc":"2.0","id":"zig-detect","method":"agent/shell/command","params":{"idempotency_key":"zig-detect","input":"/toolchain detect zig"}}"#,
         &primary,
     );
-    assert!(detect.contains("kind=zig"), "{detect}");
-    assert!(detect.contains("available=true"), "{detect}");
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `zig` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"zig-enable","method":"agent/shell/command","params":{"idempotency_key":"zig-enable","input":"/toolchain enable zig --yes"}}"#,
         &primary,
     );
-    assert!(enabled.contains("kind=zig"), "{enabled}");
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled zig; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
     let persisted = fs::read_to_string(&path).unwrap();
     assert!(persisted.contains("toolchains = [\"zig\"]"), "{persisted}");
@@ -215,14 +261,16 @@ fn runtime_agent_shell_go_toolchain_detects_and_persists_only_kind() {
         r#"{"jsonrpc":"2.0","id":"go-detect","method":"agent/shell/command","params":{"idempotency_key":"go-detect","input":"/toolchain detect go"}}"#,
         &primary,
     );
-    assert!(detect.contains("kind=go"), "{detect}");
-    assert!(detect.contains("available=true"), "{detect}");
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `go` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"go-enable","method":"agent/shell/command","params":{"idempotency_key":"go-enable","input":"/toolchain enable go --yes"}}"#,
         &primary,
     );
-    assert!(enabled.contains("kind=go"), "{enabled}");
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled go; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
     let persisted = fs::read_to_string(&path).unwrap();
     assert!(persisted.contains("toolchains = [\"go\"]"), "{persisted}");
@@ -256,14 +304,16 @@ fn runtime_agent_shell_deno_toolchain_detects_and_persists_only_kind() {
         r#"{"jsonrpc":"2.0","id":"deno-detect","method":"agent/shell/command","params":{"idempotency_key":"deno-detect","input":"/toolchain detect deno"}}"#,
         &primary,
     );
-    assert!(detect.contains("kind=deno"), "{detect}");
-    assert!(detect.contains("available=true"), "{detect}");
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `deno` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"deno-enable","method":"agent/shell/command","params":{"idempotency_key":"deno-enable","input":"/toolchain enable deno --yes"}}"#,
         &primary,
     );
-    assert!(enabled.contains("kind=deno"), "{enabled}");
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled deno; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
     let persisted = fs::read_to_string(&path).unwrap();
     assert!(persisted.contains("toolchains = [\"deno\"]"), "{persisted}");
@@ -297,14 +347,16 @@ fn runtime_agent_shell_bun_toolchain_detects_and_persists_only_kind() {
         r#"{"jsonrpc":"2.0","id":"bun-detect","method":"agent/shell/command","params":{"idempotency_key":"bun-detect","input":"/toolchain detect bun"}}"#,
         &primary,
     );
-    assert!(detect.contains("kind=bun"), "{detect}");
-    assert!(detect.contains("available=true"), "{detect}");
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `bun` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"bun-enable","method":"agent/shell/command","params":{"idempotency_key":"bun-enable","input":"/toolchain enable bun --yes"}}"#,
         &primary,
     );
-    assert!(enabled.contains("kind=bun"), "{enabled}");
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled bun; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
     let persisted = fs::read_to_string(&path).unwrap();
     assert!(persisted.contains("toolchains = [\"bun\"]"), "{persisted}");
@@ -343,14 +395,16 @@ fn runtime_agent_shell_node_toolchain_detects_and_persists_only_kind() {
         r#"{"jsonrpc":"2.0","id":"node-detect","method":"agent/shell/command","params":{"idempotency_key":"node-detect","input":"/toolchain detect node"}}"#,
         &primary,
     );
-    assert!(detect.contains("kind=node"), "{detect}");
-    assert!(detect.contains("available=true"), "{detect}");
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `node` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"node-enable","method":"agent/shell/command","params":{"idempotency_key":"node-enable","input":"/toolchain enable node --yes"}}"#,
         &primary,
     );
-    assert!(enabled.contains("kind=node"), "{enabled}");
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled node; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
     let persisted = fs::read_to_string(&path).unwrap();
     assert!(persisted.contains("toolchains = [\"node\"]"), "{persisted}");
@@ -389,14 +443,16 @@ fn runtime_agent_shell_python_toolchain_detects_and_persists_only_kind() {
         r#"{"jsonrpc":"2.0","id":"python-detect","method":"agent/shell/command","params":{"idempotency_key":"python-detect","input":"/toolchain detect python"}}"#,
         &primary,
     );
-    assert!(detect.contains("kind=python"), "{detect}");
-    assert!(detect.contains("available=true"), "{detect}");
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `python` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"python-enable","method":"agent/shell/command","params":{"idempotency_key":"python-enable","input":"/toolchain enable python --yes"}}"#,
         &primary,
     );
-    assert!(enabled.contains("kind=python"), "{enabled}");
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled python; updated"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
     let persisted = fs::read_to_string(&path).unwrap();
     assert!(
@@ -429,9 +485,15 @@ fn runtime_agent_shell_toolchain_reload_reapplies_full_disk_config() {
         &primary,
     );
 
-    assert!(reload.contains("full_config_reload=true"), "{reload}");
-    assert!(reload.contains("before_configured=none"), "{reload}");
-    assert!(reload.contains("after_configured=rust"), "{reload}");
+    assert!(reload.contains(r#""presentation":"notice""#), "{reload}");
+    assert!(
+        reload.contains("Reloaded the full configuration"),
+        "{reload}"
+    );
+    assert!(
+        reload.contains("changes apply to subsequent actions"),
+        "{reload}"
+    );
     assert_eq!(service.terminal_history_limit(), 13);
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
@@ -482,7 +544,8 @@ fn runtime_agent_shell_toolchain_audit_redacts_discovered_roots() {
         &primary,
     );
 
-    assert!(response.contains("available=true"), "{response}");
+    assert!(response.contains(r#""presentation":"pager""#), "{response}");
+    assert!(response.contains("| Available | yes |"), "{response}");
     let audit = fs::read_to_string(&audit_path).unwrap();
     assert!(audit.contains(r#""event_type":"toolchain""#), "{audit}");
     assert!(audit.contains(r#""action":"detect""#), "{audit}");

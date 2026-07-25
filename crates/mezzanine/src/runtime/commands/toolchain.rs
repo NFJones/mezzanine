@@ -13,13 +13,14 @@ use super::{
     parse_slash_command, runtime_apply_persisted_config_mutation_batch,
     runtime_effective_config_value, runtime_primary_config_path,
 };
+use crate::integrations::agent::slash::AgentShellPresentation;
 use crate::runtime::{SandboxConfig, SandboxToolchainKind};
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
     SANDBOX_BUN_PATH, SANDBOX_DENO_PATH, SANDBOX_GO_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH,
-    SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
-    discover_rust_from_environment_managers, parse_sandbox_toolchain_kind,
-    resolve_toolchain_projection,
+    SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor,
+    ToolchainPlatform, discover_rust_from_environment_managers, parse_sandbox_toolchain_kind,
+    resolve_toolchain_projection, toolchain_descriptor,
 };
 
 /// Strict operation accepted by `/toolchain`.
@@ -117,9 +118,10 @@ impl RuntimeSessionService {
                     false,
                     "inspected",
                 )?;
-                Ok(AgentShellCommandOutcome::Display {
+                Ok(AgentShellCommandOutcome::Presented {
                     command: "toolchain".to_string(),
                     body: render_toolchain_status(pane_id, &status),
+                    presentation: AgentShellPresentation::Pager,
                 })
             }
             ToolchainCommand::List => {
@@ -130,13 +132,10 @@ impl RuntimeSessionService {
                     false,
                     "listed",
                 )?;
-                Ok(AgentShellCommandOutcome::Display {
+                Ok(AgentShellCommandOutcome::Presented {
                     command: "toolchain".to_string(),
-                    body: format!(
-                        "supported_kinds={} count={} typed_allowlist=true source=runtime-toolchain",
-                        supported_toolchain_names().join(","),
-                        SUPPORTED_SANDBOX_TOOLCHAIN_KINDS.len()
-                    ),
+                    body: render_toolchain_list(),
+                    presentation: AgentShellPresentation::Pager,
                 })
             }
             ToolchainCommand::Detect(kind) => {
@@ -155,16 +154,10 @@ impl RuntimeSessionService {
                     false,
                     "detected",
                 )?;
-                Ok(AgentShellCommandOutcome::Display {
+                Ok(AgentShellCommandOutcome::Presented {
                     command: "toolchain".to_string(),
-                    body: format!(
-                        "pane={} operation=detect kind={} available=true {} configured={} generation={} changed=false source=active-pane-bootstrap",
-                        json_escape(pane_id),
-                        kind.as_str(),
-                        detail,
-                        status.configured.iter().any(|name| name == kind.as_str()),
-                        status.generation,
-                    ),
+                    body: render_toolchain_detection(pane_id, kind, &detail, &status),
+                    presentation: AgentShellPresentation::Pager,
                 })
             }
             ToolchainCommand::Enable(kind) => {
@@ -203,21 +196,13 @@ impl RuntimeSessionService {
                     changed,
                     "reloaded",
                 )?;
-                let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
-                Ok(AgentShellCommandOutcome::Mutated {
+                Ok(AgentShellCommandOutcome::Presented {
                     command: "toolchain".to_string(),
                     body: format!(
-                        "pane={} operation=reload full_config_reload=true before_configured={} after_configured={} before_state={} after_state={} generation_before={} generation_after={} changed={} subsequent_actions=true existing_shells_unchanged=true running_actions_unchanged=true",
-                        json_escape(pane_id),
-                        render_names(&before.configured),
-                        render_names(&after.configured),
-                        before.effective_state,
-                        after.effective_state,
-                        before.generation,
-                        after.generation,
-                        changed,
+                        "Reloaded the full configuration; changed={changed}; generation {} → {}; changes apply to subsequent actions, while existing shells and running actions are unchanged.",
+                        before.generation, after.generation,
                     ),
-                    visibility,
+                    presentation: AgentShellPresentation::Notice,
                 })
             }
         }
@@ -274,21 +259,16 @@ impl RuntimeSessionService {
             report.changed,
             if report.changed { "applied" } else { "no_op" },
         )?;
-        let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
-        Ok(AgentShellCommandOutcome::Mutated {
+        let action = if enable { "Enabled" } else { "Disabled" };
+        let result = if report.changed { "updated" } else { "no-op" };
+        Ok(AgentShellCommandOutcome::Presented {
             command: "toolchain".to_string(),
             body: format!(
-                "pane={} operation={} kind={} configured={} configured_kinds={} changed={} generation_before={} generation_after={} persisted_kind_only=true subsequent_actions=true existing_shells_unchanged=true running_actions_unchanged=true",
-                json_escape(pane_id),
-                operation.as_str(),
+                "{action} {}; {result}; changed={}; generation {generation_before} → {generation_after}; applies to subsequent actions.",
                 kind.as_str(),
-                enable,
-                render_names(&after),
                 report.changed,
-                generation_before,
-                generation_after,
             ),
-            visibility,
+            presentation: AgentShellPresentation::Notice,
         })
     }
 
@@ -722,88 +702,209 @@ fn detect_toolchain_detail(
     }
 }
 
-/// Renders the complete pane-local status without ambient environment data.
-fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
+/// Renders the stable descriptor catalog as a searchable Markdown table.
+fn render_toolchain_list() -> String {
+    let mut body = String::from(
+        "# Supported Toolchains\n\n| Kind | Platform | Evidence | Sandbox projection | Companions |\n| --- | --- | --- | --- | --- |\n",
+    );
+    for kind in SUPPORTED_SANDBOX_TOOLCHAIN_KINDS {
+        let descriptor = toolchain_descriptor(kind);
+        body.push_str(&format!(
+            "| `{}` | {} | {} | {} | {} |\n",
+            kind.as_str(),
+            toolchain_platform_name(descriptor.platform),
+            descriptor_root_labels(descriptor),
+            descriptor_sandbox_destinations(descriptor),
+            descriptor_companions(descriptor),
+        ));
+    }
+    body.push_str("\nSelections are typed and code-owned; they do not grant arbitrary PATH or mount authority.\n");
+    body
+}
+
+/// Renders one successful detection as structured pane-local Markdown.
+fn render_toolchain_detection(
+    pane_id: &str,
+    kind: SandboxToolchainKind,
+    detail: &str,
+    status: &ToolchainStatus,
+) -> String {
+    let descriptor = toolchain_descriptor(kind);
     format!(
-        "pane={} backend={} supported={} configured={} discoverable={} discovery={} effective={} cargo_bin={} rustup_home={} zig_root={} go_root={} deno_root={} bun_root={} node_root={} python_root={} discovery_error={} rust_sandbox_path={} zig_sandbox_path={} go_sandbox_path={} deno_sandbox_path={} bun_sandbox_path={} node_sandbox_path={} python_sandbox_path={} generation={} source=active-pane-bootstrap",
-        json_escape(pane_id),
-        status.backend,
-        supported_toolchain_names().join(","),
-        render_names(&status.configured),
-        render_names(&status.discoverable),
-        status.discovery_state,
-        status.effective_state,
-        status
-            .cargo_bin
-            .as_deref()
-            .map(json_escape)
-            .unwrap_or_else(|| "none".to_string()),
-        status
-            .rustup_home
-            .as_deref()
-            .map(json_escape)
-            .unwrap_or_else(|| "none".to_string()),
-        status
-            .zig_root
-            .as_deref()
-            .map(json_escape)
-            .unwrap_or_else(|| "none".to_string()),
-        status
-            .go_root
-            .as_deref()
-            .map(json_escape)
-            .unwrap_or_else(|| "none".to_string()),
-        status
-            .deno_root
-            .as_deref()
-            .map(json_escape)
-            .unwrap_or_else(|| "none".to_string()),
-        status
-            .bun_root
-            .as_deref()
-            .map(json_escape)
-            .unwrap_or_else(|| "none".to_string()),
-        status
-            .node_root
-            .as_deref()
-            .map(json_escape)
-            .unwrap_or_else(|| "none".to_string()),
-        status
-            .python_root
-            .as_deref()
-            .map(json_escape)
-            .unwrap_or_else(|| "none".to_string()),
-        status
-            .discovery_error
-            .as_deref()
-            .map(json_escape)
-            .unwrap_or_else(|| "none".to_string()),
-        SANDBOX_RUST_PATH,
-        SANDBOX_ZIG_PATH,
-        SANDBOX_GO_PATH,
-        SANDBOX_DENO_PATH,
-        SANDBOX_BUN_PATH,
-        SANDBOX_NODE_PATH,
-        SANDBOX_PYTHON_PATH,
+        "# Toolchain Detection\n\n| Field | Value |\n| --- | --- |\n| Kind | `{}` |\n| Available | yes |\n| Configured | {} |\n| Pane | `{}` |\n| Generation | {} |\n| Evidence source | active-pane bootstrap |\n| Host evidence | `{}` |\n| Sandbox projection | {} |\n",
+        kind.as_str(),
+        if status.configured.iter().any(|name| name == kind.as_str()) {
+            "yes"
+        } else {
+            "no"
+        },
+        markdown_cell(pane_id),
         status.generation,
+        markdown_cell(detail),
+        descriptor_sandbox_destinations(descriptor),
     )
 }
 
-/// Returns stable supported kind names from the shared metadata owner.
-fn supported_toolchain_names() -> Vec<&'static str> {
-    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS
-        .iter()
-        .copied()
-        .map(SandboxToolchainKind::as_str)
-        .collect()
+/// Returns a compact platform label for descriptor tables.
+const fn toolchain_platform_name(platform: ToolchainPlatform) -> &'static str {
+    match platform {
+        ToolchainPlatform::Any => "any",
+        ToolchainPlatform::Linux => "Linux",
+        ToolchainPlatform::MacOs => "macOS",
+        ToolchainPlatform::Windows => "Windows",
+    }
 }
 
-/// Renders an empty kind selection explicitly rather than as an empty field.
-fn render_names(names: &[String]) -> String {
-    if names.is_empty() {
-        "none".to_string()
+/// Renders descriptor evidence labels without consulting the host.
+fn descriptor_root_labels(descriptor: &ToolchainDescriptor) -> String {
+    descriptor
+        .roots
+        .iter()
+        .map(|root| format!("`{}`", root.evidence_kind))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Renders fixed descriptor-owned sandbox destinations.
+fn descriptor_sandbox_destinations(descriptor: &ToolchainDescriptor) -> String {
+    descriptor
+        .roots
+        .iter()
+        .map(|root| format!("`{}`", root.sandbox_destination))
+        .collect::<Vec<_>>()
+        .join("<br>")
+}
+
+/// Renders required and optional descriptor companions.
+fn descriptor_companions(descriptor: &ToolchainDescriptor) -> String {
+    let required = descriptor
+        .coupling
+        .required
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>();
+    let optional = descriptor
+        .coupling
+        .optional
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>();
+    match (required.is_empty(), optional.is_empty()) {
+        (true, true) => "none".to_string(),
+        (false, true) => format!("required: {}", required.join(", ")),
+        (true, false) => format!("optional: {}", optional.join(", ")),
+        (false, false) => format!(
+            "required: {}; optional: {}",
+            required.join(", "),
+            optional.join(", ")
+        ),
+    }
+}
+
+/// Escapes table delimiters and line breaks in pane-local Markdown cells.
+fn markdown_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', "<br>")
+}
+
+/// Renders the complete pane-local status without ambient environment data.
+fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
+    let mut body = format!(
+        "# Toolchains\n\n**Pane:** `{}`  \n**Backend:** `{}`  \n**Generation:** {}  \n**Discovery:** {}  \n**Effective state:** {}\n\n| Kind | Configured | Discoverable | Effective | Host evidence | Sandbox projection |\n| --- | --- | --- | --- | --- | --- |\n",
+        markdown_cell(pane_id),
+        status.backend,
+        status.generation,
+        status.discovery_state,
+        status.effective_state,
+    );
+    for kind in SUPPORTED_SANDBOX_TOOLCHAIN_KINDS {
+        let descriptor = toolchain_descriptor(kind);
+        let configured = status
+            .configured
+            .iter()
+            .any(|configured| configured == kind.as_str());
+        let discoverable = status
+            .discoverable
+            .iter()
+            .any(|available| available == kind.as_str());
+        body.push_str(&format!(
+            "| `{}` | {} | {} | {} | {} | {} |\n",
+            kind.as_str(),
+            yes_no(configured),
+            yes_no(discoverable),
+            toolchain_kind_effective_state(configured, discoverable, status),
+            toolchain_status_host_evidence(kind, status),
+            descriptor_sandbox_destinations(descriptor),
+        ));
+    }
+    if let Some(error) = status.discovery_error.as_deref() {
+        body.push_str(&format!(
+            "\n## Discovery diagnostics\n\n- {}\n",
+            markdown_cell(error)
+        ));
+    }
+    body
+}
+
+/// Returns a stable boolean label for Markdown presentation rows.
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+/// Computes one descriptor row's effective state from shared status facts.
+fn toolchain_kind_effective_state(
+    configured: bool,
+    discoverable: bool,
+    status: &ToolchainStatus,
+) -> &'static str {
+    match (configured, discoverable, status.effective_state) {
+        (true, true, "active") => "active",
+        (true, true, _) => "selected-inactive",
+        (true, false, _) => "selected-unavailable",
+        (false, true, _) => "available-disabled",
+        (false, false, _) => "disabled-unavailable",
+    }
+}
+
+/// Projects pane-local host evidence into one descriptor-oriented table cell.
+fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &ToolchainStatus) -> String {
+    let values = match kind {
+        SandboxToolchainKind::Rust => [status.cargo_bin.as_deref(), status.rustup_home.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+        SandboxToolchainKind::Zig => vec![status.zig_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Go => vec![status.go_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Deno => vec![status.deno_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Bun => vec![status.bun_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Node => vec![status.node_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Python => vec![status.python_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+    };
+    if values.is_empty() {
+        "—".to_string()
     } else {
-        names.join(",")
+        values
+            .into_iter()
+            .map(|value| format!("`{}`", markdown_cell(value)))
+            .collect::<Vec<_>>()
+            .join("<br>")
     }
 }
 

@@ -19,7 +19,6 @@ use mez_agent::{
 ///
 /// Commands use this contract when content shape must not decide whether the
 /// response opens a pager or appears as a transient status-bar message.
-#[allow(dead_code)] // Incremental command migrations consume this shared contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentShellPresentation {
     /// Render the complete body in the command pager, even when it is one line.
@@ -64,7 +63,6 @@ pub enum AgentShellCommandOutcome {
         body: String,
     },
     /// Displays content through an explicit presentation destination.
-    #[allow(dead_code)] // Incremental command migrations follow this prerequisite.
     Presented {
         /// Stable command identity used by pager and compatibility adapters.
         command: String,

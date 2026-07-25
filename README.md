@@ -455,8 +455,11 @@ Current support reflects behavior implemented in the repository today.
   real changes to subsequent sandboxed actions. Existing interactive shells
   and already-running actions are unchanged. `/toolchain reload` performs a
   full disk-backed configuration reload rather than reloading only the
-  toolchain field. Toolchains remain a typed allowlist, not arbitrary PATH or
-  host-mount configuration.
+  toolchain field. Status, list, and detection open structured Markdown in the
+  searchable, copyable command pager. Mutations and reloads use concise
+  transient notices, failures use transient error notices, and `/toolchain`
+  output is never appended to pane history. Toolchains remain a typed
+  allowlist, not arbitrary PATH or host-mount configuration.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks

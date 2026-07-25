@@ -117,10 +117,18 @@ Common slash commands:
 | `/list-mcp` | Show configured MCP tools. |
 | `/compact` | Compact older conversation context while opportunistically pruning expired persistent records. |
 | `/issue` | Add, show, update, query, or delete local project issues for the active pane repository, including mutable progress notes. |
+| `/toolchain` | Inspect typed sandbox toolchains in the command pager; status, list, and detection are searchable/copyable, while mutations and failures use transient notices without entering pane history. |
 | `/show-issues` | Browse open project issues, apply filters, open record details, and save the Markdown view to a file. |
 | `/show-memories` | Browse project-scoped persistent memories, apply filters, open record details, and save the Markdown view to a file. |
 
 `/show-issues` and `/show-memories` use the shared command-output pager. `/` keeps the normal in-page text search, while record-browser keys provide database-backed actions: `k` opens the kind dropdown selector, `p` opens the project/scope filter, `x` opens the full-text filter, `s` opens the save prompt, `Enter` opens the focused record, and `Esc` closes prompts, returns from detail to list, or exits the list view. Lists use the available overlay body width, including tables; details use the smaller of that width and `terminal.agent_wrap_column_cap`. Copy and save retain raw Markdown.
+
+`/toolchain`, `/toolchain status`, `/toolchain list`, and `/toolchain detect KIND`
+also use the shared searchable and copyable command-output pager. Their Markdown
+is descriptor-derived and includes fixed sandbox projections without granting
+new host authority. Enable, disable, and full-configuration reload results use
+one transient success notice; invalid grammar and execution failures use one
+transient error notice. These command results never append to pane history.
 | `/remember` | Generate durable memories from the current context or a supplied statement while opportunistically pruning expired persistent records. |
 | `/loop` | Re-run a prompt until an iteration completes without `apply_patch` actions or the loop limit is reached; pass `--fork` to use fresh parent-conversation forks, `--new` to use fresh empty conversations, or `--limit <int>` to override the loop limit for that command. |
 | `/new` | Start a fresh pane conversation. |

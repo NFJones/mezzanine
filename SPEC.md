@@ -3038,7 +3038,12 @@ that are already running. Repeating an already-satisfied mutation MUST be a
 no-op and MUST NOT advance configuration generation. `/toolchain reload` MUST
 perform the existing full disk-backed configuration reload, not a field-only
 toolchain reload, and MUST disclose that all changed configuration was
-reapplied. A standalone `mez sandbox toolchains enable` mutation MUST require
+reapplied. Status, list, and detection results MUST use the searchable and
+copyable command pager with structured descriptor-derived Markdown, regardless
+of rendered line count. Successful mutations and reloads MUST use one concise
+transient notice, and usage, discovery, persistence, and reload failures MUST
+use one transient error notice. No `/toolchain` result may append visible
+output to pane history. A standalone `mez sandbox toolchains enable` mutation MUST require
 `/toolchain reload`, `config/reload`, or session restart before it affects an
 already-running service.
 The same detect, enable, and disable grammar MUST accept `zig`. Zig evidence

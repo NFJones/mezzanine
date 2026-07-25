@@ -14,6 +14,7 @@ use super::{
     runtime_agent_shell_prompt_turn_response_json, runtime_agent_shell_stop_response_json,
     runtime_mezzanine_error_code,
 };
+use crate::integrations::agent::slash::AgentShellPresentation;
 use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::parse_macro_prompt_invocation;
 
@@ -598,11 +599,13 @@ impl RuntimeSessionService {
                     outcome.as_ref()
                     && command == "toolchain"
                 {
-                    let toolchain_outcome = self.execute_agent_shell_toolchain_command(
-                        primary_client_id,
-                        &pane_id,
-                        input,
-                    )?;
+                    let toolchain_outcome = self
+                        .execute_agent_shell_toolchain_command(primary_client_id, &pane_id, input)
+                        .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
+                            command: "toolchain".to_string(),
+                            body: format!("Toolchain error: {}", error.message()),
+                            presentation: AgentShellPresentation::ErrorNotice,
+                        });
                     runtime_agent_shell_command_response_json(
                         &pane_id,
                         input,
