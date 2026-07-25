@@ -117,14 +117,17 @@ struct RuntimePaneShellHandoff {
     bootstrap_marker: Option<String>,
 }
 
-/// Foreground identity observed when a handoff bootstrap emitted its start marker.
+/// Persistent shell receiver observed when a handoff bootstrap emitted its start marker.
+///
+/// Payload release occurs only after this evidence is captured, so isolated
+/// transaction children cannot be promoted as the persistent shell identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeBootstrapShellCertificationEvidence {
     /// Pane that emitted the registered bootstrap marker.
     pane_id: String,
     /// Primary process identity captured for lifecycle fencing.
     primary_process_id: u32,
-    /// Foreground process group observed at transaction start.
+    /// Persistent receiver's foreground process group observed at transaction start.
     process_group_id: u32,
     /// Shell-interaction generation associated with the bootstrap marker.
     interaction_generation: u64,

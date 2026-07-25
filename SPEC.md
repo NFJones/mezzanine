@@ -3391,6 +3391,13 @@ environment signature and the same foreground process group is observed at
 the transaction start and completion boundaries. Missing, contradictory,
 failed, timed-out, or stale proof MUST fail closed.
 
+For streamed transaction wrappers, the start-boundary observation MUST occur
+after the registered start marker is received and before the runtime releases
+the deferred command payload. The persistent shell receiver waiting for that
+payload is the certification candidate. Isolated transaction-child process
+groups observed after payload release and before completion are expected, but
+MUST NOT be promoted as persistent shell identity.
+
 Certification MUST be invalidated when the agent subshell exits, the pane
 closes, its primary process changes or is replaced, a bootstrap proof fails, or
 a new shell-interaction epoch begins. Restoring the original pane shell after

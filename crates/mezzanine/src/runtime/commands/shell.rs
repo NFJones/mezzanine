@@ -894,6 +894,10 @@ impl RuntimeSessionService {
     /// issued by the agent can mutate that child, but leaving agent mode returns
     /// to the original interactive shell without inheriting prompt, option, or
     /// environment changes made inside the agent context.
+    ///
+    /// Bootstrap delivery is intentionally two-phase: the ordered handoff sends
+    /// the child-shell launch plus transaction wrapper, while the registered
+    /// payload remains deferred until the wrapper's start marker is observed.
     pub(crate) fn enter_agent_subshell_if_needed(&mut self, pane_id: &str) -> Result<bool> {
         if self.agent_subshell_is_active(pane_id)
             || self.primary_pid_for_live_pane_process(pane_id).is_none()
@@ -916,9 +920,6 @@ impl RuntimeSessionService {
         if let Some((marker, wrapper)) = prepared_bootstrap.as_ref() {
             self.bind_agent_subshell_bootstrap_marker(pane_id, marker);
             handoff_input.extend_from_slice(wrapper.as_bytes());
-            if let Some(payload) = self.take_inline_bootstrap_payload(marker) {
-                handoff_input.extend_from_slice(&payload);
-            }
         }
         match self.write_runtime_pane_input(pane_id, &handoff_input) {
             Ok(()) => {
@@ -970,7 +971,7 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
+        let cancelled_bootstrap_payload = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
         if self.pane_has_running_shell_transaction(pane_id) {
             return Ok(false);
         }
@@ -982,12 +983,14 @@ impl RuntimeSessionService {
         }
         self.clear_shell_output_filters_for_foreground_input(pane_id);
         self.clear_agent_subshell_shell_identity(pane_id);
-        let input = if self.take_agent_subshell_command_exit(pane_id) {
+        let exit_input = if self.take_agent_subshell_command_exit(pane_id) {
             b"exit\n".as_slice()
         } else {
             b"\x04".as_slice()
         };
-        match self.write_runtime_pane_input(pane_id, input) {
+        let mut input = cancelled_bootstrap_payload.unwrap_or_default();
+        input.extend_from_slice(exit_input);
+        match self.write_runtime_pane_input(pane_id, &input) {
             Ok(()) => {
                 self.leave_agent_subshell(pane_id);
                 self.schedule_parent_shell_rebootstrap_after_agent_subshell(pane_id);

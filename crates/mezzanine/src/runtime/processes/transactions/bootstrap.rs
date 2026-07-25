@@ -1,5 +1,7 @@
 //! Pane bootstrap dispatch and completion.
 
+use mez_agent::AgentShellVisibility;
+
 use super::{
     AgentTurnState, DEFAULT_BOOTSTRAP_TIMEOUT_MS, EventKind, MezError, PaneReadinessState, Result,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
@@ -10,6 +12,10 @@ use super::{
 impl RuntimeSessionService {
     /// Registers one pane bootstrap and returns the exact wrapper that must be
     /// delivered after any preceding shell-handoff input.
+    ///
+    /// The encoded command payload remains on the registered transaction until
+    /// the runtime observes the wrapper's start marker and releases it through
+    /// the priority input path.
     pub(crate) fn prepare_bootstrap_to_pane(
         &mut self,
         pane_id: &str,
@@ -74,16 +80,6 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(())
-    }
-
-    /// Takes the payload for a registered bootstrap when its wrapper and body
-    /// will be delivered atomically behind a runtime-owned shell handoff.
-    pub(crate) fn take_inline_bootstrap_payload(&mut self, marker: &str) -> Option<Vec<u8>> {
-        self.process
-            .running_shell_transactions
-            .get_mut(marker)
-            .filter(|transaction| transaction.kind == RunningShellTransactionKind::Bootstrap)
-            .and_then(|transaction| transaction.pending_input_payload.take())
     }
 
     /// Runs the dispatch bootstrap to pane operation for this subsystem.
@@ -219,6 +215,14 @@ impl RuntimeSessionService {
             let _ = self.dispatch_stored_running_shell_actions(&turn_id)?;
         }
         let _ = self.recover_stranded_agent_shell_dispatches()?;
+        if self.agent_subshell_is_active(pane_id)
+            && self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_some_and(|session| session.visibility == AgentShellVisibility::Hidden)
+        {
+            let _ = self.exit_agent_subshell_if_active(pane_id)?;
+        }
         Ok(1)
     }
 

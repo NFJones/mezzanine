@@ -2644,7 +2644,13 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
     let exit_inputs = pane_input_effects(&exit_effects);
     assert_eq!(exit_inputs.len(), 1);
     assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
-    assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x04");
+    let exit_bytes = exit_inputs[0].pane_input_parts().1;
+    assert!(
+        exit_bytes
+            .windows(b"__MEZ_COMMAND_PAYLOAD_END_".len())
+            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_")
+    );
+    assert_eq!(exit_bytes.last(), Some(&b'\x04'));
     assert!(!service.agent_subshell_is_active(&pane_id));
     let _ = process.terminate(Duration::from_millis(10));
 }

@@ -499,8 +499,43 @@ bootstrap\tcomplete\t1714500000\n";
         .observe_agent_shell_transaction_start("%1", &marker, &turn_id, "agent-%1", "%1")
         .unwrap();
     service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(process_group_id.saturating_add(1)));
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(process_group_id));
+    service
         .observe_agent_shell_transaction_end("%1", &marker, &turn_id, "agent-%1", "%1", 0)
         .unwrap();
+}
+
+/// Verifies a transient isolated transaction child does not replace the
+/// persistent agent-subshell identity sampled at the certification boundaries.
+#[test]
+fn runtime_agent_subshell_bootstrap_accepts_transient_isolated_child_group() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let subshell_group = primary_pid.saturating_add(1);
+
+    certify_agent_subshell_foreground_group(&mut service, subshell_group);
+
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(true)
+    );
+    assert!(service.pane_environment_signature("%1").is_some());
+    let diagnostic = service.pane_foreground_process_diagnostic("%1").json();
+    assert_eq!(
+        diagnostic["certified_shell_process_group_id"],
+        subshell_group
+    );
+    assert_eq!(
+        diagnostic["certified_shell_source"],
+        "agent-subshell-bootstrap"
+    );
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a Mezzanine-owned agent subshell that completes a registered

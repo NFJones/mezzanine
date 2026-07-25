@@ -211,7 +211,11 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Captures foreground evidence when the registered handoff bootstrap starts.
+    /// Captures persistent-receiver evidence before releasing bootstrap payload.
+    ///
+    /// The wrapper is blocked in its payload read loop at this boundary, so the
+    /// foreground group belongs to the persistent agent subshell rather than an
+    /// isolated child launched later by the transaction body.
     pub(crate) fn observe_agent_subshell_bootstrap_start(&mut self, pane_id: &str, marker: &str) {
         let Some(handoff) = self.process.pane_shell_handoffs.get(pane_id) else {
             return;
@@ -254,11 +258,17 @@ impl RuntimeSessionService {
             .remove(marker);
         let current_primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
         let current_foreground_group = self.pane_foreground_process_group_observation(pane_id).0;
+        let current_interaction_generation = self
+            .process
+            .pane_shell_interaction_generations
+            .get(pane_id)
+            .copied();
         let valid = evidence.as_ref().is_some_and(|evidence| {
             evidence.pane_id == pane_id
                 && evidence.primary_process_id == handoff.primary_process_id
                 && evidence.interaction_generation == handoff.interaction_generation
                 && current_primary_process_id == Some(handoff.primary_process_id)
+                && current_interaction_generation == Some(handoff.interaction_generation)
                 && current_foreground_group == Some(evidence.process_group_id)
         }) && exit_code == 0
             && !observed_output_truncated
@@ -316,17 +326,23 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Cancels only the internal bootstrap registered for an agent-subshell
-    /// handoff so an immediate user exit is not blocked behind hidden work.
-    pub(crate) fn cancel_agent_subshell_bootstrap_for_exit(&mut self, pane_id: &str) -> bool {
+    /// Cancels an unstarted agent-subshell bootstrap and returns its payload.
+    ///
+    /// The caller must deliver the returned payload before its exit input so
+    /// the already-delivered wrapper can finish its receiver without treating
+    /// end-of-file as a truncated command. Once start observation has released
+    /// the payload, the transaction remains registered and exit waits for its
+    /// normal completion instead.
+    pub(crate) fn cancel_agent_subshell_bootstrap_for_exit(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<Vec<u8>> {
         let marker = self
             .process
             .pane_shell_handoffs
             .get(pane_id)
             .and_then(|handoff| handoff.bootstrap_marker.clone());
-        let Some(marker) = marker else {
-            return false;
-        };
+        let marker = marker?;
         let removable = self
             .process
             .running_shell_transactions
@@ -334,17 +350,22 @@ impl RuntimeSessionService {
             .is_some_and(|transaction| {
                 transaction.pane_id == pane_id
                     && transaction.kind == super::RunningShellTransactionKind::Bootstrap
+                    && transaction.pending_input_payload.is_some()
             });
         if !removable {
-            return false;
+            return None;
         }
-        self.process.running_shell_transactions.remove(&marker);
+        let payload = self
+            .process
+            .running_shell_transactions
+            .remove(&marker)
+            .and_then(|transaction| transaction.pending_input_payload);
         self.clear_shell_transaction_protocol_state(&marker);
         self.process
             .bootstrap_shell_certification_evidence
             .remove(&marker);
         self.process.pane_bootstrap_pending.remove(pane_id);
-        true
+        payload
     }
 
     /// Invalidates child-environment evidence and schedules discovery after

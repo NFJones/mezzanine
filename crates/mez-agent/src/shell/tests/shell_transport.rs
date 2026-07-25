@@ -145,6 +145,13 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
         "{wrapper}"
     );
     assert!(wrapper.contains("'/opt/homebrew/bin/fish' --no-config \"$MEZ_COMMAND_FILE\""));
+    let start_marker = wrapper.find("printf '\\033]133;C;").unwrap();
+    let payload_receiver = wrapper.find("while read -l MEZ_COMMAND_LINE").unwrap();
+    let isolated_child = wrapper.find("command setsid -w env").unwrap();
+    assert!(
+        start_marker < payload_receiver && payload_receiver < isolated_child,
+        "{wrapper}"
+    );
     assert!(!wrapper.contains("'/opt/homebrew/bin/fish' -c"));
     assert!(!wrapper.contains("echo \\'hello fish\\'"));
     assert!(!wrapper.contains("echo 'hello fish'"));
@@ -282,6 +289,15 @@ fn posix_wrapper_contains_start_and_end_markers() {
     assert!(wrapper.contains("command printf '\\033]133;C;"));
     assert!(wrapper.contains("/bin/sh"));
     assert!(wrapper.contains("command setsid -w"), "{wrapper}");
+    let start_marker = wrapper.find("command printf '\\033]133;C;").unwrap();
+    let payload_receiver = wrapper
+        .find("while IFS= read -r MEZ_COMMAND_LINE; do")
+        .unwrap();
+    let isolated_child = wrapper.find("command setsid -w").unwrap();
+    assert!(
+        start_marker < payload_receiver && payload_receiver < isolated_child,
+        "{wrapper}"
+    );
     assert!(wrapper.contains("MEZ_COMMAND_B64"));
     assert!(wrapper.contains("base64 -d < \"$MEZ_COMMAND_B64\""));
     assert!(wrapper.contains("base64 -D < \"$MEZ_COMMAND_B64\""));

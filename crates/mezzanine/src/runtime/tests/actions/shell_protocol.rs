@@ -1109,6 +1109,62 @@ fn runtime_shell_transaction_end_before_start_marker_fails_live_action() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies an agent-subshell bootstrap defers its payload until start observation.
+///
+/// The initial handoff must contain only the persistent-shell launch and wrapper.
+/// Keeping the payload registered until the start marker lets certification
+/// sample that persistent receiver before an isolated transaction child starts.
+#[test]
+fn runtime_agent_subshell_bootstrap_waits_for_start_before_releasing_payload() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let pane_id = "%1".to_string();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+
+    assert!(service.enter_agent_subshell_if_needed(&pane_id).unwrap());
+    let handoff = service.drain_pane_io_transition().side_effects;
+    assert_eq!(handoff.len(), 1);
+    let (marker, transaction) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find(|(_, transaction)| transaction.kind == RunningShellTransactionKind::Bootstrap)
+        .map(|(marker, transaction)| (marker.clone(), transaction.clone()))
+        .unwrap();
+    assert!(
+        transaction.pending_input_payload.is_some(),
+        "bootstrap payload must remain deferred until the start marker is observed"
+    );
+
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &marker,
+            &transaction.turn_id,
+            "agent-%1",
+            &pane_id,
+        )
+        .unwrap();
+
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .get(&marker)
+            .unwrap()
+            .pending_input_payload
+            .is_none()
+    );
+    let payload = service.drain_pane_io_transition().side_effects;
+    assert_eq!(payload.len(), 1);
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies shell transaction payload bytes are deferred until the wrapper
 /// receiver emits its start marker.
 ///

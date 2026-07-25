@@ -114,7 +114,14 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
     let exit_inputs = pane_input_effects(&exit_effects);
     assert_eq!(exit_inputs.len(), 1);
     assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
-    assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x04");
+    let exit_bytes = exit_inputs[0].pane_input_parts().1;
+    assert!(
+        exit_bytes
+            .windows(b"__MEZ_COMMAND_PAYLOAD_END_".len())
+            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_"),
+        "an unreleased bootstrap payload must be completed before agent-subshell EOF"
+    );
+    assert_eq!(exit_bytes.last(), Some(&b'\x04'));
 
     let prompt = b"user@host ~/repo $ ";
     let prompt_repaint = service.renderable_pane_output_bytes(&pane_id, prompt);
@@ -135,6 +142,87 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         .unwrap()
         .unwrap();
     assert_eq!(view.cursor_column, "user@host ~/repo $ ".chars().count());
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies a Ctrl+D request made after bootstrap payload release exits once
+/// the in-flight bootstrap settles instead of leaving a hidden child shell.
+///
+/// Start-marker observation consumes the deferred payload, so cancellation can
+/// no longer complete the wrapper inline. Bootstrap completion must retry the
+/// already-recorded hidden-shell exit and queue EOF only after settlement.
+#[test]
+fn runtime_agent_shell_ctrl_d_waits_for_started_bootstrap_completion() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1".to_string();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+
+    let show = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(show.contains("visibility=visible"), "{show}");
+    let _ = service.drain_pane_io_transition();
+    let (marker, turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find(|(_, transaction)| transaction.kind == RunningShellTransactionKind::Bootstrap)
+        .map(|(marker, transaction)| (marker.clone(), transaction.turn_id.clone()))
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_start(&pane_id, &marker, &turn_id, "agent-%1", &pane_id)
+        .unwrap();
+    let payload = service.drain_pane_io_transition().side_effects;
+    assert_eq!(pane_input_effects(&payload).len(), 1);
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x04".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    let pending_exit_effects = service.drain_pane_io_transition().side_effects;
+    assert!(pane_input_effects(&pending_exit_effects).is_empty());
+    assert!(service.agent_subshell_is_active(&pane_id));
+
+    let output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t/tmp\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_preview = output.to_string();
+    transaction.observed_output_bytes = output.len();
+    service
+        .observe_agent_shell_transaction_end(&pane_id, &marker, &turn_id, "agent-%1", &pane_id, 0)
+        .unwrap();
+
+    let exit_effects = service.drain_pane_io_transition().side_effects;
+    let exit_inputs = pane_input_effects(&exit_effects);
+    assert_eq!(exit_inputs.len(), 1);
+    assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x04");
+    assert!(!service.agent_subshell_is_active(&pane_id));
     let _ = process.terminate(Duration::from_millis(10));
 }
 
