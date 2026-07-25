@@ -634,12 +634,12 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
 }
 
 #[test]
-/// Verifies full-access sessions still enforce subagent write scopes.
+/// Verifies full-access sessions treat delegated write scopes as advisory.
 ///
-/// A delegated subagent that emits `apply_patch` must remain within its declared
-/// writable paths even when normal approval policy is FullAccess. This protects
-/// native local execution from bypassing scope checks during planning.
-fn turn_runner_full_access_denies_out_of_scope_subagent_apply_patch() {
+/// A delegated subagent that emits `apply_patch` outside its coordination scope
+/// must not be denied by controller-side scope checks. An active confinement
+/// backend remains responsible for enforcing concrete filesystem authority.
+fn turn_runner_full_access_allows_out_of_scope_subagent_apply_patch() {
     let mut turn = turn();
     turn.agent_id = "agent-%2".to_string();
     turn.pane_id = "%2".to_string();
@@ -719,21 +719,18 @@ fn turn_runner_full_access_denies_out_of_scope_subagent_apply_patch() {
         )
         .unwrap();
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
-    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
-    assert_eq!(
-        execution.action_results[0].error.as_ref().unwrap().code,
-        "subagent_scope_violation"
-    );
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
 }
 
 #[test]
-/// Verifies full-access sessions still enforce subagent read scopes.
+/// Verifies full-access sessions treat delegated read scopes as advisory.
 ///
-/// Full-access mode can bypass ordinary approval prompts, but it must not widen
-/// a delegated subagent beyond the parent-declared scope. Concrete read escapes
-/// therefore become hard denials before local dispatch even under FullAccess.
-fn turn_runner_full_access_denies_out_of_scope_subagent_shell_command() {
+/// Full-access bypasses scope-derived prompts, so a concrete read escape remains
+/// pending local dispatch rather than becoming a controller-side hard denial.
+/// Bubblewrap authority, when active, remains independent of approval mode.
+fn turn_runner_full_access_allows_out_of_scope_subagent_shell_command() {
     let mut turn = turn();
     turn.agent_id = "agent-%2".to_string();
     turn.pane_id = "%2".to_string();
@@ -815,12 +812,9 @@ fn turn_runner_full_access_denies_out_of_scope_subagent_shell_command() {
         )
         .unwrap();
 
-    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
-    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
-    assert_eq!(
-        execution.action_results[0].error.as_ref().unwrap().code,
-        "subagent_scope_violation"
-    );
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
 }
 
 #[test]

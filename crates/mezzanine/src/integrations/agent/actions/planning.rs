@@ -1,6 +1,6 @@
 //! Product inputs for provider-independent action-result planning.
 //!
-//! This adapter computes concrete permission, subagent-scope, local lowering,
+//! This adapter computes concrete permission, subagent-scope risk, local lowering,
 //! and MCP approval facts, then delegates canonical action-result construction
 //! to `mez-agent`. Runtime execution and product error projection remain in the
 //! composition crate.
@@ -21,7 +21,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
     ) -> Result<ActionResult> {
         let local_plan = local_action_plan(action)?;
         let network_plan = network_action_plan(action);
-        let subagent_scope_violation = match (self.subagent_scope, local_plan.as_ref()) {
+        let subagent_scope_risk = match (self.subagent_scope, local_plan.as_ref()) {
             (Some(scope), Some(plan)) => subagent_action_scope_violation(
                 self.subagent_scope_enforcement,
                 scope,
@@ -59,7 +59,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                 approval_policy: self.permissions.approval_policy(),
                 approval_bypass: self.permissions.approval_bypass(),
                 mcp_approval_required,
-                subagent_scope_violation: subagent_scope_violation.as_deref(),
+                subagent_scope_risk: subagent_scope_risk.as_deref(),
                 sandbox_first_local_prompts: self.permissions.sandbox_first_local_prompts(),
             },
         )

@@ -328,6 +328,44 @@ fn real_bubblewrap_enforces_maximum_authority_and_isolation() {
 }
 
 #[test]
+/// Proves an authorized network effect selects the connected Bubblewrap
+/// profile while retaining the production filesystem confinement plan.
+fn real_bubblewrap_authorized_network_uses_connected_profile() {
+    let config = config();
+    let Some(capability) = verified_capability(&config) else {
+        return;
+    };
+    if !Path::new("/usr/bin/python3").is_file() {
+        eprintln!(
+            "skipping real Bubblewrap connected-network test: /usr/bin/python3 is unavailable"
+        );
+        return;
+    }
+    let fixture = RealBubblewrapFixture::new("connected-network");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut network = effects();
+    network.network = true;
+    let evaluation = evaluation(EffectCompleteness::Complete, network);
+    let plan = real_plan(&config, capability, &fixture.authority(), &evaluation);
+    assert_eq!(plan.audit_summary.network, BubblewrapNetworkMode::Connected);
+    assert!(!plan.arguments.contains(&"--unshare-net".to_string()));
+
+    let command = format!(
+        "/usr/bin/python3 -c 'import socket; s=socket.create_connection((\"127.0.0.1\", {}), 1); s.close()' && printf '%s\\n' REAL_BWRAP_CONNECTED_OK",
+        port,
+    );
+    let output = execute_plan(plan, &command);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("REAL_BWRAP_CONNECTED_OK"),
+        "status={:?} stdout={stdout:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 /// Proves the production Bubblewrap launch can execute the selected host Rust
 /// toolchain while Cargo credentials and configuration remain outside the
 /// projected filesystem.

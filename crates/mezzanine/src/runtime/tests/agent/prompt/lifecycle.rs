@@ -190,10 +190,10 @@ fn runtime_subagent_omitted_scopes_inherit_parent_bubblewrap_authority() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies a root parent in host access does not manufacture Bubblewrap scope
-/// inheritance for its child while the configured backend remains unchanged.
+/// Verifies host access retains child coordination metadata without
+/// manufacturing inherited Bubblewrap authority.
 #[test]
-fn runtime_host_access_subagent_does_not_inherit_bubblewrap_scope() {
+fn runtime_host_access_subagent_retains_coordination_scope() {
     let (mut service, primary, root, _) =
         trusted_project_subagent_scope_service("runtime-subagent-host-access");
     service.set_pane_approval_policy_override("%1", Some(ApprovalPolicy::HostAccess));
@@ -227,7 +227,12 @@ fn runtime_host_access_subagent_does_not_inherit_bubblewrap_scope() {
             .unwrap()
             .to_string();
 
-    assert!(!service.has_subagent_scope_declaration(&child_agent_id));
+    let scope = service
+        .subagent_scope_declaration(&child_agent_id)
+        .expect("host-access child must retain coordination metadata");
+    assert_eq!(scope.cooperation_mode, CooperationMode::OwnedWrite);
+    assert!(scope.read_scopes.is_empty());
+    assert!(scope.write_scopes.is_empty());
     assert!(matches!(
         service.configured_permissions().sandbox,
         crate::runtime::SandboxConfig::Bubblewrap(_)

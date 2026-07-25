@@ -89,6 +89,7 @@ impl RuntimeSessionService {
                     "sandbox_protected_mask_count",
                     summary.protected_mask_count.to_string(),
                 )
+                .with_metadata("sandbox_network", summary.network.as_str())
                 .with_metadata("sandbox_plan_sha256", summary.plan_sha256.clone());
         }
         if let Some(evaluation) = permission_evaluation {

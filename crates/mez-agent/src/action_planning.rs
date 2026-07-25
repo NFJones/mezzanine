@@ -42,8 +42,12 @@ pub struct ActionPlanningInput<'a> {
     pub approval_bypass: bool,
     /// Whether the selected MCP tool requires approval.
     pub mcp_approval_required: bool,
-    /// Product-computed subagent scope violation for a local action.
-    pub subagent_scope_violation: Option<&'a str>,
+    /// Product-computed advisory subagent scope risk for a local action.
+    ///
+    /// This fact may require approval, but it is not an execution-time
+    /// confinement boundary. Concrete scope enforcement belongs to the active
+    /// sandbox backend.
+    pub subagent_scope_risk: Option<&'a str>,
     /// Whether a prompting local action may attempt sandboxed execution before
     /// requesting user approval.
     pub sandbox_first_local_prompts: bool,
@@ -61,7 +65,7 @@ impl Default for ActionPlanningInput<'_> {
             approval_policy: ApprovalPolicy::Ask,
             approval_bypass: false,
             mcp_approval_required: true,
-            subagent_scope_violation: None,
+            subagent_scope_risk: None,
             sandbox_first_local_prompts: false,
         }
     }
@@ -231,21 +235,17 @@ fn plan_local_action(
     let plan = input
         .local_plan
         .ok_or_else(|| ActionPlanningError::new("local action plan is required"))?;
-    if let Some(message) = input.subagent_scope_violation {
-        return ActionResult::failed(
-            turn,
-            action,
-            ActionStatus::Denied,
-            "subagent_scope_violation",
-            message,
-        )
-        .map_err(ActionPlanningError::from_contract);
-    }
     let permission_evaluation = input.local_permission_evaluation;
-    let decision = permission_evaluation
+    let mut decision = permission_evaluation
         .map(|evaluation| evaluation.decision)
         .or(input.local_rule_decision)
         .ok_or_else(|| ActionPlanningError::new("local action permission decision is required"))?;
+    if decision == RuleDecision::Allow
+        && input.subagent_scope_risk.is_some()
+        && !prompt_gate_satisfied_by_policy(input)
+    {
+        decision = RuleDecision::Prompt;
+    }
     let matched_rule_ids = permission_evaluation
         .map(|evaluation| evaluation.matched_rule_ids.as_slice())
         .unwrap_or_default();
@@ -900,9 +900,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies product-computed subagent scope violations override permissive
-    /// command policy and become denied results before local dispatch.
-    fn action_planning_denies_local_subagent_scope_violation() {
+    /// Verifies delegated-scope risk is an approval signal under ask mode
+    /// rather than a controller-side execution denial.
+    fn action_planning_prompts_for_local_subagent_scope_risk() {
         let action = shell_action("inspect repository files");
         let plan = local_plan();
         let result = plan_action_result(
@@ -911,14 +911,66 @@ mod tests {
             ActionPlanningInput {
                 local_plan: Some(&plan),
                 local_rule_decision: Some(RuleDecision::Allow),
-                subagent_scope_violation: Some("path escapes delegated write scope"),
+                subagent_scope_risk: Some("path escapes delegated write scope"),
                 ..ActionPlanningInput::default()
             },
         )
         .unwrap();
 
-        assert_eq!(result.status, ActionStatus::Denied);
-        assert_eq!(result.error.unwrap().code, "subagent_scope_violation");
+        assert_eq!(result.status, ActionStatus::Blocked);
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    /// Verifies model assessment can approve delegated-scope risk under
+    /// auto-allow when the action carries a non-empty rationale.
+    fn action_planning_auto_allows_local_subagent_scope_risk_with_rationale() {
+        let action = shell_action("inspect repository files");
+        let plan = local_plan();
+        let result = plan_action_result(
+            &TestTurn,
+            &action,
+            ActionPlanningInput {
+                local_plan: Some(&plan),
+                local_rule_decision: Some(RuleDecision::Allow),
+                approval_policy: ApprovalPolicy::AutoAllow,
+                subagent_scope_risk: Some("path escapes delegated read scope"),
+                ..ActionPlanningInput::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.status, ActionStatus::Running);
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    /// Verifies full-access bypasses delegated-scope approval risk while an
+    /// explicit command forbid remains terminal.
+    fn action_planning_full_access_bypasses_scope_risk_but_not_forbid() {
+        let action = shell_action("inspect repository files");
+        let plan = local_plan();
+        let input = ActionPlanningInput {
+            local_plan: Some(&plan),
+            local_rule_decision: Some(RuleDecision::Allow),
+            approval_policy: ApprovalPolicy::FullAccess,
+            subagent_scope_risk: Some("path escapes delegated read scope"),
+            ..ActionPlanningInput::default()
+        };
+        let allowed = plan_action_result(&TestTurn, &action, input).unwrap();
+        assert_eq!(allowed.status, ActionStatus::Running);
+
+        let forbidden = plan_action_result(
+            &TestTurn,
+            &action,
+            ActionPlanningInput {
+                local_rule_decision: Some(RuleDecision::Forbid),
+                ..input
+            },
+        )
+        .unwrap();
+        assert_eq!(forbidden.status, ActionStatus::Denied);
+        assert_eq!(forbidden.error.unwrap().code, "policy_forbidden");
     }
 
     #[test]

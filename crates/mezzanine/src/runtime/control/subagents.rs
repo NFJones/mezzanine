@@ -403,9 +403,6 @@ impl RuntimeSessionService {
             if parent_scope.cooperation_mode == mez_agent::CooperationMode::Unrestricted {
                 spawn.explicit_user_approval = true;
             }
-        } else {
-            spawn.read_scopes.clear();
-            spawn.write_scopes.clear();
         }
         spawn.validate()?;
         let mut child_lineage = self.validate_subagent_spawn_capacity(&spawn.parent_agent_id)?;
@@ -440,29 +437,25 @@ impl RuntimeSessionService {
             .or_else(|| child_start_directory.clone())
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_else(|| ".".to_string());
-        let mut child_scope = inherited_scope.map(|mut declaration| {
-            declaration.current_directory = current_directory.clone();
-            declaration.read_scopes = spawn.read_scopes.clone();
-            declaration.write_scopes = spawn.write_scopes.clone();
-            if profile.permission_preset.is_some() {
-                declaration.permission_preset = profile.permission_preset;
-            }
-            declaration
-        });
-        if child_scope.is_none()
-            && let Some(permission_preset) = profile.permission_preset
-        {
-            child_scope = Some(SubagentScopeDeclaration {
-                cooperation_mode: mez_agent::CooperationMode::Unrestricted,
+        let child_scope = inherited_scope.map_or_else(
+            || SubagentScopeDeclaration {
+                cooperation_mode: spawn.cooperation_mode,
                 current_directory: current_directory.clone(),
-                read_scopes: Vec::new(),
-                write_scopes: Vec::new(),
-                permission_preset: Some(permission_preset),
-            });
-        }
-        if let Some(declaration) = child_scope {
-            self.set_subagent_scope_declaration(child_agent_id.clone(), declaration);
-        }
+                read_scopes: spawn.read_scopes.clone(),
+                write_scopes: spawn.write_scopes.clone(),
+                permission_preset: profile.permission_preset,
+            },
+            |mut declaration| {
+                declaration.current_directory = current_directory.clone();
+                declaration.read_scopes = spawn.read_scopes.clone();
+                declaration.write_scopes = spawn.write_scopes.clone();
+                if profile.permission_preset.is_some() {
+                    declaration.permission_preset = profile.permission_preset;
+                }
+                declaration
+            },
+        );
+        self.set_subagent_scope_declaration(child_agent_id.clone(), child_scope);
         if let Err(error) = self.enter_agent_mode_for_pane(&started.pane_id) {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);

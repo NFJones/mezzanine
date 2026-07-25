@@ -381,13 +381,22 @@ Current support reflects behavior implemented in the repository today.
   sandbox. `host-access` skips prompts and executes local shell actions on the
   host outside that sandbox; it is primary-user-only, remains subject to hooks
   and explicit denies, and is distinct from a one-shot approved sandbox retry.
+- `policy-only` is an approval and audit backend, not OS confinement. Its path
+  and shell-network classifications can trigger `ask` or `auto-allow` gates,
+  but they do not prevent a running host process from accessing resources.
 - Bubblewrap subagents inherit their parent's effective filesystem authority;
   omitted scopes inherit, explicit scopes may only narrow, and explicit empty
-  scope arrays remain empty.
+  scope arrays remain empty. Outside Bubblewrap, subagent scopes are retained
+  as coordination and approval metadata rather than hard path restrictions.
+- Bubblewrap is the shell confinement boundary: mounts enforce maximum read and
+  write authority, while network policy selects an isolated or explicitly
+  connected launch profile after approval. Brokered `web_search`, `fetch_url`,
+  and MCP actions use product-owned transports and remain controller-gated.
 - `/permissions` reports whether the active pane's effective Bubblewrap scopes
   came from explicit configuration, a trusted project, or no authority. It also
   reports stable restriction identifiers for the synthetic home, minimal PATH,
-  isolated network, authority-only mounts, and hidden host credentials.
+  enforced shell network policy, authority-only mounts, and hidden host
+  credentials.
 - Permission preset and approval-policy overrides apply to the issuing pane and
   its existing and future subagents. The nearest override wins independently
   for each field; unrelated root panes remain isolated. `/approval inherit` and

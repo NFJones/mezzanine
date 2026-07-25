@@ -683,17 +683,6 @@ impl RuntimeSessionService {
                 let command = plan.command.as_str();
                 let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
                 let permission_policy = self.permission_policy_for_turn(&turn);
-                if let Some(scope) = subagent_scope.as_ref()
-                    && let Some(message) = mez_agent::subagent_action_scope_violation(
-                        &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-                        scope,
-                        &action,
-                        &plan.policy_command,
-                    )
-                    .map_err(MezError::invalid_args)?
-                {
-                    return Err(MezError::forbidden(message));
-                }
                 let path_scopes = if subagent_scope.is_some() {
                     None
                 } else {

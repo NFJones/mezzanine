@@ -371,7 +371,10 @@ impl ScopeRegistry {
         Self::default()
     }
 
-    /// Registers normalized write scopes or rejects an overlap.
+    /// Registers normalized write scopes.
+    ///
+    /// Callers may inspect [`Self::conflicts`] for coordination and scheduling,
+    /// but overlap is advisory and does not represent filesystem enforcement.
     pub fn register(
         &mut self,
         agent_id: impl Into<String>,
@@ -384,18 +387,6 @@ impl ScopeRegistry {
             return Err(SubagentContractError::new(
                 SubagentContractErrorKind::InvalidArgs,
                 "subagent id must not be empty",
-            ));
-        }
-        if let Some(conflict) = self
-            .conflicts(mode, write_scopes, serial_lock.as_deref())
-            .first()
-        {
-            return Err(SubagentContractError::new(
-                SubagentContractErrorKind::Conflict,
-                format!(
-                    "write scope `{}` overlaps active scope `{}` owned by {}",
-                    conflict.requested_scope, conflict.existing_scope, conflict.existing_agent_id
-                ),
             ));
         }
         self.active.insert(
@@ -618,10 +609,10 @@ mod tests {
         request.validate().unwrap();
     }
 
-    /// Verifies overlapping owned-write scopes conflict before the second
-    /// writer is registered.
+    /// Verifies overlapping owned-write scopes are reported for coordination
+    /// without blocking the second registration.
     #[test]
-    fn overlapping_owned_write_scopes_conflict() {
+    fn overlapping_owned_write_scopes_are_advisory() {
         let mut registry = ScopeRegistry::new();
         registry
             .register(
@@ -631,15 +622,21 @@ mod tests {
                 None,
             )
             .unwrap();
-        let error = registry
+        let conflicts = registry.conflicts(
+            CooperationMode::OwnedWrite,
+            &["src/parser".to_string()],
+            None,
+        );
+        assert_eq!(conflicts.len(), 1);
+        registry
             .register(
                 "a3",
                 CooperationMode::OwnedWrite,
                 &["src/parser".to_string()],
                 None,
             )
-            .unwrap_err();
-        assert_eq!(error.kind(), SubagentContractErrorKind::Conflict);
+            .unwrap();
+        assert_eq!(registry.active_write_scope_count(), 2);
     }
 
     /// Verifies serial-write registrations sharing the same lock may overlap

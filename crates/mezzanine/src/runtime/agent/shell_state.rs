@@ -157,17 +157,6 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("shell dispatch requires a local action plan"))?
             .policy_command;
         let subagent_scope = self.subagent_scope_declaration_for_turn(turn);
-        if let Some(scope) = subagent_scope.as_ref()
-            && let Some(message) = mez_agent::subagent_action_scope_violation(
-                &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-                scope,
-                action,
-                &policy_command,
-            )
-            .map_err(MezError::invalid_args)?
-        {
-            return Err(MezError::forbidden(message));
-        }
         let path_scopes = if subagent_scope.is_some() {
             None
         } else {
@@ -201,14 +190,6 @@ impl RuntimeSessionService {
             }
             mez_agent::permissions::RuleDecision::Allow
             | mez_agent::permissions::RuleDecision::Prompt => {}
-        }
-        if self.configured_permissions().resources.network_policy
-            == crate::runtime::NetworkPolicy::Deny
-            && current_permission_evaluation.effects.network
-        {
-            return Err(MezError::forbidden(
-                "network access is denied by current permission policy at pane dispatch",
-            ));
         }
         let permission_evaluation = Some(&current_permission_evaluation);
         self.require_pane_ready_for_agent_command(&turn.pane_id)?;

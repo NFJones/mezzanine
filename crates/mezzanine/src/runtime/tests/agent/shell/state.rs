@@ -188,6 +188,7 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
         read_only_mount_count: 2,
         read_write_mount_count: 1,
         protected_mask_count: 6,
+        network: crate::runtime::BubblewrapNetworkMode::Isolated,
         plan_sha256: plan_sha256.clone(),
     };
 
@@ -214,6 +215,7 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
     assert_eq!(metadata["sandbox_read_only_mount_count"], "2");
     assert_eq!(metadata["sandbox_read_write_mount_count"], "1");
     assert_eq!(metadata["sandbox_protected_mask_count"], "6");
+    assert_eq!(metadata["sandbox_network"], "isolated");
     assert_eq!(metadata["sandbox_plan_sha256"], plan_sha256);
     assert!(!serialized.contains("/private/workspace/secret.txt"));
     assert!(!serialized.contains("--ro-bind"));
@@ -545,10 +547,10 @@ fn runtime_shell_dispatch_rejects_authority_narrowed_after_planning() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies host access does not bypass the backend-independent network deny
-/// policy or convert it into an unsandboxed pane-shell transaction.
+/// Verifies host access bypasses advisory network prompts and dispatches
+/// without a backend-independent network denial.
 #[test]
-fn runtime_host_access_keeps_network_deny_terminal() {
+fn runtime_host_access_does_not_enforce_network_policy() {
     let (mut service, turn_id, _) = sandbox_fallback_execution_service();
     configure_path_resolution_bubblewrap(&mut service);
     service.permission_policy_mut().approval_policy = ApprovalPolicy::HostAccess;
@@ -568,15 +570,9 @@ fn runtime_host_access_keeps_network_deny_terminal() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(execution.action_results[0].status, ActionStatus::Denied);
-    assert_eq!(
-        execution.action_results[0]
-            .error
-            .as_ref()
-            .map(|error| error.code.as_str()),
-        Some("network_policy_denied")
-    );
-    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    assert_eq!(service.running_shell_transactions_for_tests().len(), 1);
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -954,7 +950,10 @@ fn runtime_sandbox_failure_assessment_offers_warned_fallback_approval() {
     }
     assert!(request_text.contains("synthetic-home"), "{request_text}");
     assert!(request_text.contains("minimal-path"), "{request_text}");
-    assert!(request_text.contains("network-isolated"), "{request_text}");
+    assert!(
+        request_text.contains("network-policy-enforced"),
+        "{request_text}"
+    );
     assert!(request.messages.iter().all(|message| {
         !message.content.contains("show the environment")
             && !message.content.contains("sandbox-fallback-shell")

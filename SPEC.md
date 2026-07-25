@@ -2793,11 +2793,15 @@ The `permissions` table MUST support `approval_policy`, `sandbox`,
 `command_rules`, `session_command_rules`, `global_command_rules`,
 `network_policy`, `destructive_action_policy`, `bypass_mode`, and the typed
 `bubblewrap` table. `sandbox` MUST default to `policy-only`; `bubblewrap` MUST
-be opt-in and fail closed. Configured scopes define maximum resource authority
-and MUST be resolved in the pane environment. When both configured scope arrays
-are empty, a pane within an explicitly trusted project MUST receive that project
-root as its default read-write authority. When multiple trusted roots contain the
-pane working directory, Mezzanine MUST select the deepest matching root; no other
+be opt-in and fail closed. Policy-only execution provides approval
+classification and auditing, not operating-system filesystem or shell-network
+confinement. Under policy-only execution, configured and subagent scopes are
+advisory approval and coordination metadata. When Bubblewrap is active,
+configured scopes define maximum filesystem authority and MUST be resolved in
+the pane environment. When both configured scope arrays are empty, a pane
+within an explicitly trusted project MUST receive that project root as its
+default read-write authority. When multiple trusted roots contain the pane
+working directory, Mezzanine MUST select the deepest matching root; no other
 working directory MAY infer authority. Aside from that trusted-project default,
 scopes MUST NOT be inferred
 from command patterns, approvals, presets, or trusted directories. Rule `effects` MAY declare
@@ -2834,18 +2838,24 @@ exit MAY enter one bounded structured model assessment. Only a validated
 effects may already exist. Command-failure, uncertain, malformed, timed-out, or
 failed assessments MUST settle the original command normally. Approval grants
 only the retained turn/action one unsandboxed retry and MUST never execute it
-automatically. Raw Bubblewrap arguments, arbitrary binds, host networking,
-and inherited environment allowlists MUST NOT be configurable. The schema v20
-to v21 migration MUST preserve policy-only behavior and MUST NOT invent scopes,
-rule identities, or effects.
+automatically. For shell actions, Bubblewrap MUST enforce network denial with
+an isolated network namespace and MUST use an explicit connected profile only
+after the action's network requirement is authorized. Destination-level
+filtering is outside this binary connected/isolated contract. Brokered
+`web_search`, `fetch_url`, and MCP actions execute through product-owned
+transports outside the pane-shell Bubblewrap child and MUST remain subject to
+their controller capability and approval gates. Raw Bubblewrap arguments,
+arbitrary binds, host networking, and inherited environment allowlists MUST NOT
+be configurable. The schema v20 to v21 migration MUST preserve policy-only
+behavior and MUST NOT invent scopes, rule identities, or effects.
 
 Permission status MUST distinguish configured scopes from the active pane's
 effective scopes and MUST report effective scope provenance as `explicit`,
 `trusted-project`, or `none`. Trusted-project provenance MUST include the
 selected trusted root. Bubblewrap status and bounded failure-assessment evidence
 MUST use stable, non-sensitive restriction identifiers for authority-only
-mounts, the synthetic home, the minimal executable path, isolated networking,
-and hidden host credentials. Diagnostics MUST NOT expose raw Bubblewrap
+mounts, the synthetic home, the minimal executable path, enforced shell network
+policy, and hidden host credentials. Diagnostics MUST NOT expose raw Bubblewrap
 arguments, environment values, or unrelated host paths.
 
 `mez sandbox status [PATH] [--verbose]` MUST build one deterministic, read-only
@@ -7605,18 +7615,19 @@ The approval policy `auto-allow` MUST allow non-whitelisted actions only after
 the model has determined that the action is reasonable for the active user
 request and has emitted a non-empty rationale for the action. Configured deny
 rules MUST still block matching actions. `auto-allow` MUST NOT be treated as
-full access; it remains subject to command rules, effect classification, scope
-checks, subagent constraints, and any configured sandbox backend.
+full access; command, effect, and advisory scope classification MAY invoke the
+model gate, and any configured Bubblewrap backend MUST still enforce its
+resolved filesystem and network authority.
 
 The approval policy `full-access` MUST allow actions without whitelist approval
 unless a configured deny rule matches the exact command. Full access MUST NOT
 create whitelist rules as actions execute, bypass a configured sandbox, or
-weaken sandbox failure behavior. In full-access mode, subagent
-requested read and write scopes MUST be treated as coordination metadata rather
-than hard command denials; configured deny rules remain authoritative. If the
-parent agent already has an inherited subagent scope, that inherited scope MAY
-still be exposed for coordination, but full-access MUST NOT deny commands solely
-because a model-emitted child scope is narrower than the parent.
+weaken sandbox failure behavior. Advisory path and network classifications MUST
+NOT create fresh approval restrictions in full-access mode. Subagent requested
+read and write scopes MUST remain available as coordination metadata and MUST
+NOT cause controller-side command denials. When Bubblewrap is active, its
+separately resolved maximum filesystem authority and network mode MUST still be
+enforced for every shell launch; configured deny rules remain authoritative.
 
 The approval policy `host-access` MUST allow local shell actions without fresh
 prompts and MUST execute them on the host outside any configured sandbox. Only

@@ -65,7 +65,7 @@ pub(crate) const BUBBLEWRAP_RESTRICTION_IDS: [&str; 5] = [
     "authority-mounts-only",
     "synthetic-home",
     "minimal-path",
-    "network-isolated",
+    "network-policy-enforced",
     "host-credentials-hidden",
 ];
 
@@ -214,7 +214,7 @@ pub(crate) struct EffectiveSandboxPolicy {
     pub(crate) protected_masks: Vec<SandboxProtectedMask>,
     /// Whether mounts use maximum or narrowed authority.
     pub(crate) authority_source: SandboxAuthoritySource,
-    /// Effective isolated network mode.
+    /// Effective network namespace mode.
     pub(crate) network: BubblewrapNetworkMode,
     /// Effective minimal environment policy.
     pub(crate) environment: SandboxEnvironmentPolicy,
@@ -233,6 +233,8 @@ pub(crate) struct SandboxAuditSummary {
     pub(crate) read_write_mount_count: usize,
     /// Number of protected host descendants replaced by private tmpfs mounts.
     pub(crate) protected_mask_count: usize,
+    /// Effective network namespace mode.
+    pub(crate) network: BubblewrapNetworkMode,
     /// Stable normalized launch-plan digest.
     pub(crate) plan_sha256: String,
 }
@@ -369,10 +371,6 @@ pub(crate) enum SandboxCompileErrorKind {
     ToolchainOutsideAuthority,
     /// Configuration would expose a forbidden host path.
     ForbiddenHostPath,
-    /// Network was denied by policy.
-    NetworkDenied,
-    /// Authorized network access requires a not-yet-available broker.
-    MediatedNetworkUnavailable,
     /// The command requires an unsupported sandbox capability.
     UnsupportedRequirement,
     /// A typed path or executable violates launch-plan invariants.
@@ -385,10 +383,7 @@ impl SandboxCompileErrorKind {
     /// Returns whether this preparation failure may offer an exact
     /// user-approved unsandboxed retry for an originally prompted action.
     pub(crate) const fn approval_fallback_eligible(self) -> bool {
-        matches!(
-            self,
-            Self::MediatedNetworkUnavailable | Self::UnsupportedRequirement
-        )
+        matches!(self, Self::UnsupportedRequirement)
     }
 
     /// Returns the stable diagnostic spelling used by fallback evidence.
@@ -400,8 +395,6 @@ impl SandboxCompileErrorKind {
             Self::EffectOutsideAuthority => "effect_outside_authority",
             Self::ToolchainOutsideAuthority => "toolchain_outside_authority",
             Self::ForbiddenHostPath => "forbidden_host_path",
-            Self::NetworkDenied => "network_denied",
-            Self::MediatedNetworkUnavailable => "mediated_network_unavailable",
             Self::UnsupportedRequirement => "unsupported_requirement",
             Self::InvalidInput => "invalid_input",
             Self::CapabilityProbeFailed => "capability_probe_failed",
@@ -474,6 +467,7 @@ pub(crate) fn compile_bubblewrap_launch_plan(
             read_only_mount_count,
             read_write_mount_count,
             protected_mask_count,
+            network: policy.network,
             plan_sha256,
         },
     })
@@ -706,23 +700,11 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
             "host process control and privilege changes are unsupported in Bubblewrap mode",
         ));
     }
-    if effects.network {
-        return match request.network_policy {
-            NetworkPolicy::Deny => Err(SandboxCompileError::new(
-                SandboxCompileErrorKind::NetworkDenied,
-                "network access is denied by the effective permission policy",
-            )),
-            NetworkPolicy::Prompt | NetworkPolicy::Allow => Err(SandboxCompileError::new(
-                SandboxCompileErrorKind::MediatedNetworkUnavailable,
-                "network-requiring commands need mediated egress, which is unavailable",
-            )),
-        };
-    }
     match request.config.unavailable {
         SandboxUnavailablePolicy::Fail => {}
     }
     match request.config.network {
-        BubblewrapNetworkMode::Isolated => {}
+        BubblewrapNetworkMode::Isolated | BubblewrapNetworkMode::Connected => {}
     }
     match request.config.environment {
         SandboxEnvironmentPolicy::Minimal => {}
@@ -753,7 +735,15 @@ fn effective_sandbox_policy(
         mounts,
         protected_masks,
         authority_source,
-        network: request.config.network,
+        network: if evaluation.effects.network
+            && matches!(
+                request.network_policy,
+                NetworkPolicy::Prompt | NetworkPolicy::Allow
+            ) {
+            BubblewrapNetworkMode::Connected
+        } else {
+            request.config.network
+        },
         environment: request.config.environment,
     })
 }
@@ -1044,7 +1034,6 @@ fn bubblewrap_arguments(
         "--unshare-ipc",
         "--unshare-uts",
         "--unshare-cgroup",
-        "--unshare-net",
         "--die-with-parent",
         "--new-session",
         "--cap-drop",
@@ -1091,6 +1080,9 @@ fn bubblewrap_arguments(
     .into_iter()
     .map(str::to_string)
     .collect::<Vec<_>>();
+    if policy.network == BubblewrapNetworkMode::Isolated {
+        arguments.insert(7, "--unshare-net".to_string());
+    }
     if let Some(managed_home) = request.managed_home_host_path {
         arguments.push("--bind".to_string());
         arguments.push(managed_home.to_string_lossy().into_owned());

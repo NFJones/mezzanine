@@ -164,6 +164,18 @@ pub(crate) enum SandboxUnavailablePolicy {
 pub(crate) enum BubblewrapNetworkMode {
     /// Use an isolated private network namespace.
     Isolated,
+    /// Share the pane host's network namespace for an authorized workload.
+    Connected,
+}
+
+impl BubblewrapNetworkMode {
+    /// Returns the stable audit spelling for this network mode.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Isolated => "isolated",
+            Self::Connected => "connected",
+        }
+    }
 }
 
 /// Sandbox environment projection policy.

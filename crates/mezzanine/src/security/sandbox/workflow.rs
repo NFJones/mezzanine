@@ -300,11 +300,11 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             source: "bubblewrap",
         });
         diagnostics.push(SandboxWorkflowDiagnostic {
-            id: "sandbox.network-isolated",
+            id: "sandbox.network-policy-enforced",
             severity: SandboxDiagnosticSeverity::Info,
-            summary: "Bubblewrap networking is isolated".to_string(),
-            details: "Commands that require network access cannot run in the current Bubblewrap profile.".to_string(),
-            remedy: "Use offline dependencies or review the command outside the sandbox; Mezzanine will not broaden networking automatically.".to_string(),
+            summary: "Bubblewrap enforces shell network policy".to_string(),
+            details: "Shell actions without approved network authority use an isolated namespace; authorized network actions use an explicit connected profile.".to_string(),
+            remedy: "Review permissions.network_policy and the active approval policy before running network-requiring shell actions.".to_string(),
             affected_path: None,
             source: "bubblewrap",
         });

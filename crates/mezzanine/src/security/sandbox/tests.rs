@@ -488,8 +488,8 @@ fn create_targets_mount_nearest_existing_parent() {
     );
 }
 
-/// Network, credential, process-control, stateful, and interactive
-/// requirements fail before launch rather than weakening confinement.
+/// Authorized network requirements use the connected profile while credential,
+/// process-control, stateful, and interactive requirements still fail closed.
 #[test]
 fn unsupported_requirements_fail_before_launch() {
     let config = config();
@@ -497,11 +497,15 @@ fn unsupported_requirements_fail_before_launch() {
     let mut network = effects();
     network.network = true;
     let network = evaluation(EffectCompleteness::Complete, network);
-    let error = compile_bubblewrap_launch_plan(request(&config, &authority, &network)).unwrap_err();
-    assert_eq!(
-        error.kind(),
-        SandboxCompileErrorKind::MediatedNetworkUnavailable
-    );
+    let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &network)).unwrap();
+    assert_eq!(plan.audit_summary.network, BubblewrapNetworkMode::Connected);
+    assert!(!plan.arguments.contains(&"--unshare-net".to_string()));
+
+    let mut denied_network = request(&config, &authority, &network);
+    denied_network.network_policy = NetworkPolicy::Deny;
+    let plan = compile_bubblewrap_launch_plan(denied_network).unwrap();
+    assert_eq!(plan.audit_summary.network, BubblewrapNetworkMode::Isolated);
+    assert!(plan.arguments.contains(&"--unshare-net".to_string()));
 
     let mut credentials = effects();
     credentials.credentials = true;
