@@ -387,6 +387,28 @@ fn trusted_project_defaults_primary_authority_to_project_root() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies a pane without configured or trusted-project authority exposes no
+/// `PathScopes` instead of manufacturing unresolved empty scopes. Bubblewrap
+/// callers must resolve a real maximum authority or fail with the targeted
+/// no-authority state before compilation.
+#[test]
+fn missing_primary_authority_does_not_fabricate_unresolved_scopes() {
+    let root = temp_root("runtime-no-primary-authority");
+    fs::create_dir_all(&root).unwrap();
+    let mut service = test_runtime_service();
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+
+    assert!(
+        service
+            .primary_path_resolution_request("%1")
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.path_scopes_for_pane("%1").is_none());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies nested trusted projects default Bubblewrap authority to the
 /// deepest matching root rather than a broader trusted ancestor.
 ///

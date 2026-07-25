@@ -751,18 +751,10 @@ impl RuntimeSessionService {
     /// resolved in the pane environment. When no configured authority exists,
     /// a trusted project root is used as the bounded primary authority.
     pub(crate) fn path_scopes_for_pane(&self, pane_id: &str) -> Option<PathScopes> {
-        if let Some(request) = self.primary_path_resolution_request(pane_id).ok()? {
-            return self
-                .path_scopes_for_pane_request(pane_id, &request)
-                .ok()
-                .flatten();
-        }
-        let signature = self.pane_environment_signature(pane_id)?;
-        Some(PathScopes::unresolved(
-            signature.working_directory.clone(),
-            Vec::new(),
-            Vec::new(),
-        ))
+        let request = self.primary_path_resolution_request(pane_id).ok()??;
+        self.path_scopes_for_pane_request(pane_id, &request)
+            .ok()
+            .flatten()
     }
 
     /// Reports whether a running shell transaction should display a transient

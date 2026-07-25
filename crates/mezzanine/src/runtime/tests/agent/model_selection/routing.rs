@@ -9,6 +9,27 @@ use crate::runtime::RuntimeAgentCompactionTask;
 use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
 use mez_agent::AutoSizingRoutingSelection;
 
+/// Builds a stable pane identity for routed primary-authority tests.
+fn routed_path_resolution_environment(working_directory: &Path) -> mez_agent::EnvironmentSignature {
+    mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "test-host",
+        "test-user",
+        "/bin/sh",
+        mez_agent::ShellClassification::PosixSh,
+        None,
+        Some("/usr/bin:/bin".to_string()),
+        working_directory.to_string_lossy(),
+        None,
+        true,
+        None,
+        Vec::new(),
+    )
+    .unwrap()
+}
+
 /// Starts a routed loop and returns its blocked parent plus selected worker turn.
 fn selected_routed_loop(
     command: &str,
@@ -908,6 +929,86 @@ fn runtime_routed_child_missing_execution_recovers_parent() {
         .normal_content_lines()
         .join("\n");
     assert!(!pane_text.contains("result committed: subagent task completed"));
+}
+
+/// Verifies a routed parent in a trusted project reacquires exact primary
+/// authority before its continuation reaches provider planning. Missing cache
+/// evidence queues the canonical project resolver instead of exposing
+/// unresolved empty scopes to the classifier or Bubblewrap compiler.
+#[test]
+fn runtime_routed_parent_continuation_reacquires_trusted_project_authority() {
+    let root = temp_root("runtime-routed-parent-primary-authority");
+    let project_root = root.join("project");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 recover routed parent authority");
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            project_root.clone(),
+            TrustDecision::Trusted,
+            Some(project_root.join(".git")),
+            1,
+        )
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_current_working_directory("%1".to_string(), project_root.clone());
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        routed_path_resolution_environment(&project_root),
+    );
+    mark_test_pane_ready(&mut service, "%1");
+
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &worker_turn,
+            AgentTurnState::Completed,
+            "routed_worker_missing_execution",
+        )
+        .unwrap();
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == parent_turn_id)
+        .cloned()
+        .unwrap();
+    assert!(service.path_scopes_for_pane("%1").is_none());
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(
+                &AgentId::opaque(parent_turn.agent_id.clone()).unwrap(),
+                &parent_turn.turn_id,
+            )
+            .unwrap()
+            .is_none()
+    );
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find(|transaction| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::PathResolution { .. }
+            )
+        })
+        .unwrap();
+    let RunningShellTransactionKind::PathResolution { cache_key, waiters } = &transaction.kind
+    else {
+        unreachable!();
+    };
+    let expected = project_root.to_string_lossy().into_owned();
+    assert_eq!(cache_key.request.read_scopes, vec![expected.clone()]);
+    assert_eq!(cache_key.request.write_scopes, vec![expected]);
+    assert!(cache_key.request.additional_paths.is_empty());
+    assert!(waiters.is_empty());
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Verifies malformed automatic-compaction completion fails a routed worker
