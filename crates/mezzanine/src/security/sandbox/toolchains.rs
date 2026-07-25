@@ -21,11 +21,12 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 4] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 5] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
     SandboxToolchainKind::Deno,
+    SandboxToolchainKind::Bun,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -46,6 +47,10 @@ pub(crate) const SANDBOX_GO_PATH: &str = "/opt/mez/toolchains/go/root/bin:/usr/b
 pub(crate) const SANDBOX_DENO_ROOT: &str = "/opt/mez/toolchains/deno";
 /// Fixed executable search path used when only Deno is projected.
 pub(crate) const SANDBOX_DENO_PATH: &str = "/opt/mez/toolchains/deno:/usr/bin:/bin";
+/// Fixed Bun distribution projection inside Bubblewrap.
+pub(crate) const SANDBOX_BUN_ROOT: &str = "/opt/mez/toolchains/bun/root";
+/// Fixed executable search path used when only Bun is projected.
+pub(crate) const SANDBOX_BUN_PATH: &str = "/opt/mez/toolchains/bun/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,6 +360,52 @@ const DENO_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const BUN_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "bun",
+    label: "Bun distribution",
+    sandbox_destination: SANDBOX_BUN_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/bun"],
+    required_directories: &[],
+}];
+const BUN_ENVIRONMENT: [ToolchainEnvironmentVariable; 2] = [
+    ToolchainEnvironmentVariable {
+        name: "BUN_INSTALL",
+        value: SANDBOX_BUN_ROOT,
+    },
+    ToolchainEnvironmentVariable {
+        name: "BUN_INSTALL_CACHE_DIR",
+        value: "/home/mez/.cache/bun",
+    },
+];
+const BUN_MANAGED_STATE: [ManagedToolchainState; 1] = [ManagedToolchainState {
+    purpose: "bun-package-cache",
+    sandbox_path: "/home/mez/.cache/bun",
+}];
+const BUN_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Bun,
+    aliases: &["bun"],
+    roots: &BUN_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/bun",
+    ],
+    path_entries: &["/opt/mez/toolchains/bun/root/bin"],
+    environment: &BUN_ENVIRONMENT,
+    managed_state: &BUN_MANAGED_STATE,
+    forbidden_descendants: &["install/global", "credentials", "config", ".npmrc"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -533,6 +584,7 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Zig => &ZIG_DESCRIPTOR,
         SandboxToolchainKind::Go => &GO_DESCRIPTOR,
         SandboxToolchainKind::Deno => &DENO_DESCRIPTOR,
+        SandboxToolchainKind::Bun => &BUN_DESCRIPTOR,
     }
 }
 
@@ -1049,6 +1101,57 @@ pub(crate) fn discover_deno_from_search_path(
                 )
             })?;
         validate_descriptor_root(&root, &DENO_ROOTS[0])?;
+        return Ok(Some(root));
+    }
+    Ok(None)
+}
+
+/// Discovers the first Bun distribution selected by an explicit search path.
+///
+/// The selected executable must be a real `<root>/bin/bun` file. Discovery
+/// canonicalizes and validates only that distribution root without consulting
+/// ambient BUN_INSTALL state or executing version-manager hooks.
+pub(crate) fn discover_bun_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    let Some(search_path) = search_path else {
+        return Ok(None);
+    };
+    for directory in std::env::split_paths(search_path) {
+        let executable = directory.join("bun");
+        let metadata = match fs::symlink_metadata(&executable) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to inspect selected Bun executable: {error}"),
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "selected Bun executable must be a real file, not a shim or symlink",
+            ));
+        }
+        let root = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "selected Bun executable has no distribution root",
+                )
+            })?
+            .canonicalize()
+            .map_err(|error| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to canonicalize selected Bun distribution: {error}"),
+                )
+            })?;
+        validate_descriptor_root(&root, &BUN_ROOTS[0])?;
         return Ok(Some(root));
     }
     Ok(None)

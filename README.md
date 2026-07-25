@@ -433,26 +433,27 @@ Current support reflects behavior implemented in the repository today.
   a paired sanitized Git name and email; only those identity values are
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
-- `mez sandbox toolchains detect [--kind rust|zig|go|deno] [PATH]` previews
+- `mez sandbox toolchains detect [--kind rust|zig|go|deno|bun] [PATH]` previews
   canonical roots without mutation. `mez sandbox toolchains enable KIND --yes`
   stores only the typed selection. Rust mounts Cargo and Rustup read-only; Zig,
-  Go, and Deno mount one self-contained distribution, SDK, or runtime
+  Go, Deno, and Bun mount one self-contained distribution, SDK, or runtime
   read-only. Writable cache and package state is redirected beneath
   `/home/mez`; host credentials, caches, Deno authentication and certificate
-  settings, `GOBIN`, and `GOPATH/bin` remain hidden.
+  settings, Bun global tools and configuration, `GOBIN`, and `GOPATH/bin`
+  remain hidden.
   That standalone command updates disk configuration; an existing service
   requires `/toolchain reload`, `config/reload`, or a session restart before
   the change becomes effective.
 - In the agent shell, `/toolchain` and `/toolchain status` report supported,
   configured, discoverable, and effective state for the active pane.
-  `/toolchain detect [rust|zig|go|deno]` is read-only and uses only active-pane
-  bootstrap evidence. `/toolchain enable KIND --yes` and `/toolchain disable
-  KIND --yes` persist only the typed kind and hot-apply real changes to
-  subsequent sandboxed actions. Existing interactive shells and already-running
-  actions are unchanged. `/toolchain reload` performs a full disk-backed
-  configuration reload rather than reloading only the toolchain field.
-  Toolchains remain a typed allowlist, not arbitrary PATH or host-mount
-  configuration.
+  `/toolchain detect [rust|zig|go|deno|bun]` is read-only and uses only
+  active-pane bootstrap evidence. `/toolchain enable KIND --yes` and
+  `/toolchain disable KIND --yes` persist only the typed kind and hot-apply
+  real changes to subsequent sandboxed actions. Existing interactive shells
+  and already-running actions are unchanged. `/toolchain reload` performs a
+  full disk-backed configuration reload rather than reloading only the
+  toolchain field. Toolchains remain a typed allowlist, not arbitrary PATH or
+  host-mount configuration.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks

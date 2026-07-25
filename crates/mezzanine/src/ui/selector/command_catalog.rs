@@ -317,11 +317,11 @@ pub(super) fn agent_argument_candidates(
         let candidates = match context.tokens_before.get(1).map(String::as_str) {
             None => value_candidates(&["status", "list", "detect", "enable", "disable", "reload"]),
             Some("detect" | "enable" | "disable") if context.tokens_before.len() == 2 => {
-                value_candidates(&["rust", "zig", "go", "deno"])
+                value_candidates(&["rust", "zig", "go", "deno", "bun"])
             }
             Some("enable" | "disable")
                 if context.tokens_before.get(2).is_some_and(|kind| {
-                    matches!(kind.as_str(), "rust" | "zig" | "go" | "deno")
+                    matches!(kind.as_str(), "rust" | "zig" | "go" | "deno" | "bun")
                 }) =>
             {
                 flag_candidates(&["--yes"])

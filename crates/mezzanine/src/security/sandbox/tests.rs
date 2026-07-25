@@ -1196,6 +1196,126 @@ fn deno_toolchain_discovery_rejects_non_executable_and_symlinked_runtimes() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A validated Bun distribution is projected read-only with deterministic
+/// PATH and BUN_INSTALL while package cache state remains under managed home.
+#[test]
+fn bun_toolchain_projection_is_read_only_and_cache_isolated() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-bun-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("bun-runtime");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/bun"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(root.join("bin/bun"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = root.canonicalize().unwrap();
+
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Bun);
+    assert_eq!(descriptor.aliases, ["bun"]);
+    assert_eq!(descriptor.roots[0].evidence_kind, "bun");
+    assert_eq!(descriptor.roots[0].sandbox_destination, SANDBOX_BUN_ROOT);
+    assert_eq!(descriptor.roots[0].required_executables, ["bin/bun"]);
+    assert!(descriptor.roots[0].required_directories.is_empty());
+
+    let managers = [format!("bun:{}", root.display())];
+    let projection = resolve_toolchain_projection(&[SandboxToolchainKind::Bun], &managers, "linux")
+        .unwrap()
+        .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_BUN_PATH);
+    assert_eq!(
+        projection.environment.get("BUN_INSTALL"),
+        Some(&SANDBOX_BUN_ROOT)
+    );
+    assert_eq!(
+        projection.environment.get("BUN_INSTALL_CACHE_DIR"),
+        Some(&"/home/mez/.cache/bun")
+    );
+    for omitted in ["BUN_AUTH_TOKEN", "NPM_CONFIG_USERCONFIG", "NODE_PATH"] {
+        assert!(!projection.environment.contains_key(omitted));
+    }
+
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Bun];
+    let home_scope = home_authority(&base.canonicalize().unwrap().display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &home_scope, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    let source = root.display().to_string();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_BUN_ROOT])
+    );
+    assert!(
+        !plan
+            .arguments
+            .windows(3)
+            .any(|args| args == ["--bind", source.as_str(), SANDBOX_BUN_ROOT])
+    );
+    for (name, value) in [
+        ("BUN_INSTALL", SANDBOX_BUN_ROOT),
+        ("BUN_INSTALL_CACHE_DIR", "/home/mez/.cache/bun"),
+        ("PATH", SANDBOX_BUN_PATH),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--setenv", name, value]),
+            "missing {name}={value}"
+        );
+    }
+
+    let outside = authority();
+    let mut outside_request = request(&config, &outside, &evaluation);
+    outside_request.toolchain_projection = Some(&projection);
+    assert_eq!(
+        compile_bubblewrap_launch_plan(outside_request)
+            .unwrap_err()
+            .kind(),
+        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Bun discovery rejects non-executable distribution files and symlink shims
+/// instead of importing a manager root, global tools, or ambient BUN_INSTALL.
+#[test]
+fn bun_toolchain_discovery_rejects_non_executable_and_symlinked_distributions() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-bun-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("bun-runtime");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/bun"), "not executable").unwrap();
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("bun:{}", root.display())];
+
+    let non_executable =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Bun], &managers, "linux").unwrap_err();
+    assert_eq!(
+        non_executable.kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    let external = base.join("external-bun");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(root.join("bin/bun")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("bin/bun")).unwrap();
+    let search_path = std::env::join_paths([root.join("bin")]).unwrap();
+    let symlink = discover_bun_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(symlink.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Descriptor resolution and final launch validation reject ambiguous
 /// selection and any mutation of code-owned projection metadata or classes.
 #[test]
@@ -1345,7 +1465,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .iter()
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
-        vec!["rust", "zig", "go", "deno"]
+        vec!["rust", "zig", "go", "deno", "bun"]
     );
     assert_eq!(
         parse_sandbox_toolchain_kind("rust"),

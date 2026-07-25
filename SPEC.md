@@ -2964,9 +2964,12 @@ Schema v27 adds the allowlisted `go` kind. Schema v26 to v27 migration MUST
 preserve an existing selection or omission and MUST NOT discover or enable Go.
 Schema v28 adds the allowlisted `deno` kind. Schema v27 to v28 migration MUST
 preserve an existing selection or omission and MUST NOT discover or enable
-Deno. Direct-user detection MUST accept `--kind rust|zig|go|deno`; omission
-MUST retain the existing Rust default. Active-pane detection, enablement, and
-status MUST use bootstrap evidence rather than ambient service process state.
+Deno. Schema v29 adds the allowlisted `bun` kind. Schema v28 to v29 migration
+MUST preserve an existing selection or omission and MUST NOT discover or
+enable Bun. Direct-user detection MUST accept `--kind rust|zig|go|deno|bun`;
+omission MUST retain the existing Rust default. Active-pane detection,
+enablement, and status MUST use bootstrap evidence rather than ambient service
+process state.
 Toolchain projection MUST be descriptor-driven. Each supported kind MUST own
 code-defined evidence names, structural root validation, fixed read-only
 sandbox destinations, deterministic PATH entries, synthesized child
@@ -3026,6 +3029,18 @@ caches, authentication tokens, configuration, certificate or private-key
 paths, installed scripts, npm credentials, unrelated runtimes, Node.js, or
 version-manager state. Deno permission flags MUST NOT weaken Mezzanine's outer
 Bubblewrap or network policy.
+The same detect, enable, and disable grammar MUST accept `bun`. Bun evidence
+MUST identify one canonical distribution root containing a real executable
+`bin/bun` file selected by the active pane. Mezzanine MUST reject missing,
+non-executable, symlinked, shim, malformed, duplicate, and out-of-authority Bun
+roots. The distribution MUST be mounted read-only at
+`/opt/mez/toolchains/bun/root`; its `bin` directory MUST precede
+`/usr/bin:/bin`; `BUN_INSTALL` MUST name that fixed destination; and
+`BUN_INSTALL_CACHE_DIR` MUST be `/home/mez/.cache/bun`. Selection MUST NOT
+import host package caches, global packages or executables, credentials,
+configuration, installation metadata, npm state, Node.js, unrelated runtimes,
+or version-manager state. Repository `node_modules/.bin` remains a separate
+project-environment authority and MUST NOT be implied by selecting Bun.
 Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
 derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
 evidence, reject missing, symlinked, overlapping, unexpected, credential, and
@@ -5817,8 +5832,8 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno]`, `enable KIND --yes`, `disable KIND --yes`, and
-  `reload`, where `KIND` is `rust`, `zig`, `go`, or `deno`. Unknown kinds,
+  `detect [rust|zig|go|deno|bun]`, `enable KIND --yes`, `disable KIND --yes`,
+  and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, or `bun`. Unknown kinds,
   missing confirmation, duplicate confirmation, and extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,

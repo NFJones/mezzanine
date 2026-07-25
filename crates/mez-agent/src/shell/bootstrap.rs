@@ -149,6 +149,12 @@ if [ -n \"$mez_deno_bin\" ] && [ -f \"$mez_deno_bin\" ] && [ ! -L \"$mez_deno_bi
   mez_deno_root=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_deno_bin\")\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_deno_root\" ] && [ \"$mez_deno_bin\" = \"$mez_deno_root/deno\" ] && mez_bootstrap_field env_manager \"deno:$mez_deno_root\"\n\
 fi\n\
+mez_bun_bin=$(command -v bun 2>/dev/null || true)\n\
+if [ -n \"$mez_bun_bin\" ] && [ -f \"$mez_bun_bin\" ] && [ ! -L \"$mez_bun_bin\" ]; then\n\
+  mez_bun_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_bun_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_bun_root=$(CDPATH= cd -P -- \"$mez_bun_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_bun_root\" ] && [ \"$mez_bun_bin\" = \"$mez_bun_root/bin/bun\" ] && mez_bootstrap_field env_manager \"bun:$mez_bun_root\"\n\
+fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -281,6 +287,12 @@ set -l mez_deno_bin (command -s deno 2>/dev/null)\n\
 if test -n \"$mez_deno_bin\"; and test -f \"$mez_deno_bin\"; and not test -L \"$mez_deno_bin\"\n\
   set -l mez_deno_root (cd (dirname \"$mez_deno_bin\") 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_deno_root\"; and test \"$mez_deno_bin\" = \"$mez_deno_root/deno\"; and mez_bootstrap_field env_manager \"deno:$mez_deno_root\"\n\
+end\n\
+set -l mez_bun_bin (command -s bun 2>/dev/null)\n\
+if test -n \"$mez_bun_bin\"; and test -f \"$mez_bun_bin\"; and not test -L \"$mez_bun_bin\"\n\
+  set -l mez_bun_bin_dir (cd (dirname \"$mez_bun_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_bun_root (cd \"$mez_bun_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_bun_root\"; and test \"$mez_bun_bin\" = \"$mez_bun_root/bin/bun\"; and mez_bootstrap_field env_manager \"bun:$mez_bun_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\

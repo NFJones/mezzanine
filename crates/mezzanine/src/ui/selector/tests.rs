@@ -690,7 +690,7 @@ fn selector_shadow_hint_completes_toolchain_command_name() {
 }
 
 /// Verifies `/toolchain` completion follows its strict grammar from operation
-/// through typed Rust, Zig, Go, or Deno selection and explicit confirmation.
+/// through typed Rust, Zig, Go, Deno, or Bun selection and confirmation.
 #[test]
 fn selector_shadow_hint_completes_toolchain_grammar() {
     let cases = [
@@ -699,10 +699,12 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ("/toolchain detect z", "ig", SelectorCandidateKind::Value),
         ("/toolchain detect g", "o", SelectorCandidateKind::Value),
         ("/toolchain detect d", "eno", SelectorCandidateKind::Value),
+        ("/toolchain detect b", "un", SelectorCandidateKind::Value),
         ("/toolchain enable r", "ust", SelectorCandidateKind::Value),
         ("/toolchain enable z", "ig", SelectorCandidateKind::Value),
         ("/toolchain enable g", "o", SelectorCandidateKind::Value),
         ("/toolchain enable d", "eno", SelectorCandidateKind::Value),
+        ("/toolchain enable b", "un", SelectorCandidateKind::Value),
         ("/toolchain disable r", "ust", SelectorCandidateKind::Value),
         (
             "/toolchain enable rust --y",
@@ -726,6 +728,11 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ),
         (
             "/toolchain enable deno --y",
+            "es",
+            SelectorCandidateKind::Flag,
+        ),
+        (
+            "/toolchain enable bun --y",
             "es",
             SelectorCandidateKind::Flag,
         ),

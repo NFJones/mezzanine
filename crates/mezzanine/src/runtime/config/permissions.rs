@@ -148,6 +148,8 @@ pub(crate) enum SandboxToolchainKind {
     Go,
     /// One self-contained Deno runtime selected by the active pane.
     Deno,
+    /// One self-contained Bun distribution selected by the active pane.
+    Bun,
 }
 
 impl SandboxToolchainKind {
@@ -158,6 +160,7 @@ impl SandboxToolchainKind {
             Self::Zig => "zig",
             Self::Go => "go",
             Self::Deno => "deno",
+            Self::Bun => "bun",
         }
     }
 }
