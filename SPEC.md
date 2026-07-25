@@ -2803,15 +2803,26 @@ within an explicitly trusted project MUST receive that project root as its
 default read-write authority. When multiple trusted roots contain the pane
 working directory, Mezzanine MUST select the deepest matching root; no other
 working directory MAY infer authority. Aside from that trusted-project default,
-scopes MUST NOT be inferred
-from command patterns, approvals, presets, or trusted directories. Rule `effects` MAY declare
-complete or unknown read, write, network, credential, and process-control
-requirements; they MAY only narrow maximum authority. Before Bubblewrap
-compilation, complete read, write, create, delete, and touch paths MUST be
-resolved through the pane shell as one action-specific bounded request. The
-action MUST remain pending until exact evidence settles; resolver failure,
-timeout, truncation, or stale identity MUST fail it closed. Unknown effects MUST
-retain bounded maximum authority. For deterministic `/home/<user>` authority,
+scopes MUST NOT be inferred from command patterns, approvals, presets, or
+trusted directories. Independently classified filesystem operands are advisory
+observations for authorization context, approval, audit, and display. They MUST
+NOT grant filesystem authority, request action-specific path resolution, or
+narrow Bubblewrap mounts. Ordinary outside, missing, symlink-escaping, globbed,
+tilde-prefixed, or otherwise shell-expanded operands MUST be attempted inside
+the bounded namespace and reported as sandboxed payload outcomes.
+
+An explicit configured allow rule MAY declare complete or unknown read, write,
+network, credential, and process-control requirements; such declarations MAY
+only narrow maximum authority. Only explicit complete declared read, write,
+create, delete, and touch paths MAY be resolved through the pane shell as one
+action-specific bounded request and used as a confinement manifest. The action
+MUST remain pending until exact evidence settles; resolver failure, timeout,
+truncation, or stale identity MUST fail it closed. Classifier-only or unknown
+confinement effects MUST retain bounded maximum authority. Pre-launch failure
+remains valid for explicit policy decisions, invalid or unavailable maximum
+authority, stale capability identity, forbidden sandbox configuration, and
+invalid explicit declared-confinement evidence. For deterministic
+`/home/<user>` authority,
 Mezzanine MUST additionally resolve `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
 and `.docker` descendants regardless of effect completeness. Existing protected
 descendants MUST be replaced by private tmpfs mounts emitted after host binds;
@@ -4626,8 +4637,10 @@ The model MUST NOT be required to declare filesystem, network, credential,
 process-control, privilege, destructive, or unknown effects in the MAAP action
 object. Such classifications are not authoritative when supplied by the model.
 Mezzanine MUST independently classify shell effects for approval, audit, and
-display, and MUST route incomplete or unknown classification through the active
-approval policy.
+display, and MUST route incomplete or unknown semantic classification through
+the active approval policy. Independently inferred filesystem paths MUST remain
+advisory even when their lexical parsing is confident; they MUST NOT become a
+complete confinement declaration or an authority decision.
 
 A `send_message` action MUST include `recipient`, `content_type`, and
 `payload`.
@@ -7759,8 +7772,8 @@ safe options rather than allowing arbitrary trailing arguments.
 
 Built-in `git` read-only rules MUST disable or require approval for options
 that write files, invoke external helpers, use external diff or text conversion,
-invoke pagers, alter configuration, contact remotes, or read paths outside the
-active read scopes. At minimum, `git diff --output`, external diff execution,
+invoke pagers, alter configuration, or contact remotes. Runtime path
+accessibility MUST remain a sandbox decision. At minimum, `git diff --output`, external diff execution,
 textconv execution, `git -c`, remote operations, and pager-forcing options MUST
 not be auto-allowed by generic read-only rules.
 
@@ -7768,7 +7781,8 @@ Built-in `git status` rules MUST account for Git's index-refresh behavior. A
 read-only auto-allowed `git status` form SHOULD set `GIT_OPTIONAL_LOCKS=0` or
 use an equivalent Git option when available, MUST disable pagers and external
 helpers, and MUST restrict arguments to safe status forms such as `--short`,
-`--branch`, `--porcelain`, and pathspecs within active read scopes. If
+`--branch`, `--porcelain`, and read-only pathspecs. Filesystem containment or
+operand existence MUST NOT participate in command-rule matching. If
 Mezzanine cannot prevent or classify Git metadata writes, it MUST classify the
 command as a metadata-touching command and require approval unless policy
 explicitly allows VCS metadata touches.
