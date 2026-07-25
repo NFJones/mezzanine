@@ -262,12 +262,20 @@ impl RuntimeSessionService {
                 }
                 _ => None,
             };
+            let protected_toolchain_roots = self
+                .integration
+                .config_root()
+                .into_iter()
+                .chain(self.session.socket_path().parent())
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
             let toolchain_projection =
-                crate::security::sandbox::resolve_toolchain_projection_for_project(
-                    &config.toolchains,
+                crate::security::sandbox::resolve_configured_toolchain_projection_for_project(
+                    &config,
                     &signature.environment_managers,
                     &signature.os,
                     trusted_project_root.as_deref(),
+                    &protected_toolchain_roots,
                 )
                 .map_err(|error| MezError::invalid_state(error.message()))?;
             let launch_plan = match crate::security::sandbox::compile_bubblewrap_launch_plan(

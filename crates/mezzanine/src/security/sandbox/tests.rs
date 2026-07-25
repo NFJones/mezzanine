@@ -11,6 +11,8 @@ use mez_agent::permissions::{
     PermissionEvaluation, ResolvedPathEvidence, ResolvedPathKind, RuleDecision,
 };
 
+use crate::runtime::{CustomToolchainDefinition, CustomToolchainReference, ToolchainSelection};
+
 use super::*;
 
 fn config() -> BubblewrapConfig {
@@ -860,8 +862,11 @@ fn zig_toolchain_projection_is_read_only_and_cache_isolated() {
         .unwrap();
     assert_eq!(projection.executable_path(), SANDBOX_ZIG_PATH);
     assert_eq!(
-        projection.environment.get("ZIG_GLOBAL_CACHE_DIR"),
-        Some(&"/home/mez/.cache/zig")
+        projection
+            .environment
+            .get("ZIG_GLOBAL_CACHE_DIR")
+            .map(String::as_str),
+        Some("/home/mez/.cache/zig")
     );
 
     let mut config = config();
@@ -987,7 +992,10 @@ fn go_toolchain_projection_is_read_only_and_cache_isolated() {
         ("GOMODCACHE", "/home/mez/go/pkg/mod"),
         ("GOCACHE", "/home/mez/.cache/go-build"),
     ] {
-        assert_eq!(projection.environment.get(name), Some(&value));
+        assert_eq!(
+            projection.environment.get(name).map(String::as_str),
+            Some(value)
+        );
     }
     assert!(!projection.environment.contains_key("GOBIN"));
 
@@ -1111,8 +1119,8 @@ fn deno_toolchain_projection_is_read_only_and_cache_isolated() {
             .unwrap();
     assert_eq!(projection.executable_path(), SANDBOX_DENO_PATH);
     assert_eq!(
-        projection.environment.get("DENO_DIR"),
-        Some(&"/home/mez/.cache/deno")
+        projection.environment.get("DENO_DIR").map(String::as_str),
+        Some("/home/mez/.cache/deno")
     );
     for omitted in ["DENO_AUTH_TOKENS", "DENO_CERT", "NPM_CONFIG_USERCONFIG"] {
         assert!(!projection.environment.contains_key(omitted));
@@ -1227,12 +1235,18 @@ fn bun_toolchain_projection_is_read_only_and_cache_isolated() {
         .unwrap();
     assert_eq!(projection.executable_path(), SANDBOX_BUN_PATH);
     assert_eq!(
-        projection.environment.get("BUN_INSTALL"),
-        Some(&SANDBOX_BUN_ROOT)
+        projection
+            .environment
+            .get("BUN_INSTALL")
+            .map(String::as_str),
+        Some(SANDBOX_BUN_ROOT)
     );
     assert_eq!(
-        projection.environment.get("BUN_INSTALL_CACHE_DIR"),
-        Some(&"/home/mez/.cache/bun")
+        projection
+            .environment
+            .get("BUN_INSTALL_CACHE_DIR")
+            .map(String::as_str),
+        Some("/home/mez/.cache/bun")
     );
     for omitted in ["BUN_AUTH_TOKEN", "NPM_CONFIG_USERCONFIG", "NODE_PATH"] {
         assert!(!projection.environment.contains_key(omitted));
@@ -1355,12 +1369,18 @@ fn node_toolchain_projection_is_read_only_and_package_state_isolated() {
             .unwrap();
     assert_eq!(projection.executable_path(), SANDBOX_NODE_PATH);
     assert_eq!(
-        projection.environment.get("NPM_CONFIG_CACHE"),
-        Some(&"/home/mez/.cache/npm")
+        projection
+            .environment
+            .get("NPM_CONFIG_CACHE")
+            .map(String::as_str),
+        Some("/home/mez/.cache/npm")
     );
     assert_eq!(
-        projection.environment.get("COREPACK_HOME"),
-        Some(&"/home/mez/.cache/node/corepack")
+        projection
+            .environment
+            .get("COREPACK_HOME")
+            .map(String::as_str),
+        Some("/home/mez/.cache/node/corepack")
     );
     for omitted in [
         "NPM_CONFIG_USERCONFIG",
@@ -1512,14 +1532,26 @@ fn python_toolchain_composes_contained_project_environment() {
         SANDBOX_PYTHON_ROOT
     )));
     assert_eq!(
-        projection.environment.get("PIP_CACHE_DIR"),
-        Some(&"/home/mez/.cache/pip")
+        projection
+            .environment
+            .get("PIP_CACHE_DIR")
+            .map(String::as_str),
+        Some("/home/mez/.cache/pip")
     );
     assert_eq!(
-        projection.environment.get("UV_CACHE_DIR"),
-        Some(&"/home/mez/.cache/uv")
+        projection
+            .environment
+            .get("UV_CACHE_DIR")
+            .map(String::as_str),
+        Some("/home/mez/.cache/uv")
     );
-    assert_eq!(projection.environment.get("PYTHONNOUSERSITE"), Some(&"1"));
+    assert_eq!(
+        projection
+            .environment
+            .get("PYTHONNOUSERSITE")
+            .map(String::as_str),
+        Some("1")
+    );
     for omitted in [
         "PYTHONHOME",
         "PYTHONPATH",
@@ -1536,6 +1568,279 @@ fn python_toolchain_composes_contained_project_environment() {
         projection.validate_authority(&outside).unwrap_err().kind(),
         SandboxCompileErrorKind::ToolchainOutsideAuthority
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A selected custom toolchain resolves canonical multi-root state into fixed
+/// read-only mounts, ordered PATH entries, and sandbox-path environment values.
+#[test]
+fn custom_toolchain_projection_is_fixed_read_only_and_authority_bounded() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-custom-toolchain-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let runtime = base.join("runtime");
+    let tools = base.join("tools");
+    std::fs::create_dir_all(runtime.join("bin")).unwrap();
+    std::fs::create_dir_all(tools.join("tools/bin")).unwrap();
+    std::fs::write(runtime.join("bin/acme"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        runtime.join("bin/acme"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let runtime = runtime.canonicalize().unwrap();
+    let tools = tools.canonicalize().unwrap();
+    let base = base.canonicalize().unwrap();
+
+    let mut config = config();
+    config.toolchain_selections = vec![ToolchainSelection::custom_for_test("acme").unwrap()];
+    config.custom_toolchains.insert(
+        "acme".to_string(),
+        CustomToolchainDefinition {
+            description: Some("Acme SDK".to_string()),
+            roots: vec![runtime.display().to_string(), tools.display().to_string()],
+            path_entries: vec![
+                CustomToolchainReference {
+                    root_index: 0,
+                    relative_path: "bin".to_string(),
+                },
+                CustomToolchainReference {
+                    root_index: 1,
+                    relative_path: "tools/bin".to_string(),
+                },
+            ],
+            required_executables: vec![CustomToolchainReference {
+                root_index: 0,
+                relative_path: "bin/acme".to_string(),
+            }],
+            environment: BTreeMap::from([(
+                "ACME_HOME".to_string(),
+                CustomToolchainReference {
+                    root_index: 0,
+                    relative_path: ".".to_string(),
+                },
+            )]),
+        },
+    );
+    let projection =
+        resolve_configured_toolchain_projection_for_project(&config, &[], "linux", None, &[])
+            .unwrap()
+            .unwrap();
+    assert_eq!(projection.custom_names, ["acme"]);
+    assert_eq!(
+        projection.executable_path(),
+        "/opt/mez/toolchains/custom/acme/roots/0/bin:/opt/mez/toolchains/custom/acme/roots/1/tools/bin:/usr/bin:/bin"
+    );
+    assert_eq!(
+        projection.environment.get("ACME_HOME").map(String::as_str),
+        Some("/opt/mez/toolchains/custom/acme/roots/0")
+    );
+
+    let maximum_authority = home_authority(&base.display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &maximum_authority, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    for (source, destination) in [
+        (
+            runtime.display().to_string(),
+            "/opt/mez/toolchains/custom/acme/roots/0",
+        ),
+        (
+            tools.display().to_string(),
+            "/opt/mez/toolchains/custom/acme/roots/1",
+        ),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--ro-bind", source.as_str(), destination])
+        );
+        assert!(
+            !plan
+                .arguments
+                .windows(3)
+                .any(|args| args == ["--bind", source.as_str(), destination])
+        );
+    }
+    assert_eq!(
+        projection
+            .validate_authority(&authority())
+            .unwrap_err()
+            .kind(),
+        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Custom resolution rejects escaping internal symlinks and non-executable
+/// declared requirements before a Bubblewrap workload can be compiled.
+#[test]
+fn custom_toolchain_projection_rejects_escaping_and_non_executable_references() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-custom-toolchain-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("runtime");
+    let outside = base.join("outside");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(root.join("bin/acme"), "not executable").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+    let root = root.canonicalize().unwrap();
+
+    let mut config = config();
+    config.toolchain_selections = vec![ToolchainSelection::custom_for_test("acme").unwrap()];
+    config.custom_toolchains.insert(
+        "acme".to_string(),
+        CustomToolchainDefinition {
+            description: None,
+            roots: vec![root.display().to_string()],
+            path_entries: vec![CustomToolchainReference {
+                root_index: 0,
+                relative_path: "escape".to_string(),
+            }],
+            required_executables: vec![CustomToolchainReference {
+                root_index: 0,
+                relative_path: "bin/acme".to_string(),
+            }],
+            environment: BTreeMap::new(),
+        },
+    );
+    let escaping =
+        resolve_configured_toolchain_projection_for_project(&config, &[], "linux", None, &[])
+            .unwrap_err();
+    assert_eq!(escaping.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    config
+        .custom_toolchains
+        .get_mut("acme")
+        .unwrap()
+        .path_entries = vec![CustomToolchainReference {
+        root_index: 0,
+        relative_path: "bin".to_string(),
+    }];
+    let non_executable =
+        resolve_configured_toolchain_projection_for_project(&config, &[], "linux", None, &[])
+            .unwrap_err();
+    assert_eq!(
+        non_executable.kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Built-in and custom selections preserve configured PATH precedence while
+/// retaining fixed descriptor metadata and deterministic system fallbacks.
+#[test]
+fn custom_toolchain_projection_composes_in_configured_selection_order() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-custom-toolchain-order-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let custom = base.join("acme");
+    let cargo_bin = base.join(".cargo/bin");
+    let rustup = base.join(".rustup");
+    std::fs::create_dir_all(custom.join("bin")).unwrap();
+    std::fs::create_dir_all(&cargo_bin).unwrap();
+    std::fs::create_dir_all(&rustup).unwrap();
+    std::fs::write(custom.join("bin/acme"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        custom.join("bin/acme"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let custom = custom.canonicalize().unwrap();
+    let cargo_bin = cargo_bin.canonicalize().unwrap();
+    let rustup = rustup.canonicalize().unwrap();
+
+    let mut config = config();
+    config.toolchain_selections = vec![
+        ToolchainSelection::custom_for_test("acme").unwrap(),
+        ToolchainSelection::BuiltIn(SandboxToolchainKind::Rust),
+    ];
+    config.custom_toolchains.insert(
+        "acme".to_string(),
+        CustomToolchainDefinition {
+            description: None,
+            roots: vec![custom.display().to_string()],
+            path_entries: vec![CustomToolchainReference {
+                root_index: 0,
+                relative_path: "bin".to_string(),
+            }],
+            required_executables: vec![CustomToolchainReference {
+                root_index: 0,
+                relative_path: "bin/acme".to_string(),
+            }],
+            environment: BTreeMap::new(),
+        },
+    );
+    let managers = [
+        format!("cargo-bin:{}", cargo_bin.display()),
+        format!("rustup:{}", rustup.display()),
+    ];
+
+    let projection =
+        resolve_configured_toolchain_projection_for_project(&config, &managers, "linux", None, &[])
+            .unwrap()
+            .unwrap();
+
+    assert_eq!(projection.custom_names, ["acme"]);
+    assert_eq!(projection.kinds, [SandboxToolchainKind::Rust]);
+    assert_eq!(
+        projection.executable_path(),
+        "/opt/mez/toolchains/custom/acme/roots/0/bin:/opt/mez/toolchains/rust/cargo-bin:/usr/bin:/bin"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Custom roots cannot overlap Mezzanine configuration or control-runtime
+/// storage even when those paths otherwise satisfy structural validation.
+#[test]
+fn custom_toolchain_projection_rejects_mezzanine_owned_roots() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-custom-toolchain-protected-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let protected = base.join("config");
+    std::fs::create_dir_all(protected.join("bin")).unwrap();
+    let protected = protected.canonicalize().unwrap();
+
+    let mut config = config();
+    config.toolchain_selections = vec![ToolchainSelection::custom_for_test("acme").unwrap()];
+    config.custom_toolchains.insert(
+        "acme".to_string(),
+        CustomToolchainDefinition {
+            description: None,
+            roots: vec![protected.display().to_string()],
+            path_entries: vec![CustomToolchainReference {
+                root_index: 0,
+                relative_path: "bin".to_string(),
+            }],
+            required_executables: Vec::new(),
+            environment: BTreeMap::new(),
+        },
+    );
+
+    let error = resolve_configured_toolchain_projection_for_project(
+        &config,
+        &[],
+        "linux",
+        None,
+        std::slice::from_ref(&protected),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -1618,7 +1923,9 @@ fn toolchain_projection_rejects_duplicates_and_tampered_metadata() {
     );
 
     let mut invalid_path = projection.clone();
-    invalid_path.path_entries.push(SANDBOX_RUST_CARGO_BIN);
+    invalid_path
+        .path_entries
+        .push(SANDBOX_RUST_CARGO_BIN.to_string());
     assert_eq!(
         invalid_path.validate().unwrap_err().kind(),
         SandboxCompileErrorKind::InvalidInput
@@ -1627,7 +1934,7 @@ fn toolchain_projection_rejects_duplicates_and_tampered_metadata() {
     let mut invalid_environment = projection.clone();
     invalid_environment
         .environment
-        .insert("RUSTUP_HOME", "/unexpected");
+        .insert("RUSTUP_HOME".to_string(), "/unexpected".to_string());
     assert_eq!(
         invalid_environment.validate().unwrap_err().kind(),
         SandboxCompileErrorKind::InvalidInput

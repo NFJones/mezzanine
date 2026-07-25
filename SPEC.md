@@ -2995,6 +2995,20 @@ host roots; profile import MUST reject custom selectors. Structural validation
 MUST NOT inspect ambient state. Filesystem existence, canonicalization,
 symlink containment, executable checks, forbidden canonical roots, and
 pane-resolved maximum-authority enforcement belong to runtime projection.
+Runtime projection MUST require every custom root to be an existing canonical
+real directory, reject root symlinks, complete user homes, broad system roots,
+credential paths, and Mezzanine configuration/control/runtime roots, and
+resolve every reference within its declared canonical root. Required
+executables MUST be contained regular executable files. Selected built-in and
+custom projections MUST compose in configured order, deduplicate identical
+PATH entries, reject overlapping host roots and conflicting environment
+values, and append `/usr/bin:/bin`. Custom roots MUST be mounted read-only only
+at `/opt/mez/toolchains/custom/<name>/roots/<index>`; synthesized values MUST
+use those sandbox paths. Selection MUST NOT add filesystem authority: every
+canonical root MUST already be beneath the issuing pane's maximum read
+authority. The resolved projection MUST be integrity-bound into the generated
+Bubblewrap launch plan, and schema-v32 custom projection support MUST advance
+the fixed Bubblewrap runtime profile so stale capability evidence is rejected.
 Schema v31 to v32 migration MUST preserve built-in selections and omission and
 MUST NOT infer roots, definitions, or custom selections.
 Toolchain projection MUST be descriptor-driven. Each supported kind MUST own

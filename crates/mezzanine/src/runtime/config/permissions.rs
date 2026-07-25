@@ -160,6 +160,12 @@ impl ToolchainSelection {
             Self::Custom(name) => name.selector(),
         }
     }
+
+    /// Constructs one validated custom selection for focused sandbox tests.
+    #[cfg(test)]
+    pub(crate) fn custom_for_test(name: &str) -> Result<Self> {
+        CustomToolchainName::parse(name).map(Self::Custom)
+    }
 }
 
 /// Validated custom toolchain name and persisted selector.
@@ -171,7 +177,7 @@ pub(crate) struct CustomToolchainName {
 
 impl CustomToolchainName {
     /// Parses one custom selector name using the schema-v32 identity contract.
-    fn parse(name: &str) -> Result<Self> {
+    pub(crate) fn parse(name: &str) -> Result<Self> {
         if !valid_custom_toolchain_name(name) {
             return Err(MezError::config(
                 "custom toolchain name must match [a-z][a-z0-9_-]{0,31} and not be reserved",

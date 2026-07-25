@@ -48,13 +48,13 @@ pub(crate) use toolchains::{
     discover_deno_from_search_path, discover_go_from_search_path, discover_node_from_search_path,
     discover_python_from_search_path, discover_rust_from_environment_managers,
     discover_rust_from_home, discover_zig_from_search_path, parse_sandbox_toolchain_kind,
-    resolve_toolchain_projection, resolve_toolchain_projection_for_project,
+    resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
 };
 #[cfg(test)]
 pub(crate) use toolchains::{
     SANDBOX_BUN_ROOT, SANDBOX_DENO_ROOT, SANDBOX_GO_ROOT, SANDBOX_NODE_ROOT, SANDBOX_PYTHON_ROOT,
     SANDBOX_RUST_CARGO_BIN, SANDBOX_RUSTUP_HOME, SANDBOX_ZIG_ROOT, ToolchainAuthorityClass,
-    ToolchainPlatform, toolchain_descriptor,
+    ToolchainPlatform, resolve_toolchain_projection_for_project, toolchain_descriptor,
 };
 pub(crate) use workflow::{
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
@@ -62,7 +62,7 @@ pub(crate) use workflow::{
 };
 
 /// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v1";
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v2";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -1120,7 +1120,11 @@ fn bubblewrap_arguments(
         .unwrap_or_else(|| MINIMAL_PATH.to_string());
     if let Some(toolchains) = request.toolchain_projection {
         for (name, value) in &toolchains.environment {
-            arguments.extend(["--setenv", *name, *value].into_iter().map(str::to_string));
+            arguments.extend(
+                ["--setenv", name.as_str(), value.as_str()]
+                    .into_iter()
+                    .map(str::to_string),
+            );
         }
         for environment in &toolchains.project_environments {
             arguments.extend(

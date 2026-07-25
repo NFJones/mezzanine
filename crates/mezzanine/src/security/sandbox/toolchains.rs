@@ -12,8 +12,12 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::runtime::SandboxToolchainKind;
+use crate::runtime::{
+    BubblewrapConfig, CustomToolchainDefinition, CustomToolchainReference, SandboxToolchainKind,
+    ToolchainSelection,
+};
 use mez_agent::permissions::PathScopes;
+use sha2::{Digest, Sha256};
 
 use super::{
     SandboxCompileError, SandboxCompileErrorKind, path_is_credential_directory, path_overlaps,
@@ -538,7 +542,7 @@ pub(crate) struct ResolvedToolchainRoot {
     /// Canonical host source from pane bootstrap evidence.
     pub(crate) host_path: PathBuf,
     /// Fixed code-owned sandbox destination.
-    pub(crate) sandbox_destination: &'static str,
+    pub(crate) sandbox_destination: String,
 }
 
 /// One descriptor resolved from active-pane evidence.
@@ -564,23 +568,95 @@ pub(crate) struct ResolvedProjectEnvironment {
 /// Deterministically composed projection consumed by Bubblewrap compilation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainProjection {
-    /// Kinds in code-owned descriptor priority order.
+    /// Built-in kinds in configured selection order.
     pub(crate) kinds: Vec<SandboxToolchainKind>,
+    /// Custom identities in configured selection order.
+    pub(crate) custom_names: Vec<String>,
     /// Parent directories created before mounts.
-    pub(crate) sandbox_directories: Vec<&'static str>,
+    pub(crate) sandbox_directories: Vec<String>,
     /// Validated fixed read-only mounts.
     pub(crate) roots: Vec<ResolvedToolchainRoot>,
     /// Ordered executable search paths excluding the system suffix.
-    pub(crate) path_entries: Vec<&'static str>,
+    pub(crate) path_entries: Vec<String>,
     /// Explicit synthesized environment excluding PATH.
-    pub(crate) environment: BTreeMap<&'static str, &'static str>,
+    pub(crate) environment: BTreeMap<String, String>,
     /// Managed-state declarations for status and future quotas.
     pub(crate) managed_state: Vec<ManagedToolchainState>,
     /// Repository-contained executable environments that reuse project authority.
     pub(crate) project_environments: Vec<ResolvedProjectEnvironment>,
+    /// Stable digest sealing all resolved projection metadata after filesystem validation.
+    integrity_sha256: String,
 }
 
 impl ResolvedToolchainProjection {
+    /// Seals the fully resolved projection after filesystem-backed validation.
+    fn seal(&mut self) {
+        self.integrity_sha256 = self.metadata_sha256();
+    }
+
+    /// Computes a stable digest over every launch-relevant projection field.
+    fn metadata_sha256(&self) -> String {
+        let mut digest = Sha256::new();
+        digest.update(b"mez-resolved-toolchain-projection-v1\0");
+        for kind in &self.kinds {
+            digest.update(kind.as_str().as_bytes());
+            digest.update([0]);
+        }
+        for name in &self.custom_names {
+            digest.update(b"custom:");
+            digest.update(name.as_bytes());
+            digest.update([0]);
+        }
+        for directory in &self.sandbox_directories {
+            digest.update(directory.as_bytes());
+            digest.update([0]);
+        }
+        for root in &self.roots {
+            digest.update(match root.authority_class {
+                ToolchainAuthorityClass::Runtime => b"runtime".as_slice(),
+                ToolchainAuthorityClass::ProjectEnvironment => b"project-environment".as_slice(),
+                ToolchainAuthorityClass::UserTools => b"user-tools".as_slice(),
+                ToolchainAuthorityClass::ManagedState => b"managed-state".as_slice(),
+                ToolchainAuthorityClass::Credential => b"credential".as_slice(),
+            });
+            digest.update([0]);
+            digest.update(root.host_path.to_string_lossy().as_bytes());
+            digest.update([0]);
+            digest.update(root.sandbox_destination.as_bytes());
+            digest.update([0]);
+        }
+        for entry in &self.path_entries {
+            digest.update(entry.as_bytes());
+            digest.update([0]);
+        }
+        for (name, value) in &self.environment {
+            digest.update(name.as_bytes());
+            digest.update([0]);
+            digest.update(value.as_bytes());
+            digest.update([0]);
+        }
+        for state in &self.managed_state {
+            digest.update(state.purpose.as_bytes());
+            digest.update([0]);
+            digest.update(state.sandbox_path.as_bytes());
+            digest.update([0]);
+        }
+        for environment in &self.project_environments {
+            digest.update(environment.kind.as_str().as_bytes());
+            digest.update([0]);
+            digest.update(environment.host_path.to_string_lossy().as_bytes());
+            digest.update([0]);
+            digest.update(environment.sandbox_path.as_bytes());
+            digest.update([0]);
+        }
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
     /// Validates every projected host root against pane-resolved maximum read authority.
     pub(crate) fn validate_authority(
         &self,
@@ -625,6 +701,13 @@ impl ResolvedToolchainProjection {
                 "resolved toolchain projection contains duplicate kinds",
             ));
         }
+        let custom_names = self.custom_names.iter().collect::<BTreeSet<_>>();
+        if custom_names.len() != self.custom_names.len() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                "resolved toolchain projection contains duplicate custom identities",
+            ));
+        }
         let mut expected_root_count = 0;
         let mut expected_directories = Vec::new();
         let mut expected_path_entries = Vec::new();
@@ -634,14 +717,22 @@ impl ResolvedToolchainProjection {
             let descriptor = toolchain_descriptor(*kind);
             expected_root_count += descriptor.roots.len();
             for directory in descriptor.sandbox_directories {
-                if !expected_directories.contains(directory) {
-                    expected_directories.push(*directory);
+                if !expected_directories
+                    .iter()
+                    .any(|expected| expected == directory)
+                {
+                    expected_directories.push((*directory).to_string());
                 }
             }
-            expected_path_entries.extend_from_slice(descriptor.path_entries);
+            expected_path_entries.extend(
+                descriptor
+                    .path_entries
+                    .iter()
+                    .map(|entry| (*entry).to_string()),
+            );
             for variable in descriptor.environment {
                 if expected_environment
-                    .insert(variable.name, variable.value)
+                    .insert(variable.name.to_string(), variable.value.to_string())
                     .is_some()
                 {
                     return Err(SandboxCompileError::new(
@@ -703,11 +794,12 @@ impl ResolvedToolchainProjection {
                 ));
             }
         }
-        if self.roots.len() != expected_root_count
-            || self.sandbox_directories != expected_directories
-            || self.path_entries != expected_path_entries
-            || self.environment != expected_environment
-            || self.managed_state != expected_managed_state
+        if self.custom_names.is_empty()
+            && (self.roots.len() != expected_root_count
+                || self.sandbox_directories != expected_directories
+                || self.path_entries != expected_path_entries
+                || self.environment != expected_environment
+                || self.managed_state != expected_managed_state)
         {
             return Err(SandboxCompileError::new(
                 SandboxCompileErrorKind::InvalidInput,
@@ -726,6 +818,12 @@ impl ResolvedToolchainProjection {
                     "resolved toolchain projection contains colliding mounts",
                 ));
             }
+        }
+        if self.integrity_sha256 != self.metadata_sha256() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                "resolved toolchain projection failed its integrity check",
+            ));
         }
         Ok(())
     }
@@ -815,9 +913,403 @@ pub(crate) fn resolve_toolchain_projection_for_project(
         && let Some(environment) = resolve_python_project_environment(project_root)?
     {
         projection.project_environments.push(environment);
+        projection.seal();
         projection.validate()?;
     }
     Ok(Some(projection))
+}
+
+/// Resolves ordered built-in and primary-user custom selections into one
+/// read-only projection without creating or modifying host state.
+pub(crate) fn resolve_configured_toolchain_projection_for_project(
+    config: &BubblewrapConfig,
+    environment_managers: &[String],
+    host_os: &str,
+    trusted_project_root: Option<&Path>,
+    protected_host_roots: &[PathBuf],
+) -> Result<Option<ResolvedToolchainProjection>, SandboxCompileError> {
+    if config.toolchain_selections.is_empty() {
+        return Ok(None);
+    }
+    let selected_built_ins = config
+        .toolchain_selections
+        .iter()
+        .filter_map(|selection| match selection {
+            ToolchainSelection::BuiltIn(kind) => Some(*kind),
+            ToolchainSelection::Custom(_) => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let mut projection = empty_toolchain_projection();
+    for selection in &config.toolchain_selections {
+        match selection {
+            ToolchainSelection::BuiltIn(kind) => {
+                let descriptor = toolchain_descriptor(*kind);
+                validate_selected_descriptor(descriptor, &selected_built_ins, host_os)?;
+                let resolved = resolve_descriptor(descriptor, environment_managers)?;
+                append_resolved_descriptor(&mut projection, &resolved)?;
+            }
+            ToolchainSelection::Custom(name) => {
+                let definition = config.custom_toolchains.get(name.name()).ok_or_else(|| {
+                    SandboxCompileError::new(
+                        SandboxCompileErrorKind::InvalidInput,
+                        format!("missing custom toolchain definition for `{}`", name.name()),
+                    )
+                })?;
+                append_custom_toolchain(
+                    &mut projection,
+                    name.name(),
+                    definition,
+                    protected_host_roots,
+                )?;
+            }
+        }
+    }
+    if selected_built_ins.contains(&SandboxToolchainKind::Python)
+        && let Some(project_root) = trusted_project_root
+        && let Some(environment) = resolve_python_project_environment(project_root)?
+    {
+        projection.project_environments.push(environment);
+    }
+    projection.seal();
+    projection.validate()?;
+    Ok(Some(projection))
+}
+
+/// Validates platform and companion requirements for one selected descriptor.
+fn validate_selected_descriptor(
+    descriptor: &ToolchainDescriptor,
+    selected: &BTreeSet<SandboxToolchainKind>,
+    host_os: &str,
+) -> Result<(), SandboxCompileError> {
+    if !descriptor.platform.supports(host_os) {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::UnsupportedRequirement,
+            format!(
+                "{} toolchain is unsupported on {host_os}",
+                descriptor.kind.as_str()
+            ),
+        ));
+    }
+    for required in descriptor.coupling.required {
+        if !selected.contains(required) {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::UnsupportedRequirement,
+                format!(
+                    "{} toolchain requires selected companion {}",
+                    descriptor.kind.as_str(),
+                    required.as_str()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Constructs an unsealed projection for ordered descriptor composition.
+fn empty_toolchain_projection() -> ResolvedToolchainProjection {
+    ResolvedToolchainProjection {
+        kinds: Vec::new(),
+        custom_names: Vec::new(),
+        sandbox_directories: Vec::new(),
+        roots: Vec::new(),
+        path_entries: Vec::new(),
+        environment: BTreeMap::new(),
+        managed_state: Vec::new(),
+        project_environments: Vec::new(),
+        integrity_sha256: String::new(),
+    }
+}
+
+/// Appends one validated built-in descriptor in configured selection order.
+fn append_resolved_descriptor(
+    projection: &mut ResolvedToolchainProjection,
+    resolved: &ResolvedToolchain,
+) -> Result<(), SandboxCompileError> {
+    if projection.kinds.contains(&resolved.kind) {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            "resolved toolchain projection contains duplicate kinds",
+        ));
+    }
+    let descriptor = toolchain_descriptor(resolved.kind);
+    projection.kinds.push(resolved.kind);
+    for directory in descriptor.sandbox_directories {
+        push_unique(&mut projection.sandbox_directories, directory);
+    }
+    for root in &resolved.roots {
+        append_projection_root(projection, root.clone())?;
+    }
+    for entry in descriptor.path_entries {
+        push_unique(&mut projection.path_entries, entry);
+    }
+    for variable in descriptor.environment {
+        insert_projection_environment(projection, variable.name, variable.value)?;
+    }
+    for state in descriptor.managed_state {
+        if projection
+            .managed_state
+            .iter()
+            .any(|existing| existing.sandbox_path == state.sandbox_path)
+        {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                format!(
+                    "toolchain descriptors collide in managed state at {}",
+                    state.sandbox_path
+                ),
+            ));
+        }
+        projection.managed_state.push(*state);
+    }
+    Ok(())
+}
+
+/// Resolves and appends one constrained custom definition.
+fn append_custom_toolchain(
+    projection: &mut ResolvedToolchainProjection,
+    name: &str,
+    definition: &CustomToolchainDefinition,
+    protected_host_roots: &[PathBuf],
+) -> Result<(), SandboxCompileError> {
+    if projection
+        .custom_names
+        .iter()
+        .any(|existing| existing == name)
+    {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("duplicate custom toolchain selection `{name}`"),
+        ));
+    }
+    let base = format!("/opt/mez/toolchains/custom/{name}");
+    for directory in [
+        "/opt".to_string(),
+        "/opt/mez".to_string(),
+        "/opt/mez/toolchains".to_string(),
+        "/opt/mez/toolchains/custom".to_string(),
+        base.clone(),
+        format!("{base}/roots"),
+    ] {
+        push_unique(&mut projection.sandbox_directories, &directory);
+    }
+
+    let mut roots = Vec::with_capacity(definition.roots.len());
+    for (index, configured) in definition.roots.iter().enumerate() {
+        let root = resolve_custom_root(configured, name, protected_host_roots)?;
+        let destination = format!("{base}/roots/{index}");
+        append_projection_root(
+            projection,
+            ResolvedToolchainRoot {
+                authority_class: ToolchainAuthorityClass::UserTools,
+                host_path: root.clone(),
+                sandbox_destination: destination,
+            },
+        )?;
+        roots.push(root);
+    }
+    for reference in &definition.path_entries {
+        validate_custom_reference_target(&roots, reference, name, CustomReferenceKind::Directory)?;
+        let value = custom_reference_sandbox_path(&base, reference);
+        push_unique(&mut projection.path_entries, &value);
+    }
+    for reference in &definition.required_executables {
+        validate_custom_reference_target(&roots, reference, name, CustomReferenceKind::Executable)?;
+    }
+    for (variable, reference) in &definition.environment {
+        validate_custom_reference_target(&roots, reference, name, CustomReferenceKind::Existing)?;
+        insert_projection_environment(
+            projection,
+            variable,
+            &custom_reference_sandbox_path(&base, reference),
+        )?;
+    }
+    projection.custom_names.push(name.to_string());
+    Ok(())
+}
+
+/// Filesystem shape required by one resolved custom reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CustomReferenceKind {
+    Existing,
+    Directory,
+    Executable,
+}
+
+/// Resolves one custom root without following a root-level symlink.
+fn resolve_custom_root(
+    configured: &str,
+    name: &str,
+    protected_host_roots: &[PathBuf],
+) -> Result<PathBuf, SandboxCompileError> {
+    let path = Path::new(configured);
+    validate_toolchain_root(path, &format!("custom toolchain `{name}` root"), &[])?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to inspect custom toolchain `{name}` root: {error}"),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("custom toolchain `{name}` root must be a real directory"),
+        ));
+    }
+    let canonical = path.canonicalize().map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to canonicalize custom toolchain `{name}` root: {error}"),
+        )
+    })?;
+    if canonical != path {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("custom toolchain `{name}` root must use its canonical path"),
+        ));
+    }
+    let rendered = canonical.to_string_lossy();
+    let complete_home = canonical
+        .parent()
+        .is_some_and(|parent| parent == Path::new("/home"));
+    if complete_home
+        || [
+            "/root", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/var", "/proc",
+            "/dev", "/run", "/tmp",
+        ]
+        .iter()
+        .any(|forbidden| rendered == *forbidden)
+        || protected_host_roots
+            .iter()
+            .any(|protected| canonical.starts_with(protected) || protected.starts_with(&canonical))
+    {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("custom toolchain `{name}` root overlaps a forbidden host path"),
+        ));
+    }
+    Ok(canonical)
+}
+
+/// Resolves and validates one custom root-relative reference.
+fn validate_custom_reference_target(
+    roots: &[PathBuf],
+    reference: &CustomToolchainReference,
+    name: &str,
+    kind: CustomReferenceKind,
+) -> Result<(), SandboxCompileError> {
+    let root = roots.get(reference.root_index).ok_or_else(|| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("custom toolchain `{name}` reference has an invalid root index"),
+        )
+    })?;
+    let target = if reference.relative_path == "." {
+        root.clone()
+    } else {
+        root.join(&reference.relative_path)
+    };
+    let canonical = target.canonicalize().map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to resolve custom toolchain `{name}` reference: {error}"),
+        )
+    })?;
+    if !canonical.starts_with(root) {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("custom toolchain `{name}` reference escapes its declared root"),
+        ));
+    }
+    let metadata = fs::symlink_metadata(&target).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to inspect custom toolchain `{name}` reference: {error}"),
+        )
+    })?;
+    let valid = match kind {
+        CustomReferenceKind::Existing => {
+            !metadata.file_type().is_symlink() && (metadata.is_file() || metadata.is_dir())
+        }
+        CustomReferenceKind::Directory => metadata.is_dir(),
+        CustomReferenceKind::Executable => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                !metadata.file_type().is_symlink()
+                    && metadata.is_file()
+                    && metadata.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                !metadata.file_type().is_symlink() && metadata.is_file()
+            }
+        }
+    };
+    if !valid {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("custom toolchain `{name}` reference has an invalid filesystem type"),
+        ));
+    }
+    Ok(())
+}
+
+/// Renders one validated custom reference as a fixed sandbox path.
+fn custom_reference_sandbox_path(base: &str, reference: &CustomToolchainReference) -> String {
+    let root = format!("{base}/roots/{}", reference.root_index);
+    if reference.relative_path == "." {
+        root
+    } else {
+        format!("{root}/{}", reference.relative_path)
+    }
+}
+
+/// Appends one root while rejecting host overlap and destination collision.
+fn append_projection_root(
+    projection: &mut ResolvedToolchainProjection,
+    root: ResolvedToolchainRoot,
+) -> Result<(), SandboxCompileError> {
+    if projection.roots.iter().any(|existing| {
+        existing.sandbox_destination == root.sandbox_destination
+            || existing.host_path == root.host_path
+            || existing.host_path.starts_with(&root.host_path)
+            || root.host_path.starts_with(&existing.host_path)
+    }) {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            "toolchain projections contain overlapping roots or destinations",
+        ));
+    }
+    projection.roots.push(root);
+    Ok(())
+}
+
+/// Inserts one synthesized value, accepting only byte-identical duplicates.
+fn insert_projection_environment(
+    projection: &mut ResolvedToolchainProjection,
+    name: &str,
+    value: &str,
+) -> Result<(), SandboxCompileError> {
+    if let Some(existing) = projection.environment.get(name) {
+        if existing == value {
+            return Ok(());
+        }
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("toolchain projections synthesize conflicting {name} values"),
+        ));
+    }
+    projection
+        .environment
+        .insert(name.to_string(), value.to_string());
+    Ok(())
+}
+
+/// Appends one value only when an identical value is not already present.
+fn push_unique(values: &mut Vec<String>, value: &str) {
+    if !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
+    }
 }
 
 /// Resolves one descriptor from bounded pane-bootstrap evidence.
@@ -858,7 +1350,7 @@ fn resolve_descriptor(
         roots.push(ResolvedToolchainRoot {
             authority_class: root_descriptor.authority_class,
             host_path,
-            sandbox_destination: root_descriptor.sandbox_destination,
+            sandbox_destination: root_descriptor.sandbox_destination.to_string(),
         });
     }
     if !descriptor.allow_root_overlap {
@@ -901,14 +1393,16 @@ fn compose_toolchain_projection(
 
     let mut projection = ResolvedToolchainProjection {
         kinds: Vec::new(),
+        custom_names: Vec::new(),
         sandbox_directories: Vec::new(),
         roots: Vec::new(),
         path_entries: Vec::new(),
         environment: BTreeMap::new(),
         managed_state: Vec::new(),
         project_environments: Vec::new(),
+        integrity_sha256: String::new(),
     };
-    let mut destinations = BTreeSet::new();
+    let mut destinations = BTreeSet::<String>::new();
     let mut managed_paths = BTreeSet::new();
     for kind in SUPPORTED_SANDBOX_TOOLCHAIN_KINDS {
         let Some(toolchain) = resolved_by_kind.get(&kind) else {
@@ -922,12 +1416,18 @@ fn compose_toolchain_projection(
         }
         projection.kinds.push(kind);
         for directory in descriptor.sandbox_directories {
-            if !projection.sandbox_directories.contains(directory) {
-                projection.sandbox_directories.push(directory);
+            if !projection
+                .sandbox_directories
+                .iter()
+                .any(|existing| existing == directory)
+            {
+                projection
+                    .sandbox_directories
+                    .push((*directory).to_string());
             }
         }
         for root in &toolchain.roots {
-            if !destinations.insert(root.sandbox_destination) {
+            if !destinations.insert(root.sandbox_destination.clone()) {
                 return Err(SandboxCompileError::new(
                     SandboxCompileErrorKind::InvalidInput,
                     format!(
@@ -949,16 +1449,22 @@ fn compose_toolchain_projection(
             projection.roots.push(root.clone());
         }
         for path_entry in descriptor.path_entries {
-            if projection.path_entries.contains(path_entry) {
+            if projection
+                .path_entries
+                .iter()
+                .any(|existing| existing == path_entry)
+            {
                 return Err(SandboxCompileError::new(
                     SandboxCompileErrorKind::InvalidInput,
                     format!("toolchain descriptors collide in PATH at {path_entry}"),
                 ));
             }
-            projection.path_entries.push(path_entry);
+            projection.path_entries.push((*path_entry).to_string());
         }
         for variable in descriptor.environment {
-            if let Some(existing) = projection.environment.insert(variable.name, variable.value)
+            if let Some(existing) = projection
+                .environment
+                .insert(variable.name.to_string(), variable.value.to_string())
                 && existing != variable.value
             {
                 return Err(SandboxCompileError::new(
@@ -992,6 +1498,7 @@ fn compose_toolchain_projection(
             projection.managed_state.push(*state);
         }
     }
+    projection.seal();
     projection.validate()?;
     Ok(projection)
 }
