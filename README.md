@@ -304,6 +304,7 @@ Useful slash commands include:
 | `/list-macros` | Show the agent macros available to the active pane.   |
 | `/list-mcp`    | List configured MCP tools.                            |
 | `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions; persistent memory is enabled by default. |
+| `/toolchain`   | Inspect, detect, enable, disable, or fully reload typed sandbox toolchains for the active pane. |
 | `/show-context` | Browse the current pane conversation in transcript order, open individual entries, and delete the selected entry with `d`. |
 | `/show-issues` | Browse open project issues, filter issue records, open details, delete with `d` when no open issue depends on the selection, and save the rendered Markdown view. |
 | `/show-memories` | Browse project-scoped persistent memories, filter records, open details, delete the selection with `d`, and save the rendered Markdown view. |
@@ -436,6 +437,18 @@ Current support reflects behavior implemented in the repository today.
   mutation. `mez sandbox toolchains enable rust --yes` stores only the typed
   selection; Bubblewrap mounts Cargo and Rustup read-only with deterministic
   PATH precedence and never exposes the complete home or credential state.
+  That standalone command updates disk configuration; an existing service
+  requires `/toolchain reload`, `config/reload`, or a session restart before
+  the change becomes effective.
+- In the agent shell, `/toolchain` and `/toolchain status` report supported,
+  configured, discoverable, and effective state for the active pane.
+  `/toolchain detect [rust]` is read-only and uses only active-pane bootstrap
+  evidence. `/toolchain enable rust --yes` and `/toolchain disable rust --yes`
+  persist only the typed kind and hot-apply real changes to subsequent
+  sandboxed actions. Existing interactive shells and already-running actions
+  are unchanged. `/toolchain reload` performs a full disk-backed configuration
+  reload rather than reloading only the toolchain field. Toolchains remain a
+  typed allowlist, not arbitrary PATH or host-mount configuration.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks

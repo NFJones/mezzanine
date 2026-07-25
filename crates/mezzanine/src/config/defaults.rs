@@ -474,6 +474,8 @@ sandbox = "policy-only"
 # git_user_email = "you@example.invalid"
 # Opt-in read-only Rust projection; enable with
 # `mez sandbox toolchains enable rust --yes` after reviewing detected roots.
+# Existing services then require `/toolchain reload`, `config/reload`, or a
+# restart; `/toolchain enable rust --yes` hot-applies subsequent actions.
 # toolchains = ["rust"]
 trusted_directories = []
 trusted_projects = []

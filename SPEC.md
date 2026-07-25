@@ -2958,6 +2958,20 @@ initial supported kind is `rust`. Configuration MUST persist only the typed
 kind and MUST NOT persist arbitrary host paths. `mez sandbox toolchains detect
 [PATH]` MUST be read-only. Enabling a toolchain MUST require direct-user
 confirmation, and noninteractive or JSON mutation MUST require `--yes`.
+The agent shell `/toolchain` command and `/toolchain status` MUST report
+supported, configured, discoverable, and effective state for the active pane.
+`/toolchain detect [rust]` MUST be read-only and MUST use active-pane bootstrap
+evidence rather than ambient service environment state. `/toolchain enable
+rust --yes` and `/toolchain disable rust --yes` MUST require explicit
+confirmation, persist only typed kinds, and apply real changes to subsequent
+sandboxed actions without rewriting existing interactive shells or actions
+that are already running. Repeating an already-satisfied mutation MUST be a
+no-op and MUST NOT advance configuration generation. `/toolchain reload` MUST
+perform the existing full disk-backed configuration reload, not a field-only
+toolchain reload, and MUST disclose that all changed configuration was
+reapplied. A standalone `mez sandbox toolchains enable` mutation MUST require
+`/toolchain reload`, `config/reload`, or session restart before it affects an
+already-running service.
 Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
 derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
 evidence, reject missing, symlinked, overlapping, unexpected, credential, and
@@ -5747,6 +5761,18 @@ The baseline command capabilities are:
 - `/trust`: Trust a pending project overlay root. It MUST accept a project root,
   `latest`, or the only pending project trust request for the live session, and
   it MUST provide a list view for pending project trust requests.
+- `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
+  active pane. It MUST accept no argument or `status`, `list`, `detect [rust]`,
+  `enable rust --yes`, `disable rust --yes`, and `reload`. Unknown kinds,
+  missing confirmation, duplicate confirmation, and extra arguments MUST
+  produce a pane-local usage error without mutation. Status MUST distinguish
+  active, selected-but-inactive, selected-but-unavailable,
+  available-but-disabled, and disabled-and-unavailable states. Detection MUST
+  be read-only. Enable and disable MUST preserve typed kind-only persistence,
+  apply only to subsequent sandboxed actions, and leave existing shells and
+  already-running actions unchanged. Reload MUST run the complete disk-backed
+  config reload. Toolchain commands MUST NOT become a general PATH,
+  environment-variable, or arbitrary host-mount configuration surface.
 - `/list-sessions`: Show resumable saved agent sessions in the pane buffer as a
   nested list keyed by conversation UUID, sorted by last activity with the most
   recent session first. Prompt summaries MAY be truncated to the terminal width

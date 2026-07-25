@@ -679,6 +679,44 @@ fn selector_shadow_hint_completes_agent_slash_prefix() {
     assert_eq!(hint.kind, SelectorCandidateKind::Command);
 }
 
+/// Verifies `/tool` completes the canonical typed-toolchain command before
+/// argument-specific completion takes over.
+#[test]
+fn selector_shadow_hint_completes_toolchain_command_name() {
+    let hint = shadow_hint(SelectorSurface::AgentCommand, "/tool", 5).unwrap();
+
+    assert_eq!(hint.text, "chain");
+    assert_eq!(hint.kind, SelectorCandidateKind::Command);
+}
+
+/// Verifies `/toolchain` completion follows its strict grammar from operation
+/// through typed Rust selection and explicit mutation confirmation.
+#[test]
+fn selector_shadow_hint_completes_toolchain_grammar() {
+    let cases = [
+        ("/toolchain sta", "tus", SelectorCandidateKind::Value),
+        ("/toolchain detect r", "ust", SelectorCandidateKind::Value),
+        ("/toolchain enable r", "ust", SelectorCandidateKind::Value),
+        ("/toolchain disable r", "ust", SelectorCandidateKind::Value),
+        (
+            "/toolchain enable rust --y",
+            "es",
+            SelectorCandidateKind::Flag,
+        ),
+        (
+            "/toolchain disable rust --y",
+            "es",
+            SelectorCandidateKind::Flag,
+        ),
+    ];
+
+    for (line, expected_text, expected_kind) in cases {
+        let hint = shadow_hint(SelectorSurface::AgentCommand, line, line.len()).unwrap();
+        assert_eq!(hint.text, expected_text, "completion for {line}");
+        assert_eq!(hint.kind, expected_kind, "candidate kind for {line}");
+    }
+}
+
 /// Verifies dynamic argument candidates can provide shadow completion text.
 #[test]
 fn selector_shadow_hint_completes_dynamic_resume_candidate() {
@@ -733,11 +771,21 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
         "/routing ".len(),
     )
     .unwrap();
+    let toolchain_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/toolchain ",
+        "/toolchain ".len(),
+    )
+    .unwrap();
 
     assert_eq!(loop_hint.text, " [--fork|--new] [--limit <int>] <prompt>");
     assert_eq!(latency_hint.text, " <slow|default|fast>");
     assert_eq!(trust_hint.text, " <project-root|latest|list|pending>");
     assert_eq!(routing_hint.text, " <on|off|toggle|status|policy>");
+    assert_eq!(
+        toolchain_hint.text,
+        " <status|list|detect|enable|disable|reload>"
+    );
     assert_eq!(
         personality_hint.text,
         " <profile|style|list|status|show|clear|default>"

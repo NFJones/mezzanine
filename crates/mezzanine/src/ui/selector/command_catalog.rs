@@ -313,6 +313,24 @@ pub(super) fn agent_argument_candidates(
     command: &str,
     context: &SelectorTokenContext,
 ) -> Vec<SelectorCandidate> {
+    if command == "toolchain" {
+        let candidates = match context.tokens_before.get(1).map(String::as_str) {
+            None => value_candidates(&["status", "list", "detect", "enable", "disable", "reload"]),
+            Some("detect" | "enable" | "disable") if context.tokens_before.len() == 2 => {
+                value_candidates(&["rust"])
+            }
+            Some("enable" | "disable")
+                if context
+                    .tokens_before
+                    .get(2)
+                    .is_some_and(|kind| kind == "rust") =>
+            {
+                flag_candidates(&["--yes"])
+            }
+            _ => Vec::new(),
+        };
+        return dedupe_selector_candidates(candidates);
+    }
     if command == "routing"
         && context
             .tokens_before
