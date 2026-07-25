@@ -152,6 +152,8 @@ pub(crate) enum SandboxToolchainKind {
     Bun,
     /// One self-contained Node.js distribution selected by the active pane.
     Node,
+    /// One selected Python base runtime with an optional trusted-project environment.
+    Python,
 }
 
 impl SandboxToolchainKind {
@@ -164,6 +166,7 @@ impl SandboxToolchainKind {
             Self::Deno => "deno",
             Self::Bun => "bun",
             Self::Node => "node",
+            Self::Python => "python",
         }
     }
 }

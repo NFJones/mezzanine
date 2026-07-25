@@ -362,6 +362,55 @@ fn runtime_agent_shell_node_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Confirmed Python detection and enablement consume only active-pane base
+/// runtime evidence and persist the typed kind without host paths or caches.
+#[test]
+fn runtime_agent_shell_python_toolchain_detects_and_persists_only_kind() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-python-toolchain-mutation", config);
+    let python_root = path.parent().unwrap().join("python-runtime");
+    fs::create_dir_all(python_root.join("bin")).unwrap();
+    fs::create_dir_all(python_root.join("lib")).unwrap();
+    fs::write(python_root.join("bin/python3"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        python_root.join("bin/python3"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let python_root = python_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("python-runtime:{}", python_root.display())]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"python-detect","method":"agent/shell/command","params":{"idempotency_key":"python-detect","input":"/toolchain detect python"}}"#,
+        &primary,
+    );
+    assert!(detect.contains("kind=python"), "{detect}");
+    assert!(detect.contains("available=true"), "{detect}");
+
+    let enabled = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"python-enable","method":"agent/shell/command","params":{"idempotency_key":"python-enable","input":"/toolchain enable python --yes"}}"#,
+        &primary,
+    );
+    assert!(enabled.contains("kind=python"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(
+        persisted.contains("toolchains = [\"python\"]"),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&python_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

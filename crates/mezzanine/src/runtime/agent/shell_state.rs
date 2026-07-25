@@ -245,15 +245,16 @@ impl RuntimeSessionService {
                 )
             })?;
             let maximum_authority = self.bubblewrap_path_scopes_for_turn(turn, evaluation)?;
+            let trusted_project_root = self.trusted_project_root_for_pane(&turn.pane_id);
             let managed_home = match (
                 self.integration.config_root(),
-                self.trusted_project_root_for_pane(&turn.pane_id),
+                trusted_project_root.as_ref(),
             ) {
                 (Some(config_root), Some(project_root)) => {
                     let (home, activity_lock) =
                         crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload(
                             config_root,
-                            &project_root,
+                            project_root,
                         )
                         .map_err(|error| MezError::invalid_state(error.message()))?;
                     managed_home_activity_lock = Some(activity_lock);
@@ -261,12 +262,14 @@ impl RuntimeSessionService {
                 }
                 _ => None,
             };
-            let toolchain_projection = crate::security::sandbox::resolve_toolchain_projection(
-                &config.toolchains,
-                &signature.environment_managers,
-                &signature.os,
-            )
-            .map_err(|error| MezError::invalid_state(error.message()))?;
+            let toolchain_projection =
+                crate::security::sandbox::resolve_toolchain_projection_for_project(
+                    &config.toolchains,
+                    &signature.environment_managers,
+                    &signature.os,
+                    trusted_project_root.as_deref(),
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
             let launch_plan = match crate::security::sandbox::compile_bubblewrap_launch_plan(
                 crate::security::sandbox::BubblewrapCompileRequest {
                     config: &config,

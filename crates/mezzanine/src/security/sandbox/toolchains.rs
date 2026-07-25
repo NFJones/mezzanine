@@ -21,13 +21,14 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 6] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 7] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
     SandboxToolchainKind::Deno,
     SandboxToolchainKind::Bun,
     SandboxToolchainKind::Node,
+    SandboxToolchainKind::Python,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -56,6 +57,10 @@ pub(crate) const SANDBOX_BUN_PATH: &str = "/opt/mez/toolchains/bun/root/bin:/usr
 pub(crate) const SANDBOX_NODE_ROOT: &str = "/opt/mez/toolchains/node/root";
 /// Fixed executable search path used when only Node.js is projected.
 pub(crate) const SANDBOX_NODE_PATH: &str = "/opt/mez/toolchains/node/root/bin:/usr/bin:/bin";
+/// Fixed Python base-runtime projection inside Bubblewrap.
+pub(crate) const SANDBOX_PYTHON_ROOT: &str = "/opt/mez/toolchains/python/root";
+/// Fixed executable search path used when only the Python base runtime is projected.
+pub(crate) const SANDBOX_PYTHON_PATH: &str = "/opt/mez/toolchains/python/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -463,6 +468,68 @@ const NODE_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const PYTHON_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "python-runtime",
+    label: "Python runtime",
+    sandbox_destination: SANDBOX_PYTHON_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/python3"],
+    required_directories: &["lib"],
+}];
+const PYTHON_ENVIRONMENT: [ToolchainEnvironmentVariable; 3] = [
+    ToolchainEnvironmentVariable {
+        name: "PIP_CACHE_DIR",
+        value: "/home/mez/.cache/pip",
+    },
+    ToolchainEnvironmentVariable {
+        name: "UV_CACHE_DIR",
+        value: "/home/mez/.cache/uv",
+    },
+    ToolchainEnvironmentVariable {
+        name: "PYTHONNOUSERSITE",
+        value: "1",
+    },
+];
+const PYTHON_MANAGED_STATE: [ManagedToolchainState; 2] = [
+    ManagedToolchainState {
+        purpose: "pip-cache",
+        sandbox_path: "/home/mez/.cache/pip",
+    },
+    ManagedToolchainState {
+        purpose: "uv-cache",
+        sandbox_path: "/home/mez/.cache/uv",
+    },
+];
+const PYTHON_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Python,
+    aliases: &["python", "python3"],
+    roots: &PYTHON_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/python",
+    ],
+    path_entries: &["/opt/mez/toolchains/python/root/bin"],
+    environment: &PYTHON_ENVIRONMENT,
+    managed_state: &PYTHON_MANAGED_STATE,
+    forbidden_descendants: &[
+        "pip.conf",
+        ".pypirc",
+        "keyring",
+        "credentials",
+        "site-packages",
+    ],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -483,6 +550,17 @@ pub(crate) struct ResolvedToolchain {
     pub(crate) roots: Vec<ResolvedToolchainRoot>,
 }
 
+/// One validated repository-contained executable environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedProjectEnvironment {
+    /// Toolchain kind that owns the environment contract.
+    pub(crate) kind: SandboxToolchainKind,
+    /// Canonical host path already projected through trusted project authority.
+    pub(crate) host_path: PathBuf,
+    /// Sandbox-visible path, identical to the trusted project path.
+    pub(crate) sandbox_path: String,
+}
+
 /// Deterministically composed projection consumed by Bubblewrap compilation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainProjection {
@@ -498,6 +576,8 @@ pub(crate) struct ResolvedToolchainProjection {
     pub(crate) environment: BTreeMap<&'static str, &'static str>,
     /// Managed-state declarations for status and future quotas.
     pub(crate) managed_state: Vec<ManagedToolchainState>,
+    /// Repository-contained executable environments that reuse project authority.
+    pub(crate) project_environments: Vec<ResolvedProjectEnvironment>,
 }
 
 impl ResolvedToolchainProjection {
@@ -518,6 +598,18 @@ impl ResolvedToolchainProjection {
                         "{} falls outside maximum sandbox read authority",
                         root.sandbox_destination
                     ),
+                ));
+            }
+        }
+        for environment in &self.project_environments {
+            if !authority
+                .read_scopes
+                .iter()
+                .any(|scope| environment.host_path.starts_with(Path::new(scope)))
+            {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::ToolchainOutsideAuthority,
+                    "Python project environment falls outside maximum sandbox read authority",
                 ));
             }
         }
@@ -594,6 +686,23 @@ impl ResolvedToolchainProjection {
                 }
             }
         }
+        for environment in &self.project_environments {
+            if environment.kind != SandboxToolchainKind::Python
+                || !self.kinds.contains(&SandboxToolchainKind::Python)
+            {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "resolved project environment has no matching selected toolchain",
+                ));
+            }
+            validate_python_project_environment(&environment.host_path)?;
+            if environment.sandbox_path != environment.host_path.display().to_string() {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "resolved Python project environment has an invalid sandbox path",
+                ));
+            }
+        }
         if self.roots.len() != expected_root_count
             || self.sandbox_directories != expected_directories
             || self.path_entries != expected_path_entries
@@ -623,10 +732,11 @@ impl ResolvedToolchainProjection {
 
     /// Builds deterministic PATH with the fixed system suffix.
     pub(crate) fn executable_path(&self) -> String {
-        self.path_entries
+        self.project_environments
             .iter()
-            .copied()
-            .chain(["/usr/bin", "/bin"])
+            .map(|environment| format!("{}/bin", environment.sandbox_path))
+            .chain(self.path_entries.iter().map(|entry| (*entry).to_string()))
+            .chain(["/usr/bin".to_string(), "/bin".to_string()])
             .collect::<Vec<_>>()
             .join(":")
     }
@@ -643,6 +753,7 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Deno => &DENO_DESCRIPTOR,
         SandboxToolchainKind::Bun => &BUN_DESCRIPTOR,
         SandboxToolchainKind::Node => &NODE_DESCRIPTOR,
+        SandboxToolchainKind::Python => &PYTHON_DESCRIPTOR,
     }
 }
 
@@ -651,6 +762,16 @@ pub(crate) fn resolve_toolchain_projection(
     selected: &[SandboxToolchainKind],
     environment_managers: &[String],
     host_os: &str,
+) -> Result<Option<ResolvedToolchainProjection>, SandboxCompileError> {
+    resolve_toolchain_projection_for_project(selected, environment_managers, host_os, None)
+}
+
+/// Resolves selected descriptors and an optional trusted-project environment.
+pub(crate) fn resolve_toolchain_projection_for_project(
+    selected: &[SandboxToolchainKind],
+    environment_managers: &[String],
+    host_os: &str,
+    trusted_project_root: Option<&Path>,
 ) -> Result<Option<ResolvedToolchainProjection>, SandboxCompileError> {
     if selected.is_empty() {
         return Ok(None);
@@ -688,7 +809,15 @@ pub(crate) fn resolve_toolchain_projection(
         }
         resolved.push(resolve_descriptor(descriptor, environment_managers)?);
     }
-    compose_toolchain_projection(&resolved).map(Some)
+    let mut projection = compose_toolchain_projection(&resolved)?;
+    if selected_set.contains(&SandboxToolchainKind::Python)
+        && let Some(project_root) = trusted_project_root
+        && let Some(environment) = resolve_python_project_environment(project_root)?
+    {
+        projection.project_environments.push(environment);
+        projection.validate()?;
+    }
+    Ok(Some(projection))
 }
 
 /// Resolves one descriptor from bounded pane-bootstrap evidence.
@@ -777,6 +906,7 @@ fn compose_toolchain_projection(
         path_entries: Vec::new(),
         environment: BTreeMap::new(),
         managed_state: Vec::new(),
+        project_environments: Vec::new(),
     };
     let mut destinations = BTreeSet::new();
     let mut managed_paths = BTreeSet::new();
@@ -1264,6 +1394,138 @@ pub(crate) fn discover_node_from_search_path(
         return Ok(Some(root));
     }
     Ok(None)
+}
+
+/// Discovers the first selected Python base runtime from an explicit search path.
+///
+/// The executable must be a real `<root>/bin/python3` file. Discovery never
+/// runs activation scripts or manager hooks and does not inspect ambient
+/// Python, pip, uv, pyenv, asdf, or mise configuration.
+pub(crate) fn discover_python_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    let Some(search_path) = search_path else {
+        return Ok(None);
+    };
+    for directory in std::env::split_paths(search_path) {
+        let executable = directory.join("python3");
+        let metadata = match fs::symlink_metadata(&executable) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to inspect selected Python executable: {error}"),
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "selected Python executable must be a real file, not a shim or symlink",
+            ));
+        }
+        let root = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "selected Python executable has no runtime root",
+                )
+            })?
+            .canonicalize()
+            .map_err(|error| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to canonicalize selected Python runtime: {error}"),
+                )
+            })?;
+        validate_descriptor_root(&root, &PYTHON_ROOTS[0])?;
+        return Ok(Some(root));
+    }
+    Ok(None)
+}
+
+/// Resolves an optional `.venv` contained by one trusted canonical project.
+fn resolve_python_project_environment(
+    project_root: &Path,
+) -> Result<Option<ResolvedProjectEnvironment>, SandboxCompileError> {
+    let project_root = project_root.canonicalize().map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to canonicalize trusted project root: {error}"),
+        )
+    })?;
+    let environment = project_root.join(".venv");
+    match fs::symlink_metadata(&environment) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "Python project environment must not be a symlink",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                format!("failed to inspect Python project environment: {error}"),
+            ));
+        }
+    }
+    let environment = environment.canonicalize().map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to canonicalize Python project environment: {error}"),
+        )
+    })?;
+    if !environment.starts_with(&project_root)
+        || environment.parent() != Some(project_root.as_path())
+    {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            "Python project environment must remain directly inside the trusted project",
+        ));
+    }
+    validate_python_project_environment(&environment)?;
+    Ok(Some(ResolvedProjectEnvironment {
+        kind: SandboxToolchainKind::Python,
+        sandbox_path: environment.display().to_string(),
+        host_path: environment,
+    }))
+}
+
+/// Validates one contained Python virtual environment without executing it.
+fn validate_python_project_environment(environment: &Path) -> Result<(), SandboxCompileError> {
+    let metadata = fs::symlink_metadata(environment).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to inspect Python project environment: {error}"),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            "Python project environment must be a real directory",
+        ));
+    }
+    validate_distribution_directory(environment, "bin", "Python project environment")?;
+    validate_distribution_executable(environment, "bin/python", "Python project environment")?;
+    let config = environment.join("pyvenv.cfg");
+    let config_metadata = fs::symlink_metadata(&config).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to inspect Python project environment pyvenv.cfg: {error}"),
+        )
+    })?;
+    if config_metadata.file_type().is_symlink() || !config_metadata.is_file() {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            "Python project environment pyvenv.cfg must be a real file",
+        ));
+    }
+    Ok(())
 }
 
 /// Discovers Rust roots from explicit active-pane bootstrap records.

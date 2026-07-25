@@ -1460,6 +1460,133 @@ fn node_toolchain_discovery_rejects_malformed_and_symlinked_distributions() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A selected Python base runtime remains read-only while one valid trusted
+/// project `.venv` reuses project authority and takes deterministic PATH precedence.
+#[test]
+fn python_toolchain_composes_contained_project_environment() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-python-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let runtime = base.join("python-runtime");
+    std::fs::create_dir_all(runtime.join("bin")).unwrap();
+    std::fs::create_dir_all(runtime.join("lib")).unwrap();
+    std::fs::write(runtime.join("bin/python3"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        runtime.join("bin/python3"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let project = base.join("project");
+    let environment = project.join(".venv");
+    std::fs::create_dir_all(environment.join("bin")).unwrap();
+    std::fs::write(environment.join("pyvenv.cfg"), "home = /python\n").unwrap();
+    std::fs::write(environment.join("bin/python"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        environment.join("bin/python"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let runtime = runtime.canonicalize().unwrap();
+    let project = project.canonicalize().unwrap();
+    let environment = environment.canonicalize().unwrap();
+    let managers = [format!("python-runtime:{}", runtime.display())];
+
+    let projection = resolve_toolchain_projection_for_project(
+        &[SandboxToolchainKind::Python],
+        &managers,
+        "linux",
+        Some(&project),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(projection.roots[0].sandbox_destination, SANDBOX_PYTHON_ROOT);
+    assert_eq!(projection.project_environments[0].host_path, environment);
+    assert!(projection.executable_path().starts_with(&format!(
+        "{}/bin:{}",
+        environment.display(),
+        SANDBOX_PYTHON_ROOT
+    )));
+    assert_eq!(
+        projection.environment.get("PIP_CACHE_DIR"),
+        Some(&"/home/mez/.cache/pip")
+    );
+    assert_eq!(
+        projection.environment.get("UV_CACHE_DIR"),
+        Some(&"/home/mez/.cache/uv")
+    );
+    assert_eq!(projection.environment.get("PYTHONNOUSERSITE"), Some(&"1"));
+    for omitted in [
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PIP_CONFIG_FILE",
+        "UV_CONFIG_FILE",
+    ] {
+        assert!(!projection.environment.contains_key(omitted));
+    }
+
+    let maximum_authority = home_authority(&base.canonicalize().unwrap().display().to_string());
+    projection.validate_authority(&maximum_authority).unwrap();
+    let outside = authority();
+    assert_eq!(
+        projection.validate_authority(&outside).unwrap_err().kind(),
+        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Python project-environment discovery fails closed for malformed or
+/// symlinked `.venv` state instead of importing an external environment.
+#[test]
+fn python_toolchain_rejects_malformed_and_symlinked_project_environments() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-python-project-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let runtime = base.join("python-runtime");
+    std::fs::create_dir_all(runtime.join("bin")).unwrap();
+    std::fs::create_dir_all(runtime.join("lib")).unwrap();
+    std::fs::write(runtime.join("bin/python3"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        runtime.join("bin/python3"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let project = base.join("project");
+    let environment = project.join(".venv");
+    std::fs::create_dir_all(environment.join("bin")).unwrap();
+    let runtime = runtime.canonicalize().unwrap();
+    let project = project.canonicalize().unwrap();
+    let managers = [format!("python-runtime:{}", runtime.display())];
+
+    let malformed = resolve_toolchain_projection_for_project(
+        &[SandboxToolchainKind::Python],
+        &managers,
+        "linux",
+        Some(&project),
+    )
+    .unwrap_err();
+    assert_eq!(malformed.kind(), SandboxCompileErrorKind::InvalidInput);
+
+    std::fs::remove_dir_all(&environment).unwrap();
+    let external = base.join("external-venv");
+    std::fs::create_dir_all(&external).unwrap();
+    std::os::unix::fs::symlink(&external, &environment).unwrap();
+    let symlink = resolve_toolchain_projection_for_project(
+        &[SandboxToolchainKind::Python],
+        &managers,
+        "linux",
+        Some(&project),
+    )
+    .unwrap_err();
+    assert_eq!(symlink.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Descriptor resolution and final launch validation reject ambiguous
 /// selection and any mutation of code-owned projection metadata or classes.
 #[test]
@@ -1609,13 +1736,16 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .iter()
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
-        vec!["rust", "zig", "go", "deno", "bun", "node"]
+        vec!["rust", "zig", "go", "deno", "bun", "node", "python"]
     );
     assert_eq!(
         parse_sandbox_toolchain_kind("rust"),
         Some(SandboxToolchainKind::Rust)
     );
-    assert_eq!(parse_sandbox_toolchain_kind("python"), None);
+    assert_eq!(
+        parse_sandbox_toolchain_kind("python"),
+        Some(SandboxToolchainKind::Python)
+    );
     assert_eq!(
         SANDBOX_RUST_PATH,
         format!("{SANDBOX_RUST_CARGO_BIN}:/usr/bin:/bin")

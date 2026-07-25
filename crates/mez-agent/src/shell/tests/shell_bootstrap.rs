@@ -34,6 +34,8 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains("env_manager \"bun:"));
     assert!(script.contains("command -v node"));
     assert!(script.contains("env_manager \"node-runtime:"));
+    assert!(script.contains("command -v python3"));
+    assert!(script.contains("env_manager \"python-runtime:"));
     assert!(script.contains("bootstrap"));
     assert!(script.contains("complete"));
     assert!(script.contains("AGENTS.md"));
@@ -66,6 +68,8 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     assert!(script.contains("env_manager \"bun:"));
     assert!(script.contains("command -s node"));
     assert!(script.contains("env_manager \"node-runtime:"));
+    assert!(script.contains("command -s python3"));
+    assert!(script.contains("env_manager \"python-runtime:"));
 }
 
 #[test]

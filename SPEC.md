@@ -2968,8 +2968,10 @@ Deno. Schema v29 adds the allowlisted `bun` kind. Schema v28 to v29 migration
 MUST preserve an existing selection or omission and MUST NOT discover or
 enable Bun. Schema v30 adds the allowlisted `node` kind. Schema v29 to v30
 migration MUST preserve an existing selection or omission and MUST NOT
-discover or enable Node.js. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node`; omission MUST retain the existing Rust
+discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
+Schema v30 to v31 migration MUST preserve an existing selection or omission
+and MUST NOT discover or enable Python. Direct-user detection MUST accept
+`--kind rust|zig|go|deno|bun|node|python`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state.
 Toolchain projection MUST be descriptor-driven. Each supported kind MUST own
@@ -3059,6 +3061,24 @@ Node environment variables. Repository `node_modules/.bin` remains a separate
 project-controlled authority and MUST NOT be implied by selecting Node.js.
 Corepack downloads and package-manager network activity remain subject to the
 normal action network policy.
+The same detect, enable, and disable grammar MUST accept `python`. Python
+evidence MUST identify one canonical base runtime containing a real executable
+`bin/python3` file and real `lib` directory selected by the active pane. The
+runtime MUST be mounted read-only at `/opt/mez/toolchains/python/root`, and its
+`bin` directory MUST precede `/usr/bin:/bin`. `PIP_CACHE_DIR` and
+`UV_CACHE_DIR` MUST resolve beneath `/home/mez`, and `PYTHONNOUSERSITE` MUST be
+enabled. Host `PYTHONHOME`, `PYTHONPATH`, user site packages, pip
+configuration, package-index credentials, keyrings, caches, manager state, and
+unrelated virtual environments MUST remain hidden. When Python is selected and
+the active pane has a trusted canonical project containing a real `.venv`
+directory, Mezzanine MAY prepend that contained `.venv/bin` and synthesize
+`VIRTUAL_ENV`. The environment MUST contain real `pyvenv.cfg`, `bin`, and
+executable `bin/python` entries, remain directly inside the trusted project,
+and reuse existing project authority rather than adding another host mount.
+Missing `.venv` state MUST leave the base runtime usable; malformed, symlinked,
+external, or out-of-authority environments MUST fail closed. Detection MUST
+never execute activation scripts or manager hooks, and Mezzanine MUST NOT
+create, install into, or otherwise mutate a virtual environment automatically.
 Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
 derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
 evidence, reject missing, symlinked, overlapping, unexpected, credential, and
@@ -5850,9 +5870,9 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
-  `node`. Unknown kinds, missing confirmation, duplicate confirmation, and
+  `node`, or `python`. Unknown kinds, missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,

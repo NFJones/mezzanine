@@ -433,22 +433,23 @@ Current support reflects behavior implemented in the repository today.
   a paired sanitized Git name and email; only those identity values are
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
-- `mez sandbox toolchains detect [--kind rust|zig|go|deno|bun|node] [PATH]`
+- `mez sandbox toolchains detect [--kind rust|zig|go|deno|bun|node|python] [PATH]`
   previews
   canonical roots without mutation. `mez sandbox toolchains enable KIND --yes`
   stores only the typed selection. Rust mounts Cargo and Rustup read-only; Zig,
-  Go, Deno, Bun, and Node.js mount one self-contained distribution, SDK, or
+  Go, Deno, Bun, Node.js, and Python mount one self-contained distribution, SDK, or
   runtime read-only. Writable cache and package state is redirected beneath
   `/home/mez`; host credentials, caches, Deno authentication and certificate
   settings, Bun global tools and configuration, npm credentials and global
-  packages, `GOBIN`, and `GOPATH/bin` remain hidden. Node.js does not
+  packages, Python package credentials and host caches, `GOBIN`, and
+  `GOPATH/bin` remain hidden. Node.js does not
   implicitly add repository `node_modules/.bin` to PATH.
   That standalone command updates disk configuration; an existing service
   requires `/toolchain reload`, `config/reload`, or a session restart before
   the change becomes effective.
 - In the agent shell, `/toolchain` and `/toolchain status` report supported,
   configured, discoverable, and effective state for the active pane.
-  `/toolchain detect [rust|zig|go|deno|bun|node]` is read-only and uses only
+  `/toolchain detect [rust|zig|go|deno|bun|node|python]` is read-only and uses only
   active-pane bootstrap evidence. `/toolchain enable KIND --yes` and
   `/toolchain disable KIND --yes` persist only the typed kind and hot-apply
   real changes to subsequent sandboxed actions. Existing interactive shells
