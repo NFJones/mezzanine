@@ -214,6 +214,52 @@ fn unknown_effects_compile_to_bounded_maximum_authority() {
     );
 }
 
+/// Verifies classifier-observed filesystem operands remain advisory even when
+/// they are lexically concrete. Outside, missing, expanded, and heuristic
+/// operands must not require path evidence or narrow the maximum mount graph.
+#[test]
+fn advisory_filesystem_operands_compile_to_maximum_authority() {
+    let config = config();
+    let authority = authority();
+    let mut advisory = effects();
+    advisory.reads = vec![
+        "/home/alice".to_string(),
+        "missing.txt".to_string(),
+        "*.rs".to_string(),
+        "~/secret.txt".to_string(),
+        "escape-link".to_string(),
+        "5".to_string(),
+    ];
+    let evaluation = evaluation(EffectCompleteness::Unknown, advisory);
+
+    let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
+
+    assert_eq!(
+        plan.audit_summary.authority_source,
+        SandboxAuthoritySource::Maximum
+    );
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", "/workspace", "/workspace"])
+    );
+    for advisory_operand in [
+        "/home/alice",
+        "missing.txt",
+        "*.rs",
+        "~/secret.txt",
+        "escape-link",
+        "5",
+    ] {
+        assert!(
+            !plan
+                .arguments
+                .iter()
+                .any(|argument| argument == advisory_operand)
+        );
+    }
+}
+
 /// Broad deterministic user-home authority keeps ordinary files available but
 /// masks every direct credential directory after the parent host bind.
 #[test]

@@ -328,6 +328,47 @@ fn real_bubblewrap_enforces_maximum_authority_and_isolation() {
 }
 
 #[test]
+/// Proves an advisory outside-path operand does not prevent compilation or
+/// payload launch. The command starts inside Bubblewrap and then returns a
+/// normal nonzero workload status because the host path is not projected.
+fn real_bubblewrap_advisory_outside_path_fails_inside_payload() {
+    let config = config();
+    let Some(capability) = verified_capability(&config) else {
+        return;
+    };
+    let fixture = RealBubblewrapFixture::new("advisory-outside-path");
+    let outside_path = fixture.host_home.join("secret.txt");
+    let mut advisory = effects();
+    advisory.reads = vec![outside_path.to_string_lossy().into_owned()];
+    let evaluation = evaluation(EffectCompleteness::Unknown, advisory);
+    let plan = real_plan(&config, capability, &fixture.authority(), &evaluation);
+    assert_eq!(
+        plan.audit_summary.authority_source,
+        SandboxAuthoritySource::Maximum
+    );
+    assert!(
+        !plan
+            .arguments
+            .iter()
+            .any(|argument| argument == &outside_path.to_string_lossy())
+    );
+
+    let command = format!(
+        "printf '%s\\n' REAL_BWRAP_ADVISORY_PAYLOAD_STARTED\ncat {}",
+        shell_quote(&outside_path),
+    );
+    let output = execute_plan(plan, &command);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("REAL_BWRAP_ADVISORY_PAYLOAD_STARTED"),
+        "status={:?} stdout={stdout:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains(";D;1;mez_marker="), "stdout={stdout:?}");
+}
+
+#[test]
 /// Proves an authorized network effect selects the connected Bubblewrap
 /// profile while retaining the production filesystem confinement plan.
 fn real_bubblewrap_authorized_network_uses_connected_profile() {

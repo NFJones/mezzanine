@@ -2211,10 +2211,11 @@ fn runtime_complete_effects_request_action_specific_path_resolution() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies unknown filesystem effects retain maximum authority and do not
-/// dispatch an unnecessary action-specific resolver transaction.
+/// Verifies advisory filesystem operands retain maximum authority and do not
+/// dispatch an action-specific resolver. Concrete outside, missing, glob,
+/// tilde, symlink, and heuristic operands remain payload-level observations.
 #[test]
-fn runtime_unknown_effects_skip_action_specific_path_resolution() {
+fn runtime_advisory_effects_skip_action_specific_path_resolution() {
     let root = temp_root("runtime-unknown-action-path-resolution");
     fs::create_dir_all(root.join("src")).unwrap();
     let mut service = test_runtime_service();
@@ -2230,8 +2231,14 @@ fn runtime_unknown_effects_skip_action_specific_path_resolution() {
     mark_test_pane_ready(&mut service, "%1");
 
     let mut effects = path_resolution_effects();
-    effects.reads.push("src".to_string());
-    effects.unknown = true;
+    effects.reads = vec![
+        "/home/alice".to_string(),
+        "missing.txt".to_string(),
+        "*.rs".to_string(),
+        "~/secret.txt".to_string(),
+        "escape-link".to_string(),
+        "5".to_string(),
+    ];
     let evaluation =
         path_resolution_evaluation(mez_agent::permissions::EffectCompleteness::Unknown, effects);
 
