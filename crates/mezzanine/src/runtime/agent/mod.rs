@@ -211,7 +211,7 @@ pub(crate) struct RuntimeAgentComponent {
     /// Per-turn successful shell dispatch history.
     agent_turn_shell_dispatch_history: BTreeMap<String, AgentShellDispatchHistory>,
     /// Consecutive idle-recovery observations of shell actions blocked behind
-    /// a non-shell foreground process, keyed by turn and action identity.
+    /// an uncertified foreground process group, keyed by turn and action identity.
     pending_shell_dispatch_blocked_recovery_attempts: BTreeMap<(String, String), usize>,
     /// Per-turn network action history.
     agent_turn_network_action_history: BTreeMap<String, AgentNetworkActionHistory>,

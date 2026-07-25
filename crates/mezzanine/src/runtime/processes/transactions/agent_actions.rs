@@ -91,6 +91,9 @@ impl RuntimeSessionService {
         self.process
             .shell_transaction_started_markers
             .insert(marker.to_string());
+        if transaction.kind == RunningShellTransactionKind::Bootstrap {
+            self.observe_agent_subshell_bootstrap_start(pane_id, marker);
+        }
         let kind_name = runtime_running_shell_transaction_kind_name(&transaction.kind).to_string();
         let payload = self
             .process

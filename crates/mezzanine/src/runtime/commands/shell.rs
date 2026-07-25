@@ -904,10 +904,29 @@ impl RuntimeSessionService {
             self.session.shell.path(),
             self.shell_classification_for_pane(pane_id),
         )?;
-        match self.write_runtime_pane_input(pane_id, shell_command.as_bytes()) {
+        self.begin_agent_subshell_shell_handoff(pane_id)?;
+        let prepared_bootstrap = match self.prepare_bootstrap_to_pane(pane_id) {
+            Ok(prepared_bootstrap) => prepared_bootstrap,
+            Err(error) => {
+                self.clear_agent_subshell_shell_identity(pane_id);
+                return Err(error);
+            }
+        };
+        let mut handoff_input = shell_command.into_bytes();
+        if let Some((marker, wrapper)) = prepared_bootstrap.as_ref() {
+            self.bind_agent_subshell_bootstrap_marker(pane_id, marker);
+            handoff_input.extend_from_slice(wrapper.as_bytes());
+            if let Some(payload) = self.take_inline_bootstrap_payload(marker) {
+                handoff_input.extend_from_slice(&payload);
+            }
+        }
+        match self.write_runtime_pane_input(pane_id, &handoff_input) {
             Ok(()) => {
                 self.enter_agent_subshell(pane_id);
                 self.take_agent_subshell_command_exit(pane_id);
+                if let Some((marker, _)) = prepared_bootstrap {
+                    self.record_bootstrap_sent(pane_id, &marker)?;
+                }
                 self.remember_hidden_shell_render_suppression(pane_id);
                 Ok(true)
             }
@@ -918,9 +937,19 @@ impl RuntimeSessionService {
                         Some(std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected)
                     ) =>
             {
+                if prepared_bootstrap.is_some() {
+                    self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+                }
+                self.clear_agent_subshell_shell_identity(pane_id);
                 Ok(false)
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                if prepared_bootstrap.is_some() {
+                    self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+                }
+                self.clear_agent_subshell_shell_identity(pane_id);
+                Err(error)
+            }
         }
     }
 
@@ -938,16 +967,21 @@ impl RuntimeSessionService {
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
             .is_some()
-            || self.pane_has_running_shell_transaction(pane_id)
         {
+            return Ok(false);
+        }
+        self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
+        if self.pane_has_running_shell_transaction(pane_id) {
             return Ok(false);
         }
         if self.primary_pid_for_live_pane_process(pane_id).is_none() {
             self.clear_agent_subshell_state(pane_id);
+            self.clear_agent_subshell_shell_identity(pane_id);
             self.clear_shell_output_filters_for_foreground_input(pane_id);
             return Ok(false);
         }
         self.clear_shell_output_filters_for_foreground_input(pane_id);
+        self.clear_agent_subshell_shell_identity(pane_id);
         let input = if self.take_agent_subshell_command_exit(pane_id) {
             b"exit\n".as_slice()
         } else {
@@ -956,6 +990,7 @@ impl RuntimeSessionService {
         match self.write_runtime_pane_input(pane_id, input) {
             Ok(()) => {
                 self.leave_agent_subshell(pane_id);
+                self.schedule_parent_shell_rebootstrap_after_agent_subshell(pane_id);
                 Ok(true)
             }
             Err(error)
@@ -966,6 +1001,7 @@ impl RuntimeSessionService {
                     ) =>
             {
                 self.clear_agent_subshell_state(pane_id);
+                self.clear_agent_subshell_shell_identity(pane_id);
                 self.clear_shell_output_filters_for_foreground_input(pane_id);
                 Ok(false)
             }

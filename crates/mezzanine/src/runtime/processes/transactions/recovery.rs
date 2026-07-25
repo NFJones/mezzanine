@@ -94,7 +94,7 @@ impl RuntimeSessionService {
                 }
                 PaneReadinessState::Busy => {
                     let foreground_primary_shell =
-                        self.pane_foreground_primary_shell_state(&turn.pane_id);
+                        self.pane_foreground_certified_shell_state(&turn.pane_id);
                     if foreground_primary_shell != Some(false)
                         && let Some(action_id) =
                             self.pending_shell_action_id_for_turn(&turn.turn_id)
@@ -174,7 +174,7 @@ impl RuntimeSessionService {
                 PaneReadinessState::FullScreen
                 | PaneReadinessState::PasswordPrompt
                 | PaneReadinessState::InteractiveBlocked => {
-                    if self.pane_foreground_primary_shell_state(&turn.pane_id) != Some(true) {
+                    if self.pane_foreground_certified_shell_state(&turn.pane_id) != Some(true) {
                         continue;
                     }
                     self.set_pane_readiness(&turn.pane_id, PaneReadinessState::PromptCandidate);

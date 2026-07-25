@@ -105,6 +105,7 @@ impl RuntimeSessionService {
                 self.process
                     .pane_bootstrap_pending
                     .remove(&transaction.pane_id);
+                self.clear_agent_subshell_shell_identity(&transaction.pane_id);
                 self.append_agent_error_text_to_terminal_buffer(
                     &transaction.pane_id,
                     &format!("agent: shell bootstrap protocol violation: {message}"),
@@ -174,6 +175,9 @@ impl RuntimeSessionService {
             }
             self.clear_shell_transaction_protocol_state(&marker);
             failed_count = failed_count.saturating_add(1);
+            if transaction.kind == RunningShellTransactionKind::Bootstrap {
+                self.clear_agent_subshell_shell_identity(pane_id);
+            }
             match transaction.kind.clone() {
                 RunningShellTransactionKind::AgentAction { action_id } => {
                     self.fail_agent_action_for_pane_write_failure(

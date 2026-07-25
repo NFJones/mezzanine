@@ -960,7 +960,7 @@ fn poll_until_exit(service: &mut RuntimeSessionService) -> Vec<PaneExitUpdate> {
 /// - `pane_id`: The pane expected to have an idle foreground shell.
 fn wait_until_primary_shell_foreground(service: &mut RuntimeSessionService, pane_id: &str) {
     for _ in 0..50 {
-        if service.pane_foreground_primary_shell_state(pane_id) == Some(true) {
+        if service.pane_foreground_certified_shell_state(pane_id) == Some(true) {
             return;
         }
         let _ = service.poll_pane_outputs(4096).unwrap();

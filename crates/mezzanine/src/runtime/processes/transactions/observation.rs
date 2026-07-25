@@ -1,5 +1,9 @@
 //! Shell transaction event observation and foreground-shell state.
 
+use super::super::{
+    EnvironmentSignature, RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
+    RuntimePaneCertifiedShellIdentity, RuntimePaneShellHandoff,
+};
 use super::{
     AgentTurnState, Result, RuntimeSessionService, TerminalOscEvent,
     runtime_execution_ready_for_provider_continuation,
@@ -27,6 +31,14 @@ pub(crate) struct RuntimePaneForegroundDiagnostic {
     primary_process_group_id: Option<u32>,
     /// Whether the observed foreground group belongs to the primary shell.
     primary_shell_is_foreground: Option<bool>,
+    /// Non-primary process group certified for the current shell epoch.
+    certified_shell_process_group_id: Option<u32>,
+    /// Runtime-owned provenance for the non-primary certification.
+    certified_shell_source: Option<&'static str>,
+    /// Whether the observed group is an accepted primary or certified shell.
+    certified_shell_is_foreground: Option<bool>,
+    /// Current shell-interaction generation for trace correlation.
+    shell_interaction_generation: Option<u64>,
 }
 
 impl RuntimePaneForegroundDiagnostic {
@@ -40,6 +52,10 @@ impl RuntimePaneForegroundDiagnostic {
             "primary_process_id": self.primary_process_id,
             "primary_process_group_id": self.primary_process_group_id,
             "primary_shell_is_foreground": self.primary_shell_is_foreground,
+            "certified_shell_process_group_id": self.certified_shell_process_group_id,
+            "certified_shell_source": self.certified_shell_source,
+            "certified_shell_is_foreground": self.certified_shell_is_foreground,
+            "shell_interaction_generation": self.shell_interaction_generation,
         })
     }
 
@@ -47,7 +63,7 @@ impl RuntimePaneForegroundDiagnostic {
     pub(crate) fn summary(&self) -> String {
         match self.foreground_process_group_id {
             Some(process_group_id) => format!(
-                "foreground_process={} foreground_process_group={} primary_process={} primary_process_group={} primary_shell_is_foreground={} source={}",
+                "foreground_process={} foreground_process_group={} primary_process={} primary_process_group={} primary_shell_is_foreground={} certified_shell_process_group={} certified_shell_is_foreground={} certification_source={} shell_interaction_generation={} source={}",
                 self.foreground_process_name
                     .as_deref()
                     .unwrap_or("unavailable"),
@@ -64,6 +80,19 @@ impl RuntimePaneForegroundDiagnostic {
                     .map(|is_foreground| is_foreground.to_string())
                     .as_deref()
                     .unwrap_or("unavailable"),
+                self.certified_shell_process_group_id
+                    .map(|process_group_id| process_group_id.to_string())
+                    .as_deref()
+                    .unwrap_or("unavailable"),
+                self.certified_shell_is_foreground
+                    .map(|is_foreground| is_foreground.to_string())
+                    .as_deref()
+                    .unwrap_or("unavailable"),
+                self.certified_shell_source.unwrap_or("primary-shell"),
+                self.shell_interaction_generation
+                    .map(|generation| generation.to_string())
+                    .as_deref()
+                    .unwrap_or("unavailable"),
                 self.foreground_process_group_source,
             ),
             None => "foreground_process_metadata=unavailable".to_string(),
@@ -72,27 +101,270 @@ impl RuntimePaneForegroundDiagnostic {
 }
 
 impl RuntimeSessionService {
-    /// Reports whether host process metadata can determine if the pane primary
-    /// shell is the foreground process group for its PTY.
-    pub(crate) fn pane_foreground_primary_shell_state(&self, pane_id: &str) -> Option<bool> {
-        let primary_pid = self.primary_pid_for_live_pane_process(pane_id)?;
-        let foreground_group = self
+    /// Returns the best foreground process-group observation and its source.
+    fn pane_foreground_process_group_observation(
+        &self,
+        pane_id: &str,
+    ) -> (Option<u32>, &'static str) {
+        match self
             .process
             .pane_processes
             .foreground_process_group_id(pane_id)
-            .or_else(|| {
-                self.process
-                    .pane_foreground_process_groups
-                    .get(pane_id)
-                    .copied()
-            })?;
-        let primary_process_group = self
-            .process
+        {
+            Some(process_group_id) => (Some(process_group_id), "pty"),
+            None => match self
+                .process
+                .pane_foreground_process_groups
+                .get(pane_id)
+                .copied()
+            {
+                Some(process_group_id) => (Some(process_group_id), "worker-cache"),
+                None => (None, "unavailable"),
+            },
+        }
+    }
+
+    /// Returns the original pane-shell process group for one live pane.
+    fn pane_primary_process_group_id(&self, pane_id: &str, primary_pid: u32) -> u32 {
+        self.process
             .pane_processes
             .process_group_leader(pane_id)
             .and_then(|leader| u32::try_from(leader).ok())
-            .unwrap_or(primary_pid);
-        Some(foreground_group == primary_pid || foreground_group == primary_process_group)
+            .unwrap_or(primary_pid)
+    }
+
+    /// Reports whether the pane foreground group is the primary shell or the
+    /// non-primary shell certified for the current process and interaction epoch.
+    pub(crate) fn pane_foreground_certified_shell_state(&self, pane_id: &str) -> Option<bool> {
+        let primary_pid = self.primary_pid_for_live_pane_process(pane_id)?;
+        let foreground_group = self.pane_foreground_process_group_observation(pane_id).0?;
+        let primary_process_group = self.pane_primary_process_group_id(pane_id, primary_pid);
+        if foreground_group == primary_pid || foreground_group == primary_process_group {
+            return Some(true);
+        }
+        let certified = self.process.pane_certified_shell_identities.get(pane_id);
+        Some(certified.is_some_and(|identity| {
+            identity.primary_process_id == primary_pid
+                && self
+                    .process
+                    .pane_shell_interaction_generations
+                    .get(pane_id)
+                    .copied()
+                    == Some(identity.interaction_generation)
+                && self.process.pane_environment_signatures.get(pane_id)
+                    == Some(&identity.environment_signature)
+                && identity.process_group_id == foreground_group
+        }))
+    }
+
+    /// Starts a new runtime-owned agent-subshell handoff and invalidates state
+    /// derived from the previous pane environment before bootstrap dispatch.
+    pub(crate) fn begin_agent_subshell_shell_handoff(&mut self, pane_id: &str) -> Result<()> {
+        let primary_process_id =
+            self.primary_pid_for_live_pane_process(pane_id)
+                .ok_or_else(|| {
+                    crate::error::MezError::invalid_state("pane shell process is unavailable")
+                })?;
+        self.process.next_shell_interaction_generation = self
+            .process
+            .next_shell_interaction_generation
+            .saturating_add(1);
+        let interaction_generation = self.process.next_shell_interaction_generation;
+        self.process
+            .pane_shell_interaction_generations
+            .insert(pane_id.to_string(), interaction_generation);
+        self.process.pane_certified_shell_identities.remove(pane_id);
+        self.process
+            .bootstrap_shell_certification_evidence
+            .retain(|_, evidence| evidence.pane_id != pane_id);
+        self.process.pane_shell_handoffs.insert(
+            pane_id.to_string(),
+            RuntimePaneShellHandoff {
+                primary_process_id,
+                interaction_generation,
+                bootstrap_marker: None,
+            },
+        );
+        self.process.pane_environment_signatures.remove(pane_id);
+        self.process
+            .pane_path_scopes
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_bubblewrap_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
+        self.clear_pane_agent_instruction_files(pane_id);
+        self.process
+            .pane_bootstrap_pending
+            .insert(pane_id.to_string());
+        Ok(())
+    }
+
+    /// Binds the exact registered bootstrap marker to a pending subshell handoff.
+    pub(crate) fn bind_agent_subshell_bootstrap_marker(&mut self, pane_id: &str, marker: &str) {
+        if let Some(handoff) = self.process.pane_shell_handoffs.get_mut(pane_id)
+            && handoff.bootstrap_marker.is_none()
+        {
+            handoff.bootstrap_marker = Some(marker.to_string());
+        }
+    }
+
+    /// Captures foreground evidence when the registered handoff bootstrap starts.
+    pub(crate) fn observe_agent_subshell_bootstrap_start(&mut self, pane_id: &str, marker: &str) {
+        let Some(handoff) = self.process.pane_shell_handoffs.get(pane_id) else {
+            return;
+        };
+        if handoff.bootstrap_marker.as_deref() != Some(marker) {
+            return;
+        }
+        let Some(process_group_id) = self.pane_foreground_process_group_observation(pane_id).0
+        else {
+            return;
+        };
+        self.process.bootstrap_shell_certification_evidence.insert(
+            marker.to_string(),
+            RuntimeBootstrapShellCertificationEvidence {
+                pane_id: pane_id.to_string(),
+                primary_process_id: handoff.primary_process_id,
+                process_group_id,
+                interaction_generation: handoff.interaction_generation,
+            },
+        );
+    }
+
+    /// Settles a handoff bootstrap and promotes only consistent, complete proof.
+    pub(crate) fn settle_agent_subshell_bootstrap_certification(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+        exit_code: i32,
+        observed_output_truncated: bool,
+        environment_signature: Option<&EnvironmentSignature>,
+    ) -> Option<bool> {
+        let handoff = self.process.pane_shell_handoffs.get(pane_id)?.clone();
+        if handoff.bootstrap_marker.as_deref() != Some(marker) {
+            return None;
+        }
+        self.process.pane_shell_handoffs.remove(pane_id);
+        let evidence = self
+            .process
+            .bootstrap_shell_certification_evidence
+            .remove(marker);
+        let current_primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
+        let current_foreground_group = self.pane_foreground_process_group_observation(pane_id).0;
+        let valid = evidence.as_ref().is_some_and(|evidence| {
+            evidence.pane_id == pane_id
+                && evidence.primary_process_id == handoff.primary_process_id
+                && evidence.interaction_generation == handoff.interaction_generation
+                && current_primary_process_id == Some(handoff.primary_process_id)
+                && current_foreground_group == Some(evidence.process_group_id)
+        }) && exit_code == 0
+            && !observed_output_truncated
+            && environment_signature.is_some();
+        if let (true, Some(evidence), Some(environment_signature)) =
+            (valid, evidence, environment_signature)
+        {
+            self.process.pane_certified_shell_identities.insert(
+                pane_id.to_string(),
+                RuntimePaneCertifiedShellIdentity {
+                    primary_process_id: evidence.primary_process_id,
+                    process_group_id: evidence.process_group_id,
+                    interaction_generation: evidence.interaction_generation,
+                    environment_signature: environment_signature.clone(),
+                    source: RuntimeCertifiedShellSource::AgentSubshellBootstrap,
+                },
+            );
+        } else {
+            self.process.pane_certified_shell_identities.remove(pane_id);
+            self.process.pane_environment_signatures.remove(pane_id);
+            self.process
+                .pane_path_scopes
+                .retain(|key, _| key.pane_id != pane_id);
+            self.process
+                .pane_path_scope_failures
+                .retain(|key, _| key.pane_id != pane_id);
+            self.process
+                .pane_bubblewrap_capabilities
+                .retain(|key, _| key.pane_id != pane_id);
+            self.clear_pane_agent_instruction_files(pane_id);
+        }
+        Some(valid)
+    }
+
+    /// Invalidates every non-primary shell proof associated with one pane.
+    pub(crate) fn clear_agent_subshell_shell_identity(&mut self, pane_id: &str) {
+        self.process.pane_certified_shell_identities.remove(pane_id);
+        self.process.pane_shell_handoffs.remove(pane_id);
+        self.process
+            .bootstrap_shell_certification_evidence
+            .retain(|_, evidence| evidence.pane_id != pane_id);
+        if self
+            .process
+            .pane_shell_interaction_generations
+            .contains_key(pane_id)
+        {
+            self.process.next_shell_interaction_generation = self
+                .process
+                .next_shell_interaction_generation
+                .saturating_add(1);
+            self.process.pane_shell_interaction_generations.insert(
+                pane_id.to_string(),
+                self.process.next_shell_interaction_generation,
+            );
+        }
+    }
+
+    /// Cancels only the internal bootstrap registered for an agent-subshell
+    /// handoff so an immediate user exit is not blocked behind hidden work.
+    pub(crate) fn cancel_agent_subshell_bootstrap_for_exit(&mut self, pane_id: &str) -> bool {
+        let marker = self
+            .process
+            .pane_shell_handoffs
+            .get(pane_id)
+            .and_then(|handoff| handoff.bootstrap_marker.clone());
+        let Some(marker) = marker else {
+            return false;
+        };
+        let removable = self
+            .process
+            .running_shell_transactions
+            .get(&marker)
+            .is_some_and(|transaction| {
+                transaction.pane_id == pane_id
+                    && transaction.kind == super::RunningShellTransactionKind::Bootstrap
+            });
+        if !removable {
+            return false;
+        }
+        self.process.running_shell_transactions.remove(&marker);
+        self.clear_shell_transaction_protocol_state(&marker);
+        self.process
+            .bootstrap_shell_certification_evidence
+            .remove(&marker);
+        self.process.pane_bootstrap_pending.remove(pane_id);
+        true
+    }
+
+    /// Invalidates child-environment evidence and schedules discovery after
+    /// control returns to the original pane shell.
+    pub(crate) fn schedule_parent_shell_rebootstrap_after_agent_subshell(&mut self, pane_id: &str) {
+        self.process.pane_environment_signatures.remove(pane_id);
+        self.process
+            .pane_path_scopes
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_bubblewrap_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
+        self.clear_pane_agent_instruction_files(pane_id);
+        self.process
+            .pane_bootstrap_pending
+            .insert(pane_id.to_string());
+        self.set_pane_readiness(pane_id, super::PaneReadinessState::Unknown);
     }
 
     /// Returns the foreground-process observation available for a pane readiness failure.
@@ -102,29 +374,10 @@ impl RuntimeSessionService {
     ) -> RuntimePaneForegroundDiagnostic {
         let primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
         let primary_process_group_id = primary_process_id.map(|primary_process_id| {
-            self.process
-                .pane_processes
-                .process_group_leader(pane_id)
-                .and_then(|leader| u32::try_from(leader).ok())
-                .unwrap_or(primary_process_id)
+            self.pane_primary_process_group_id(pane_id, primary_process_id)
         });
-        let live_foreground_process_group_id = self
-            .process
-            .pane_processes
-            .foreground_process_group_id(pane_id);
-        let cached_foreground_process_group_id = self
-            .process
-            .pane_foreground_process_groups
-            .get(pane_id)
-            .copied();
         let (foreground_process_group_id, foreground_process_group_source) =
-            match live_foreground_process_group_id {
-                Some(process_group_id) => (Some(process_group_id), "pty"),
-                None => match cached_foreground_process_group_id {
-                    Some(process_group_id) => (Some(process_group_id), "worker-cache"),
-                    None => (None, "unavailable"),
-                },
-            };
+            self.pane_foreground_process_group_observation(pane_id);
         let primary_shell_is_foreground =
             foreground_process_group_id.and_then(|process_group_id| {
                 primary_process_id.map(|primary_process_id| {
@@ -132,6 +385,9 @@ impl RuntimeSessionService {
                         || process_group_id == primary_process_id
                 })
             });
+        let certified_identity = self.process.pane_certified_shell_identities.get(pane_id);
+        let certified_shell_is_foreground = foreground_process_group_id
+            .and_then(|_| self.pane_foreground_certified_shell_state(pane_id));
 
         RuntimePaneForegroundDiagnostic {
             metadata_available: primary_process_id.is_some()
@@ -143,6 +399,15 @@ impl RuntimeSessionService {
             primary_process_id,
             primary_process_group_id,
             primary_shell_is_foreground,
+            certified_shell_process_group_id: certified_identity
+                .map(|identity| identity.process_group_id),
+            certified_shell_source: certified_identity.map(|identity| identity.source.as_str()),
+            certified_shell_is_foreground,
+            shell_interaction_generation: self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied(),
         }
     }
 

@@ -186,7 +186,7 @@ impl RuntimeSessionService {
             .contains(pane_id.as_str())
             && self.pane_readiness_state(&pane_id) == PaneReadinessState::Unknown;
         if !awaiting_initial_prompt
-            && self.pane_foreground_primary_shell_state(&pane_id) == Some(true)
+            && self.pane_foreground_certified_shell_state(&pane_id) == Some(true)
         {
             let _ = self.observe_passive_shell_prompt_candidate(
                 pane_id.as_str(),

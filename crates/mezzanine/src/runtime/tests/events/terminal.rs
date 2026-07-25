@@ -706,6 +706,10 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
             "primary_process_id": null,
             "primary_process_group_id": null,
             "primary_shell_is_foreground": null,
+            "certified_shell_process_group_id": null,
+            "certified_shell_source": null,
+            "certified_shell_is_foreground": null,
+            "shell_interaction_generation": null,
         })
     );
     assert_eq!(execution.action_results[1].status, ActionStatus::Running);

@@ -8,19 +8,19 @@ use super::{
 };
 
 impl RuntimeSessionService {
-    /// Runs the dispatch bootstrap to pane operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(crate) fn dispatch_bootstrap_to_pane(&mut self, pane_id: &str) -> Result<()> {
+    /// Registers one pane bootstrap and returns the exact wrapper that must be
+    /// delivered after any preceding shell-handoff input.
+    pub(crate) fn prepare_bootstrap_to_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<Option<(String, String)>> {
         if self
             .process
             .running_shell_transactions
             .values()
             .any(|transaction| transaction.pane_id == pane_id)
         {
-            return Ok(());
+            return Ok(None);
         }
         let agent_id = format!("agent-{pane_id}");
         let turn_id = format!("bootstrap-{pane_id}-{}", current_unix_seconds());
@@ -46,7 +46,7 @@ impl RuntimeSessionService {
         self.register_running_shell_transaction(
             marker_id.clone(),
             RunningShellTransactionRef {
-                turn_id: turn_id.clone(),
+                turn_id,
                 kind: RunningShellTransactionKind::Bootstrap,
                 pane_id: pane_id.to_string(),
                 command: bootstrap_script,
@@ -60,18 +60,47 @@ impl RuntimeSessionService {
             },
             true,
         );
-        if let Err(error) = self.write_runtime_pane_input(pane_id, wrapper.as_bytes()) {
-            self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
-            return Err(error);
-        }
+        Ok(Some((marker_id, wrapper)))
+    }
+
+    /// Records successful delivery of a previously registered bootstrap.
+    pub(crate) fn record_bootstrap_sent(&mut self, pane_id: &str, marker: &str) -> Result<()> {
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
                 r#"{{"pane_id":"{}","bootstrap":"sent","marker":"{}"}}"#,
                 json_escape(pane_id),
-                json_escape(&marker_id)
+                json_escape(marker)
             ),
         )?;
+        Ok(())
+    }
+
+    /// Takes the payload for a registered bootstrap when its wrapper and body
+    /// will be delivered atomically behind a runtime-owned shell handoff.
+    pub(crate) fn take_inline_bootstrap_payload(&mut self, marker: &str) -> Option<Vec<u8>> {
+        self.process
+            .running_shell_transactions
+            .get_mut(marker)
+            .filter(|transaction| transaction.kind == RunningShellTransactionKind::Bootstrap)
+            .and_then(|transaction| transaction.pending_input_payload.take())
+    }
+
+    /// Runs the dispatch bootstrap to pane operation for this subsystem.
+    ///
+    /// The function keeps parsing, state changes, and error propagation in
+    /// the owning module so callers receive typed results instead of relying
+    /// on duplicated control-flow logic.
+    pub(crate) fn dispatch_bootstrap_to_pane(&mut self, pane_id: &str) -> Result<()> {
+        let Some((marker_id, wrapper)) = self.prepare_bootstrap_to_pane(pane_id)? else {
+            return Ok(());
+        };
+        self.bind_agent_subshell_bootstrap_marker(pane_id, &marker_id);
+        if let Err(error) = self.write_runtime_pane_input(pane_id, wrapper.as_bytes()) {
+            self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+            return Err(error);
+        }
+        self.record_bootstrap_sent(pane_id, &marker_id)?;
         Ok(())
     }
 
@@ -90,6 +119,7 @@ impl RuntimeSessionService {
     ) -> Result<usize> {
         self.process.pane_bootstrap_pending.remove(pane_id);
         let mut bootstrap_parsed = false;
+        let mut bootstrap_signature = None;
         if exit_code == 0 {
             let all_output = if observed_output_preview.trim().is_empty() {
                 let screen = self.process.pane_screens.get(pane_id).ok_or_else(|| {
@@ -106,8 +136,9 @@ impl RuntimeSessionService {
             let (signature, inventory, instruction_files) =
                 parse_bootstrap_env_output(&all_output, self.session.shell.path());
 
-            if let Some(sig) = signature.clone() {
+            if let Some(sig) = signature {
                 bootstrap_parsed = true;
+                bootstrap_signature = Some(sig.clone());
                 // Authority resolved under the previous environment must be
                 // discarded before retained actions resume. Bubblewrap
                 // preflight rebuilds each missing prerequisite under `sig`.
@@ -157,7 +188,16 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
-        if bootstrap_parsed || exit_code == 0 {
+        let certification = self.settle_agent_subshell_bootstrap_certification(
+            pane_id,
+            marker,
+            exit_code,
+            observed_output_truncated,
+            bootstrap_signature.as_ref(),
+        );
+        if certification == Some(false) {
+            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+        } else if bootstrap_parsed || exit_code == 0 {
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
         } else if self.pane_readiness_state(pane_id) == PaneReadinessState::Busy {
             self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);

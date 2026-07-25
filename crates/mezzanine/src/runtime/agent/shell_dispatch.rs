@@ -664,7 +664,7 @@ impl RuntimeSessionService {
                     return Ok(dispatched);
                 }
                 PaneReadinessState::Busy => {
-                    match self.pane_foreground_primary_shell_state(&turn.pane_id) {
+                    match self.pane_foreground_certified_shell_state(&turn.pane_id) {
                         Some(true) => {
                             self.set_pane_readiness(
                                 &turn.pane_id,
@@ -745,7 +745,7 @@ impl RuntimeSessionService {
                                 let foreground_diagnostic =
                                     self.pane_foreground_process_diagnostic(&turn.pane_id);
                                 let message = format!(
-                                    "pane {} kept a non-shell foreground process active; shell command was not dispatched ({})",
+                                    "pane {} kept an uncertified foreground process group active; shell command was not dispatched ({})",
                                     turn.pane_id,
                                     foreground_diagnostic.summary(),
                                 );
@@ -759,7 +759,7 @@ impl RuntimeSessionService {
                                 result.structured_content_json = Some(
                                     serde_json::json!({
                                         "state": "dispatch_blocked",
-                                        "reason": "foreground_process_active",
+                                        "reason": "uncertified_foreground_process",
                                         "attempts": attempts,
                                         "command": runtime_agent_context_command(action, command),
                                         "foreground_process": foreground_diagnostic.json(),
@@ -822,7 +822,7 @@ impl RuntimeSessionService {
                 state @ (PaneReadinessState::FullScreen
                 | PaneReadinessState::PasswordPrompt
                 | PaneReadinessState::InteractiveBlocked)
-                    if self.pane_foreground_primary_shell_state(&turn.pane_id) == Some(true) =>
+                    if self.pane_foreground_certified_shell_state(&turn.pane_id) == Some(true) =>
                 {
                     self.set_pane_readiness(&turn.pane_id, PaneReadinessState::PromptCandidate);
                     self.append_agent_status_text_to_terminal_buffer(

@@ -1076,7 +1076,7 @@ impl RuntimeSessionService {
         if previous == PaneReadinessState::Ready {
             return Ok(());
         }
-        let foreground_primary_shell = self.pane_foreground_primary_shell_state(pane_id);
+        let foreground_primary_shell = self.pane_foreground_certified_shell_state(pane_id);
         let recoverable_passive_state = matches!(
             previous,
             PaneReadinessState::PromptCandidate | PaneReadinessState::Busy

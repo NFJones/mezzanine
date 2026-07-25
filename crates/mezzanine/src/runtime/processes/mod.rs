@@ -75,6 +75,61 @@ struct DetachedPaneProcess {
     generation: u64,
 }
 
+/// Provenance for a non-primary shell boundary trusted for pane dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeCertifiedShellSource {
+    /// A Mezzanine-owned agent subshell completed its registered bootstrap.
+    AgentSubshellBootstrap,
+}
+
+impl RuntimeCertifiedShellSource {
+    /// Returns the stable diagnostic name for this certification source.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AgentSubshellBootstrap => "agent-subshell-bootstrap",
+        }
+    }
+}
+
+/// Certified non-primary shell identity for one live pane-process epoch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimePaneCertifiedShellIdentity {
+    /// Primary pane process that owned the certified child-shell handoff.
+    primary_process_id: u32,
+    /// Foreground process group proven by the registered bootstrap protocol.
+    process_group_id: u32,
+    /// Monotonic shell-interaction generation that fences stale identities.
+    interaction_generation: u64,
+    /// Environment discovered by the bootstrap that certified this boundary.
+    environment_signature: EnvironmentSignature,
+    /// Runtime-owned provenance for the certification.
+    source: RuntimeCertifiedShellSource,
+}
+
+/// Pending runtime-owned handoff from the primary shell to an agent subshell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimePaneShellHandoff {
+    /// Primary pane process that received the child-shell launch command.
+    primary_process_id: u32,
+    /// Shell-interaction generation assigned to this handoff.
+    interaction_generation: u64,
+    /// Exact bootstrap marker registered after the handoff command.
+    bootstrap_marker: Option<String>,
+}
+
+/// Foreground identity observed when a handoff bootstrap emitted its start marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeBootstrapShellCertificationEvidence {
+    /// Pane that emitted the registered bootstrap marker.
+    pane_id: String,
+    /// Primary process identity captured for lifecycle fencing.
+    primary_process_id: u32,
+    /// Foreground process group observed at transaction start.
+    process_group_id: u32,
+    /// Shell-interaction generation associated with the bootstrap marker.
+    interaction_generation: u64,
+}
+
 /// Owns live process metadata that is private to the pane process subsystem.
 ///
 /// Detached process ids, observed foreground groups, and program-owned title
@@ -139,6 +194,18 @@ pub(crate) struct RuntimeProcessComponent {
     next_detached_pane_generation: u64,
     /// Latest foreground process groups observed by pane workers.
     pane_foreground_process_groups: std::collections::BTreeMap<String, u32>,
+    /// Certified non-primary shell identities keyed by pane id.
+    pane_certified_shell_identities:
+        std::collections::BTreeMap<String, RuntimePaneCertifiedShellIdentity>,
+    /// Runtime-owned agent-subshell handoffs awaiting bootstrap proof.
+    pane_shell_handoffs: std::collections::BTreeMap<String, RuntimePaneShellHandoff>,
+    /// Bootstrap-start foreground evidence keyed by exact transaction marker.
+    bootstrap_shell_certification_evidence:
+        std::collections::BTreeMap<String, RuntimeBootstrapShellCertificationEvidence>,
+    /// Current shell-interaction generation keyed by pane id.
+    pane_shell_interaction_generations: std::collections::BTreeMap<String, u64>,
+    /// Next monotonic shell-interaction generation.
+    next_shell_interaction_generation: u64,
     /// Program-owned pane title state keyed by pane id.
     program_owned_pane_titles: std::collections::BTreeMap<String, ProgramOwnedPaneTitle>,
     /// Full terminal parsers retained for visible shell transaction streams.
@@ -1608,6 +1675,7 @@ impl RuntimeSessionService {
         force: bool,
     ) -> Result<bool> {
         self.clear_agent_subshell_state(pane_id);
+        self.clear_agent_subshell_shell_identity(pane_id);
         if self.process.pane_processes.contains_pane(pane_id) {
             return Ok(self
                 .process
@@ -1661,9 +1729,24 @@ impl RuntimeSessionService {
     /// deferred I/O, and subagent bookkeeping that would otherwise make a
     /// closed pane appear partially alive to later agent/session surfaces.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) {
+        let removed_transaction_markers = self
+            .process
+            .running_shell_transactions
+            .iter()
+            .filter(|(_, transaction)| transaction.pane_id == pane_id)
+            .map(|(marker, _)| marker.clone())
+            .collect::<Vec<_>>();
+        for marker in removed_transaction_markers {
+            self.remove_running_shell_transaction(&marker);
+            self.clear_shell_transaction_protocol_state(&marker);
+        }
         self.agent_shell_store_mut().remove_session(pane_id);
         self.integration.remove_pane_permission_override(pane_id);
         self.clear_agent_subshell_state(pane_id);
+        self.clear_agent_subshell_shell_identity(pane_id);
+        self.process
+            .pane_shell_interaction_generations
+            .remove(pane_id);
         self.remove_agent_prompt_input(pane_id);
         self.clear_agent_pane_presentation_preferences(pane_id);
         self.integration

@@ -459,6 +459,264 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Completes a runtime-owned agent-subshell bootstrap under one foreground
+/// process group so dispatch tests can exercise certified-shell behavior.
+fn certify_agent_subshell_foreground_group(
+    service: &mut RuntimeSessionService,
+    process_group_id: u32,
+) {
+    service.enter_agent_subshell("%1");
+    service.begin_agent_subshell_shell_handoff("%1").unwrap();
+    service.dispatch_bootstrap_to_pane("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(process_group_id));
+    let (marker, turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .unwrap();
+    let output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t/tmp\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_preview = output.to_string();
+    transaction.observed_output_bytes = output.len();
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, &turn_id, "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, &turn_id, "agent-%1", "%1", 0)
+        .unwrap();
+}
+
+/// Verifies a Mezzanine-owned agent subshell that completes a registered
+/// bootstrap is accepted for stale-busy recovery without trusting its name.
+#[test]
+fn runtime_shell_dispatch_recovers_for_certified_agent_subshell_group() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let subshell_group = primary_pid.saturating_add(1);
+    certify_agent_subshell_foreground_group(&mut service, subshell_group);
+
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(true)
+    );
+    let diagnostic = service.pane_foreground_process_diagnostic("%1").json();
+    assert_eq!(
+        diagnostic["certified_shell_process_group_id"],
+        subshell_group
+    );
+    assert_eq!(
+        diagnostic["certified_shell_source"],
+        "agent-subshell-bootstrap"
+    );
+    assert_eq!(diagnostic["certified_shell_is_foreground"], true);
+
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "shell-certified".to_string(),
+        rationale: "inspect through the certified agent subshell".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    service.agent_turn_executions_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect with the certified shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Probing
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a certified agent subshell remains recognized through worker-cached
+/// foreground metadata, then loses authority when agent mode restores the parent.
+#[test]
+fn runtime_agent_subshell_exit_invalidates_cached_certified_group() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let subshell_group = primary_pid.saturating_add(1);
+    certify_agent_subshell_foreground_group(&mut service, subshell_group);
+    service
+        .apply_pane_foreground_process_event("%1", "bash", subshell_group, None)
+        .unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", None);
+    let mut process = service.take_running_pane_process_for_adapter("%1").unwrap();
+
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(true)
+    );
+    assert!(service.exit_agent_subshell_if_active("%1").unwrap());
+    assert!(!service.agent_subshell_is_active("%1"));
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(false)
+    );
+    assert!(service.pane_environment_signature("%1").is_none());
+    assert!(service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Unknown
+    );
+
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(true)
+    );
+    let _ = process.terminate(std::time::Duration::from_millis(10));
+}
+
+/// Verifies a changed foreground group between bootstrap start and completion
+/// cannot certify a nested shell, even when the reported process name is shell-like.
+#[test]
+fn runtime_agent_subshell_bootstrap_group_mismatch_fails_closed() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let candidate_group = primary_pid.saturating_add(1);
+    service.enter_agent_subshell("%1");
+    service.begin_agent_subshell_shell_handoff("%1").unwrap();
+    service.dispatch_bootstrap_to_pane("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(candidate_group));
+    let (marker, turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .unwrap();
+    let output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t/tmp\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_preview = output.to_string();
+    transaction.observed_output_bytes = output.len();
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, &turn_id, "agent-%1", "%1")
+        .unwrap();
+    service
+        .apply_pane_foreground_process_event("%1", "bash", candidate_group.saturating_add(1), None)
+        .unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(candidate_group.saturating_add(1)));
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, &turn_id, "agent-%1", "%1", 0)
+        .unwrap();
+
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(false)
+    );
+    assert!(service.pane_environment_signature("%1").is_none());
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Degraded
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a shell action blocked behind a persistent foreground program
 /// settles after bounded idle recovery without injecting input into that program.
 #[test]
@@ -557,6 +815,7 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
     )
     .unwrap();
     let foreground_process = &diagnostic["foreground_process"];
+    assert_eq!(diagnostic["reason"], "uncertified_foreground_process");
     assert_eq!(foreground_process["metadata_available"], true);
     assert_eq!(foreground_process["foreground_process_group_source"], "pty");
     assert_eq!(
@@ -565,6 +824,11 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
     );
     assert_eq!(foreground_process["primary_process_id"], primary_pid);
     assert_eq!(foreground_process["primary_shell_is_foreground"], false);
+    assert_eq!(
+        foreground_process["certified_shell_process_group_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(foreground_process["certified_shell_is_foreground"], false);
     assert!(service.running_shell_transactions_for_tests().is_empty());
     assert_eq!(
         service

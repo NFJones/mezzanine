@@ -38,6 +38,9 @@ impl RuntimeSessionService {
             }
             self.clear_shell_transaction_protocol_state(&marker);
             expired_count = expired_count.saturating_add(1);
+            if transaction.kind == RunningShellTransactionKind::Bootstrap {
+                self.clear_agent_subshell_shell_identity(&transaction.pane_id);
+            }
             match transaction.kind.clone() {
                 RunningShellTransactionKind::AgentAction { action_id } => {
                     self.expire_agent_action_shell_transaction(

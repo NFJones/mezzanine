@@ -71,7 +71,7 @@ impl RuntimeSessionService {
         source: &str,
     ) -> Result<usize> {
         let previous = self.pane_readiness_state(pane_id);
-        let foreground_primary_shell = self.pane_foreground_primary_shell_state(pane_id);
+        let foreground_primary_shell = self.pane_foreground_certified_shell_state(pane_id);
         let may_recover_interactive_block = matches!(
             previous,
             PaneReadinessState::FullScreen

@@ -3369,6 +3369,23 @@ executable. If the active environment's `$SHELL` is unset, empty, relative,
 non-executable, or otherwise unusable but `/bin/sh` is executable, Mezzanine
 MUST classify `/bin/sh` as the shell identity for that environment.
 
+Host process metadata MUST authorize non-interactive shell dispatch only when
+the observed foreground process group is either the original pane shell PID or
+process group, or a non-primary shell boundary certified for the current pane
+primary-process identity and shell-interaction epoch. Process names such as
+`sh`, `bash`, `zsh`, and `fish` are diagnostic metadata only and MUST NOT grant
+dispatch authority. A Mezzanine-owned agent-subshell handoff MUST remain
+uncertified until a registered, non-truncated bootstrap succeeds with a parsed
+environment signature and the same foreground process group is observed at
+the transaction start and completion boundaries. Missing, contradictory,
+failed, timed-out, or stale proof MUST fail closed.
+
+Certification MUST be invalidated when the agent subshell exits, the pane
+closes, its primary process changes or is replaced, a bootstrap proof fails, or
+a new shell-interaction epoch begins. Restoring the original pane shell after
+an agent-subshell exit MUST invalidate child-environment path and sandbox
+caches and schedule fresh bootstrap discovery for the parent environment.
+
 If the active interactive environment does not expose a usable shell, the
 harness MAY continue terminal observation, but it MUST treat agent shell command
 execution as unavailable or interactive-only until a usable shell is observed.
@@ -3791,8 +3808,9 @@ The harness MUST NOT send non-interactive agent commands while the state is
 Passive shell-integration markers, including OSC 133 and OSC 633 prompt and
 command markers, MAY move the pane from `unknown` or `busy` to
 `prompt-candidate`. They MAY also move the pane from `interactive-blocked` to
-`prompt-candidate` when host process metadata independently shows the primary
-pane shell is again the foreground process. Prompt-looking text without
+`prompt-candidate` when host process metadata independently shows the original
+pane shell or the currently certified shell boundary is again the foreground
+process group. Prompt-looking text without
 shell-integration markers MAY be used only as a user-visible hint and MUST NOT
 by itself move the pane to `ready`.
 
