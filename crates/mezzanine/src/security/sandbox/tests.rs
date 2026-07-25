@@ -380,6 +380,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     let plan = bubblewrap_capability_probe_plan(&config, "/bin/sh").unwrap();
 
     assert_eq!(plan.executable, "/usr/bin/bwrap");
+    assert_eq!(plan.expected_stdout, "mez-bubblewrap-capability-v1");
     assert!(plan.arguments.contains(&"--unshare-net".to_string()));
     assert!(plan.arguments.contains(&"--disable-userns".to_string()));
     assert!(plan.arguments.contains(&"--clearenv".to_string()));
@@ -388,13 +389,18 @@ fn capability_probe_is_deterministic_and_environment_bound() {
             .iter()
             .any(|argument| argument.contains("/etc/passwd"))
     );
+    assert!(
+        plan.arguments
+            .last()
+            .is_some_and(|script| script.contains("printf '%s' 'mez-bubblewrap-capability-v1'"))
+    );
     let capability = parse_bubblewrap_capability_probe(
         "%1",
         "pane-env-sha256",
         0,
         &plan,
         0,
-        "mez-bubblewrap-capability-v1\n",
+        "mez-bubblewrap-capability-v1",
     )
     .unwrap();
     assert_eq!(
@@ -408,6 +414,28 @@ fn capability_probe_is_deterministic_and_environment_bound() {
         capability.cache_key.pane_environment_signature,
         "pane-env-sha256"
     );
+
+    for contaminated_output in [
+        "mez-bubblewrap-capability-v1\n",
+        "mez-bubblewrap-capability-v1\r\n",
+        "leading-mez-bubblewrap-capability-v1",
+        "mez-bubblewrap-capability-v1trailing",
+        "",
+    ] {
+        assert_eq!(
+            parse_bubblewrap_capability_probe(
+                "%1",
+                "pane-env-sha256",
+                0,
+                &plan,
+                0,
+                contaminated_output,
+            )
+            .unwrap_err()
+            .kind(),
+            SandboxCompileErrorKind::CapabilityProbeFailed
+        );
+    }
 
     assert_eq!(
         parse_bubblewrap_capability_probe("%1", "pane-env-sha256", 0, &plan, 1, "")

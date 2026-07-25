@@ -122,7 +122,8 @@ fn register_required_start_capture(service: &mut RuntimeSessionService) {
 }
 
 /// Verifies wrapper echo before a mandatory start marker is excluded while
-/// output after that marker is retained from the same PTY read.
+/// a newline-free capability sentinel is retained exactly until its matching
+/// end marker despite ordinary CRLF terminal traffic outside the transaction.
 #[test]
 fn runtime_shell_transaction_capture_starts_after_osc_boundary() {
     let mut service = test_runtime_service();
@@ -130,7 +131,7 @@ fn runtime_shell_transaction_capture_starts_after_osc_boundary() {
 
     service.record_running_shell_transaction_output(
         "%1",
-        b"\x1b[?2004l\rMEZ_STTY_STATE=\r\n\x1b]133;C;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\mez-bubblewrap-capability-v1\n",
+        b"\x1b[?2004l\rMEZ_STTY_STATE=\r\n\x1b]133;C;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\mez-bubblewrap-capability-v1\x1b]133;D;0;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\\r\nprompt > ",
     );
 
     let transaction = service
@@ -139,11 +140,11 @@ fn runtime_shell_transaction_capture_starts_after_osc_boundary() {
         .unwrap();
     assert_eq!(
         transaction.observed_output_preview,
-        "mez-bubblewrap-capability-v1\n"
+        "mez-bubblewrap-capability-v1"
     );
     assert_eq!(
         transaction.observed_output_bytes,
-        "mez-bubblewrap-capability-v1\n".len()
+        "mez-bubblewrap-capability-v1".len()
     );
 }
 

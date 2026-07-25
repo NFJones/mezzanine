@@ -1514,7 +1514,7 @@ fn runtime_bubblewrap_probe_nonzero_exit_retains_typed_evidence() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies exact sentinel output contaminated by unrelated pane bytes is a
+/// Verifies a PTY-translated CRLF appended to the newline-free sentinel is a
 /// distinct fail-closed mismatch and never populates the capability cache.
 #[test]
 fn runtime_bubblewrap_probe_contaminated_sentinel_fails_closed() {
@@ -1546,7 +1546,7 @@ fn runtime_bubblewrap_probe_contaminated_sentinel_fails_closed() {
         } => (cache_key.clone(), probe_plan.expected_stdout),
         _ => unreachable!(),
     };
-    transaction.observed_output_preview = format!("{expected_stdout}$ prompt repaint\n");
+    transaction.observed_output_preview = format!("{expected_stdout}\r\n");
     transaction.observed_output_bytes = transaction.observed_output_preview.len();
 
     service

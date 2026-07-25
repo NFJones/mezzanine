@@ -2821,7 +2821,9 @@ never trigger automatic or approval-gated unsandboxed execution. Probe success
 MUST require complete registered transaction framing, an exact pane,
 environment, configuration-generation, executable, and runtime-profile
 identity match, a zero child exit status, non-truncated output, and exactly the
-fixed decoded sentinel with no additional bytes. Probe failures MUST retain a
+fixed newline-free decoded sentinel with no additional bytes. Transaction
+framing MUST delimit the sentinel without relying on a terminal line ending.
+Probe failures MUST retain a
 bounded escaped output preview, actual exit status when available, decoded and
 observed byte counts, truncation and exact-sentinel state, and a typed failure
 class. Failed probe results MUST NOT be cached; a later independent action MAY

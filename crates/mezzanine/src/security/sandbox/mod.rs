@@ -475,6 +475,10 @@ pub(crate) fn compile_bubblewrap_launch_plan(
 
 /// Builds a deterministic pane-environment probe for every facility used by
 /// the fixed Bubblewrap runtime profile.
+///
+/// The sentinel deliberately omits a line terminator because pane PTYs may
+/// translate LF output to CRLF. Transaction framing supplies the output
+/// boundary, so exact matching can still reject every additional byte.
 pub(crate) fn bubblewrap_capability_probe_plan(
     config: &BubblewrapConfig,
     child_shell_path: &str,
@@ -489,10 +493,10 @@ pub(crate) fn bubblewrap_capability_probe_plan(
             "initial Bubblewrap profile supports child shells under /bin or /usr only",
         ));
     }
-    let expected_stdout = "mez-bubblewrap-capability-v1\n";
+    let expected_stdout = "mez-bubblewrap-capability-v1";
     let probe_script = format!(
-        "test ! -e /etc/passwd && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s\\n' '{}'",
-        expected_stdout.trim_end()
+        "test ! -e /etc/passwd && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{}'",
+        expected_stdout
     );
     let arguments = vec![
         "--unshare-user",
