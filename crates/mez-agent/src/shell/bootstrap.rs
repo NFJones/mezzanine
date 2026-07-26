@@ -208,6 +208,18 @@ if [ -n \"$mez_composer_bin\" ] && [ -f \"$mez_composer_bin\" ] && [ ! -L \"$mez
   mez_composer_root=$(CDPATH= cd -P -- \"$mez_composer_bin_dir/..\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_composer_root\" ] && [ \"$mez_composer_bin\" = \"$mez_composer_root/bin/composer\" ] && mez_bootstrap_field env_manager \"composer-runtime:$mez_composer_root\"\n\
 fi\n\
+mez_erlang_bin=$(command -v erl 2>/dev/null || true)\n\
+if [ -n \"$mez_erlang_bin\" ] && [ -f \"$mez_erlang_bin\" ] && [ ! -L \"$mez_erlang_bin\" ]; then\n\
+  mez_erlang_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_erlang_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_erlang_root=$(CDPATH= cd -P -- \"$mez_erlang_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_erlang_root\" ] && [ \"$mez_erlang_bin\" = \"$mez_erlang_root/bin/erl\" ] && mez_bootstrap_field env_manager \"erlang-otp:$mez_erlang_root\"\n\
+fi\n\
+mez_elixir_bin=$(command -v elixir 2>/dev/null || true)\n\
+if [ -n \"$mez_elixir_bin\" ] && [ -f \"$mez_elixir_bin\" ] && [ ! -L \"$mez_elixir_bin\" ]; then\n\
+  mez_elixir_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_elixir_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_elixir_root=$(CDPATH= cd -P -- \"$mez_elixir_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_elixir_root\" ] && [ \"$mez_elixir_bin\" = \"$mez_elixir_root/bin/elixir\" ] && mez_bootstrap_field env_manager \"elixir-runtime:$mez_elixir_root\"\n\
+fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -399,6 +411,18 @@ if test -n \"$mez_composer_bin\"; and test -f \"$mez_composer_bin\"; and not tes
   set -l mez_composer_bin_dir (cd (dirname \"$mez_composer_bin\") 2>/dev/null; and pwd -P)\n\
   set -l mez_composer_root (cd \"$mez_composer_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_composer_root\"; and test \"$mez_composer_bin\" = \"$mez_composer_root/bin/composer\"; and mez_bootstrap_field env_manager \"composer-runtime:$mez_composer_root\"\n\
+end\n\
+set -l mez_erlang_bin (command -s erl 2>/dev/null)\n\
+if test -n \"$mez_erlang_bin\"; and test -f \"$mez_erlang_bin\"; and not test -L \"$mez_erlang_bin\"\n\
+  set -l mez_erlang_bin_dir (cd (dirname \"$mez_erlang_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_erlang_root (cd \"$mez_erlang_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_erlang_root\"; and test \"$mez_erlang_bin\" = \"$mez_erlang_root/bin/erl\"; and mez_bootstrap_field env_manager \"erlang-otp:$mez_erlang_root\"\n\
+end\n\
+set -l mez_elixir_bin (command -s elixir 2>/dev/null)\n\
+if test -n \"$mez_elixir_bin\"; and test -f \"$mez_elixir_bin\"; and not test -L \"$mez_elixir_bin\"\n\
+  set -l mez_elixir_bin_dir (cd (dirname \"$mez_elixir_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_elixir_root (cd \"$mez_elixir_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_elixir_root\"; and test \"$mez_elixir_bin\" = \"$mez_elixir_root/bin/elixir\"; and mez_bootstrap_field env_manager \"elixir-runtime:$mez_elixir_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\

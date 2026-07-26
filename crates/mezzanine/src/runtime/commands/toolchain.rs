@@ -27,9 +27,10 @@ use crate::runtime::{
 };
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
-    SANDBOX_BUN_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH,
-    SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH,
-    SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
+    SANDBOX_BUN_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH,
+    SANDBOX_ERLANG_ELIXIR_PATH, SANDBOX_ERLANG_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
+    SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH,
+    SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
     SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor, ToolchainPlatform,
     discover_rust_from_environment_managers, resolve_configured_toolchain_projection_for_project,
     resolve_toolchain_projection, toolchain_descriptor,
@@ -111,6 +112,8 @@ struct ToolchainStatus {
     ruby_root: Option<String>,
     php_root: Option<String>,
     composer_root: Option<String>,
+    erlang_root: Option<String>,
+    elixir_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -929,6 +932,8 @@ impl RuntimeSessionService {
             ruby_root,
             php_root,
             composer_root,
+            erlang_root,
+            elixir_root,
             discovery_error,
         ) = match self.pane_environment_signature(pane_id) {
             None if self.pane_bootstrap_is_pending(pane_id) => (
@@ -950,10 +955,14 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1223,6 +1232,42 @@ impl RuntimeSessionService {
                         None
                     }
                 };
+                let erlang_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Erlang],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("erlang".to_string());
+                        projection
+                            .roots
+                            .first()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("erlang:{}", error.message()));
+                        None
+                    }
+                };
+                let elixir_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Erlang, SandboxToolchainKind::Elixir],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("elixir".to_string());
+                        projection
+                            .roots
+                            .last()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("elixir:{}", error.message()));
+                        None
+                    }
+                };
                 let state = if discoverable.is_empty() {
                     "unavailable"
                 } else {
@@ -1246,6 +1291,8 @@ impl RuntimeSessionService {
                     ruby_root,
                     php_root,
                     composer_root,
+                    erlang_root,
+                    elixir_root,
                     (!errors.is_empty()).then(|| errors.join(";")),
                 )
             }
@@ -1294,6 +1341,8 @@ impl RuntimeSessionService {
             ruby_root,
             php_root,
             composer_root,
+            erlang_root,
+            elixir_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -1775,6 +1824,40 @@ fn detect_toolchain_detail(
                 SANDBOX_PHP_COMPOSER_PATH,
             ))
         }
+        SandboxToolchainKind::Erlang => {
+            let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state("Erlang/OTP projection unexpectedly resolved empty")
+                })?;
+            let root = projection.roots.first().ok_or_else(|| {
+                MezError::invalid_state("Erlang/OTP projection is missing its runtime root")
+            })?;
+            Ok(format!(
+                "erlang_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_ERLANG_PATH,
+            ))
+        }
+        SandboxToolchainKind::Elixir => {
+            let projection = resolve_toolchain_projection(
+                &[SandboxToolchainKind::Erlang, kind],
+                environment_managers,
+                host_os,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?
+            .ok_or_else(|| {
+                MezError::invalid_state("Elixir projection unexpectedly resolved empty")
+            })?;
+            let root = projection.roots.last().ok_or_else(|| {
+                MezError::invalid_state("Elixir projection is missing its compiler root")
+            })?;
+            Ok(format!(
+                "elixir_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_ERLANG_ELIXIR_PATH,
+            ))
+        }
     }
 }
 
@@ -2026,6 +2109,14 @@ fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &Toolchain
             .flatten()
             .collect(),
         SandboxToolchainKind::Composer => vec![status.composer_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Erlang => vec![status.erlang_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Elixir => vec![status.elixir_root.as_deref()]
             .into_iter()
             .flatten()
             .collect(),

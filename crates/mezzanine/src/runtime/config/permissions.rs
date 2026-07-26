@@ -364,6 +364,10 @@ pub(crate) enum SandboxToolchainKind {
     Php,
     /// One selected standalone Composer companion distribution.
     Composer,
+    /// One selected Erlang/OTP runtime distribution.
+    Erlang,
+    /// One selected Elixir compiler and Mix distribution.
+    Elixir,
 }
 
 impl SandboxToolchainKind {
@@ -384,6 +388,8 @@ impl SandboxToolchainKind {
             Self::Ruby => "ruby",
             Self::Php => "php",
             Self::Composer => "composer",
+            Self::Erlang => "erlang",
+            Self::Elixir => "elixir",
         }
     }
 }

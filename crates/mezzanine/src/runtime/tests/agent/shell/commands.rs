@@ -784,6 +784,70 @@ fn runtime_agent_shell_composer_requires_php_and_persists_only_kinds() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Elixir detection requires exact Erlang and Elixir evidence, while
+/// enablement preserves both typed selections without persisting host roots.
+#[test]
+fn runtime_agent_shell_elixir_requires_erlang_and_persists_only_kinds() {
+    let config = "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = [\"erlang\"]\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-erlang-elixir-toolchain-mutation", config);
+    let erlang_root = path.parent().unwrap().join("erlang-runtime");
+    fs::create_dir_all(erlang_root.join("bin")).unwrap();
+    fs::create_dir_all(erlang_root.join("lib/erlang")).unwrap();
+    for executable in ["erl", "erlc", "escript"] {
+        let executable_path = erlang_root.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let elixir_root = path.parent().unwrap().join("elixir-runtime");
+    fs::create_dir_all(elixir_root.join("bin")).unwrap();
+    fs::create_dir_all(elixir_root.join("lib/elixir")).unwrap();
+    for executable in ["elixir", "elixirc", "mix"] {
+        let executable_path = elixir_root.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let erlang_root = erlang_root.canonicalize().unwrap();
+    let elixir_root = elixir_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![
+            format!("erlang-otp:{}", erlang_root.display()),
+            format!("elixir-runtime:{}", elixir_root.display()),
+        ]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"elixir-detect","method":"agent/shell/command","params":{"idempotency_key":"elixir-detect","input":"/toolchain detect elixir"}}"#,
+        &primary,
+    );
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `elixir` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable elixir --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled elixir; updated"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(
+        persisted.contains("toolchains = [\"erlang\", \"elixir\"]"),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&erlang_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&elixir_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

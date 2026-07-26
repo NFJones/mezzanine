@@ -983,6 +983,79 @@ fn sandbox_php_and_composer_toolchains_detect_without_persisting_roots() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Erlang and Elixir detection uses only captured CLI search-path entries,
+/// reports canonical roots, and never persists host paths or package state.
+#[test]
+fn sandbox_erlang_and_elixir_toolchains_detect_without_persisting_roots() {
+    let (mut env, home) = test_env("sandbox-erlang-elixir-toolchain");
+    let erlang_root = home.join("erlang-runtime");
+    fs::create_dir_all(erlang_root.join("bin")).unwrap();
+    fs::create_dir_all(erlang_root.join("lib/erlang")).unwrap();
+    for executable in ["erl", "erlc", "escript"] {
+        let path = erlang_root.join("bin").join(executable);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let elixir_root = home.join("elixir-runtime");
+    fs::create_dir_all(elixir_root.join("bin")).unwrap();
+    fs::create_dir_all(elixir_root.join("lib/elixir")).unwrap();
+    for executable in ["elixir", "elixirc", "mix"] {
+        let path = elixir_root.join("bin").join(executable);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let erlang_root = erlang_root.canonicalize().unwrap();
+    let elixir_root = elixir_root.canonicalize().unwrap();
+    env.path =
+        Some(std::env::join_paths([erlang_root.join("bin"), elixir_root.join("bin")]).unwrap());
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    for (kind, field, root) in [
+        ("erlang", "erlang_root", &erlang_root),
+        ("elixir", "elixir_root", &elixir_root),
+    ] {
+        stdout.clear();
+        stderr.clear();
+        let detect_code = block_on_cli_code(crate::cli::run_with(
+            with_json_output(vec![
+                "mez".to_string(),
+                "sandbox".to_string(),
+                "toolchains".to_string(),
+                "detect".to_string(),
+                "--kind".to_string(),
+                kind.to_string(),
+                project.to_string_lossy().into_owned(),
+            ]),
+            env.clone(),
+            false,
+            &mut stdout,
+            &mut stderr,
+        ))
+        .unwrap();
+        assert_eq!(detect_code, 0);
+        let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(detected["kind"], kind);
+        assert_eq!(detected["available"], true);
+        assert_eq!(detected[field], root.to_string_lossy().as_ref());
+        assert!(stderr.is_empty());
+        assert!(!config_path.exists());
+    }
+
+    assert_toolchain_enable_requires_live_primary(
+        env,
+        "elixir",
+        &config_path,
+        &mut stdout,
+        &mut stderr,
+    );
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]

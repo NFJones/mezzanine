@@ -691,7 +691,7 @@ fn selector_shadow_hint_completes_toolchain_command_name() {
 
 /// Verifies `/toolchain` completion follows its strict grammar from operation
 /// through typed Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, Dart,
-/// Kotlin, Ruby, PHP, or Composer selection and confirmation.
+/// Kotlin, Ruby, PHP, Composer, Erlang, or Elixir selection and confirmation.
 #[test]
 fn selector_shadow_hint_completes_toolchain_grammar() {
     let cases = [
@@ -714,6 +714,8 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
             "omposer",
             SelectorCandidateKind::Value,
         ),
+        ("/toolchain detect er", "lang", SelectorCandidateKind::Value),
+        ("/toolchain detect el", "ixir", SelectorCandidateKind::Value),
         ("/toolchain enable rus", "t", SelectorCandidateKind::Value),
         ("/toolchain enable z", "ig", SelectorCandidateKind::Value),
         ("/toolchain enable g", "o", SelectorCandidateKind::Value),
@@ -732,6 +734,8 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
             "omposer",
             SelectorCandidateKind::Value,
         ),
+        ("/toolchain enable er", "lang", SelectorCandidateKind::Value),
+        ("/toolchain enable el", "ixir", SelectorCandidateKind::Value),
         ("/toolchain disable rus", "t", SelectorCandidateKind::Value),
         (
             "/toolchain enable rust --y",

@@ -2971,7 +2971,7 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state.
 Schema v32 MAY define constrained custom toolchains in the primary user layer
@@ -3093,6 +3093,28 @@ composed PATH MUST be exactly
 beneath the managed home. Host `auth.json`, tokens, global Composer
 configuration and packages, certificates, private keys, manager state,
 inherited environment, and unrelated PHP installations MUST remain excluded.
+Schema v39 adds the allowlisted `erlang` and `elixir` kinds. Schema v38 to v39
+migration MUST preserve existing built-in and custom selections or omission
+and MUST NOT discover or enable either kind. Direct-user discovery MUST use
+only the captured search path and accept non-symlink executables exactly at
+`<canonical-erlang-root>/bin/erl` and `<canonical-elixir-root>/bin/elixir`.
+Active-pane discovery MUST use exact `erlang-otp:<canonical-root>` and
+`elixir-runtime:<canonical-root>` bootstrap evidence without invoking asdf,
+mise, shell hooks, Hex, Mix, or Rebar and without accepting manager shims. The
+Erlang root MUST contain real executable `bin/erl`, `bin/erlc`, and
+`bin/escript` entries plus a real `lib/erlang` directory. The Elixir root MUST
+contain real executable `bin/elixir`, `bin/elixirc`, and `bin/mix` entries plus
+a real `lib/elixir` directory. Incomplete, malformed, symlinked, overlapping,
+or authority-exceeding roots MUST fail closed. Selecting `elixir` MUST also
+require selecting `erlang`; no ambient Erlang runtime may satisfy that
+dependency. The roots MUST be mounted read-only at
+`/opt/mez/toolchains/erlang/root` and `/opt/mez/toolchains/elixir/root`; their
+composed PATH MUST be exactly
+`/opt/mez/toolchains/erlang/root/bin:/opt/mez/toolchains/elixir/root/bin:/usr/bin:/bin`.
+`MIX_HOME`, `HEX_HOME`, and `REBAR_CACHE_DIR` MUST point beneath the managed
+home. Host Hex credentials, archives, global Mix tasks, signing material,
+manager state, inherited environment, and unrelated BEAM installations MUST
+remain excluded.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -6037,10 +6059,10 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
   `node`, `python`, `jdk`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
-  `composer`. Unknown kinds, missing confirmation, duplicate confirmation, and
+  `composer`, `erlang`, or `elixir`. Unknown kinds, missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,

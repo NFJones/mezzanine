@@ -35,14 +35,16 @@ use crate::security::project::{
 };
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
-    SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
-    SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH,
-    SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
-    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
-    SandboxWorkflowRequest, clear_bubblewrap_managed_home, discover_bun_from_search_path,
+    SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_ERLANG_ELIXIR_PATH,
+    SANDBOX_ERLANG_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH,
+    SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH,
+    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
+    clear_bubblewrap_managed_home, discover_bun_from_search_path,
     discover_composer_from_search_path, discover_dart_from_search_path,
-    discover_deno_from_search_path, discover_dotnet_from_search_path, discover_go_from_search_path,
-    discover_jdk_from_search_path, discover_kotlin_from_search_path,
+    discover_deno_from_search_path, discover_dotnet_from_search_path,
+    discover_elixir_from_search_path, discover_erlang_from_search_path,
+    discover_go_from_search_path, discover_jdk_from_search_path, discover_kotlin_from_search_path,
     discover_node_from_search_path, discover_php_from_search_path,
     discover_python_from_search_path, discover_ruby_from_search_path, discover_rust_from_home,
     discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
@@ -1174,6 +1176,8 @@ struct SandboxToolchainResult {
     ruby_root: Option<PathBuf>,
     php_root: Option<PathBuf>,
     composer_root: Option<PathBuf>,
+    erlang_root: Option<PathBuf>,
+    elixir_root: Option<PathBuf>,
     sandbox_path: &'static str,
     read_only: bool,
     applied: bool,
@@ -1638,6 +1642,8 @@ enum DirectToolchainDetection {
     Ruby(Option<PathBuf>),
     Php(Option<PathBuf>),
     Composer(Option<PathBuf>),
+    Erlang(Option<PathBuf>),
+    Elixir(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1657,6 +1663,8 @@ impl DirectToolchainDetection {
             Self::Ruby(root) => root.is_some(),
             Self::Php(root) => root.is_some(),
             Self::Composer(root) => root.is_some(),
+            Self::Erlang(root) => root.is_some(),
+            Self::Elixir(root) => root.is_some(),
         }
     }
 
@@ -1676,6 +1684,8 @@ impl DirectToolchainDetection {
             Self::Ruby(_) => SandboxToolchainKind::Ruby,
             Self::Php(_) => SandboxToolchainKind::Php,
             Self::Composer(_) => SandboxToolchainKind::Composer,
+            Self::Erlang(_) => SandboxToolchainKind::Erlang,
+            Self::Elixir(_) => SandboxToolchainKind::Elixir,
         }
     }
 }
@@ -1727,6 +1737,12 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Composer => discover_composer_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Composer)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Erlang => discover_erlang_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Erlang)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Elixir => discover_elixir_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Elixir)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
     }
 }
 
@@ -1764,6 +1780,14 @@ fn toolchain_result(
     };
     let composer_root = match &detection {
         DirectToolchainDetection::Composer(root) => root.clone(),
+        _ => None,
+    };
+    let erlang_root = match &detection {
+        DirectToolchainDetection::Erlang(root) => root.clone(),
+        _ => None,
+    };
+    let elixir_root = match &detection {
+        DirectToolchainDetection::Elixir(root) => root.clone(),
         _ => None,
     };
     let (
@@ -1931,6 +1955,28 @@ fn toolchain_result(
             None,
             SANDBOX_PHP_COMPOSER_PATH,
         ),
+        DirectToolchainDetection::Erlang(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_ERLANG_PATH,
+        ),
+        DirectToolchainDetection::Elixir(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_ERLANG_ELIXIR_PATH,
+        ),
     };
     SandboxToolchainResult {
         version: 1,
@@ -1952,6 +1998,8 @@ fn toolchain_result(
         ruby_root,
         php_root,
         composer_root,
+        erlang_root,
+        elixir_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -2097,6 +2145,22 @@ fn write_toolchain_result<W: Write>(
             "composer_root: {}",
             result
                 .composer_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "erlang_root: {}",
+            result
+                .erlang_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "elixir_root: {}",
+            result
+                .elixir_root
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;

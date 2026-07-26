@@ -25,7 +25,7 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 14] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 16] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
@@ -40,6 +40,8 @@ pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 14] =
     SandboxToolchainKind::Ruby,
     SandboxToolchainKind::Php,
     SandboxToolchainKind::Composer,
+    SandboxToolchainKind::Erlang,
+    SandboxToolchainKind::Elixir,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -102,6 +104,15 @@ pub(crate) const SANDBOX_COMPOSER_ROOT: &str = "/opt/mez/toolchains/composer/roo
 /// Fixed executable search path when Composer is composed with PHP.
 pub(crate) const SANDBOX_PHP_COMPOSER_PATH: &str =
     "/opt/mez/toolchains/php/root/bin:/opt/mez/toolchains/composer/root/bin:/usr/bin:/bin";
+/// Fixed Erlang/OTP runtime projection inside Bubblewrap.
+pub(crate) const SANDBOX_ERLANG_ROOT: &str = "/opt/mez/toolchains/erlang/root";
+/// Fixed executable search path used when only Erlang/OTP is projected.
+pub(crate) const SANDBOX_ERLANG_PATH: &str = "/opt/mez/toolchains/erlang/root/bin:/usr/bin:/bin";
+/// Fixed Elixir compiler and Mix projection inside Bubblewrap.
+pub(crate) const SANDBOX_ELIXIR_ROOT: &str = "/opt/mez/toolchains/elixir/root";
+/// Fixed executable search path when Elixir is composed with Erlang/OTP.
+pub(crate) const SANDBOX_ERLANG_ELIXIR_PATH: &str =
+    "/opt/mez/toolchains/erlang/root/bin:/opt/mez/toolchains/elixir/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -921,6 +932,98 @@ const COMPOSER_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const ERLANG_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "erlang-otp",
+    label: "Erlang/OTP runtime",
+    sandbox_destination: SANDBOX_ERLANG_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/erl", "bin/erlc", "bin/escript"],
+    required_directories: &["lib/erlang"],
+}];
+const ERLANG_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Erlang,
+    aliases: &["erlang"],
+    roots: &ERLANG_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/erlang",
+    ],
+    path_entries: &["/opt/mez/toolchains/erlang/root/bin"],
+    environment: &[],
+    managed_state: &[],
+    forbidden_descendants: &[".hex", ".mix", ".cache", "archives", "credentials", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[SandboxToolchainKind::Elixir],
+    },
+    allow_root_overlap: false,
+};
+
+const ELIXIR_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "elixir-runtime",
+    label: "Elixir runtime",
+    sandbox_destination: SANDBOX_ELIXIR_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::UserTools,
+    required_executables: &["bin/elixir", "bin/elixirc", "bin/mix"],
+    required_directories: &["lib/elixir"],
+}];
+const ELIXIR_ENVIRONMENT: [ToolchainEnvironmentVariable; 3] = [
+    ToolchainEnvironmentVariable {
+        name: "MIX_HOME",
+        value: "/home/mez/.local/share/mix",
+    },
+    ToolchainEnvironmentVariable {
+        name: "HEX_HOME",
+        value: "/home/mez/.local/share/hex",
+    },
+    ToolchainEnvironmentVariable {
+        name: "REBAR_CACHE_DIR",
+        value: "/home/mez/.cache/rebar3",
+    },
+];
+const ELIXIR_MANAGED_STATE: [ManagedToolchainState; 3] = [
+    ManagedToolchainState {
+        purpose: "mix-home",
+        sandbox_path: "/home/mez/.local/share/mix",
+    },
+    ManagedToolchainState {
+        purpose: "hex-home",
+        sandbox_path: "/home/mez/.local/share/hex",
+    },
+    ManagedToolchainState {
+        purpose: "rebar-cache",
+        sandbox_path: "/home/mez/.cache/rebar3",
+    },
+];
+const ELIXIR_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Elixir,
+    aliases: &["elixir"],
+    roots: &ELIXIR_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/elixir",
+    ],
+    path_entries: &["/opt/mez/toolchains/elixir/root/bin"],
+    environment: &ELIXIR_ENVIRONMENT,
+    managed_state: &ELIXIR_MANAGED_STATE,
+    forbidden_descendants: &[".hex", ".mix", "archives", "credentials", "keys", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[SandboxToolchainKind::Erlang],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -1246,6 +1349,8 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Ruby => &RUBY_DESCRIPTOR,
         SandboxToolchainKind::Php => &PHP_DESCRIPTOR,
         SandboxToolchainKind::Composer => &COMPOSER_DESCRIPTOR,
+        SandboxToolchainKind::Erlang => &ERLANG_DESCRIPTOR,
+        SandboxToolchainKind::Elixir => &ELIXIR_DESCRIPTOR,
     }
 }
 
@@ -2609,6 +2714,34 @@ pub(crate) fn discover_composer_from_search_path(
         "Composer executable",
         "Composer companion",
         &COMPOSER_ROOTS[0],
+    )
+}
+
+/// Discovers one selected Erlang/OTP runtime from an explicit search path
+/// without invoking asdf, mise, shell hooks, or manager-owned shims.
+pub(crate) fn discover_erlang_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "erl",
+        "Erlang executable",
+        "Erlang/OTP runtime",
+        &ERLANG_ROOTS[0],
+    )
+}
+
+/// Discovers one selected Elixir runtime from an explicit search path without
+/// reading host Hex/Rebar state or invoking manager hooks.
+pub(crate) fn discover_elixir_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "elixir",
+        "Elixir executable",
+        "Elixir runtime",
+        &ELIXIR_ROOTS[0],
     )
 }
 

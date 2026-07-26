@@ -50,6 +50,10 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains("env_manager \"php-runtime:"));
     assert!(script.contains("command -v composer"));
     assert!(script.contains("env_manager \"composer-runtime:"));
+    assert!(script.contains("command -v erl"));
+    assert!(script.contains("env_manager \"erlang-otp:"));
+    assert!(script.contains("command -v elixir"));
+    assert!(script.contains("env_manager \"elixir-runtime:"));
     assert!(script.contains("bootstrap"));
     assert!(script.contains("complete"));
     assert!(script.contains("AGENTS.md"));
@@ -98,6 +102,10 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     assert!(script.contains("env_manager \"php-runtime:"));
     assert!(script.contains("command -s composer"));
     assert!(script.contains("env_manager \"composer-runtime:"));
+    assert!(script.contains("command -s erl"));
+    assert!(script.contains("env_manager \"erlang-otp:"));
+    assert!(script.contains("command -s elixir"));
+    assert!(script.contains("env_manager \"elixir-runtime:"));
 }
 
 #[test]

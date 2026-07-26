@@ -1822,6 +1822,138 @@ fn php_and_composer_discovery_rejects_incomplete_and_symlinked_roots() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A complete Erlang/OTP runtime composes read-only with its required Elixir
+/// companion while Mix, Hex, and Rebar state remains project-isolated.
+#[test]
+fn erlang_and_elixir_toolchains_compose_with_managed_package_state() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-erlang-elixir-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let erlang_root = base.join("erlang-runtime");
+    std::fs::create_dir_all(erlang_root.join("bin")).unwrap();
+    std::fs::create_dir_all(erlang_root.join("lib/erlang")).unwrap();
+    for executable in ["erl", "erlc", "escript"] {
+        let path = erlang_root.join("bin").join(executable);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let elixir_root = base.join("elixir-runtime");
+    std::fs::create_dir_all(elixir_root.join("bin")).unwrap();
+    std::fs::create_dir_all(elixir_root.join("lib/elixir")).unwrap();
+    for executable in ["elixir", "elixirc", "mix"] {
+        let path = elixir_root.join("bin").join(executable);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let erlang_root = erlang_root.canonicalize().unwrap();
+    let elixir_root = elixir_root.canonicalize().unwrap();
+    let managers = [
+        format!("erlang-otp:{}", erlang_root.display()),
+        format!("elixir-runtime:{}", elixir_root.display()),
+    ];
+
+    let missing = resolve_toolchain_projection(&[SandboxToolchainKind::Elixir], &managers, "linux")
+        .unwrap_err();
+    assert_eq!(
+        missing.kind(),
+        SandboxCompileErrorKind::UnsupportedRequirement
+    );
+
+    let erlang = toolchain_descriptor(SandboxToolchainKind::Erlang);
+    assert_eq!(erlang.aliases, ["erlang"]);
+    assert_eq!(erlang.roots[0].evidence_kind, "erlang-otp");
+    assert_eq!(erlang.roots[0].sandbox_destination, SANDBOX_ERLANG_ROOT);
+    let elixir = toolchain_descriptor(SandboxToolchainKind::Elixir);
+    assert_eq!(elixir.aliases, ["elixir"]);
+    assert_eq!(elixir.roots[0].evidence_kind, "elixir-runtime");
+    assert_eq!(elixir.roots[0].sandbox_destination, SANDBOX_ELIXIR_ROOT);
+    assert_eq!(elixir.coupling.required, [SandboxToolchainKind::Erlang]);
+
+    let projection = resolve_toolchain_projection(
+        &[SandboxToolchainKind::Erlang, SandboxToolchainKind::Elixir],
+        &managers,
+        "linux",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_ERLANG_ELIXIR_PATH);
+    for (name, value) in [
+        ("MIX_HOME", "/home/mez/.local/share/mix"),
+        ("HEX_HOME", "/home/mez/.local/share/hex"),
+        ("REBAR_CACHE_DIR", "/home/mez/.cache/rebar3"),
+    ] {
+        assert_eq!(
+            projection.environment.get(name).map(String::as_str),
+            Some(value),
+            "missing {name}"
+        );
+    }
+    assert_eq!(projection.roots.len(), 2);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Erlang and Elixir discovery reject incomplete roots and manager shims
+/// rather than broadening to asdf, mise, host archives, or credential state.
+#[test]
+fn erlang_and_elixir_discovery_rejects_incomplete_and_symlinked_roots() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-erlang-elixir-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let erlang_root = base.join("erlang-runtime");
+    std::fs::create_dir_all(erlang_root.join("bin")).unwrap();
+    for executable in ["erl", "erlc", "escript"] {
+        let path = erlang_root.join("bin").join(executable);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let erlang_root = erlang_root.canonicalize().unwrap();
+    let managers = [format!("erlang-otp:{}", erlang_root.display())];
+    assert!(
+        resolve_toolchain_projection(&[SandboxToolchainKind::Erlang], &managers, "linux").is_err()
+    );
+
+    std::fs::create_dir_all(erlang_root.join("lib/erlang")).unwrap();
+    let external_erlang = base.join("external-erlang");
+    std::fs::write(&external_erlang, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external_erlang, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(erlang_root.join("bin/erl")).unwrap();
+    std::os::unix::fs::symlink(&external_erlang, erlang_root.join("bin/erl")).unwrap();
+    let erlang_path = std::env::join_paths([erlang_root.join("bin")]).unwrap();
+    let erlang_error = discover_erlang_from_search_path(Some(&erlang_path)).unwrap_err();
+    assert_eq!(
+        erlang_error.kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    let elixir_root = base.join("elixir-runtime");
+    std::fs::create_dir_all(elixir_root.join("bin")).unwrap();
+    std::fs::create_dir_all(elixir_root.join("lib/elixir")).unwrap();
+    for executable in ["elixirc", "mix"] {
+        let path = elixir_root.join("bin").join(executable);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let external_elixir = base.join("external-elixir");
+    std::fs::write(&external_elixir, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external_elixir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&external_elixir, elixir_root.join("bin/elixir")).unwrap();
+    let elixir_path = std::env::join_paths([elixir_root.join("bin")]).unwrap();
+    let elixir_error = discover_elixir_from_search_path(Some(&elixir_path)).unwrap_err();
+    assert_eq!(
+        elixir_error.kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A validated .NET SDK is projected read-only with fixed runtime and managed
 /// state variables while telemetry and first-time setup remain deterministic.
 #[test]
@@ -2732,7 +2864,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .collect::<Vec<_>>(),
         vec![
             "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart",
-            "kotlin", "ruby", "php", "composer"
+            "kotlin", "ruby", "php", "composer", "erlang", "elixir"
         ]
     );
     assert_eq!(
@@ -2770,6 +2902,14 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("composer"),
         Some(SandboxToolchainKind::Composer)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("erlang"),
+        Some(SandboxToolchainKind::Erlang)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("elixir"),
+        Some(SandboxToolchainKind::Elixir)
     );
     assert_eq!(
         SANDBOX_RUST_PATH,

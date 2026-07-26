@@ -33,6 +33,7 @@ mod v34_v35;
 mod v35_v36;
 mod v36_v37;
 mod v37_v38;
+mod v38_v39;
 
 #[cfg(test)]
 pub use driver::migrate_config_text;
