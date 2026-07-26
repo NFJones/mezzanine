@@ -2971,9 +2971,10 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
-evidence rather than ambient service process state.
+evidence rather than ambient service process state, except that OCaml
+detection MUST use only the active pane's trusted project root.
 Schema v32 MAY define constrained custom toolchains in the primary user layer
 under `permissions.bubblewrap.custom_toolchains.<name>` and select them with
 `custom:<name>`. Names MUST match `[a-z][a-z0-9_-]{0,31}` and MUST exclude
@@ -3137,6 +3138,20 @@ second, Stack third, and `/usr/bin:/bin` last in composed PATH. `CABAL_DIR` and
 disable inherited environment files. Host package databases, Hackage
 credentials, signing material, GHCup metadata, user executable bins, inherited
 environment, and unrelated compiler installations MUST remain excluded.
+Schema v41 adds the allowlisted `ocaml` kind. Schema v40 to v41 migration MUST
+preserve existing built-in and custom selections or omission and MUST NOT
+discover or enable OCaml. OCaml projection MUST accept only the direct
+`<canonical-trusted-project>/_opam` local switch. It MUST NOT execute `opam
+env`, inspect global `~/.opam` state, accept an unrelated switch, or derive a
+switch from ambient PATH or service environment state. The `_opam` root and
+its `bin`, `lib`, and `share` directories MUST be real contained directories;
+`bin/ocaml`, `bin/ocamlc`, `bin/ocamlopt`, and `bin/dune` MUST be contained
+regular executable files. Symlinked roots, directories, executables, malformed
+layouts, absent trusted-project authority, and authority-exceeding paths MUST
+fail closed. The switch MUST be mounted read-only at its canonical project
+path. Its composed PATH MUST be exactly
+`<canonical-trusted-project>/_opam/bin:/usr/bin:/bin`, and
+`OPAM_SWITCH_PREFIX` MUST equal `<canonical-trusted-project>/_opam`.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -6081,10 +6096,10 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
   `node`, `python`, `jdk`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
-  `composer`, `erlang`, `elixir`, `ghc`, `cabal`, or `stack`. Unknown kinds,
+  `composer`, `erlang`, `elixir`, `ghc`, `cabal`, `stack`, or `ocaml`. Unknown kinds,
   missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish

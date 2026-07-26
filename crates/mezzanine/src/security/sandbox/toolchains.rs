@@ -25,7 +25,7 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 19] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 20] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
@@ -45,6 +45,7 @@ pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 19] =
     SandboxToolchainKind::Ghc,
     SandboxToolchainKind::Cabal,
     SandboxToolchainKind::Stack,
+    SandboxToolchainKind::Ocaml,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -1165,6 +1166,23 @@ const STACK_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const OCAML_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Ocaml,
+    aliases: &["ocaml", "opam"],
+    roots: &[],
+    sandbox_directories: &[],
+    path_entries: &[],
+    environment: &[],
+    managed_state: &[],
+    forbidden_descendants: &[".opam", "credentials", "repositories", "plugins"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -1316,7 +1334,7 @@ impl ResolvedToolchainProjection {
             {
                 return Err(SandboxCompileError::new(
                     SandboxCompileErrorKind::ToolchainOutsideAuthority,
-                    "Python project environment falls outside maximum sandbox read authority",
+                    "project toolchain environment falls outside maximum sandbox read authority",
                 ));
             }
         }
@@ -1409,19 +1427,30 @@ impl ResolvedToolchainProjection {
             }
         }
         for environment in &self.project_environments {
-            if environment.kind != SandboxToolchainKind::Python
-                || !self.kinds.contains(&SandboxToolchainKind::Python)
-            {
+            if !self.kinds.contains(&environment.kind) {
                 return Err(SandboxCompileError::new(
                     SandboxCompileErrorKind::InvalidInput,
                     "resolved project environment has no matching selected toolchain",
                 ));
             }
-            validate_python_project_environment(&environment.host_path)?;
+            match environment.kind {
+                SandboxToolchainKind::Python => {
+                    validate_python_project_environment(&environment.host_path)?;
+                }
+                SandboxToolchainKind::Ocaml => {
+                    validate_ocaml_project_environment(&environment.host_path)?;
+                }
+                _ => {
+                    return Err(SandboxCompileError::new(
+                        SandboxCompileErrorKind::InvalidInput,
+                        "resolved project environment has an unsupported toolchain kind",
+                    ));
+                }
+            }
             if environment.sandbox_path != environment.host_path.display().to_string() {
                 return Err(SandboxCompileError::new(
                     SandboxCompileErrorKind::InvalidInput,
-                    "resolved Python project environment has an invalid sandbox path",
+                    "resolved project environment has an invalid sandbox path",
                 ));
             }
         }
@@ -1495,6 +1524,7 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Ghc => &GHC_DESCRIPTOR,
         SandboxToolchainKind::Cabal => &CABAL_DESCRIPTOR,
         SandboxToolchainKind::Stack => &STACK_DESCRIPTOR,
+        SandboxToolchainKind::Ocaml => &OCAML_DESCRIPTOR,
     }
 }
 
@@ -1556,9 +1586,14 @@ pub(crate) fn resolve_toolchain_projection_for_project(
         && let Some(environment) = resolve_python_project_environment(project_root)?
     {
         projection.project_environments.push(environment);
-        projection.seal();
-        projection.validate()?;
     }
+    append_required_ocaml_project_environment(
+        &mut projection,
+        &selected_set,
+        trusted_project_root,
+    )?;
+    projection.seal();
+    projection.validate()?;
     Ok(Some(projection))
 }
 
@@ -1613,6 +1648,11 @@ pub(crate) fn resolve_configured_toolchain_projection_for_project(
     {
         projection.project_environments.push(environment);
     }
+    append_required_ocaml_project_environment(
+        &mut projection,
+        &selected_built_ins,
+        trusted_project_root,
+    )?;
     projection.seal();
     projection.validate()?;
     Ok(Some(projection))
@@ -3058,6 +3098,105 @@ fn validate_python_project_environment(environment: &Path) -> Result<(), Sandbox
             "Python project environment pyvenv.cfg must be a real file",
         ));
     }
+    Ok(())
+}
+
+/// Discovers one repository-contained `_opam` local switch without executing
+/// `opam env` or consulting global opam configuration and manager state.
+pub(crate) fn discover_ocaml_project_environment(
+    project_root: &Path,
+) -> Result<Option<ResolvedProjectEnvironment>, SandboxCompileError> {
+    let project_root = project_root.canonicalize().map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to canonicalize trusted project root: {error}"),
+        )
+    })?;
+    let environment = project_root.join("_opam");
+    match fs::symlink_metadata(&environment) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "OCaml local switch must not be a symlink",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                format!("failed to inspect OCaml local switch: {error}"),
+            ));
+        }
+    }
+    let environment = environment.canonicalize().map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to canonicalize OCaml local switch: {error}"),
+        )
+    })?;
+    if !environment.starts_with(&project_root)
+        || environment.parent() != Some(project_root.as_path())
+    {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            "OCaml local switch must remain directly inside the trusted project",
+        ));
+    }
+    validate_ocaml_project_environment(&environment)?;
+    Ok(Some(ResolvedProjectEnvironment {
+        kind: SandboxToolchainKind::Ocaml,
+        sandbox_path: environment.display().to_string(),
+        host_path: environment,
+    }))
+}
+
+/// Validates one repository-contained OCaml switch without executing tools.
+fn validate_ocaml_project_environment(environment: &Path) -> Result<(), SandboxCompileError> {
+    let metadata = fs::symlink_metadata(environment).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to inspect OCaml local switch: {error}"),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            "OCaml local switch must be a real directory",
+        ));
+    }
+    for directory in ["bin", "lib", "share"] {
+        validate_distribution_directory(environment, directory, "OCaml local switch")?;
+    }
+    for executable in ["bin/ocaml", "bin/ocamlc", "bin/ocamlopt", "bin/dune"] {
+        validate_distribution_executable(environment, executable, "OCaml local switch")?;
+    }
+    Ok(())
+}
+
+/// Adds the selected OCaml project environment and fails when no trusted local
+/// switch is available, rather than falling back to global opam state.
+fn append_required_ocaml_project_environment(
+    projection: &mut ResolvedToolchainProjection,
+    selected: &BTreeSet<SandboxToolchainKind>,
+    trusted_project_root: Option<&Path>,
+) -> Result<(), SandboxCompileError> {
+    if !selected.contains(&SandboxToolchainKind::Ocaml) {
+        return Ok(());
+    }
+    let project_root = trusted_project_root.ok_or_else(|| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::UnsupportedRequirement,
+            "selected OCaml toolchain requires a trusted project root",
+        )
+    })?;
+    let environment = discover_ocaml_project_environment(project_root)?.ok_or_else(|| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::UnsupportedRequirement,
+            "selected OCaml toolchain requires a repository-local _opam switch",
+        )
+    })?;
+    projection.project_environments.push(environment);
     Ok(())
 }
 

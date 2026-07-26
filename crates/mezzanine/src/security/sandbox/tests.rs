@@ -2858,6 +2858,130 @@ fn python_toolchain_rejects_malformed_and_symlinked_project_environments() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A selected OCaml toolchain accepts only the direct trusted-project `_opam`
+/// switch, gives its `bin` directory deterministic PATH precedence, and sets
+/// `OPAM_SWITCH_PREFIX` without consulting or projecting global opam state.
+#[test]
+fn ocaml_toolchain_composes_contained_local_switch() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-ocaml-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("project");
+    let environment = project.join("_opam");
+    for directory in ["bin", "lib", "share"] {
+        std::fs::create_dir_all(environment.join(directory)).unwrap();
+    }
+    for executable in ["ocaml", "ocamlc", "ocamlopt", "dune"] {
+        let path = environment.join("bin").join(executable);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let project = project.canonicalize().unwrap();
+    let environment = environment.canonicalize().unwrap();
+
+    let projection = resolve_toolchain_projection_for_project(
+        &[SandboxToolchainKind::Ocaml],
+        &[],
+        "linux",
+        Some(&project),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(projection.roots.is_empty());
+    assert_eq!(projection.project_environments.len(), 1);
+    assert_eq!(projection.project_environments[0].host_path, environment);
+    assert_eq!(
+        projection.executable_path(),
+        format!("{}/bin:/usr/bin:/bin", environment.display())
+    );
+
+    let maximum_authority = home_authority(&base.canonicalize().unwrap().display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Ocaml];
+    let mut compile_request = request(&config, &maximum_authority, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    let environment_text = environment.display().to_string();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| { args == ["--setenv", "OPAM_SWITCH_PREFIX", environment_text.as_str()] })
+    );
+    assert!(plan.arguments.windows(3).any(|args| {
+        args == [
+            "--setenv",
+            "PATH",
+            format!("{}/bin:/usr/bin:/bin", environment.display()).as_str(),
+        ]
+    }));
+    assert!(
+        !plan
+            .arguments
+            .iter()
+            .any(|argument| argument.contains("/.opam"))
+    );
+
+    let outside = authority();
+    assert_eq!(
+        projection.validate_authority(&outside).unwrap_err().kind(),
+        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// OCaml local-switch discovery fails closed for absent, incomplete,
+/// non-executable, or symlinked `_opam` state and never falls back to a global
+/// manager switch elsewhere in the user's home.
+#[test]
+fn ocaml_toolchain_rejects_absent_malformed_and_symlinked_local_switches() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-ocaml-project-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+
+    assert!(
+        discover_ocaml_project_environment(&project)
+            .unwrap()
+            .is_none()
+    );
+    let missing = resolve_toolchain_projection_for_project(
+        &[SandboxToolchainKind::Ocaml],
+        &[],
+        "linux",
+        Some(&project),
+    )
+    .unwrap_err();
+    assert_eq!(
+        missing.kind(),
+        SandboxCompileErrorKind::UnsupportedRequirement
+    );
+
+    let environment = project.join("_opam");
+    for directory in ["bin", "lib", "share"] {
+        std::fs::create_dir_all(environment.join(directory)).unwrap();
+    }
+    let malformed = discover_ocaml_project_environment(&project).unwrap_err();
+    assert_eq!(malformed.kind(), SandboxCompileErrorKind::InvalidInput);
+
+    std::fs::remove_dir_all(&environment).unwrap();
+    let external = base.join("global-opam-switch");
+    std::fs::create_dir_all(&external).unwrap();
+    std::os::unix::fs::symlink(&external, &environment).unwrap();
+    let symlink = discover_ocaml_project_environment(&project).unwrap_err();
+    assert_eq!(symlink.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Descriptor resolution and final launch validation reject ambiguous
 /// selection and any mutation of code-owned projection metadata or classes.
 #[test]
@@ -3011,7 +3135,8 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .collect::<Vec<_>>(),
         vec![
             "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart",
-            "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack"
+            "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack",
+            "ocaml"
         ]
     );
     assert_eq!(
@@ -3069,6 +3194,10 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("stack"),
         Some(SandboxToolchainKind::Stack)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("ocaml"),
+        Some(SandboxToolchainKind::Ocaml)
     );
     assert_eq!(
         SANDBOX_RUST_PATH,

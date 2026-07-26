@@ -374,6 +374,8 @@ pub(crate) enum SandboxToolchainKind {
     Cabal,
     /// One selected Stack companion distribution.
     Stack,
+    /// One repository-contained OCaml local switch.
+    Ocaml,
 }
 
 impl SandboxToolchainKind {
@@ -399,6 +401,7 @@ impl SandboxToolchainKind {
             Self::Ghc => "ghc",
             Self::Cabal => "cabal",
             Self::Stack => "stack",
+            Self::Ocaml => "ocaml",
         }
     }
 }

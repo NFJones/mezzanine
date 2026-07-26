@@ -47,10 +47,11 @@ use crate::security::sandbox::{
     discover_elixir_from_search_path, discover_erlang_from_search_path,
     discover_ghc_from_search_path, discover_go_from_search_path, discover_jdk_from_search_path,
     discover_kotlin_from_search_path, discover_node_from_search_path,
-    discover_php_from_search_path, discover_python_from_search_path,
-    discover_ruby_from_search_path, discover_rust_from_home, discover_stack_from_search_path,
-    discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
-    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
+    discover_ocaml_project_environment, discover_php_from_search_path,
+    discover_python_from_search_path, discover_ruby_from_search_path, discover_rust_from_home,
+    discover_stack_from_search_path, discover_zig_from_search_path,
+    inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind, plan_sandbox_workflow,
+    prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -1183,7 +1184,8 @@ struct SandboxToolchainResult {
     ghc_root: Option<PathBuf>,
     cabal_root: Option<PathBuf>,
     stack_root: Option<PathBuf>,
-    sandbox_path: &'static str,
+    ocaml_root: Option<PathBuf>,
+    sandbox_path: String,
     read_only: bool,
     applied: bool,
     confirmation_required: bool,
@@ -1218,7 +1220,7 @@ fn run_sandbox_toolchains<W: Write>(
             };
             let path = path.unwrap_or(std::env::current_dir()?);
             let project = discover_project_root_with_metadata(&path, input_source)?;
-            let detection = detect_direct_toolchain(kind, &env)?;
+            let detection = detect_direct_toolchain(kind, &env, Some(&project.canonical_root))?;
             let result = toolchain_result(project.canonical_root, detection, false, false);
             write_toolchain_result(stdout, output_format, &result)?;
             Ok(0)
@@ -1447,9 +1449,26 @@ fn submit_toolchain_selectors<W: Write>(
         selectors.push(selector);
     }
     if operation == "enable" {
+        let project_root = if selectors.iter().any(|selector| {
+            matches!(
+                selector,
+                ToolchainSelection::BuiltIn(SandboxToolchainKind::Ocaml)
+            )
+        }) {
+            let current = std::env::current_dir()?;
+            Some(
+                discover_project_root_with_metadata(
+                    &current,
+                    ProjectRootInputSource::CurrentDirectory,
+                )?
+                .canonical_root,
+            )
+        } else {
+            None
+        };
         for selector in &selectors {
             if let ToolchainSelection::BuiltIn(kind) = selector {
-                let detection = detect_direct_toolchain(*kind, env)?;
+                let detection = detect_direct_toolchain(*kind, env, project_root.as_deref())?;
                 if !detection.available() {
                     return Err(MezError::invalid_state(format!(
                         "{} toolchain detection did not find a canonical distribution",
@@ -1652,6 +1671,7 @@ enum DirectToolchainDetection {
     Ghc(Option<PathBuf>),
     Cabal(Option<PathBuf>),
     Stack(Option<PathBuf>),
+    Ocaml(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1676,6 +1696,7 @@ impl DirectToolchainDetection {
             Self::Ghc(root) => root.is_some(),
             Self::Cabal(root) => root.is_some(),
             Self::Stack(root) => root.is_some(),
+            Self::Ocaml(root) => root.is_some(),
         }
     }
 
@@ -1700,6 +1721,7 @@ impl DirectToolchainDetection {
             Self::Ghc(_) => SandboxToolchainKind::Ghc,
             Self::Cabal(_) => SandboxToolchainKind::Cabal,
             Self::Stack(_) => SandboxToolchainKind::Stack,
+            Self::Ocaml(_) => SandboxToolchainKind::Ocaml,
         }
     }
 }
@@ -1707,6 +1729,7 @@ impl DirectToolchainDetection {
 fn detect_direct_toolchain(
     kind: SandboxToolchainKind,
     env: &CliEnv,
+    project_root: Option<&Path>,
 ) -> Result<DirectToolchainDetection> {
     match kind {
         SandboxToolchainKind::Rust => discover_rust_from_home(env.home.as_deref())
@@ -1766,6 +1789,18 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Stack => discover_stack_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Stack)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Ocaml => {
+            let project_root = project_root.ok_or_else(|| {
+                MezError::invalid_state("OCaml detection requires a canonical project root")
+            })?;
+            discover_ocaml_project_environment(project_root)
+                .map(|environment| {
+                    DirectToolchainDetection::Ocaml(
+                        environment.map(|environment| environment.host_path),
+                    )
+                })
+                .map_err(|error| MezError::invalid_state(error.message()))
+        }
     }
 }
 
@@ -1825,6 +1860,10 @@ fn toolchain_result(
         DirectToolchainDetection::Stack(root) => root.clone(),
         _ => None,
     };
+    let ocaml_root = match &detection {
+        DirectToolchainDetection::Ocaml(root) => root.clone(),
+        _ => None,
+    };
     let (
         cargo_bin,
         rustup_home,
@@ -1845,7 +1884,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_RUST_PATH,
+            SANDBOX_RUST_PATH.to_string(),
         ),
         DirectToolchainDetection::Zig(root) => (
             None,
@@ -1856,7 +1895,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_ZIG_PATH,
+            SANDBOX_ZIG_PATH.to_string(),
         ),
         DirectToolchainDetection::Go(root) => (
             None,
@@ -1867,7 +1906,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_GO_PATH,
+            SANDBOX_GO_PATH.to_string(),
         ),
         DirectToolchainDetection::Deno(root) => (
             None,
@@ -1878,7 +1917,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_DENO_PATH,
+            SANDBOX_DENO_PATH.to_string(),
         ),
         DirectToolchainDetection::Bun(root) => (
             None,
@@ -1889,7 +1928,7 @@ fn toolchain_result(
             root,
             None,
             None,
-            SANDBOX_BUN_PATH,
+            SANDBOX_BUN_PATH.to_string(),
         ),
         DirectToolchainDetection::Node(root) => (
             None,
@@ -1900,7 +1939,7 @@ fn toolchain_result(
             None,
             root,
             None,
-            SANDBOX_NODE_PATH,
+            SANDBOX_NODE_PATH.to_string(),
         ),
         DirectToolchainDetection::Python(root) => (
             None,
@@ -1911,7 +1950,7 @@ fn toolchain_result(
             None,
             None,
             root,
-            SANDBOX_PYTHON_PATH,
+            SANDBOX_PYTHON_PATH.to_string(),
         ),
         DirectToolchainDetection::Jdk(_) => (
             None,
@@ -1922,7 +1961,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_JDK_PATH,
+            SANDBOX_JDK_PATH.to_string(),
         ),
         DirectToolchainDetection::Dotnet(_) => (
             None,
@@ -1933,7 +1972,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_DOTNET_PATH,
+            SANDBOX_DOTNET_PATH.to_string(),
         ),
         DirectToolchainDetection::Dart(_) => (
             None,
@@ -1944,7 +1983,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_DART_PATH,
+            SANDBOX_DART_PATH.to_string(),
         ),
         DirectToolchainDetection::Kotlin(_) => (
             None,
@@ -1955,7 +1994,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_KOTLIN_JDK_PATH,
+            SANDBOX_KOTLIN_JDK_PATH.to_string(),
         ),
         DirectToolchainDetection::Ruby(_) => (
             None,
@@ -1966,7 +2005,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_RUBY_PATH,
+            SANDBOX_RUBY_PATH.to_string(),
         ),
         DirectToolchainDetection::Php(_) => (
             None,
@@ -1977,7 +2016,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_PHP_PATH,
+            SANDBOX_PHP_PATH.to_string(),
         ),
         DirectToolchainDetection::Composer(_) => (
             None,
@@ -1988,7 +2027,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_PHP_COMPOSER_PATH,
+            SANDBOX_PHP_COMPOSER_PATH.to_string(),
         ),
         DirectToolchainDetection::Erlang(_) => (
             None,
@@ -1999,7 +2038,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_ERLANG_PATH,
+            SANDBOX_ERLANG_PATH.to_string(),
         ),
         DirectToolchainDetection::Elixir(_) => (
             None,
@@ -2010,7 +2049,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_ERLANG_ELIXIR_PATH,
+            SANDBOX_ERLANG_ELIXIR_PATH.to_string(),
         ),
         DirectToolchainDetection::Ghc(_) => (
             None,
@@ -2021,7 +2060,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_GHC_PATH,
+            SANDBOX_GHC_PATH.to_string(),
         ),
         DirectToolchainDetection::Cabal(_) => (
             None,
@@ -2032,7 +2071,7 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_GHC_CABAL_PATH,
+            SANDBOX_GHC_CABAL_PATH.to_string(),
         ),
         DirectToolchainDetection::Stack(_) => (
             None,
@@ -2043,7 +2082,19 @@ fn toolchain_result(
             None,
             None,
             None,
-            SANDBOX_GHC_STACK_PATH,
+            SANDBOX_GHC_STACK_PATH.to_string(),
+        ),
+        DirectToolchainDetection::Ocaml(root) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            root.as_deref()
+                .map_or_else(|| "_opam".to_string(), |path| path.display().to_string()),
         ),
     };
     SandboxToolchainResult {
@@ -2071,6 +2122,7 @@ fn toolchain_result(
         ghc_root,
         cabal_root,
         stack_root,
+        ocaml_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -2256,6 +2308,14 @@ fn write_toolchain_result<W: Write>(
             "stack_root: {}",
             result
                 .stack_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "ocaml_root: {}",
+            result
+                .ocaml_root
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;

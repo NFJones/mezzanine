@@ -32,9 +32,9 @@ use crate::security::sandbox::{
     SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH,
     SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH,
     SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
-    ToolchainDescriptor, ToolchainPlatform, discover_rust_from_environment_managers,
-    resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
-    toolchain_descriptor,
+    ToolchainDescriptor, ToolchainPlatform, discover_ocaml_project_environment,
+    discover_rust_from_environment_managers, resolve_configured_toolchain_projection_for_project,
+    resolve_toolchain_projection, toolchain_descriptor,
 };
 
 /// Strict operation accepted by `/toolchain`.
@@ -118,6 +118,7 @@ struct ToolchainStatus {
     ghc_root: Option<String>,
     cabal_root: Option<String>,
     stack_root: Option<String>,
+    ocaml_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -222,6 +223,7 @@ impl RuntimeSessionService {
                             *kind,
                             &signature.environment_managers,
                             &signature.os,
+                            self.trusted_project_root_for_pane(pane_id).as_deref(),
                         )?;
                         render_toolchain_detection(pane_id, *kind, &detail, &status)
                     }
@@ -941,6 +943,7 @@ impl RuntimeSessionService {
             ghc_root,
             cabal_root,
             stack_root,
+            ocaml_root,
             discovery_error,
         ) = match self.pane_environment_signature(pane_id) {
             None if self.pane_bootstrap_is_pending(pane_id) => (
@@ -967,10 +970,12 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
                 None,
                 None,
                 None,
@@ -1335,6 +1340,20 @@ impl RuntimeSessionService {
                         None
                     }
                 };
+                let ocaml_root = match self.trusted_project_root_for_pane(pane_id) {
+                    Some(project_root) => match discover_ocaml_project_environment(&project_root) {
+                        Ok(Some(environment)) => {
+                            discoverable.push("ocaml".to_string());
+                            Some(environment.host_path.display().to_string())
+                        }
+                        Ok(None) => None,
+                        Err(error) => {
+                            errors.push(format!("ocaml:{}", error.message()));
+                            None
+                        }
+                    },
+                    None => None,
+                };
                 let state = if discoverable.is_empty() {
                     "unavailable"
                 } else {
@@ -1363,6 +1382,7 @@ impl RuntimeSessionService {
                     ghc_root,
                     cabal_root,
                     stack_root,
+                    ocaml_root,
                     (!errors.is_empty()).then(|| errors.join(";")),
                 )
             }
@@ -1416,6 +1436,7 @@ impl RuntimeSessionService {
             ghc_root,
             cabal_root,
             stack_root,
+            ocaml_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -1680,6 +1701,7 @@ fn detect_toolchain_detail(
     kind: SandboxToolchainKind,
     environment_managers: &[String],
     host_os: &str,
+    trusted_project_root: Option<&std::path::Path>,
 ) -> Result<String> {
     match kind {
         SandboxToolchainKind::Rust => {
@@ -1984,6 +2006,23 @@ fn detect_toolchain_detail(
                 SANDBOX_GHC_STACK_PATH,
             ))
         }
+        SandboxToolchainKind::Ocaml => {
+            let project_root = trusted_project_root.ok_or_else(|| {
+                MezError::invalid_state("OCaml detection requires a trusted project root")
+            })?;
+            let environment = discover_ocaml_project_environment(project_root)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "OCaml detection requires a repository-local _opam switch",
+                    )
+                })?;
+            Ok(format!(
+                "ocaml_root={} sandbox_path={}",
+                json_escape(&environment.host_path.display().to_string()),
+                json_escape(&environment.sandbox_path),
+            ))
+        }
     }
 }
 
@@ -2255,6 +2294,10 @@ fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &Toolchain
             .flatten()
             .collect(),
         SandboxToolchainKind::Stack => vec![status.stack_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Ocaml => vec![status.ocaml_root.as_deref()]
             .into_iter()
             .flatten()
             .collect(),

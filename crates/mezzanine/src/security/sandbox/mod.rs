@@ -22,7 +22,6 @@ use mez_agent::permissions::{
 };
 use sha2::{Digest, Sha256};
 
-#[cfg(test)]
 use crate::runtime::SandboxToolchainKind;
 use crate::runtime::{
     BubblewrapConfig, BubblewrapNetworkMode, NetworkPolicy, SandboxEnvironmentPolicy,
@@ -54,11 +53,12 @@ pub(crate) use toolchains::{
     discover_elixir_from_search_path, discover_erlang_from_search_path,
     discover_ghc_from_search_path, discover_go_from_search_path, discover_jdk_from_search_path,
     discover_kotlin_from_search_path, discover_node_from_search_path,
-    discover_php_from_search_path, discover_python_from_search_path,
-    discover_ruby_from_search_path, discover_rust_from_environment_managers,
-    discover_rust_from_home, discover_stack_from_search_path, discover_zig_from_search_path,
-    parse_sandbox_toolchain_kind, resolve_configured_toolchain_projection_for_project,
-    resolve_toolchain_projection, toolchain_descriptor,
+    discover_ocaml_project_environment, discover_php_from_search_path,
+    discover_python_from_search_path, discover_ruby_from_search_path,
+    discover_rust_from_environment_managers, discover_rust_from_home,
+    discover_stack_from_search_path, discover_zig_from_search_path, parse_sandbox_toolchain_kind,
+    resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
+    toolchain_descriptor,
 };
 #[cfg(test)]
 pub(crate) use toolchains::{
@@ -1147,8 +1147,13 @@ fn bubblewrap_arguments(
             );
         }
         for environment in &toolchains.project_environments {
+            let variable = match environment.kind {
+                SandboxToolchainKind::Python => "VIRTUAL_ENV",
+                SandboxToolchainKind::Ocaml => "OPAM_SWITCH_PREFIX",
+                _ => continue,
+            };
             arguments.extend(
-                ["--setenv", "VIRTUAL_ENV", environment.sandbox_path.as_str()]
+                ["--setenv", variable, environment.sandbox_path.as_str()]
                     .into_iter()
                     .map(str::to_string),
             );

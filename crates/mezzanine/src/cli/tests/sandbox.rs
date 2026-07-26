@@ -1145,6 +1145,64 @@ fn sandbox_haskell_toolchains_detect_without_persisting_roots() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// OCaml detection accepts only the canonical project-local `_opam` switch,
+/// reports that switch without consulting PATH, and never persists its host
+/// path or creates configuration during read-only inspection.
+#[test]
+fn sandbox_ocaml_toolchain_detects_only_project_local_switch() {
+    let (env, home) = test_env("sandbox-ocaml-toolchain");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let environment = project.join("_opam");
+    for directory in ["bin", "lib", "share"] {
+        fs::create_dir_all(environment.join(directory)).unwrap();
+    }
+    for executable in ["ocaml", "ocamlc", "ocamlopt", "dune"] {
+        let path = environment.join("bin").join(executable);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let project = project.canonicalize().unwrap();
+    let environment = environment.canonicalize().unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let detect_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "detect".to_string(),
+            "--kind".to_string(),
+            "ocaml".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(detect_code, 0);
+    let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(detected["kind"], "ocaml");
+    assert_eq!(detected["available"], true);
+    assert_eq!(
+        detected["ocaml_root"],
+        environment.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        detected["sandbox_path"],
+        environment.to_string_lossy().as_ref()
+    );
+    assert!(stderr.is_empty());
+    assert!(!config_path.exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]

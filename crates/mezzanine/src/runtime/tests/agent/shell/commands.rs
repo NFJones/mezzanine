@@ -923,6 +923,70 @@ fn runtime_agent_shell_haskell_companions_require_ghc_and_persist_only_kinds() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// OCaml detection and enablement use only the active pane's trusted project
+/// `_opam` switch while persisting the kind rather than any canonical host path.
+#[test]
+fn runtime_agent_shell_ocaml_uses_trusted_project_local_switch() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-ocaml-toolchain-mutation", config);
+    let project = path.parent().unwrap().join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let environment = project.join("_opam");
+    for directory in ["bin", "lib", "share"] {
+        fs::create_dir_all(environment.join(directory)).unwrap();
+    }
+    for executable in ["ocaml", "ocamlc", "ocamlopt", "dune"] {
+        let executable_path = environment.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let project = project.canonicalize().unwrap();
+    let environment = environment.canonicalize().unwrap();
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            project.clone(),
+            TrustDecision::Trusted,
+            Some(project.join(".git")),
+            1,
+        )
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_current_working_directory("%1".to_string(), project.clone());
+    service.set_pane_environment_signature_for_tests("%1", toolchain_environment(Vec::new()));
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"ocaml-detect","method":"agent/shell/command","params":{"idempotency_key":"ocaml-detect","input":"/toolchain detect ocaml"}}"#,
+        &primary,
+    );
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `ocaml` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+    assert!(
+        detect.contains(&environment.to_string_lossy().into_owned()),
+        "{detect}"
+    );
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable ocaml --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(
+        persisted.contains("toolchains = [\"ocaml\"]"),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&environment.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]
