@@ -1725,6 +1725,38 @@ impl ResolvedToolchainProjection {
         Ok(())
     }
 
+    /// Adds enabled projection roots to effective read authority without
+    /// changing generic filesystem mounts or write authority.
+    pub(crate) fn extend_read_authority(
+        &self,
+        authority: &PathScopes,
+    ) -> Result<PathScopes, SandboxCompileError> {
+        let read_scopes = authority
+            .read_scopes
+            .iter()
+            .cloned()
+            .chain(
+                self.roots
+                    .iter()
+                    .map(|root| root.host_path.to_string_lossy().into_owned()),
+            )
+            .chain(
+                self.project_environments
+                    .iter()
+                    .map(|environment| environment.host_path.to_string_lossy().into_owned()),
+            )
+            .collect();
+        PathScopes::try_shell_resolved_with_evidence(
+            authority.current_directory.clone(),
+            read_scopes,
+            authority.write_scopes.clone(),
+            authority.path_evidence.clone(),
+        )
+        .map_err(|error| {
+            SandboxCompileError::new(SandboxCompileErrorKind::InvalidInput, error.message())
+        })
+    }
+
     /// Revalidates descriptor-owned roots before final launch compilation.
     pub(crate) fn validate(&self) -> Result<(), SandboxCompileError> {
         let kinds = self.kinds.iter().copied().collect::<BTreeSet<_>>();

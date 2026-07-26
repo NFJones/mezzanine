@@ -773,8 +773,8 @@ impl RuntimeSessionService {
         self.preflight_toolchain_candidate(pane_id, &candidate, None)
     }
 
-    /// Resolves and authority-checks a complete candidate Bubblewrap
-    /// toolchain configuration without mutating disk or live state.
+    /// Resolves a complete candidate Bubblewrap toolchain configuration
+    /// without mutating disk or live state.
     fn preflight_toolchain_candidate(
         &self,
         pane_id: &str,
@@ -798,7 +798,7 @@ impl RuntimeSessionService {
             .chain(self.session.socket_path().parent())
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>();
-        let projection = resolve_configured_toolchain_projection_for_project(
+        resolve_configured_toolchain_projection_for_project(
             &candidate,
             &signature.environment_managers,
             &signature.os,
@@ -806,18 +806,6 @@ impl RuntimeSessionService {
             &protected_roots,
         )
         .map_err(|error| MezError::invalid_state(error.message()))?;
-        if let Some(projection) = projection
-            && !projection.custom_names.is_empty()
-        {
-            let authority = self.path_scopes_for_pane(pane_id).ok_or_else(|| {
-                MezError::invalid_state(
-                    "custom toolchain preflight requires resolved pane read authority",
-                )
-            })?;
-            projection
-                .validate_authority(&authority)
-                .map_err(|error| MezError::invalid_state(error.message()))?;
-        }
         Ok(())
     }
 
@@ -863,14 +851,6 @@ impl RuntimeSessionService {
         )
         .map_err(|error| MezError::invalid_state(error.message()))?
         .ok_or_else(|| MezError::invalid_state("custom toolchain projection resolved empty"))?;
-        let authority = self.path_scopes_for_pane(pane_id).ok_or_else(|| {
-            MezError::invalid_state(
-                "custom toolchain inspection requires resolved pane read authority",
-            )
-        })?;
-        projection
-            .validate_authority(&authority)
-            .map_err(|error| MezError::invalid_state(error.message()))?;
         let configured = config
             .toolchain_selections
             .contains(&ToolchainSelection::Custom(name.clone()));

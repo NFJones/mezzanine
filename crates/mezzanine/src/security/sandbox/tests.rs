@@ -920,11 +920,12 @@ fn zig_toolchain_projection_is_read_only_and_cache_isolated() {
     let outside = authority();
     let mut outside_request = request(&config, &outside, &evaluation);
     outside_request.toolchain_projection = Some(&projection);
-    assert_eq!(
-        compile_bubblewrap_launch_plan(outside_request)
-            .unwrap_err()
-            .kind(),
-        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    let outside_plan = compile_bubblewrap_launch_plan(outside_request).unwrap();
+    assert!(
+        outside_plan
+            .arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_ZIG_ROOT])
     );
 
     let _ = std::fs::remove_dir_all(&base);
@@ -1052,11 +1053,12 @@ fn go_toolchain_projection_is_read_only_and_cache_isolated() {
     let outside = authority();
     let mut outside_request = request(&config, &outside, &evaluation);
     outside_request.toolchain_projection = Some(&projection);
-    assert_eq!(
-        compile_bubblewrap_launch_plan(outside_request)
-            .unwrap_err()
-            .kind(),
-        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    let outside_plan = compile_bubblewrap_launch_plan(outside_request).unwrap();
+    assert!(
+        outside_plan
+            .arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_GO_ROOT])
     );
 
     let _ = std::fs::remove_dir_all(&base);
@@ -1176,11 +1178,12 @@ fn deno_toolchain_projection_is_read_only_and_cache_isolated() {
     let outside = authority();
     let mut outside_request = request(&config, &outside, &evaluation);
     outside_request.toolchain_projection = Some(&projection);
-    assert_eq!(
-        compile_bubblewrap_launch_plan(outside_request)
-            .unwrap_err()
-            .kind(),
-        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    let outside_plan = compile_bubblewrap_launch_plan(outside_request).unwrap();
+    assert!(
+        outside_plan
+            .arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_DENO_ROOT])
     );
 
     let _ = std::fs::remove_dir_all(&base);
@@ -1303,11 +1306,12 @@ fn bun_toolchain_projection_is_read_only_and_cache_isolated() {
     let outside = authority();
     let mut outside_request = request(&config, &outside, &evaluation);
     outside_request.toolchain_projection = Some(&projection);
-    assert_eq!(
-        compile_bubblewrap_launch_plan(outside_request)
-            .unwrap_err()
-            .kind(),
-        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    let outside_plan = compile_bubblewrap_launch_plan(outside_request).unwrap();
+    assert!(
+        outside_plan
+            .arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_BUN_ROOT])
     );
 
     let _ = std::fs::remove_dir_all(&base);
@@ -2577,11 +2581,12 @@ fn node_toolchain_projection_is_read_only_and_package_state_isolated() {
     let outside = authority();
     let mut outside_request = request(&config, &outside, &evaluation);
     outside_request.toolchain_projection = Some(&projection);
-    assert_eq!(
-        compile_bubblewrap_launch_plan(outside_request)
-            .unwrap_err()
-            .kind(),
-        SandboxCompileErrorKind::ToolchainOutsideAuthority
+    let outside_plan = compile_bubblewrap_launch_plan(outside_request).unwrap();
+    assert!(
+        outside_plan
+            .arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_NODE_ROOT])
     );
 
     let _ = std::fs::remove_dir_all(&base);
@@ -3453,10 +3458,10 @@ fn toolchain_projection_rejects_duplicates_and_tampered_metadata() {
     );
 }
 
-/// Toolchain convenience must not project either bootstrap-derived root from
-/// outside the pane-resolved maximum read authority.
+/// Enabled toolchains add their validated roots to effective read authority
+/// while exposing them only at fixed read-only sandbox destinations.
 #[test]
-fn rust_toolchain_projection_rejects_roots_outside_maximum_authority() {
+fn rust_toolchain_projection_adds_read_authority_without_generic_mounts() {
     let mut config = config();
     config.toolchains = vec![SandboxToolchainKind::Rust];
     let authority = authority();
@@ -3482,12 +3487,18 @@ fn rust_toolchain_projection_rejects_roots_outside_maximum_authority() {
         let mut compile_request = request(&config, &authority, &evaluation);
         compile_request.toolchain_projection = Some(&projection);
 
-        let error = compile_bubblewrap_launch_plan(compile_request).unwrap_err();
-        assert_eq!(
-            error.kind(),
-            SandboxCompileErrorKind::ToolchainOutsideAuthority
-        );
-        assert!(!error.kind().approval_fallback_eligible());
+        let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+        for root in &projection.roots {
+            let source = root.host_path.to_string_lossy();
+            assert!(plan.arguments.windows(3).any(|args| {
+                args[0] == "--ro-bind" && args[1] == source && args[2] == root.sandbox_destination
+            }));
+            assert!(
+                !plan.arguments.windows(3).any(|args| {
+                    args[0] == "--ro-bind" && args[1] == source && args[2] == source
+                })
+            );
+        }
     }
 }
 

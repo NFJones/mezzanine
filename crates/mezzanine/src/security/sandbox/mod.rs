@@ -652,7 +652,9 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
     }
     if let Some(toolchains) = request.toolchain_projection {
         toolchains.validate()?;
-        toolchains.validate_authority(request.maximum_authority)?;
+        let effective_read_authority =
+            toolchains.extend_read_authority(request.maximum_authority)?;
+        toolchains.validate_authority(&effective_read_authority)?;
     }
     if !Path::new(request.child_shell_path).starts_with("/bin")
         && !Path::new(request.child_shell_path).starts_with("/usr")

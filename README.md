@@ -482,9 +482,9 @@ Current support reflects behavior implemented in the repository today.
   state beneath the managed home, disable inherited GHC environment files, and
   exclude GHCup state, host package stores, Hackage credentials, user bins, and
   unrelated compiler installations.
-  Custom roots must already be
-  within the pane's
-  resolved read authority and are projected read-only at fixed sandbox paths.
+  Enabled custom roots are added to effective read authority and projected
+  read-only only at fixed sandbox paths; they do not add write authority or
+  generic mounts at their original host paths.
   Writable cache and package state is redirected beneath
   `/home/mez`; host credentials, caches, Deno authentication and certificate
   settings, Bun global tools and configuration, npm credentials and global

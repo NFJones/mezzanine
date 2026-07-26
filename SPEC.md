@@ -3161,8 +3161,9 @@ discovery MUST accept only real executables inside validated standalone roots;
 active-pane discovery MUST use exact `llvm-toolchain`, `gcc-toolchain`,
 `cmake-toolchain`, `ninja-toolchain`, and `meson-toolchain` bootstrap evidence.
 The roots MUST contain their descriptor-required executables and distribution
-directories, remain non-overlapping and within maximum read authority, and be
-mounted read-only at fixed `/opt/mez/toolchains/<kind>/root` destinations.
+directories and remain non-overlapping. Enabling a selected root MUST add it to
+effective read authority only for its fixed read-only
+`/opt/mez/toolchains/<kind>/root` projection.
 Explicit multi-kind selection MUST compose PATH in descriptor order followed
 by `/usr/bin:/bin`. Mezzanine MUST NOT inherit `CC`, `CXX`, `CFLAGS`,
 `CPPFLAGS`, `LDFLAGS`, plugin or sysroot variables, Homebrew/Linuxbrew state,
@@ -3212,9 +3213,10 @@ custom projections MUST compose in configured order, deduplicate identical
 PATH entries, reject overlapping host roots and conflicting environment
 values, and append `/usr/bin:/bin`. Custom roots MUST be mounted read-only only
 at `/opt/mez/toolchains/custom/<name>/roots/<index>`; synthesized values MUST
-use those sandbox paths. Selection MUST NOT add filesystem authority: every
-canonical root MUST already be beneath the issuing pane's maximum read
-authority. The resolved projection MUST be integrity-bound into the generated
+use those sandbox paths. Enabling a custom toolchain MUST add each validated
+canonical root to the issuing pane's effective read authority for its fixed
+read-only projection only. It MUST NOT add write authority or a generic mount
+at the root's original host path. The resolved projection MUST be integrity-bound into the generated
 Bubblewrap launch plan, and schema-v32 custom projection support MUST advance
 the fixed Bubblewrap runtime profile so stale capability evidence is rejected.
 Schema v31 to v32 migration MUST preserve built-in selections and omission and
@@ -3231,8 +3233,8 @@ Descriptor composition MUST reject duplicate kinds, ambiguous evidence,
 overlapping host roots unless explicitly modeled, duplicate fixed
 destinations, conflicting PATH entries, conflicting synthesized variables, and
 managed state outside `/home/mez`. Final launch compilation MUST revalidate the
-composed projection and require every host root to remain beneath the
-pane-resolved maximum read authority. Toolchain configuration MUST NOT become
+composed projection and require every enabled host root to be present in the
+effective read authority. Toolchain configuration MUST NOT become
 an arbitrary PATH, environment-variable, mount, version-manager-hook, or
 credential-import surface.
 The agent shell `/toolchain` command and `/toolchain status [SELECTOR]` MUST
@@ -3353,8 +3355,9 @@ Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
 derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
 evidence, reject missing, symlinked, overlapping, unexpected, credential, and
 runtime roots, and mount only those roots read-only at fixed sandbox paths.
-Both roots MUST be component-wise descendants of the pane-resolved maximum
-read authority; toolchain selection MUST NOT add host filesystem authority.
+Enabling Rust MUST add both roots to effective read authority for those fixed
+read-only projections only and MUST NOT add write authority or generic mounts
+at their original host paths.
 Only Cargo's `bin` directory MAY be mounted; Cargo credentials, registry
 configuration, and caches MUST remain hidden. Cargo binaries MUST precede
 `/usr/bin:/bin` deterministically. The projection

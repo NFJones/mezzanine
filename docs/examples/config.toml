@@ -472,7 +472,8 @@ sandbox = "policy-only"
 # mutation still requires authenticated confirmation in the attached primary
 # client. They are disabled by default and portable sandbox profiles reject
 # them to avoid serializing host roots. Runtime projection also requires
-# existing pane read authority; definitions never grant authority.
+# read authority only when enabled and only for fixed read-only projections;
+# they never grant write authority or generic mounts at original host paths.
 # [permissions.bubblewrap.custom_toolchains.acme]
 # description = "Acme compiler SDK"
 # roots = ["/home/user/.local/share/acme-sdk"]
