@@ -428,7 +428,7 @@ pub(super) fn agent_argument_candidates(
 fn toolchain_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
     const BUILT_INS: &[&str] = &[
         "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart", "kotlin",
-        "ruby", "php", "composer", "erlang", "elixir",
+        "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack",
     ];
     let Some(operation) = context.tokens_before.get(1).map(String::as_str) else {
         return value_candidates(&[

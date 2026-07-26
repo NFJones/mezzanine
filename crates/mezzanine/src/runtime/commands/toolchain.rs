@@ -28,12 +28,13 @@ use crate::runtime::{
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
     SANDBOX_BUN_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH,
-    SANDBOX_ERLANG_ELIXIR_PATH, SANDBOX_ERLANG_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
-    SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH,
-    SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
-    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor, ToolchainPlatform,
-    discover_rust_from_environment_managers, resolve_configured_toolchain_projection_for_project,
-    resolve_toolchain_projection, toolchain_descriptor,
+    SANDBOX_ERLANG_ELIXIR_PATH, SANDBOX_ERLANG_PATH, SANDBOX_GHC_CABAL_PATH, SANDBOX_GHC_PATH,
+    SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH,
+    SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH,
+    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    ToolchainDescriptor, ToolchainPlatform, discover_rust_from_environment_managers,
+    resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
+    toolchain_descriptor,
 };
 
 /// Strict operation accepted by `/toolchain`.
@@ -114,6 +115,9 @@ struct ToolchainStatus {
     composer_root: Option<String>,
     erlang_root: Option<String>,
     elixir_root: Option<String>,
+    ghc_root: Option<String>,
+    cabal_root: Option<String>,
+    stack_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -934,6 +938,9 @@ impl RuntimeSessionService {
             composer_root,
             erlang_root,
             elixir_root,
+            ghc_root,
+            cabal_root,
+            stack_root,
             discovery_error,
         ) = match self.pane_environment_signature(pane_id) {
             None if self.pane_bootstrap_is_pending(pane_id) => (
@@ -957,10 +964,16 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1268,6 +1281,60 @@ impl RuntimeSessionService {
                         None
                     }
                 };
+                let ghc_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Ghc],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("ghc".to_string());
+                        projection
+                            .roots
+                            .first()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("ghc:{}", error.message()));
+                        None
+                    }
+                };
+                let cabal_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Ghc, SandboxToolchainKind::Cabal],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("cabal".to_string());
+                        projection
+                            .roots
+                            .last()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("cabal:{}", error.message()));
+                        None
+                    }
+                };
+                let stack_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Ghc, SandboxToolchainKind::Stack],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("stack".to_string());
+                        projection
+                            .roots
+                            .last()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("stack:{}", error.message()));
+                        None
+                    }
+                };
                 let state = if discoverable.is_empty() {
                     "unavailable"
                 } else {
@@ -1293,6 +1360,9 @@ impl RuntimeSessionService {
                     composer_root,
                     erlang_root,
                     elixir_root,
+                    ghc_root,
+                    cabal_root,
+                    stack_root,
                     (!errors.is_empty()).then(|| errors.join(";")),
                 )
             }
@@ -1343,6 +1413,9 @@ impl RuntimeSessionService {
             composer_root,
             erlang_root,
             elixir_root,
+            ghc_root,
+            cabal_root,
+            stack_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -1858,6 +1931,59 @@ fn detect_toolchain_detail(
                 SANDBOX_ERLANG_ELIXIR_PATH,
             ))
         }
+        SandboxToolchainKind::Ghc => {
+            let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state("GHC projection unexpectedly resolved empty")
+                })?;
+            let root = projection.roots.first().ok_or_else(|| {
+                MezError::invalid_state("GHC projection is missing its compiler root")
+            })?;
+            Ok(format!(
+                "ghc_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_GHC_PATH,
+            ))
+        }
+        SandboxToolchainKind::Cabal => {
+            let projection = resolve_toolchain_projection(
+                &[SandboxToolchainKind::Ghc, kind],
+                environment_managers,
+                host_os,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?
+            .ok_or_else(|| {
+                MezError::invalid_state("Cabal projection unexpectedly resolved empty")
+            })?;
+            let root = projection.roots.last().ok_or_else(|| {
+                MezError::invalid_state("Cabal projection is missing its companion root")
+            })?;
+            Ok(format!(
+                "cabal_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_GHC_CABAL_PATH,
+            ))
+        }
+        SandboxToolchainKind::Stack => {
+            let projection = resolve_toolchain_projection(
+                &[SandboxToolchainKind::Ghc, kind],
+                environment_managers,
+                host_os,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?
+            .ok_or_else(|| {
+                MezError::invalid_state("Stack projection unexpectedly resolved empty")
+            })?;
+            let root = projection.roots.last().ok_or_else(|| {
+                MezError::invalid_state("Stack projection is missing its companion root")
+            })?;
+            Ok(format!(
+                "stack_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_GHC_STACK_PATH,
+            ))
+        }
     }
 }
 
@@ -2117,6 +2243,18 @@ fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &Toolchain
             .flatten()
             .collect(),
         SandboxToolchainKind::Elixir => vec![status.elixir_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Ghc => vec![status.ghc_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Cabal => vec![status.cabal_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Stack => vec![status.stack_root.as_deref()]
             .into_iter()
             .flatten()
             .collect(),

@@ -220,6 +220,24 @@ if [ -n \"$mez_elixir_bin\" ] && [ -f \"$mez_elixir_bin\" ] && [ ! -L \"$mez_eli
   mez_elixir_root=$(CDPATH= cd -P -- \"$mez_elixir_bin_dir/..\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_elixir_root\" ] && [ \"$mez_elixir_bin\" = \"$mez_elixir_root/bin/elixir\" ] && mez_bootstrap_field env_manager \"elixir-runtime:$mez_elixir_root\"\n\
 fi\n\
+mez_ghc_bin=$(command -v ghc 2>/dev/null || true)\n\
+if [ -n \"$mez_ghc_bin\" ] && [ -f \"$mez_ghc_bin\" ] && [ ! -L \"$mez_ghc_bin\" ]; then\n\
+  mez_ghc_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_ghc_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_ghc_root=$(CDPATH= cd -P -- \"$mez_ghc_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_ghc_root\" ] && [ \"$mez_ghc_bin\" = \"$mez_ghc_root/bin/ghc\" ] && mez_bootstrap_field env_manager \"ghc-compiler:$mez_ghc_root\"\n\
+fi\n\
+mez_cabal_bin=$(command -v cabal 2>/dev/null || true)\n\
+if [ -n \"$mez_cabal_bin\" ] && [ -f \"$mez_cabal_bin\" ] && [ ! -L \"$mez_cabal_bin\" ]; then\n\
+  mez_cabal_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_cabal_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_cabal_root=$(CDPATH= cd -P -- \"$mez_cabal_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_cabal_root\" ] && [ \"$mez_cabal_bin\" = \"$mez_cabal_root/bin/cabal\" ] && mez_bootstrap_field env_manager \"cabal-companion:$mez_cabal_root\"\n\
+fi\n\
+mez_stack_bin=$(command -v stack 2>/dev/null || true)\n\
+if [ -n \"$mez_stack_bin\" ] && [ -f \"$mez_stack_bin\" ] && [ ! -L \"$mez_stack_bin\" ]; then\n\
+  mez_stack_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_stack_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_stack_root=$(CDPATH= cd -P -- \"$mez_stack_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_stack_root\" ] && [ \"$mez_stack_bin\" = \"$mez_stack_root/bin/stack\" ] && mez_bootstrap_field env_manager \"stack-companion:$mez_stack_root\"\n\
+fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -423,6 +441,24 @@ if test -n \"$mez_elixir_bin\"; and test -f \"$mez_elixir_bin\"; and not test -L
   set -l mez_elixir_bin_dir (cd (dirname \"$mez_elixir_bin\") 2>/dev/null; and pwd -P)\n\
   set -l mez_elixir_root (cd \"$mez_elixir_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_elixir_root\"; and test \"$mez_elixir_bin\" = \"$mez_elixir_root/bin/elixir\"; and mez_bootstrap_field env_manager \"elixir-runtime:$mez_elixir_root\"\n\
+end\n\
+set -l mez_ghc_bin (command -s ghc 2>/dev/null)\n\
+if test -n \"$mez_ghc_bin\"; and test -f \"$mez_ghc_bin\"; and not test -L \"$mez_ghc_bin\"\n\
+  set -l mez_ghc_bin_dir (cd (dirname \"$mez_ghc_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_ghc_root (cd \"$mez_ghc_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_ghc_root\"; and test \"$mez_ghc_bin\" = \"$mez_ghc_root/bin/ghc\"; and mez_bootstrap_field env_manager \"ghc-compiler:$mez_ghc_root\"\n\
+end\n\
+set -l mez_cabal_bin (command -s cabal 2>/dev/null)\n\
+if test -n \"$mez_cabal_bin\"; and test -f \"$mez_cabal_bin\"; and not test -L \"$mez_cabal_bin\"\n\
+  set -l mez_cabal_bin_dir (cd (dirname \"$mez_cabal_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_cabal_root (cd \"$mez_cabal_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_cabal_root\"; and test \"$mez_cabal_bin\" = \"$mez_cabal_root/bin/cabal\"; and mez_bootstrap_field env_manager \"cabal-companion:$mez_cabal_root\"\n\
+end\n\
+set -l mez_stack_bin (command -s stack 2>/dev/null)\n\
+if test -n \"$mez_stack_bin\"; and test -f \"$mez_stack_bin\"; and not test -L \"$mez_stack_bin\"\n\
+  set -l mez_stack_bin_dir (cd (dirname \"$mez_stack_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_stack_root (cd \"$mez_stack_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_stack_root\"; and test \"$mez_stack_bin\" = \"$mez_stack_root/bin/stack\"; and mez_bootstrap_field env_manager \"stack-companion:$mez_stack_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\

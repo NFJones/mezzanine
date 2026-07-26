@@ -368,6 +368,12 @@ pub(crate) enum SandboxToolchainKind {
     Erlang,
     /// One selected Elixir compiler and Mix distribution.
     Elixir,
+    /// One selected Glasgow Haskell Compiler distribution.
+    Ghc,
+    /// One selected Cabal companion distribution.
+    Cabal,
+    /// One selected Stack companion distribution.
+    Stack,
 }
 
 impl SandboxToolchainKind {
@@ -390,6 +396,9 @@ impl SandboxToolchainKind {
             Self::Composer => "composer",
             Self::Erlang => "erlang",
             Self::Elixir => "elixir",
+            Self::Ghc => "ghc",
+            Self::Cabal => "cabal",
+            Self::Stack => "stack",
         }
     }
 }

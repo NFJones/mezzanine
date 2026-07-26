@@ -1954,6 +1954,153 @@ fn erlang_and_elixir_discovery_rejects_incomplete_and_symlinked_roots() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A complete GHC compiler composes read-only with Cabal and Stack while all
+/// package-manager state remains beneath the project-isolated managed home.
+#[test]
+fn ghc_cabal_and_stack_compose_with_managed_package_state() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-haskell-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let ghc_root = base.join("ghc-compiler");
+    std::fs::create_dir_all(ghc_root.join("bin")).unwrap();
+    std::fs::create_dir_all(ghc_root.join("lib/ghc")).unwrap();
+    for executable in ["ghc", "ghci", "runghc", "ghc-pkg"] {
+        let path = ghc_root.join("bin").join(executable);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let cabal_root = base.join("cabal-companion");
+    std::fs::create_dir_all(cabal_root.join("bin")).unwrap();
+    std::fs::write(cabal_root.join("bin/cabal"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        cabal_root.join("bin/cabal"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let stack_root = base.join("stack-companion");
+    std::fs::create_dir_all(stack_root.join("bin")).unwrap();
+    std::fs::write(stack_root.join("bin/stack"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        stack_root.join("bin/stack"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let ghc_root = ghc_root.canonicalize().unwrap();
+    let cabal_root = cabal_root.canonicalize().unwrap();
+    let stack_root = stack_root.canonicalize().unwrap();
+    let managers = [
+        format!("ghc-compiler:{}", ghc_root.display()),
+        format!("cabal-companion:{}", cabal_root.display()),
+        format!("stack-companion:{}", stack_root.display()),
+    ];
+
+    for companion in [SandboxToolchainKind::Cabal, SandboxToolchainKind::Stack] {
+        let missing = resolve_toolchain_projection(&[companion], &managers, "linux").unwrap_err();
+        assert_eq!(
+            missing.kind(),
+            SandboxCompileErrorKind::UnsupportedRequirement
+        );
+    }
+
+    let ghc = toolchain_descriptor(SandboxToolchainKind::Ghc);
+    assert_eq!(ghc.roots[0].evidence_kind, "ghc-compiler");
+    assert_eq!(ghc.roots[0].sandbox_destination, SANDBOX_GHC_ROOT);
+    let cabal = toolchain_descriptor(SandboxToolchainKind::Cabal);
+    assert_eq!(cabal.roots[0].sandbox_destination, SANDBOX_CABAL_ROOT);
+    assert_eq!(cabal.coupling.required, [SandboxToolchainKind::Ghc]);
+    let stack = toolchain_descriptor(SandboxToolchainKind::Stack);
+    assert_eq!(stack.roots[0].sandbox_destination, SANDBOX_STACK_ROOT);
+    assert_eq!(stack.coupling.required, [SandboxToolchainKind::Ghc]);
+
+    let projection = resolve_toolchain_projection(
+        &[
+            SandboxToolchainKind::Ghc,
+            SandboxToolchainKind::Cabal,
+            SandboxToolchainKind::Stack,
+        ],
+        &managers,
+        "linux",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_GHC_CABAL_STACK_PATH);
+    for (name, value) in [
+        ("GHC_ENVIRONMENT", "-"),
+        ("CABAL_DIR", "/home/mez/.local/share/cabal"),
+        ("STACK_ROOT", "/home/mez/.local/share/stack"),
+    ] {
+        assert_eq!(
+            projection.environment.get(name).map(String::as_str),
+            Some(value),
+            "missing {name}"
+        );
+    }
+    assert_eq!(projection.roots.len(), 3);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Haskell discovery rejects incomplete compiler roots and manager shims
+/// instead of broadening to GHCup, package stores, or user executable trees.
+#[test]
+fn ghc_cabal_and_stack_discovery_rejects_incomplete_and_symlinked_roots() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-haskell-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let ghc_root = base.join("ghc-compiler");
+    std::fs::create_dir_all(ghc_root.join("bin")).unwrap();
+    for executable in ["ghc", "ghci", "runghc", "ghc-pkg"] {
+        let path = ghc_root.join("bin").join(executable);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let ghc_root = ghc_root.canonicalize().unwrap();
+    let managers = [format!("ghc-compiler:{}", ghc_root.display())];
+    assert!(
+        resolve_toolchain_projection(&[SandboxToolchainKind::Ghc], &managers, "linux").is_err()
+    );
+
+    std::fs::create_dir_all(ghc_root.join("lib/ghc")).unwrap();
+    let external = base.join("external-tool");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(ghc_root.join("bin/ghc")).unwrap();
+    std::os::unix::fs::symlink(&external, ghc_root.join("bin/ghc")).unwrap();
+    let ghc_path = std::env::join_paths([ghc_root.join("bin")]).unwrap();
+    assert_eq!(
+        discover_ghc_from_search_path(Some(&ghc_path))
+            .unwrap_err()
+            .kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    for (name, discover) in [
+        (
+            "cabal",
+            discover_cabal_from_search_path
+                as fn(Option<&std::ffi::OsStr>) -> Result<Option<PathBuf>, SandboxCompileError>,
+        ),
+        ("stack", discover_stack_from_search_path),
+    ] {
+        let root = base.join(format!("{name}-companion"));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::os::unix::fs::symlink(&external, root.join("bin").join(name)).unwrap();
+        let search_path = std::env::join_paths([root.join("bin")]).unwrap();
+        assert_eq!(
+            discover(Some(&search_path)).unwrap_err().kind(),
+            SandboxCompileErrorKind::ForbiddenHostPath
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A validated .NET SDK is projected read-only with fixed runtime and managed
 /// state variables while telemetry and first-time setup remain deterministic.
 #[test]
@@ -2864,7 +3011,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .collect::<Vec<_>>(),
         vec![
             "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart",
-            "kotlin", "ruby", "php", "composer", "erlang", "elixir"
+            "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack"
         ]
     );
     assert_eq!(
@@ -2910,6 +3057,18 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("elixir"),
         Some(SandboxToolchainKind::Elixir)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("ghc"),
+        Some(SandboxToolchainKind::Ghc)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("cabal"),
+        Some(SandboxToolchainKind::Cabal)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("stack"),
+        Some(SandboxToolchainKind::Stack)
     );
     assert_eq!(
         SANDBOX_RUST_PATH,

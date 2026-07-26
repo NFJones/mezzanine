@@ -2971,7 +2971,7 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state.
 Schema v32 MAY define constrained custom toolchains in the primary user layer
@@ -3115,6 +3115,28 @@ composed PATH MUST be exactly
 home. Host Hex credentials, archives, global Mix tasks, signing material,
 manager state, inherited environment, and unrelated BEAM installations MUST
 remain excluded.
+Schema v40 adds the allowlisted `ghc`, `cabal`, and `stack` kinds. Schema v39
+to v40 migration MUST preserve existing built-in and custom selections or
+omission and MUST NOT discover or enable any Haskell toolchain kind.
+Direct-user discovery MUST use only the captured search path and accept
+non-symlink executables exactly at `<canonical-ghc-root>/bin/ghc`,
+`<canonical-cabal-root>/bin/cabal`, and `<canonical-stack-root>/bin/stack`.
+Active-pane discovery MUST use exact `ghc-compiler:<canonical-root>`,
+`cabal-companion:<canonical-root>`, and `stack-companion:<canonical-root>`
+bootstrap evidence without invoking GHCup, Stack, asdf, mise, shell hooks, or
+package-manager configuration and without accepting manager shims. The GHC
+root MUST contain real executable `bin/ghc`, `bin/ghci`, `bin/runghc`, and
+`bin/ghc-pkg` entries plus a real `lib/ghc` directory. Cabal and Stack roots
+MUST contain their corresponding real executable. Incomplete, malformed,
+symlinked, overlapping, or authority-exceeding roots MUST fail closed.
+Selecting `cabal` or `stack` MUST also require selecting `ghc`; no ambient GHC
+compiler may satisfy that dependency. Roots MUST be mounted read-only at their
+fixed `/opt/mez/toolchains/<kind>/root` destinations, with GHC first, Cabal
+second, Stack third, and `/usr/bin:/bin` last in composed PATH. `CABAL_DIR` and
+`STACK_ROOT` MUST point beneath the managed home, and `GHC_ENVIRONMENT` MUST
+disable inherited environment files. Host package databases, Hackage
+credentials, signing material, GHCup metadata, user executable bins, inherited
+environment, and unrelated compiler installations MUST remain excluded.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -6059,10 +6081,11 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
   `node`, `python`, `jdk`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
-  `composer`, `erlang`, or `elixir`. Unknown kinds, missing confirmation, duplicate confirmation, and
+  `composer`, `erlang`, `elixir`, `ghc`, `cabal`, or `stack`. Unknown kinds,
+  missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,

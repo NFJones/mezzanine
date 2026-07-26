@@ -36,17 +36,19 @@ use crate::security::project::{
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
     SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_ERLANG_ELIXIR_PATH,
-    SANDBOX_ERLANG_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH,
-    SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH,
-    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    SANDBOX_ERLANG_PATH, SANDBOX_GHC_CABAL_PATH, SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH,
+    SANDBOX_GO_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH,
+    SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH,
+    SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
-    clear_bubblewrap_managed_home, discover_bun_from_search_path,
+    clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_cabal_from_search_path,
     discover_composer_from_search_path, discover_dart_from_search_path,
     discover_deno_from_search_path, discover_dotnet_from_search_path,
     discover_elixir_from_search_path, discover_erlang_from_search_path,
-    discover_go_from_search_path, discover_jdk_from_search_path, discover_kotlin_from_search_path,
-    discover_node_from_search_path, discover_php_from_search_path,
-    discover_python_from_search_path, discover_ruby_from_search_path, discover_rust_from_home,
+    discover_ghc_from_search_path, discover_go_from_search_path, discover_jdk_from_search_path,
+    discover_kotlin_from_search_path, discover_node_from_search_path,
+    discover_php_from_search_path, discover_python_from_search_path,
+    discover_ruby_from_search_path, discover_rust_from_home, discover_stack_from_search_path,
     discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
     plan_sandbox_workflow, prune_bubblewrap_managed_homes,
 };
@@ -1178,6 +1180,9 @@ struct SandboxToolchainResult {
     composer_root: Option<PathBuf>,
     erlang_root: Option<PathBuf>,
     elixir_root: Option<PathBuf>,
+    ghc_root: Option<PathBuf>,
+    cabal_root: Option<PathBuf>,
+    stack_root: Option<PathBuf>,
     sandbox_path: &'static str,
     read_only: bool,
     applied: bool,
@@ -1644,6 +1649,9 @@ enum DirectToolchainDetection {
     Composer(Option<PathBuf>),
     Erlang(Option<PathBuf>),
     Elixir(Option<PathBuf>),
+    Ghc(Option<PathBuf>),
+    Cabal(Option<PathBuf>),
+    Stack(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1665,6 +1673,9 @@ impl DirectToolchainDetection {
             Self::Composer(root) => root.is_some(),
             Self::Erlang(root) => root.is_some(),
             Self::Elixir(root) => root.is_some(),
+            Self::Ghc(root) => root.is_some(),
+            Self::Cabal(root) => root.is_some(),
+            Self::Stack(root) => root.is_some(),
         }
     }
 
@@ -1686,6 +1697,9 @@ impl DirectToolchainDetection {
             Self::Composer(_) => SandboxToolchainKind::Composer,
             Self::Erlang(_) => SandboxToolchainKind::Erlang,
             Self::Elixir(_) => SandboxToolchainKind::Elixir,
+            Self::Ghc(_) => SandboxToolchainKind::Ghc,
+            Self::Cabal(_) => SandboxToolchainKind::Cabal,
+            Self::Stack(_) => SandboxToolchainKind::Stack,
         }
     }
 }
@@ -1743,6 +1757,15 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Elixir => discover_elixir_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Elixir)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Ghc => discover_ghc_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Ghc)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Cabal => discover_cabal_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Cabal)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Stack => discover_stack_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Stack)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
     }
 }
 
@@ -1788,6 +1811,18 @@ fn toolchain_result(
     };
     let elixir_root = match &detection {
         DirectToolchainDetection::Elixir(root) => root.clone(),
+        _ => None,
+    };
+    let ghc_root = match &detection {
+        DirectToolchainDetection::Ghc(root) => root.clone(),
+        _ => None,
+    };
+    let cabal_root = match &detection {
+        DirectToolchainDetection::Cabal(root) => root.clone(),
+        _ => None,
+    };
+    let stack_root = match &detection {
+        DirectToolchainDetection::Stack(root) => root.clone(),
         _ => None,
     };
     let (
@@ -1977,6 +2012,39 @@ fn toolchain_result(
             None,
             SANDBOX_ERLANG_ELIXIR_PATH,
         ),
+        DirectToolchainDetection::Ghc(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_GHC_PATH,
+        ),
+        DirectToolchainDetection::Cabal(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_GHC_CABAL_PATH,
+        ),
+        DirectToolchainDetection::Stack(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_GHC_STACK_PATH,
+        ),
     };
     SandboxToolchainResult {
         version: 1,
@@ -2000,6 +2068,9 @@ fn toolchain_result(
         composer_root,
         erlang_root,
         elixir_root,
+        ghc_root,
+        cabal_root,
+        stack_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -2161,6 +2232,30 @@ fn write_toolchain_result<W: Write>(
             "elixir_root: {}",
             result
                 .elixir_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "ghc_root: {}",
+            result
+                .ghc_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "cabal_root: {}",
+            result
+                .cabal_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "stack_root: {}",
+            result
+                .stack_root
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;

@@ -54,6 +54,12 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains("env_manager \"erlang-otp:"));
     assert!(script.contains("command -v elixir"));
     assert!(script.contains("env_manager \"elixir-runtime:"));
+    assert!(script.contains("command -v ghc"));
+    assert!(script.contains("env_manager \"ghc-compiler:"));
+    assert!(script.contains("command -v cabal"));
+    assert!(script.contains("env_manager \"cabal-companion:"));
+    assert!(script.contains("command -v stack"));
+    assert!(script.contains("env_manager \"stack-companion:"));
     assert!(script.contains("bootstrap"));
     assert!(script.contains("complete"));
     assert!(script.contains("AGENTS.md"));
@@ -106,6 +112,12 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     assert!(script.contains("env_manager \"erlang-otp:"));
     assert!(script.contains("command -s elixir"));
     assert!(script.contains("env_manager \"elixir-runtime:"));
+    assert!(script.contains("command -s ghc"));
+    assert!(script.contains("env_manager \"ghc-compiler:"));
+    assert!(script.contains("command -s cabal"));
+    assert!(script.contains("env_manager \"cabal-companion:"));
+    assert!(script.contains("command -s stack"));
+    assert!(script.contains("env_manager \"stack-companion:"));
 }
 
 #[test]

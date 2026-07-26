@@ -25,7 +25,7 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 16] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 19] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
@@ -42,6 +42,9 @@ pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 16] =
     SandboxToolchainKind::Composer,
     SandboxToolchainKind::Erlang,
     SandboxToolchainKind::Elixir,
+    SandboxToolchainKind::Ghc,
+    SandboxToolchainKind::Cabal,
+    SandboxToolchainKind::Stack,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -113,6 +116,22 @@ pub(crate) const SANDBOX_ELIXIR_ROOT: &str = "/opt/mez/toolchains/elixir/root";
 /// Fixed executable search path when Elixir is composed with Erlang/OTP.
 pub(crate) const SANDBOX_ERLANG_ELIXIR_PATH: &str =
     "/opt/mez/toolchains/erlang/root/bin:/opt/mez/toolchains/elixir/root/bin:/usr/bin:/bin";
+/// Fixed GHC compiler projection inside Bubblewrap.
+pub(crate) const SANDBOX_GHC_ROOT: &str = "/opt/mez/toolchains/ghc/root";
+/// Fixed executable search path used when only GHC is projected.
+pub(crate) const SANDBOX_GHC_PATH: &str = "/opt/mez/toolchains/ghc/root/bin:/usr/bin:/bin";
+/// Fixed Cabal companion projection inside Bubblewrap.
+pub(crate) const SANDBOX_CABAL_ROOT: &str = "/opt/mez/toolchains/cabal/root";
+/// Fixed Stack companion projection inside Bubblewrap.
+pub(crate) const SANDBOX_STACK_ROOT: &str = "/opt/mez/toolchains/stack/root";
+/// Fixed executable search path when Cabal is composed with GHC.
+pub(crate) const SANDBOX_GHC_CABAL_PATH: &str =
+    "/opt/mez/toolchains/ghc/root/bin:/opt/mez/toolchains/cabal/root/bin:/usr/bin:/bin";
+/// Fixed executable search path when Stack is composed with GHC.
+pub(crate) const SANDBOX_GHC_STACK_PATH: &str =
+    "/opt/mez/toolchains/ghc/root/bin:/opt/mez/toolchains/stack/root/bin:/usr/bin:/bin";
+/// Fixed executable search path when both Haskell companions are selected.
+pub(crate) const SANDBOX_GHC_CABAL_STACK_PATH: &str = "/opt/mez/toolchains/ghc/root/bin:/opt/mez/toolchains/cabal/root/bin:/opt/mez/toolchains/stack/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1024,6 +1043,128 @@ const ELIXIR_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const GHC_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "ghc-compiler",
+    label: "GHC compiler",
+    sandbox_destination: SANDBOX_GHC_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/ghc", "bin/ghci", "bin/runghc", "bin/ghc-pkg"],
+    required_directories: &["lib/ghc"],
+}];
+const GHC_ENVIRONMENT: [ToolchainEnvironmentVariable; 1] = [ToolchainEnvironmentVariable {
+    name: "GHC_ENVIRONMENT",
+    value: "-",
+}];
+const GHC_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Ghc,
+    aliases: &["ghc"],
+    roots: &GHC_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/ghc",
+    ],
+    path_entries: &["/opt/mez/toolchains/ghc/root/bin"],
+    environment: &GHC_ENVIRONMENT,
+    managed_state: &[],
+    forbidden_descendants: &[".ghcup", ".cabal", ".stack", "credentials", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[SandboxToolchainKind::Cabal, SandboxToolchainKind::Stack],
+    },
+    allow_root_overlap: false,
+};
+
+const CABAL_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "cabal-companion",
+    label: "Cabal companion",
+    sandbox_destination: SANDBOX_CABAL_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::UserTools,
+    required_executables: &["bin/cabal"],
+    required_directories: &[],
+}];
+const CABAL_ENVIRONMENT: [ToolchainEnvironmentVariable; 1] = [ToolchainEnvironmentVariable {
+    name: "CABAL_DIR",
+    value: "/home/mez/.local/share/cabal",
+}];
+const CABAL_MANAGED_STATE: [ManagedToolchainState; 1] = [ManagedToolchainState {
+    purpose: "cabal-home",
+    sandbox_path: "/home/mez/.local/share/cabal",
+}];
+const CABAL_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Cabal,
+    aliases: &["cabal"],
+    roots: &CABAL_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/cabal",
+    ],
+    path_entries: &["/opt/mez/toolchains/cabal/root/bin"],
+    environment: &CABAL_ENVIRONMENT,
+    managed_state: &CABAL_MANAGED_STATE,
+    forbidden_descendants: &["config", "credentials", "packages", "store", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[SandboxToolchainKind::Ghc],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
+const STACK_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "stack-companion",
+    label: "Stack companion",
+    sandbox_destination: SANDBOX_STACK_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::UserTools,
+    required_executables: &["bin/stack"],
+    required_directories: &[],
+}];
+const STACK_ENVIRONMENT: [ToolchainEnvironmentVariable; 1] = [ToolchainEnvironmentVariable {
+    name: "STACK_ROOT",
+    value: "/home/mez/.local/share/stack",
+}];
+const STACK_MANAGED_STATE: [ManagedToolchainState; 1] = [ManagedToolchainState {
+    purpose: "stack-root",
+    sandbox_path: "/home/mez/.local/share/stack",
+}];
+const STACK_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Stack,
+    aliases: &["stack"],
+    roots: &STACK_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/stack",
+    ],
+    path_entries: &["/opt/mez/toolchains/stack/root/bin"],
+    environment: &STACK_ENVIRONMENT,
+    managed_state: &STACK_MANAGED_STATE,
+    forbidden_descendants: &[
+        "config.yaml",
+        "credentials",
+        "programs",
+        "snapshots",
+        "shims",
+    ],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[SandboxToolchainKind::Ghc],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -1351,6 +1492,9 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Composer => &COMPOSER_DESCRIPTOR,
         SandboxToolchainKind::Erlang => &ERLANG_DESCRIPTOR,
         SandboxToolchainKind::Elixir => &ELIXIR_DESCRIPTOR,
+        SandboxToolchainKind::Ghc => &GHC_DESCRIPTOR,
+        SandboxToolchainKind::Cabal => &CABAL_DESCRIPTOR,
+        SandboxToolchainKind::Stack => &STACK_DESCRIPTOR,
     }
 }
 
@@ -2742,6 +2886,46 @@ pub(crate) fn discover_elixir_from_search_path(
         "Elixir executable",
         "Elixir runtime",
         &ELIXIR_ROOTS[0],
+    )
+}
+
+/// Discovers one selected GHC compiler from an explicit search path without
+/// invoking GHCup, Stack, asdf, mise, shell hooks, or manager-owned shims.
+pub(crate) fn discover_ghc_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "ghc",
+        "GHC executable",
+        "GHC compiler",
+        &GHC_ROOTS[0],
+    )
+}
+
+/// Discovers one selected Cabal companion without reading host package state.
+pub(crate) fn discover_cabal_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "cabal",
+        "Cabal executable",
+        "Cabal companion",
+        &CABAL_ROOTS[0],
+    )
+}
+
+/// Discovers one selected Stack companion without invoking manager hooks.
+pub(crate) fn discover_stack_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "stack",
+        "Stack executable",
+        "Stack companion",
+        &STACK_ROOTS[0],
     )
 }
 

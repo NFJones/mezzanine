@@ -848,6 +848,81 @@ fn runtime_agent_shell_elixir_requires_erlang_and_persists_only_kinds() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Cabal and Stack detection requires exact GHC companion evidence, while
+/// enablement preserves typed selections without persisting any host roots.
+#[test]
+fn runtime_agent_shell_haskell_companions_require_ghc_and_persist_only_kinds() {
+    let config = "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = [\"ghc\"]\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-haskell-toolchain-mutation", config);
+    let ghc_root = path.parent().unwrap().join("ghc-compiler");
+    fs::create_dir_all(ghc_root.join("bin")).unwrap();
+    fs::create_dir_all(ghc_root.join("lib/ghc")).unwrap();
+    for executable in ["ghc", "ghci", "runghc", "ghc-pkg"] {
+        let executable_path = ghc_root.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let cabal_root = path.parent().unwrap().join("cabal-companion");
+    fs::create_dir_all(cabal_root.join("bin")).unwrap();
+    fs::write(cabal_root.join("bin/cabal"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        cabal_root.join("bin/cabal"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let stack_root = path.parent().unwrap().join("stack-companion");
+    fs::create_dir_all(stack_root.join("bin")).unwrap();
+    fs::write(stack_root.join("bin/stack"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        stack_root.join("bin/stack"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let ghc_root = ghc_root.canonicalize().unwrap();
+    let cabal_root = cabal_root.canonicalize().unwrap();
+    let stack_root = stack_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![
+            format!("ghc-compiler:{}", ghc_root.display()),
+            format!("cabal-companion:{}", cabal_root.display()),
+            format!("stack-companion:{}", stack_root.display()),
+        ]),
+    );
+
+    for kind in ["cabal", "stack"] {
+        let detect = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"{kind}-detect","method":"agent/shell/command","params":{{"idempotency_key":"{kind}-detect","input":"/toolchain detect {kind}"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+        assert!(detect.contains(&format!("| Kind | `{kind}` |")), "{detect}");
+        assert!(detect.contains("| Available | yes |"), "{detect}");
+    }
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable cabal stack --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(
+        persisted.contains("toolchains = [\"ghc\", \"cabal\", \"stack\"]"),
+        "{persisted}"
+    );
+    for root in [&ghc_root, &cabal_root, &stack_root] {
+        assert!(
+            !persisted.contains(&root.to_string_lossy().into_owned()),
+            "{persisted}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

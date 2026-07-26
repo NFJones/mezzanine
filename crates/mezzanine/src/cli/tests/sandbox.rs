@@ -1056,6 +1056,95 @@ fn sandbox_erlang_and_elixir_toolchains_detect_without_persisting_roots() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// GHC, Cabal, and Stack detection uses only captured CLI search-path entries,
+/// reports canonical roots, and never persists host paths or package state.
+#[test]
+fn sandbox_haskell_toolchains_detect_without_persisting_roots() {
+    let (mut env, home) = test_env("sandbox-haskell-toolchains");
+    let ghc_root = home.join("ghc-compiler");
+    fs::create_dir_all(ghc_root.join("bin")).unwrap();
+    fs::create_dir_all(ghc_root.join("lib/ghc")).unwrap();
+    for executable in ["ghc", "ghci", "runghc", "ghc-pkg"] {
+        let path = ghc_root.join("bin").join(executable);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let cabal_root = home.join("cabal-companion");
+    fs::create_dir_all(cabal_root.join("bin")).unwrap();
+    fs::write(cabal_root.join("bin/cabal"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        cabal_root.join("bin/cabal"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let stack_root = home.join("stack-companion");
+    fs::create_dir_all(stack_root.join("bin")).unwrap();
+    fs::write(stack_root.join("bin/stack"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        stack_root.join("bin/stack"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let ghc_root = ghc_root.canonicalize().unwrap();
+    let cabal_root = cabal_root.canonicalize().unwrap();
+    let stack_root = stack_root.canonicalize().unwrap();
+    env.path = Some(
+        std::env::join_paths([
+            ghc_root.join("bin"),
+            cabal_root.join("bin"),
+            stack_root.join("bin"),
+        ])
+        .unwrap(),
+    );
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    for (kind, field, root) in [
+        ("ghc", "ghc_root", &ghc_root),
+        ("cabal", "cabal_root", &cabal_root),
+        ("stack", "stack_root", &stack_root),
+    ] {
+        stdout.clear();
+        stderr.clear();
+        let detect_code = block_on_cli_code(crate::cli::run_with(
+            with_json_output(vec![
+                "mez".to_string(),
+                "sandbox".to_string(),
+                "toolchains".to_string(),
+                "detect".to_string(),
+                "--kind".to_string(),
+                kind.to_string(),
+                project.to_string_lossy().into_owned(),
+            ]),
+            env.clone(),
+            false,
+            &mut stdout,
+            &mut stderr,
+        ))
+        .unwrap();
+        assert_eq!(detect_code, 0);
+        let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(detected["kind"], kind);
+        assert_eq!(detected["available"], true);
+        assert_eq!(detected[field], root.to_string_lossy().as_ref());
+        assert!(stderr.is_empty());
+        assert!(!config_path.exists());
+    }
+
+    assert_toolchain_enable_requires_live_primary(
+        env,
+        "stack",
+        &config_path,
+        &mut stdout,
+        &mut stderr,
+    );
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]

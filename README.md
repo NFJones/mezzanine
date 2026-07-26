@@ -434,7 +434,7 @@ Current support reflects behavior implemented in the repository today.
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
 - `mez sandbox toolchains list`, `status [SELECTOR] [PATH]`, and
-  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir] [PATH]` inspect effective
+  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack] [PATH]` inspect effective
   toolchain configuration and canonical built-in roots without mutation.
   `enable SELECTOR... --yes` and `disable SELECTOR... --yes` preserve ordered
   built-in or `custom:<name>` selections. `custom define NAME ... --yes` and
@@ -443,7 +443,7 @@ Current support reflects behavior implemented in the repository today.
   confirmation in the attached primary client; they do not edit configuration
   offline or approve their own request. Rust mounts Cargo and Rustup read-only;
   Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, Dart, Kotlin/JVM, Ruby, PHP,
-  Composer, Erlang/OTP, and Elixir mount one
+  Composer, Erlang/OTP, Elixir, GHC, Cabal, and Stack mount one
   self-contained distribution, SDK, or runtime read-only. JDK projection synthesizes
   `JAVA_HOME` and includes only the selected SDK, not Java manager homes,
   preferences, credentials, Maven or Gradle state, or shell hooks. .NET
@@ -465,6 +465,10 @@ Current support reflects behavior implemented in the repository today.
   Elixir requires the selected Erlang/OTP runtime, redirects Mix, Hex, and
   Rebar state beneath the managed home, and excludes host Hex credentials,
   archives, global Mix tasks, manager state, and unrelated BEAM installations.
+  Cabal and Stack require the selected GHC compiler, redirect package and build
+  state beneath the managed home, disable inherited GHC environment files, and
+  exclude GHCup state, host package stores, Hackage credentials, user bins, and
+  unrelated compiler installations.
   Custom roots must already be
   within the pane's
   resolved read authority and are projected read-only at fixed sandbox paths.
@@ -481,7 +485,7 @@ Current support reflects behavior implemented in the repository today.
   expired, or it was already settled.
 - In the agent shell, `/toolchain` and `/toolchain status` report supported,
   configured, discoverable, and effective state for the active pane.
-  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir]` is read-only and uses only
+  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack]` is read-only and uses only
   active-pane bootstrap evidence. `/toolchain define NAME ... --yes`, ordered
   `/toolchain enable SELECTOR... --yes`, `/toolchain disable SELECTOR... --yes`,
   and `/toolchain remove custom:NAME [--disable] --yes` require direct
