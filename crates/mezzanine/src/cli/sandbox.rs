@@ -35,18 +35,21 @@ use crate::security::project::{
 };
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
-    SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_ERLANG_ELIXIR_PATH,
-    SANDBOX_ERLANG_PATH, SANDBOX_GHC_CABAL_PATH, SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH,
-    SANDBOX_GO_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH,
-    SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH,
-    SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    SANDBOX_CMAKE_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH,
+    SANDBOX_ERLANG_ELIXIR_PATH, SANDBOX_ERLANG_PATH, SANDBOX_GCC_PATH, SANDBOX_GHC_CABAL_PATH,
+    SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
+    SANDBOX_KOTLIN_JDK_PATH, SANDBOX_LLVM_PATH, SANDBOX_MESON_PATH, SANDBOX_NINJA_PATH,
+    SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH,
+    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
     clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_cabal_from_search_path,
-    discover_composer_from_search_path, discover_dart_from_search_path,
-    discover_deno_from_search_path, discover_dotnet_from_search_path,
-    discover_elixir_from_search_path, discover_erlang_from_search_path,
-    discover_ghc_from_search_path, discover_go_from_search_path, discover_jdk_from_search_path,
-    discover_kotlin_from_search_path, discover_node_from_search_path,
+    discover_cmake_from_search_path, discover_composer_from_search_path,
+    discover_dart_from_search_path, discover_deno_from_search_path,
+    discover_dotnet_from_search_path, discover_elixir_from_search_path,
+    discover_erlang_from_search_path, discover_gcc_from_search_path, discover_ghc_from_search_path,
+    discover_go_from_search_path, discover_jdk_from_search_path, discover_kotlin_from_search_path,
+    discover_llvm_from_search_path, discover_meson_from_search_path,
+    discover_ninja_from_search_path, discover_node_from_search_path,
     discover_ocaml_project_environment, discover_php_from_search_path,
     discover_python_from_search_path, discover_ruby_from_search_path, discover_rust_from_home,
     discover_stack_from_search_path, discover_zig_from_search_path,
@@ -1185,6 +1188,11 @@ struct SandboxToolchainResult {
     cabal_root: Option<PathBuf>,
     stack_root: Option<PathBuf>,
     ocaml_root: Option<PathBuf>,
+    llvm_root: Option<PathBuf>,
+    gcc_root: Option<PathBuf>,
+    cmake_root: Option<PathBuf>,
+    ninja_root: Option<PathBuf>,
+    meson_root: Option<PathBuf>,
     sandbox_path: String,
     read_only: bool,
     applied: bool,
@@ -1672,6 +1680,11 @@ enum DirectToolchainDetection {
     Cabal(Option<PathBuf>),
     Stack(Option<PathBuf>),
     Ocaml(Option<PathBuf>),
+    Llvm(Option<PathBuf>),
+    Gcc(Option<PathBuf>),
+    Cmake(Option<PathBuf>),
+    Ninja(Option<PathBuf>),
+    Meson(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1697,6 +1710,11 @@ impl DirectToolchainDetection {
             Self::Cabal(root) => root.is_some(),
             Self::Stack(root) => root.is_some(),
             Self::Ocaml(root) => root.is_some(),
+            Self::Llvm(root) => root.is_some(),
+            Self::Gcc(root) => root.is_some(),
+            Self::Cmake(root) => root.is_some(),
+            Self::Ninja(root) => root.is_some(),
+            Self::Meson(root) => root.is_some(),
         }
     }
 
@@ -1722,6 +1740,11 @@ impl DirectToolchainDetection {
             Self::Cabal(_) => SandboxToolchainKind::Cabal,
             Self::Stack(_) => SandboxToolchainKind::Stack,
             Self::Ocaml(_) => SandboxToolchainKind::Ocaml,
+            Self::Llvm(_) => SandboxToolchainKind::Llvm,
+            Self::Gcc(_) => SandboxToolchainKind::Gcc,
+            Self::Cmake(_) => SandboxToolchainKind::Cmake,
+            Self::Ninja(_) => SandboxToolchainKind::Ninja,
+            Self::Meson(_) => SandboxToolchainKind::Meson,
         }
     }
 }
@@ -1801,6 +1824,21 @@ fn detect_direct_toolchain(
                 })
                 .map_err(|error| MezError::invalid_state(error.message()))
         }
+        SandboxToolchainKind::Llvm => discover_llvm_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Llvm)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Gcc => discover_gcc_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Gcc)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Cmake => discover_cmake_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Cmake)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Ninja => discover_ninja_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Ninja)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Meson => discover_meson_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Meson)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
     }
 }
 
@@ -1862,6 +1900,26 @@ fn toolchain_result(
     };
     let ocaml_root = match &detection {
         DirectToolchainDetection::Ocaml(root) => root.clone(),
+        _ => None,
+    };
+    let llvm_root = match &detection {
+        DirectToolchainDetection::Llvm(root) => root.clone(),
+        _ => None,
+    };
+    let gcc_root = match &detection {
+        DirectToolchainDetection::Gcc(root) => root.clone(),
+        _ => None,
+    };
+    let cmake_root = match &detection {
+        DirectToolchainDetection::Cmake(root) => root.clone(),
+        _ => None,
+    };
+    let ninja_root = match &detection {
+        DirectToolchainDetection::Ninja(root) => root.clone(),
+        _ => None,
+    };
+    let meson_root = match &detection {
+        DirectToolchainDetection::Meson(root) => root.clone(),
         _ => None,
     };
     let (
@@ -2096,6 +2154,61 @@ fn toolchain_result(
             root.as_deref()
                 .map_or_else(|| "_opam".to_string(), |path| path.display().to_string()),
         ),
+        DirectToolchainDetection::Llvm(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_LLVM_PATH.to_string(),
+        ),
+        DirectToolchainDetection::Gcc(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_GCC_PATH.to_string(),
+        ),
+        DirectToolchainDetection::Cmake(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_CMAKE_PATH.to_string(),
+        ),
+        DirectToolchainDetection::Ninja(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_NINJA_PATH.to_string(),
+        ),
+        DirectToolchainDetection::Meson(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_MESON_PATH.to_string(),
+        ),
     };
     SandboxToolchainResult {
         version: 1,
@@ -2123,6 +2236,11 @@ fn toolchain_result(
         cabal_root,
         stack_root,
         ocaml_root,
+        llvm_root,
+        gcc_root,
+        cmake_root,
+        ninja_root,
+        meson_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -2319,6 +2437,19 @@ fn write_toolchain_result<W: Write>(
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;
+        for (name, root) in [
+            ("llvm_root", result.llvm_root.as_deref()),
+            ("gcc_root", result.gcc_root.as_deref()),
+            ("cmake_root", result.cmake_root.as_deref()),
+            ("ninja_root", result.ninja_root.as_deref()),
+            ("meson_root", result.meson_root.as_deref()),
+        ] {
+            writeln!(
+                stdout,
+                "{name}: {}",
+                root.map_or_else(|| "none".to_string(), |path| path.display().to_string())
+            )?;
+        }
         writeln!(stdout, "sandbox_path: {}", result.sandbox_path)?;
         writeln!(stdout, "read_only: {}", result.read_only)?;
         writeln!(stdout, "applied: {}", result.applied)?;

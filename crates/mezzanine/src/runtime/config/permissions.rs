@@ -376,6 +376,16 @@ pub(crate) enum SandboxToolchainKind {
     Stack,
     /// One repository-contained OCaml local switch.
     Ocaml,
+    /// One selected standalone LLVM/Clang toolchain.
+    Llvm,
+    /// One selected standalone GCC toolchain.
+    Gcc,
+    /// One selected standalone CMake distribution.
+    Cmake,
+    /// One selected standalone Ninja distribution.
+    Ninja,
+    /// One selected standalone Meson distribution.
+    Meson,
 }
 
 impl SandboxToolchainKind {
@@ -402,6 +412,11 @@ impl SandboxToolchainKind {
             Self::Cabal => "cabal",
             Self::Stack => "stack",
             Self::Ocaml => "ocaml",
+            Self::Llvm => "llvm",
+            Self::Gcc => "gcc",
+            Self::Cmake => "cmake",
+            Self::Ninja => "ninja",
+            Self::Meson => "meson",
         }
     }
 }

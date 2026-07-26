@@ -27,14 +27,16 @@ use crate::runtime::{
 };
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
-    SANDBOX_BUN_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH,
-    SANDBOX_ERLANG_ELIXIR_PATH, SANDBOX_ERLANG_PATH, SANDBOX_GHC_CABAL_PATH, SANDBOX_GHC_PATH,
-    SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH,
-    SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH,
-    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
-    ToolchainDescriptor, ToolchainPlatform, discover_ocaml_project_environment,
-    discover_rust_from_environment_managers, resolve_configured_toolchain_projection_for_project,
-    resolve_toolchain_projection, toolchain_descriptor,
+    SANDBOX_BUN_PATH, SANDBOX_CMAKE_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH,
+    SANDBOX_DOTNET_PATH, SANDBOX_ERLANG_ELIXIR_PATH, SANDBOX_ERLANG_PATH, SANDBOX_GCC_PATH,
+    SANDBOX_GHC_CABAL_PATH, SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH,
+    SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_LLVM_PATH, SANDBOX_MESON_PATH,
+    SANDBOX_NINJA_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH,
+    SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
+    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor, ToolchainPlatform,
+    discover_ocaml_project_environment, discover_rust_from_environment_managers,
+    resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
+    toolchain_descriptor,
 };
 
 /// Strict operation accepted by `/toolchain`.
@@ -119,6 +121,11 @@ struct ToolchainStatus {
     cabal_root: Option<String>,
     stack_root: Option<String>,
     ocaml_root: Option<String>,
+    llvm_root: Option<String>,
+    gcc_root: Option<String>,
+    cmake_root: Option<String>,
+    ninja_root: Option<String>,
+    meson_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -944,6 +951,11 @@ impl RuntimeSessionService {
             cabal_root,
             stack_root,
             ocaml_root,
+            llvm_root,
+            gcc_root,
+            cmake_root,
+            ninja_root,
+            meson_root,
             discovery_error,
         ) = match self.pane_environment_signature(pane_id) {
             None if self.pane_bootstrap_is_pending(pane_id) => (
@@ -971,10 +983,20 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
+                None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1354,6 +1376,30 @@ impl RuntimeSessionService {
                     },
                     None => None,
                 };
+                let mut resolve_native_root =
+                    |kind: SandboxToolchainKind| match resolve_toolchain_projection(
+                        &[kind],
+                        &signature.environment_managers,
+                        &signature.os,
+                    ) {
+                        Ok(Some(projection)) => {
+                            discoverable.push(kind.as_str().to_string());
+                            projection
+                                .roots
+                                .first()
+                                .map(|root| root.host_path.display().to_string())
+                        }
+                        Ok(None) => None,
+                        Err(error) => {
+                            errors.push(format!("{}:{}", kind.as_str(), error.message()));
+                            None
+                        }
+                    };
+                let llvm_root = resolve_native_root(SandboxToolchainKind::Llvm);
+                let gcc_root = resolve_native_root(SandboxToolchainKind::Gcc);
+                let cmake_root = resolve_native_root(SandboxToolchainKind::Cmake);
+                let ninja_root = resolve_native_root(SandboxToolchainKind::Ninja);
+                let meson_root = resolve_native_root(SandboxToolchainKind::Meson);
                 let state = if discoverable.is_empty() {
                     "unavailable"
                 } else {
@@ -1383,6 +1429,11 @@ impl RuntimeSessionService {
                     cabal_root,
                     stack_root,
                     ocaml_root,
+                    llvm_root,
+                    gcc_root,
+                    cmake_root,
+                    ninja_root,
+                    meson_root,
                     (!errors.is_empty()).then(|| errors.join(";")),
                 )
             }
@@ -1437,6 +1488,11 @@ impl RuntimeSessionService {
             cabal_root,
             stack_root,
             ocaml_root,
+            llvm_root,
+            gcc_root,
+            cmake_root,
+            ninja_root,
+            meson_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -2023,6 +2079,34 @@ fn detect_toolchain_detail(
                 json_escape(&environment.sandbox_path),
             ))
         }
+        SandboxToolchainKind::Llvm
+        | SandboxToolchainKind::Gcc
+        | SandboxToolchainKind::Cmake
+        | SandboxToolchainKind::Ninja
+        | SandboxToolchainKind::Meson => {
+            let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state("native toolchain projection resolved empty")
+                })?;
+            let root = projection.roots.first().ok_or_else(|| {
+                MezError::invalid_state("native toolchain projection is missing its root")
+            })?;
+            let sandbox_path = match kind {
+                SandboxToolchainKind::Llvm => SANDBOX_LLVM_PATH,
+                SandboxToolchainKind::Gcc => SANDBOX_GCC_PATH,
+                SandboxToolchainKind::Cmake => SANDBOX_CMAKE_PATH,
+                SandboxToolchainKind::Ninja => SANDBOX_NINJA_PATH,
+                SandboxToolchainKind::Meson => SANDBOX_MESON_PATH,
+                _ => unreachable!("native toolchain arm restricts kind"),
+            };
+            Ok(format!(
+                "{}_root={} sandbox_path={}",
+                kind.as_str(),
+                json_escape(&root.host_path.display().to_string()),
+                sandbox_path,
+            ))
+        }
     }
 }
 
@@ -2298,6 +2382,26 @@ fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &Toolchain
             .flatten()
             .collect(),
         SandboxToolchainKind::Ocaml => vec![status.ocaml_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Llvm => vec![status.llvm_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Gcc => vec![status.gcc_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Cmake => vec![status.cmake_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Ninja => vec![status.ninja_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Meson => vec![status.meson_root.as_deref()]
             .into_iter()
             .flatten()
             .collect(),

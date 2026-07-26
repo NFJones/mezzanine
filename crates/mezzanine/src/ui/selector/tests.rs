@@ -691,8 +691,8 @@ fn selector_shadow_hint_completes_toolchain_command_name() {
 
 /// Verifies `/toolchain` completion follows its strict grammar from operation
 /// through typed Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, Dart,
-/// Kotlin, Ruby, PHP, Composer, Erlang, Elixir, GHC, Cabal, Stack, or OCaml
-/// selection and confirmation.
+/// Kotlin, Ruby, PHP, Composer, Erlang, Elixir, GHC, Cabal, Stack, OCaml,
+/// LLVM, GCC, CMake, Ninja, or Meson selection and confirmation.
 #[test]
 fn selector_shadow_hint_completes_toolchain_grammar() {
     let cases = [
@@ -721,6 +721,11 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ("/toolchain detect ca", "bal", SelectorCandidateKind::Value),
         ("/toolchain detect st", "ack", SelectorCandidateKind::Value),
         ("/toolchain detect oc", "aml", SelectorCandidateKind::Value),
+        ("/toolchain detect ll", "vm", SelectorCandidateKind::Value),
+        ("/toolchain detect gc", "c", SelectorCandidateKind::Value),
+        ("/toolchain detect cm", "ake", SelectorCandidateKind::Value),
+        ("/toolchain detect ni", "nja", SelectorCandidateKind::Value),
+        ("/toolchain detect me", "son", SelectorCandidateKind::Value),
         ("/toolchain enable rus", "t", SelectorCandidateKind::Value),
         ("/toolchain enable z", "ig", SelectorCandidateKind::Value),
         ("/toolchain enable g", "o", SelectorCandidateKind::Value),
@@ -745,6 +750,11 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ("/toolchain enable ca", "bal", SelectorCandidateKind::Value),
         ("/toolchain enable st", "ack", SelectorCandidateKind::Value),
         ("/toolchain enable oc", "aml", SelectorCandidateKind::Value),
+        ("/toolchain enable ll", "vm", SelectorCandidateKind::Value),
+        ("/toolchain enable gc", "c", SelectorCandidateKind::Value),
+        ("/toolchain enable cm", "ake", SelectorCandidateKind::Value),
+        ("/toolchain enable ni", "nja", SelectorCandidateKind::Value),
+        ("/toolchain enable me", "son", SelectorCandidateKind::Value),
         ("/toolchain disable rus", "t", SelectorCandidateKind::Value),
         (
             "/toolchain enable rust --y",

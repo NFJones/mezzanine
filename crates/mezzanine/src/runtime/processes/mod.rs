@@ -303,6 +303,8 @@ struct RuntimeProcessSettings {
     terminal_history_rotate_lines: usize,
     /// TERM value exported to pane processes and attached clients.
     terminal_term: String,
+    /// Emoji-width policy represented by the currently modeled pane screens.
+    terminal_emoji_width: mez_terminal::TerminalEmojiWidth,
     /// Hidden shell output tail lines retained in action previews.
     terminal_shell_output_preview_lines: usize,
 }
@@ -313,6 +315,7 @@ impl Default for RuntimeProcessSettings {
             terminal_history_limit: mez_terminal::DEFAULT_HISTORY_LIMIT,
             terminal_history_rotate_lines: mez_terminal::DEFAULT_HISTORY_ROTATE_LINES,
             terminal_term: mez_terminal::DEFAULT_PANE_TERM.to_string(),
+            terminal_emoji_width: mez_terminal::TerminalEmojiWidth::Wide,
             terminal_shell_output_preview_lines: 5,
         }
     }
@@ -470,13 +473,15 @@ impl RuntimeSessionService {
         shell_output_preview_lines: usize,
     ) -> Result<()> {
         self.configure_pane_screen_history(history_limit, history_rotate_lines)?;
+        let emoji_width_changed =
+            self.process.settings.terminal_emoji_width != terminal_emoji_width;
         self.process.settings = RuntimeProcessSettings {
             terminal_history_limit: history_limit,
             terminal_history_rotate_lines: history_rotate_lines,
             terminal_term,
+            terminal_emoji_width,
             terminal_shell_output_preview_lines: shell_output_preview_lines,
         };
-        let emoji_width_changed = mez_terminal::terminal_emoji_width() != terminal_emoji_width;
         mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
         if emoji_width_changed {
             for screen in self.process.pane_screens.values_mut() {

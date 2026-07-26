@@ -1203,6 +1203,86 @@ fn sandbox_ocaml_toolchain_detects_only_project_local_switch() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Native compiler and build-tool detection accepts only complete standalone
+/// roots from the captured CLI search path, reports canonical roots, and does
+/// not persist host paths or create configuration during read-only inspection.
+#[test]
+fn sandbox_native_toolchains_detect_without_persisting_roots() {
+    let (mut env, home) = test_env("sandbox-native-toolchains");
+    let specifications = [
+        (
+            "llvm",
+            ["clang", "clang++", "llvm-ar", "llvm-config"].as_slice(),
+            ["lib/clang"].as_slice(),
+        ),
+        (
+            "gcc",
+            ["gcc", "g++", "gcc-ar"].as_slice(),
+            ["lib/gcc"].as_slice(),
+        ),
+        (
+            "cmake",
+            ["cmake", "ctest"].as_slice(),
+            ["share/cmake"].as_slice(),
+        ),
+        ("ninja", ["ninja"].as_slice(), [].as_slice()),
+        ("meson", ["meson"].as_slice(), [].as_slice()),
+    ];
+    let mut roots = Vec::new();
+    for (kind, executables, directories) in specifications {
+        let root = home.join(kind);
+        fs::create_dir_all(root.join("bin")).unwrap();
+        for directory in directories {
+            fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        for executable in executables {
+            let path = root.join("bin").join(executable);
+            fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        roots.push((kind, root.canonicalize().unwrap()));
+    }
+    env.path = Some(std::env::join_paths(roots.iter().map(|(_, root)| root.join("bin"))).unwrap());
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    for (kind, root) in &roots {
+        stdout.clear();
+        stderr.clear();
+        let detect_code = block_on_cli_code(crate::cli::run_with(
+            with_json_output(vec![
+                "mez".to_string(),
+                "sandbox".to_string(),
+                "toolchains".to_string(),
+                "detect".to_string(),
+                "--kind".to_string(),
+                (*kind).to_string(),
+                project.to_string_lossy().into_owned(),
+            ]),
+            env.clone(),
+            false,
+            &mut stdout,
+            &mut stderr,
+        ))
+        .unwrap();
+        assert_eq!(detect_code, 0);
+        let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(detected["kind"], *kind);
+        assert_eq!(detected["available"], true);
+        assert_eq!(
+            detected[format!("{kind}_root")],
+            root.to_string_lossy().as_ref()
+        );
+        assert!(stderr.is_empty());
+        assert!(!config_path.exists());
+    }
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]

@@ -434,7 +434,7 @@ Current support reflects behavior implemented in the repository today.
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
 - `mez sandbox toolchains list`, `status [SELECTOR] [PATH]`, and
-  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml] [PATH]` inspect effective
+  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson] [PATH]` inspect effective
   toolchain configuration and canonical built-in roots without mutation.
   `enable SELECTOR... --yes` and `disable SELECTOR... --yes` preserve ordered
   built-in or `custom:<name>` selections. `custom define NAME ... --yes` and
@@ -447,7 +447,9 @@ Current support reflects behavior implemented in the repository today.
   self-contained distribution, SDK, or runtime read-only. OCaml projects only
   project the direct trusted-project `_opam` local switch read-only, prepend its
   `bin` directory to PATH, and set `OPAM_SWITCH_PREFIX`; global opam state and
-  `opam env` are never used. JDK projection synthesizes
+  `opam env` are never used. LLVM/Clang, GCC, CMake, Ninja, and Meson accept
+  only validated standalone roots, mount them read-only at fixed paths, and do
+  not inherit compiler/linker flags or package-manager prefixes. JDK projection synthesizes
   `JAVA_HOME` and includes only the selected SDK, not Java manager homes,
   preferences, credentials, Maven or Gradle state, or shell hooks. .NET
   projection synthesizes `DOTNET_ROOT`, redirects CLI and NuGet package state
@@ -488,7 +490,7 @@ Current support reflects behavior implemented in the repository today.
   expired, or it was already settled.
 - In the agent shell, `/toolchain` and `/toolchain status` report supported,
   configured, discoverable, and effective state for the active pane.
-  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml]` is read-only and uses
+  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson]` is read-only and uses
   active-pane bootstrap evidence or the pane's trusted project root for OCaml.
   `/toolchain define NAME ... --yes`, ordered
   `/toolchain enable SELECTOR... --yes`, `/toolchain disable SELECTOR... --yes`,

@@ -25,7 +25,7 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 20] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 25] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
@@ -46,6 +46,11 @@ pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 20] =
     SandboxToolchainKind::Cabal,
     SandboxToolchainKind::Stack,
     SandboxToolchainKind::Ocaml,
+    SandboxToolchainKind::Llvm,
+    SandboxToolchainKind::Gcc,
+    SandboxToolchainKind::Cmake,
+    SandboxToolchainKind::Ninja,
+    SandboxToolchainKind::Meson,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -133,6 +138,26 @@ pub(crate) const SANDBOX_GHC_STACK_PATH: &str =
     "/opt/mez/toolchains/ghc/root/bin:/opt/mez/toolchains/stack/root/bin:/usr/bin:/bin";
 /// Fixed executable search path when both Haskell companions are selected.
 pub(crate) const SANDBOX_GHC_CABAL_STACK_PATH: &str = "/opt/mez/toolchains/ghc/root/bin:/opt/mez/toolchains/cabal/root/bin:/opt/mez/toolchains/stack/root/bin:/usr/bin:/bin";
+/// Fixed LLVM/Clang toolchain projection inside Bubblewrap.
+pub(crate) const SANDBOX_LLVM_ROOT: &str = "/opt/mez/toolchains/llvm/root";
+/// Fixed executable search path used when only LLVM/Clang is projected.
+pub(crate) const SANDBOX_LLVM_PATH: &str = "/opt/mez/toolchains/llvm/root/bin:/usr/bin:/bin";
+/// Fixed GCC toolchain projection inside Bubblewrap.
+pub(crate) const SANDBOX_GCC_ROOT: &str = "/opt/mez/toolchains/gcc/root";
+/// Fixed executable search path used when only GCC is projected.
+pub(crate) const SANDBOX_GCC_PATH: &str = "/opt/mez/toolchains/gcc/root/bin:/usr/bin:/bin";
+/// Fixed CMake distribution projection inside Bubblewrap.
+pub(crate) const SANDBOX_CMAKE_ROOT: &str = "/opt/mez/toolchains/cmake/root";
+/// Fixed executable search path used when only CMake is projected.
+pub(crate) const SANDBOX_CMAKE_PATH: &str = "/opt/mez/toolchains/cmake/root/bin:/usr/bin:/bin";
+/// Fixed Ninja distribution projection inside Bubblewrap.
+pub(crate) const SANDBOX_NINJA_ROOT: &str = "/opt/mez/toolchains/ninja/root";
+/// Fixed executable search path used when only Ninja is projected.
+pub(crate) const SANDBOX_NINJA_PATH: &str = "/opt/mez/toolchains/ninja/root/bin:/usr/bin:/bin";
+/// Fixed Meson distribution projection inside Bubblewrap.
+pub(crate) const SANDBOX_MESON_ROOT: &str = "/opt/mez/toolchains/meson/root";
+/// Fixed executable search path used when only Meson is projected.
+pub(crate) const SANDBOX_MESON_PATH: &str = "/opt/mez/toolchains/meson/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1183,6 +1208,166 @@ const OCAML_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const LLVM_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "llvm-toolchain",
+    label: "LLVM/Clang toolchain",
+    sandbox_destination: SANDBOX_LLVM_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/clang", "bin/clang++", "bin/llvm-ar", "bin/llvm-config"],
+    required_directories: &["lib/clang"],
+}];
+const LLVM_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Llvm,
+    aliases: &["llvm", "clang"],
+    roots: &LLVM_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/llvm",
+    ],
+    path_entries: &["/opt/mez/toolchains/llvm/root/bin"],
+    environment: &[],
+    managed_state: &[],
+    forbidden_descendants: &[".linuxbrew", "Cellar", "Homebrew", "credentials", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
+const GCC_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "gcc-toolchain",
+    label: "GCC toolchain",
+    sandbox_destination: SANDBOX_GCC_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/gcc", "bin/g++", "bin/gcc-ar"],
+    required_directories: &["lib/gcc"],
+}];
+const GCC_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Gcc,
+    aliases: &["gcc"],
+    roots: &GCC_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/gcc",
+    ],
+    path_entries: &["/opt/mez/toolchains/gcc/root/bin"],
+    environment: &[],
+    managed_state: &[],
+    forbidden_descendants: &[".linuxbrew", "Cellar", "Homebrew", "credentials", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
+const CMAKE_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "cmake-toolchain",
+    label: "CMake distribution",
+    sandbox_destination: SANDBOX_CMAKE_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::UserTools,
+    required_executables: &["bin/cmake", "bin/ctest"],
+    required_directories: &["share/cmake"],
+}];
+const CMAKE_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Cmake,
+    aliases: &["cmake"],
+    roots: &CMAKE_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/cmake",
+    ],
+    path_entries: &["/opt/mez/toolchains/cmake/root/bin"],
+    environment: &[],
+    managed_state: &[],
+    forbidden_descendants: &[".linuxbrew", "Cellar", "Homebrew", "credentials", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
+const NINJA_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "ninja-toolchain",
+    label: "Ninja distribution",
+    sandbox_destination: SANDBOX_NINJA_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::UserTools,
+    required_executables: &["bin/ninja"],
+    required_directories: &[],
+}];
+const NINJA_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Ninja,
+    aliases: &["ninja"],
+    roots: &NINJA_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/ninja",
+    ],
+    path_entries: &["/opt/mez/toolchains/ninja/root/bin"],
+    environment: &[],
+    managed_state: &[],
+    forbidden_descendants: &[".linuxbrew", "Cellar", "Homebrew", "credentials", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
+const MESON_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "meson-toolchain",
+    label: "Meson distribution",
+    sandbox_destination: SANDBOX_MESON_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::UserTools,
+    required_executables: &["bin/meson"],
+    required_directories: &[],
+}];
+const MESON_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Meson,
+    aliases: &["meson"],
+    roots: &MESON_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/meson",
+    ],
+    path_entries: &["/opt/mez/toolchains/meson/root/bin"],
+    environment: &[],
+    managed_state: &[],
+    forbidden_descendants: &[".linuxbrew", "Cellar", "Homebrew", "credentials", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -1525,6 +1710,11 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Cabal => &CABAL_DESCRIPTOR,
         SandboxToolchainKind::Stack => &STACK_DESCRIPTOR,
         SandboxToolchainKind::Ocaml => &OCAML_DESCRIPTOR,
+        SandboxToolchainKind::Llvm => &LLVM_DESCRIPTOR,
+        SandboxToolchainKind::Gcc => &GCC_DESCRIPTOR,
+        SandboxToolchainKind::Cmake => &CMAKE_DESCRIPTOR,
+        SandboxToolchainKind::Ninja => &NINJA_DESCRIPTOR,
+        SandboxToolchainKind::Meson => &MESON_DESCRIPTOR,
     }
 }
 
@@ -2966,6 +3156,71 @@ pub(crate) fn discover_stack_from_search_path(
         "Stack executable",
         "Stack companion",
         &STACK_ROOTS[0],
+    )
+}
+
+/// Discovers one standalone LLVM/Clang toolchain from an explicit search path.
+pub(crate) fn discover_llvm_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "clang",
+        "Clang executable",
+        "LLVM/Clang toolchain",
+        &LLVM_ROOTS[0],
+    )
+}
+
+/// Discovers one standalone GCC toolchain from an explicit search path.
+pub(crate) fn discover_gcc_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "gcc",
+        "GCC executable",
+        "GCC toolchain",
+        &GCC_ROOTS[0],
+    )
+}
+
+/// Discovers one standalone CMake distribution from an explicit search path.
+pub(crate) fn discover_cmake_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "cmake",
+        "CMake executable",
+        "CMake distribution",
+        &CMAKE_ROOTS[0],
+    )
+}
+
+/// Discovers one standalone Ninja distribution from an explicit search path.
+pub(crate) fn discover_ninja_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "ninja",
+        "Ninja executable",
+        "Ninja distribution",
+        &NINJA_ROOTS[0],
+    )
+}
+
+/// Discovers one standalone Meson distribution from an explicit search path.
+pub(crate) fn discover_meson_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "meson",
+        "Meson executable",
+        "Meson distribution",
+        &MESON_ROOTS[0],
     )
 }
 

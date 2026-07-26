@@ -2971,7 +2971,7 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state, except that OCaml
 detection MUST use only the active pane's trusted project root.
@@ -3152,6 +3152,19 @@ fail closed. The switch MUST be mounted read-only at its canonical project
 path. Its composed PATH MUST be exactly
 `<canonical-trusted-project>/_opam/bin:/usr/bin:/bin`, and
 `OPAM_SWITCH_PREFIX` MUST equal `<canonical-trusted-project>/_opam`.
+Schema v42 adds the allowlisted `llvm`, `gcc`, `cmake`, `ninja`, and `meson`
+kinds. Schema v41 to v42 migration MUST preserve existing built-in and custom
+selections or omission and MUST NOT discover or enable native tooling. Direct
+discovery MUST accept only real executables inside validated standalone roots;
+active-pane discovery MUST use exact `llvm-toolchain`, `gcc-toolchain`,
+`cmake-toolchain`, `ninja-toolchain`, and `meson-toolchain` bootstrap evidence.
+The roots MUST contain their descriptor-required executables and distribution
+directories, remain non-overlapping and within maximum read authority, and be
+mounted read-only at fixed `/opt/mez/toolchains/<kind>/root` destinations.
+Explicit multi-kind selection MUST compose PATH in descriptor order followed
+by `/usr/bin:/bin`. Mezzanine MUST NOT inherit `CC`, `CXX`, `CFLAGS`,
+`CPPFLAGS`, `LDFLAGS`, plugin or sysroot variables, Homebrew/Linuxbrew state,
+Conan/vcpkg state, package-manager credentials, or unrelated user tools.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -6096,10 +6109,11 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
   `node`, `python`, `jdk`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
-  `composer`, `erlang`, `elixir`, `ghc`, `cabal`, `stack`, or `ocaml`. Unknown kinds,
+  `composer`, `erlang`, `elixir`, `ghc`, `cabal`, `stack`, `ocaml`, `llvm`,
+  `gcc`, `cmake`, `ninja`, or `meson`. Unknown kinds,
   missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish

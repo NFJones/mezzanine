@@ -2982,6 +2982,138 @@ fn ocaml_toolchain_rejects_absent_malformed_and_symlinked_local_switches() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Explicit LLVM, GCC, CMake, Ninja, and Meson selections compose only their
+/// validated standalone roots in stable descriptor order without importing
+/// ambient compiler flags, package-manager prefixes, or unrelated user tools.
+#[test]
+fn native_toolchains_compose_explicit_standalone_roots() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-native-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let specifications = [
+        (
+            "llvm-toolchain",
+            "llvm",
+            ["clang", "clang++", "llvm-ar", "llvm-config"].as_slice(),
+            ["lib/clang"].as_slice(),
+        ),
+        (
+            "gcc-toolchain",
+            "gcc",
+            ["gcc", "g++", "gcc-ar"].as_slice(),
+            ["lib/gcc"].as_slice(),
+        ),
+        (
+            "cmake-toolchain",
+            "cmake",
+            ["cmake", "ctest"].as_slice(),
+            ["share/cmake"].as_slice(),
+        ),
+        (
+            "ninja-toolchain",
+            "ninja",
+            ["ninja"].as_slice(),
+            [].as_slice(),
+        ),
+        (
+            "meson-toolchain",
+            "meson",
+            ["meson"].as_slice(),
+            [].as_slice(),
+        ),
+    ];
+    let mut managers = Vec::new();
+    let mut roots = Vec::new();
+    for (evidence, name, executables, directories) in specifications {
+        let root = base.join(name);
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        for directory in directories {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        for executable in executables {
+            let path = root.join("bin").join(executable);
+            std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let root = root.canonicalize().unwrap();
+        managers.push(format!("{evidence}:{}", root.display()));
+        roots.push(root);
+    }
+
+    let projection = resolve_toolchain_projection(
+        &[
+            SandboxToolchainKind::Llvm,
+            SandboxToolchainKind::Gcc,
+            SandboxToolchainKind::Cmake,
+            SandboxToolchainKind::Ninja,
+            SandboxToolchainKind::Meson,
+        ],
+        &managers,
+        "linux",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(projection.roots.len(), 5);
+    assert_eq!(
+        projection.executable_path(),
+        "/opt/mez/toolchains/llvm/root/bin:/opt/mez/toolchains/gcc/root/bin:/opt/mez/toolchains/cmake/root/bin:/opt/mez/toolchains/ninja/root/bin:/opt/mez/toolchains/meson/root/bin:/usr/bin:/bin"
+    );
+    for variable in ["CC", "CXX", "CFLAGS", "CPPFLAGS", "LDFLAGS"] {
+        assert!(!projection.environment.contains_key(variable));
+    }
+    assert_eq!(
+        projection
+            .roots
+            .iter()
+            .map(|root| root.host_path.clone())
+            .collect::<Vec<_>>(),
+        roots
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Native tooling discovery rejects an incomplete compiler root and a selected
+/// executable symlink instead of broadening projection to its package prefix.
+#[test]
+fn native_toolchains_reject_incomplete_and_symlinked_roots() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-native-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let llvm = base.join("llvm");
+    std::fs::create_dir_all(llvm.join("bin")).unwrap();
+    std::fs::write(llvm.join("bin/clang"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        llvm.join("bin/clang"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let llvm = llvm.canonicalize().unwrap();
+    let incomplete = resolve_toolchain_projection(
+        &[SandboxToolchainKind::Llvm],
+        &[format!("llvm-toolchain:{}", llvm.display())],
+        "linux",
+    )
+    .unwrap_err();
+    assert_eq!(incomplete.kind(), SandboxCompileErrorKind::InvalidInput);
+
+    let external = base.join("external-ninja");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let ninja = base.join("ninja/bin");
+    std::fs::create_dir_all(&ninja).unwrap();
+    std::os::unix::fs::symlink(&external, ninja.join("ninja")).unwrap();
+    let search_path = std::env::join_paths([ninja]).unwrap();
+    let symlink = discover_ninja_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(symlink.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Descriptor resolution and final launch validation reject ambiguous
 /// selection and any mutation of code-owned projection metadata or classes.
 #[test]
@@ -3136,7 +3268,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
         vec![
             "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart",
             "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack",
-            "ocaml"
+            "ocaml", "llvm", "gcc", "cmake", "ninja", "meson"
         ]
     );
     assert_eq!(
