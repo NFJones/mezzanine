@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::control::ControlIdempotencyCache;
 use crate::protocol::event::EventLog;
-use crate::runtime::SandboxToolchainKind;
+use crate::runtime::{CustomToolchainDefinition, CustomToolchainName, ToolchainSelection};
 use mez_agent::messaging::MessageService;
 
 /// Owns control replay, messaging, and event-fanout state.
@@ -28,9 +28,15 @@ pub(crate) struct PendingToolchainMutation {
     pub(crate) id: String,
     /// Canonical operation submitted by the external CLI.
     pub(crate) operation: String,
-    /// Allowlisted toolchain kind selected by the request.
-    pub(crate) kind: SandboxToolchainKind,
-    /// Digest of the normalized operation and kind.
+    /// Ordered typed selectors carried by the exact request.
+    pub(crate) selectors: Vec<ToolchainSelection>,
+    /// Custom identity carried by define/remove requests.
+    pub(crate) custom_name: Option<CustomToolchainName>,
+    /// Complete constrained definition carried by define requests.
+    pub(crate) definition: Option<CustomToolchainDefinition>,
+    /// Whether removal atomically disables an enabled custom selector.
+    pub(crate) disable: bool,
+    /// Digest of the normalized operation and selectors.
     pub(crate) digest: String,
     /// Config generation captured when the request was submitted.
     pub(crate) config_generation: u64,

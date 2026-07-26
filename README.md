@@ -433,13 +433,18 @@ Current support reflects behavior implemented in the repository today.
   a paired sanitized Git name and email; only those identity values are
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
-- `mez sandbox toolchains detect [--kind rust|zig|go|deno|bun|node|python] [PATH]`
-  previews
-  canonical roots without mutation. `mez sandbox toolchains enable KIND --yes`
-  submits the exact typed selection to a live service for confirmation in the
-  attached primary client; it does not edit configuration or approve its own
-  request. Rust mounts Cargo and Rustup read-only; Zig, Go, Deno, Bun, Node.js,
-  and Python mount one self-contained distribution, SDK, or runtime read-only.
+- `mez sandbox toolchains list`, `status [SELECTOR] [PATH]`, and
+  `detect [--kind rust|zig|go|deno|bun|node|python] [PATH]` inspect effective
+  toolchain configuration and canonical built-in roots without mutation.
+  `enable SELECTOR... --yes` and `disable SELECTOR... --yes` preserve ordered
+  built-in or `custom:<name>` selections. `custom define NAME ... --yes` and
+  `custom remove NAME [--disable] --yes` submit constrained custom-definition
+  changes. Mutations submit an exact digest-bound request to a live service for
+  confirmation in the attached primary client; they do not edit configuration
+  offline or approve their own request. Rust mounts Cargo and Rustup read-only;
+  Zig, Go, Deno, Bun, Node.js, and Python mount one self-contained distribution,
+  SDK, or runtime read-only. Custom roots must already be within the pane's
+  resolved read authority and are projected read-only at fixed sandbox paths.
   Writable cache and package state is redirected beneath
   `/home/mez`; host credentials, caches, Deno authentication and certificate
   settings, Bun global tools and configuration, npm credentials and global
@@ -454,10 +459,11 @@ Current support reflects behavior implemented in the repository today.
 - In the agent shell, `/toolchain` and `/toolchain status` report supported,
   configured, discoverable, and effective state for the active pane.
   `/toolchain detect [rust|zig|go|deno|bun|node|python]` is read-only and uses only
-  active-pane bootstrap evidence. `/toolchain enable KIND --yes` and
-  `/toolchain disable KIND --yes` require direct authenticated primary input,
-  persist only the typed kind, and hot-apply real changes to subsequent
-  sandboxed actions. Existing interactive shells
+  active-pane bootstrap evidence. `/toolchain define NAME ... --yes`, ordered
+  `/toolchain enable SELECTOR... --yes`, `/toolchain disable SELECTOR... --yes`,
+  and `/toolchain remove custom:NAME [--disable] --yes` require direct
+  authenticated primary input. They atomically persist and hot-apply real
+  changes to subsequent sandboxed actions. Existing interactive shells
   and already-running actions are unchanged. `/toolchain reload` performs a
   full disk-backed configuration reload rather than reloading only the
   toolchain field. Status, list, and detection open structured Markdown in the

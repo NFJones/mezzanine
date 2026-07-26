@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use super::{
     CliEnv, CliOutputFormat, MezError, Result, Serialize, SocketSelection, cli_idempotency_key,
-    json_escape, run_automation_control_request, serialize_json,
+    run_automation_control_request, serialize_json,
 };
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
@@ -24,7 +24,9 @@ use crate::config::{
     plan_config_mutations,
 };
 use crate::runtime::{
-    SandboxToolchainKind, runtime_configured_permissions_from_config,
+    ConfiguredPermissions, CustomToolchainDefinition, CustomToolchainName, SandboxConfig,
+    SandboxToolchainKind, ToolchainSelection, normalized_custom_toolchain_mutation_digest,
+    normalized_toolchain_selectors_digest, runtime_configured_permissions_from_config,
     runtime_effective_config_value,
 };
 use crate::security::project::{
@@ -34,11 +36,12 @@ use crate::security::project::{
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
     SANDBOX_DENO_PATH, SANDBOX_GO_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUST_PATH,
-    SANDBOX_ZIG_PATH, SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
-    clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_deno_from_search_path,
-    discover_go_from_search_path, discover_node_from_search_path, discover_python_from_search_path,
-    discover_rust_from_home, discover_zig_from_search_path, inspect_bubblewrap_managed_home,
-    parse_sandbox_toolchain_kind, plan_sandbox_workflow, prune_bubblewrap_managed_homes,
+    SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity,
+    SandboxWorkflowPlan, SandboxWorkflowRequest, clear_bubblewrap_managed_home,
+    discover_bun_from_search_path, discover_deno_from_search_path, discover_go_from_search_path,
+    discover_node_from_search_path, discover_python_from_search_path, discover_rust_from_home,
+    discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
+    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -251,6 +254,15 @@ struct SandboxSetupResult {
 /// Direct-user typed toolchain discovery and activation commands.
 #[derive(Debug, Clone, Subcommand)]
 enum SandboxToolchainsCommand {
+    /// Lists supported built-in kinds and configured custom identities.
+    List,
+    /// Reports configured toolchain selections and definitions without mutation.
+    Status {
+        /// Optional built-in or `custom:<name>` selector to inspect.
+        selector: Option<String>,
+        /// Project path used to load the applicable read-only configuration.
+        path: Option<PathBuf>,
+    },
     /// Detects canonical allowlisted toolchain roots without changing config.
     Detect {
         /// Allowlisted kind to inspect; omitted for backwards-compatible Rust detection.
@@ -259,11 +271,65 @@ enum SandboxToolchainsCommand {
         /// Project path reported with the detection result.
         path: Option<PathBuf>,
     },
-    /// Enables one allowlisted toolchain kind in user config.
+    /// Submits ordered typed toolchain selectors for activation.
     Enable {
-        /// Allowlisted toolchain kind.
-        kind: String,
+        /// Built-in or `custom:<name>` selectors in projection order.
+        #[arg(required = true, num_args = 1..)]
+        selectors: Vec<String>,
         /// Confirms the read-only host path projection.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Submits ordered typed toolchain selectors for deactivation.
+    Disable {
+        /// Built-in or `custom:<name>` selectors to remove.
+        #[arg(required = true, num_args = 1..)]
+        selectors: Vec<String>,
+        /// Confirms the persisted selection change.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Defines or removes constrained custom toolchains.
+    Custom {
+        #[command(subcommand)]
+        command: SandboxCustomToolchainCommand,
+    },
+}
+
+/// Direct-user custom toolchain definition commands.
+#[derive(Debug, Clone, Subcommand)]
+enum SandboxCustomToolchainCommand {
+    /// Defines or atomically replaces one constrained custom toolchain.
+    Define {
+        /// Stable custom identity without the `custom:` prefix.
+        name: String,
+        /// Absolute host root made available read-only.
+        #[arg(long = "root", required = true)]
+        roots: Vec<String>,
+        /// Root-relative PATH reference in `<root-index>:<path>` form.
+        #[arg(long = "path", required = true)]
+        path_entries: Vec<String>,
+        /// Required executable reference in `<root-index>:<path>` form.
+        #[arg(long = "require")]
+        required_executables: Vec<String>,
+        /// Synthesized environment entry in `NAME=<root-index>:<path>` form.
+        #[arg(long = "env-root")]
+        environment: Vec<String>,
+        /// Optional printable description.
+        #[arg(long)]
+        description: Option<String>,
+        /// Confirms submission to the attached primary client.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Removes one custom definition, optionally disabling it atomically.
+    Remove {
+        /// Stable custom identity with or without the `custom:` prefix.
+        name: String,
+        /// Also remove the selector from the enabled projection.
+        #[arg(long)]
+        disable: bool,
+        /// Confirms submission to the attached primary client.
         #[arg(long)]
         yes: bool,
     },
@@ -1112,6 +1178,14 @@ fn run_sandbox_toolchains<W: Write>(
     stdout: &mut W,
 ) -> Result<u8> {
     match command {
+        SandboxToolchainsCommand::List => {
+            write_toolchain_list(&env, output_format, stdout)?;
+            Ok(0)
+        }
+        SandboxToolchainsCommand::Status { selector, path } => {
+            write_toolchain_status(&env, selector.as_deref(), path, output_format, stdout)?;
+            Ok(0)
+        }
         SandboxToolchainsCommand::Detect { kind, path } => {
             let kind = parse_sandbox_toolchain_kind(&kind).ok_or_else(|| {
                 MezError::invalid_args("sandbox toolchains detect received an unsupported kind")
@@ -1128,51 +1202,407 @@ fn run_sandbox_toolchains<W: Write>(
             write_toolchain_result(stdout, output_format, &result)?;
             Ok(0)
         }
-        SandboxToolchainsCommand::Enable { kind, yes } => {
-            let kind = parse_sandbox_toolchain_kind(&kind).ok_or_else(|| {
-                MezError::invalid_args("sandbox toolchains enable received an unsupported kind")
-            })?;
-            let project = discover_project_root_with_metadata(
-                &std::env::current_dir()?,
-                ProjectRootInputSource::CurrentDirectory,
-            )?;
-            let detection = detect_direct_toolchain(kind, &env)?;
-            if !detection.available() {
-                return Err(MezError::invalid_state(format!(
-                    "{} toolchain detection did not find a canonical distribution",
-                    kind.as_str()
-                )));
+        SandboxToolchainsCommand::Enable { selectors, yes } => submit_toolchain_selectors(
+            socket_selection,
+            &env,
+            interactive,
+            output_format,
+            stdout,
+            ToolchainSelectorMutation {
+                operation: "enable",
+                selector_names: selectors,
+                yes,
+            },
+        ),
+        SandboxToolchainsCommand::Disable { selectors, yes } => submit_toolchain_selectors(
+            socket_selection,
+            &env,
+            interactive,
+            output_format,
+            stdout,
+            ToolchainSelectorMutation {
+                operation: "disable",
+                selector_names: selectors,
+                yes,
+            },
+        ),
+        SandboxToolchainsCommand::Custom { command } => submit_custom_toolchain_mutation(
+            socket_selection,
+            interactive,
+            output_format,
+            stdout,
+            command,
+        ),
+    }
+}
+
+/// Loads typed toolchain configuration without mutating trust, config, or
+/// managed runtime state.
+fn read_toolchain_permissions(
+    env: &CliEnv,
+    path: Option<PathBuf>,
+) -> Result<(PathBuf, ConfiguredPermissions)> {
+    let current = std::env::current_dir()?;
+    let path = path.unwrap_or_else(|| current.clone());
+    let source = if path == current {
+        ProjectRootInputSource::CurrentDirectory
+    } else {
+        ProjectRootInputSource::ExplicitPath
+    };
+    let discovery = discover_project_root_with_metadata(&path, source)?;
+    let paths = env.config_paths()?;
+    let layers = load_read_only_config_layers(
+        &paths,
+        &discovery.canonical_root,
+        &discovery.canonical_start,
+        false,
+    )?;
+    let structured = runtime_effective_config_value(&layers)?;
+    let permissions = runtime_configured_permissions_from_config(&structured)?;
+    Ok((discovery.canonical_root, permissions))
+}
+
+/// Writes supported built-ins and configured custom identities without host
+/// probing or configuration mutation.
+fn write_toolchain_list<W: Write>(
+    env: &CliEnv,
+    output_format: CliOutputFormat,
+    stdout: &mut W,
+) -> Result<()> {
+    let (_, permissions) = read_toolchain_permissions(env, None)?;
+    let custom = match &permissions.sandbox {
+        SandboxConfig::PolicyOnly => Vec::new(),
+        SandboxConfig::Bubblewrap(config) => {
+            config.custom_toolchains.keys().cloned().collect::<Vec<_>>()
+        }
+    };
+    let built_ins = SUPPORTED_SANDBOX_TOOLCHAIN_KINDS
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>();
+    if output_format.is_json() {
+        writeln!(
+            stdout,
+            "{}",
+            serde_json::json!({
+                "version": 1,
+                "built_ins": built_ins,
+                "custom": custom.iter().map(|name| format!("custom:{name}")).collect::<Vec<_>>(),
+            })
+        )?;
+    } else {
+        writeln!(stdout, "built_ins: {}", built_ins.join(","))?;
+        writeln!(
+            stdout,
+            "custom: {}",
+            if custom.is_empty() {
+                "none".to_string()
+            } else {
+                custom
+                    .iter()
+                    .map(|name| format!("custom:{name}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
             }
-            if !yes {
-                let mut result = toolchain_result(project.canonical_root, detection, false, true);
-                result.message = if interactive {
-                    format!(
-                        "Review the read-only roots and rerun with --yes to enable {}.",
-                        kind.as_str()
-                    )
-                } else {
-                    "Noninteractive toolchain mutation requires --yes.".to_string()
-                };
-                write_toolchain_result(stdout, output_format, &result)?;
-                return Ok(1);
-            }
-            let digest = crate::runtime::normalized_toolchain_mutation_digest("enable", kind);
-            let params = format!(
-                r#"{{"operation":"enable","kind":"{}","request_digest":"{}","idempotency_key":"{}"}}"#,
-                json_escape(kind.as_str()),
-                digest,
-                cli_idempotency_key("toolchain-mutation-submit"),
-            );
-            run_automation_control_request(
-                socket_selection,
-                "toolchain/mutation/submit",
-                &params,
-                output_format,
+        )?;
+    }
+    Ok(())
+}
+
+/// Writes configured selection and custom-definition metadata without probing
+/// arbitrary host paths or changing runtime state.
+fn write_toolchain_status<W: Write>(
+    env: &CliEnv,
+    requested: Option<&str>,
+    path: Option<PathBuf>,
+    output_format: CliOutputFormat,
+    stdout: &mut W,
+) -> Result<()> {
+    let requested = requested
+        .map(ToolchainSelection::parse)
+        .transpose()
+        .map_err(|error| MezError::invalid_args(error.message()))?;
+    let (project_root, permissions) = read_toolchain_permissions(env, path)?;
+    let (configured, definitions) = match &permissions.sandbox {
+        SandboxConfig::PolicyOnly => (Vec::new(), std::collections::BTreeMap::new()),
+        SandboxConfig::Bubblewrap(config) => (
+            config
+                .toolchain_selections
+                .iter()
+                .map(ToolchainSelection::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            config.custom_toolchains.clone(),
+        ),
+    };
+    let identities = if let Some(selection) = requested {
+        vec![selection.as_str().to_string()]
+    } else {
+        SUPPORTED_SANDBOX_TOOLCHAIN_KINDS
+            .iter()
+            .map(|kind| kind.as_str().to_string())
+            .chain(definitions.keys().map(|name| format!("custom:{name}")))
+            .collect::<Vec<_>>()
+    };
+    let entries = identities
+        .iter()
+        .map(|identity| {
+            let custom_name = identity.strip_prefix("custom:");
+            let definition = custom_name.and_then(|name| definitions.get(name));
+            serde_json::json!({
+                "identity": identity,
+                "source": if custom_name.is_some() { "custom" } else { "built-in" },
+                "configured": configured.iter().any(|value| value == identity),
+                "defined": custom_name.is_none() || definition.is_some(),
+                "description": definition.and_then(|value| value.description.as_deref()),
+                "roots": definition.map(|value| value.roots.clone()).unwrap_or_default(),
+                "path_entries": definition.map(|value| value.path_entries.iter().map(|reference| reference.as_str()).collect::<Vec<_>>()).unwrap_or_default(),
+                "required_executables": definition.map(|value| value.required_executables.iter().map(|reference| reference.as_str()).collect::<Vec<_>>()).unwrap_or_default(),
+                "environment": definition.map(|value| value.environment.iter().map(|(name, reference)| (name.clone(), reference.as_str())).collect::<std::collections::BTreeMap<_, _>>()).unwrap_or_default(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if output_format.is_json() {
+        writeln!(
+            stdout,
+            "{}",
+            serde_json::json!({
+                "version": 1,
+                "project_root": project_root,
+                "sandbox": permissions.sandbox.as_str(),
+                "configured": configured,
+                "toolchains": entries,
+            })
+        )?;
+    } else {
+        writeln!(stdout, "project_root: {}", project_root.display())?;
+        writeln!(stdout, "sandbox: {}", permissions.sandbox.as_str())?;
+        for entry in entries {
+            writeln!(
                 stdout,
+                "toolchain: {} source={} configured={} defined={}",
+                entry["identity"].as_str().unwrap_or("unknown"),
+                entry["source"].as_str().unwrap_or("unknown"),
+                entry["configured"].as_bool().unwrap_or(false),
+                entry["defined"].as_bool().unwrap_or(false),
             )?;
-            Ok(0)
         }
     }
+    Ok(())
+}
+
+/// Operation-specific fields for one ordered selector mutation submission.
+struct ToolchainSelectorMutation {
+    operation: &'static str,
+    selector_names: Vec<String>,
+    yes: bool,
+}
+
+/// Validates and submits one exact ordered selector mutation. Built-in enable
+/// requests retain direct-user discovery as an early diagnostic; custom
+/// selectors are preflighted by the live pane runtime before confirmation.
+fn submit_toolchain_selectors<W: Write>(
+    socket_selection: &SocketSelection,
+    env: &CliEnv,
+    interactive: bool,
+    output_format: CliOutputFormat,
+    stdout: &mut W,
+    mutation: ToolchainSelectorMutation,
+) -> Result<u8> {
+    let ToolchainSelectorMutation {
+        operation,
+        selector_names,
+        yes,
+    } = mutation;
+    let mut selectors = Vec::with_capacity(selector_names.len());
+    for name in selector_names {
+        let selector = ToolchainSelection::parse(&name)
+            .map_err(|error| MezError::invalid_args(error.message()))?;
+        if selectors.contains(&selector) {
+            return Err(MezError::invalid_args(
+                "sandbox toolchains mutation received a duplicate selector",
+            ));
+        }
+        selectors.push(selector);
+    }
+    if operation == "enable" {
+        for selector in &selectors {
+            if let ToolchainSelection::BuiltIn(kind) = selector {
+                let detection = detect_direct_toolchain(*kind, env)?;
+                if !detection.available() {
+                    return Err(MezError::invalid_state(format!(
+                        "{} toolchain detection did not find a canonical distribution",
+                        kind.as_str()
+                    )));
+                }
+            }
+        }
+    }
+    let selector_values = selectors
+        .iter()
+        .map(ToolchainSelection::as_str)
+        .collect::<Vec<_>>();
+    if !yes {
+        let message = if interactive {
+            format!(
+                "Review the {} selector request [{}] and rerun with --yes; the attached primary client must still approve it.",
+                operation,
+                selector_values.join(", ")
+            )
+        } else {
+            "Noninteractive toolchain mutation requires --yes.".to_string()
+        };
+        match output_format {
+            CliOutputFormat::Json => writeln!(
+                stdout,
+                "{}",
+                serde_json::json!({
+                    "operation": operation,
+                    "selectors": selector_values,
+                    "confirmation_required": true,
+                    "applied": false,
+                    "message": message,
+                })
+            )?,
+            CliOutputFormat::Plain => writeln!(stdout, "{message}")?,
+        }
+        return Ok(1);
+    }
+    let digest = normalized_toolchain_selectors_digest(operation, &selectors);
+    let params = serde_json::json!({
+        "operation": operation,
+        "selectors": selector_values,
+        "request_digest": digest,
+        "idempotency_key": cli_idempotency_key("toolchain-mutation-submit"),
+    })
+    .to_string();
+    run_automation_control_request(
+        socket_selection,
+        "toolchain/mutation/submit",
+        &params,
+        output_format,
+        stdout,
+    )?;
+    Ok(0)
+}
+
+/// Validates and submits one constrained custom toolchain definition or
+/// removal for authenticated settlement by the attached primary client.
+fn submit_custom_toolchain_mutation<W: Write>(
+    socket_selection: &SocketSelection,
+    interactive: bool,
+    output_format: CliOutputFormat,
+    stdout: &mut W,
+    command: SandboxCustomToolchainCommand,
+) -> Result<u8> {
+    let (operation, name, definition, disable, yes) = match command {
+        SandboxCustomToolchainCommand::Define {
+            name,
+            roots,
+            path_entries,
+            required_executables,
+            environment,
+            description,
+            yes,
+        } => {
+            let name = CustomToolchainName::parse(&name)
+                .map_err(|error| MezError::invalid_args(error.message()))?;
+            let mut environment_values = std::collections::BTreeMap::new();
+            for entry in environment {
+                let (variable, reference) = entry.split_once('=').ok_or_else(|| {
+                    MezError::invalid_args(
+                        "custom toolchain --env-root must use NAME=<root-index>:<path>",
+                    )
+                })?;
+                if environment_values
+                    .insert(variable.to_string(), reference.to_string())
+                    .is_some()
+                {
+                    return Err(MezError::invalid_args(
+                        "custom toolchain definition contains a duplicate environment variable",
+                    ));
+                }
+            }
+            let definition = CustomToolchainDefinition::new(
+                description,
+                roots,
+                path_entries,
+                required_executables,
+                environment_values,
+            )
+            .map_err(|error| MezError::invalid_args(error.message()))?;
+            ("define", name, Some(definition), false, yes)
+        }
+        SandboxCustomToolchainCommand::Remove { name, disable, yes } => {
+            let name = CustomToolchainName::parse(name.strip_prefix("custom:").unwrap_or(&name))
+                .map_err(|error| MezError::invalid_args(error.message()))?;
+            ("remove", name, None, disable, yes)
+        }
+    };
+    let digest =
+        normalized_custom_toolchain_mutation_digest(operation, &name, definition.as_ref(), disable);
+    let definition_json = definition.as_ref().map(|definition| {
+        serde_json::json!({
+            "description": definition.description,
+            "roots": definition.roots,
+            "path_entries": definition.path_entries.iter().map(|reference| reference.as_str()).collect::<Vec<_>>(),
+            "required_executables": definition.required_executables.iter().map(|reference| reference.as_str()).collect::<Vec<_>>(),
+            "environment": definition.environment.iter().map(|(variable, reference)| (variable.clone(), reference.as_str())).collect::<std::collections::BTreeMap<_, _>>(),
+        })
+    });
+    if !yes {
+        let message = if interactive {
+            format!(
+                "Review the {operation} request for {} and rerun with --yes; the attached primary client must still approve it.",
+                name.selector(),
+            )
+        } else {
+            "Noninteractive custom toolchain mutation requires --yes.".to_string()
+        };
+        if output_format.is_json() {
+            writeln!(
+                stdout,
+                "{}",
+                serde_json::json!({
+                    "operation": operation,
+                    "selector": name.selector(),
+                    "definition": definition_json,
+                    "disable": disable,
+                    "request_digest": digest,
+                    "confirmation_required": true,
+                    "applied": false,
+                    "message": message,
+                })
+            )?;
+        } else {
+            writeln!(stdout, "{message}")?;
+        }
+        return Ok(1);
+    }
+    let mut params = serde_json::json!({
+        "operation": operation,
+        "name": name.name(),
+        "disable": disable,
+        "request_digest": digest,
+        "idempotency_key": cli_idempotency_key("toolchain-custom-mutation-submit"),
+    });
+    if let Some(definition) = definition_json {
+        let object = params.as_object_mut().ok_or_else(|| {
+            MezError::invalid_state("custom toolchain request must be a JSON object")
+        })?;
+        let definition = definition.as_object().ok_or_else(|| {
+            MezError::invalid_state("custom toolchain definition must be a JSON object")
+        })?;
+        object.extend(definition.clone());
+    }
+    run_automation_control_request(
+        socket_selection,
+        "toolchain/mutation/submit",
+        &params.to_string(),
+        output_format,
+        stdout,
+    )?;
+    Ok(0)
 }
 
 #[derive(Debug)]

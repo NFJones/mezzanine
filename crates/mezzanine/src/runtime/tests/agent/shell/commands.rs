@@ -555,7 +555,7 @@ fn runtime_toolchain_mutation_submission_requires_exact_primary_settlement() {
     assert_eq!(consumed, input.len());
     assert!(submitted.contains(r#""state":"pending""#), "{submitted}");
     assert!(submitted.contains(r#""operation":"enable""#), "{submitted}");
-    assert!(submitted.contains(r#""kind":"rust""#), "{submitted}");
+    assert!(submitted.contains(r#""selectors":["rust"]"#), "{submitted}");
     assert!(!fs::read_to_string(&path).unwrap().contains("\"rust\""));
 
     let submitted_json: serde_json::Value = serde_json::from_str(&submitted).unwrap();
@@ -593,6 +593,127 @@ fn runtime_toolchain_mutation_submission_requires_exact_primary_settlement() {
         .unwrap();
     assert!(replay.contains("missing or already settled"), "{replay}");
     let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// Verifies a typed custom definition submitted by automation remains pending
+/// until matching authenticated primary input applies the exact definition.
+#[test]
+fn runtime_custom_toolchain_definition_requires_exact_primary_settlement() {
+    let custom_root = temp_root("runtime-custom-toolchain-root").join("acme-sdk");
+    fs::create_dir_all(custom_root.join("bin")).unwrap();
+    fs::write(custom_root.join("bin/acme"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        custom_root.join("bin/acme"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let custom_root = custom_root.canonicalize().unwrap();
+    let config = format!(
+        "version = 32\n[permissions]\nsandbox = \"bubblewrap\"\nread_scopes = [\"{}\"]\n[permissions.bubblewrap]\ntoolchains = []\n",
+        custom_root.display(),
+    );
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-custom-toolchain-settlement", &config);
+    service.set_pane_environment_signature_for_tests("%1", toolchain_environment(Vec::new()));
+    let authority_request = service
+        .primary_path_resolution_request("%1")
+        .unwrap()
+        .unwrap();
+    let authority_command = mez_agent::shell::pane_path_resolution_command(
+        &authority_request,
+        mez_agent::ShellClassification::PosixSh,
+    )
+    .unwrap();
+    let authority_output = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(authority_command)
+        .current_dir(&custom_root)
+        .output()
+        .unwrap();
+    assert!(authority_output.status.success(), "{authority_output:?}");
+    let authority_key = service
+        .path_resolution_cache_key("%1", &authority_request)
+        .unwrap();
+    service
+        .observe_path_resolution_transaction_end(
+            "custom-toolchain-authority",
+            "%1",
+            0,
+            authority_key,
+            &String::from_utf8(authority_output.stdout).unwrap(),
+            false,
+        )
+        .unwrap();
+    let name = crate::runtime::CustomToolchainName::parse("acme").unwrap();
+    let definition = crate::runtime::CustomToolchainDefinition::new(
+        Some("Acme SDK".to_string()),
+        vec![custom_root.to_string_lossy().into_owned()],
+        vec!["0:bin".to_string()],
+        vec!["0:bin/acme".to_string()],
+        std::collections::BTreeMap::from([("ACME_HOME".to_string(), "0:.".to_string())]),
+    )
+    .unwrap();
+    let digest = crate::runtime::normalized_custom_toolchain_mutation_digest(
+        "define",
+        &name,
+        Some(&definition),
+        false,
+    );
+    let mut connection = ControlConnectionState::new(true, false);
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"automation-init","method":"control/initialize","params":{"client_name":"toolchain-cli","requested_version":1,"requested_role":"automation","client":{"name":"toolchain-cli","interactive":false}}}"#,
+    );
+    let submit = encode_control_body(
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "submit-custom",
+            "method": "toolchain/mutation/submit",
+            "params": {
+                "operation": "define",
+                "name": "acme",
+                "description": "Acme SDK",
+                "roots": [custom_root],
+                "path_entries": ["0:bin"],
+                "required_executables": ["0:bin/acme"],
+                "environment": {"ACME_HOME": "0:."},
+                "request_digest": digest,
+                "idempotency_key": "submit-custom-acme",
+            },
+        })
+        .to_string(),
+    );
+    let mut input = initialize;
+    input.extend_from_slice(&submit);
+
+    let (output, consumed) = service
+        .handle_control_input_for_connection(&input, 16 * 1024, &mut connection)
+        .unwrap();
+    let (_, initialized_bytes) = decode_control_frame(&output, 16 * 1024).unwrap();
+    let (submitted, _) = decode_control_frame(&output[initialized_bytes..], 16 * 1024).unwrap();
+    assert_eq!(consumed, input.len());
+    assert!(submitted.contains(r#""state":"pending""#), "{submitted}");
+    assert!(submitted.contains(r#""operation":"define""#), "{submitted}");
+    assert!(
+        !fs::read_to_string(&path)
+            .unwrap()
+            .contains("custom_toolchains")
+    );
+
+    let submitted_json: serde_json::Value = serde_json::from_str(&submitted).unwrap();
+    let request_id = submitted_json["result"]["request_id"].as_str().unwrap();
+    let confirmed = service
+        .execute_agent_shell_command(
+            &primary,
+            &format!("/toolchain confirm {request_id} {digest} --yes"),
+        )
+        .unwrap();
+    assert!(confirmed.contains("Defined custom:acme"), "{confirmed}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("[permissions.bubblewrap.custom_toolchains.acme]"));
+    assert!(persisted.contains(&format!("roots = [\"{}\"]", custom_root.display())));
+    assert!(persisted.contains("ACME_HOME = \"0:.\""));
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+    let _ = fs::remove_dir_all(custom_root.parent().unwrap());
 }
 
 /// Verifies pending mutation settlement fails closed after configuration

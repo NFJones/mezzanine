@@ -129,12 +129,17 @@ is descriptor-derived and includes fixed sandbox projections without granting
 new host authority. Enable, disable, and full-configuration reload results use
 one transient success notice; invalid grammar and execution failures use one
 transient error notice. These command results never append to pane history.
-Mutating slash commands require authenticated primary-client input. A standalone
-`mez sandbox toolchains enable KIND --yes` command can only submit a
-digest-bound pending request to a live service; the primary client must enter
-the displayed `/toolchain confirm REQUEST DIGEST --yes` command or reject it
-with `/toolchain reject REQUEST DIGEST`. Control-origin text, stale or tampered
-requests, and replayed confirmations fail closed.
+Mutating slash commands require authenticated primary-client input. Ordered
+built-in and `custom:<name>` selectors are accepted by enable and disable;
+define and remove manage constrained primary-user custom definitions. A
+standalone `mez sandbox toolchains enable SELECTOR... --yes`, `disable
+SELECTOR... --yes`, `custom define NAME ... --yes`, or `custom remove NAME
+[--disable] --yes` command can only submit a digest-bound pending request to a
+live service. The primary client must enter the displayed `/toolchain confirm
+REQUEST DIGEST --yes` command or reject it with `/toolchain reject REQUEST
+DIGEST`. `--yes` consents only to submission. Control-origin text, absent
+primary clients, stale or tampered requests, and replayed confirmations fail
+closed. List and status remain available offline and read-only.
 | `/remember` | Generate durable memories from the current context or a supplied statement while opportunistically pruning expired persistent records. |
 | `/loop` | Re-run a prompt until an iteration completes without `apply_patch` actions or the loop limit is reached; pass `--fork` to use fresh parent-conversation forks, `--new` to use fresh empty conversations, or `--limit <int>` to override the loop limit for that command. |
 | `/new` | Start a fresh pane conversation. |

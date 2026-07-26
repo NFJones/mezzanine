@@ -56,9 +56,28 @@ pub(super) fn reject_unsupported_mutation_path(segments: &[String]) -> Result<()
         && segments.get(3).is_some_and(|segment| {
             MUTABLE_MCP_EXTERNAL_CAPABILITY_KEYS.contains(&segment.as_str())
         });
-    if segments.len() > 3 && !allow_nested_mcp_external_capability {
+    let allow_custom_toolchain_definition = segments.len() >= 4
+        && segments.len() <= 6
+        && segments.first().map(String::as_str) == Some("permissions")
+        && segments.get(1).map(String::as_str) == Some("bubblewrap")
+        && segments.get(2).map(String::as_str) == Some("custom_toolchains")
+        && match segments.len() {
+            4 => true,
+            5 => segments.get(4).is_some_and(|field| {
+                matches!(
+                    field.as_str(),
+                    "description" | "roots" | "path_entries" | "required_executables"
+                )
+            }),
+            6 => segments.get(4).map(String::as_str) == Some("environment"),
+            _ => false,
+        };
+    if segments.len() > 3
+        && !allow_nested_mcp_external_capability
+        && !allow_custom_toolchain_definition
+    {
         return Err(MezError::config(
-            "configuration mutation supports only scalar paths up to three segments except supported mcp_servers.<name>.external_capability scalar keys",
+            "configuration mutation supports only scalar paths up to three segments except supported MCP capability and custom-toolchain definition paths",
         ));
     }
     if segments.first().map(String::as_str) == Some("permissions")

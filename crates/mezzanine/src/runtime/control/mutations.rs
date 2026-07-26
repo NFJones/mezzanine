@@ -22,7 +22,9 @@ use super::{
     runtime_pane_readiness_state_name, runtime_split_direction, runtime_terminal_step_result_json,
     source_pane_target_checked_resolved, window_target_checked_resolved,
 };
+#[cfg(test)]
 use crate::runtime::SandboxToolchainKind;
+use crate::runtime::{CustomToolchainDefinition, CustomToolchainName, ToolchainSelection};
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::parse_sandbox_toolchain_kind;
 use sha2::{Digest, Sha256};
@@ -786,21 +788,179 @@ impl RuntimeSessionService {
         let operation = runtime_json_string_field(params, "operation").ok_or_else(|| {
             MezError::invalid_args("toolchain mutation submission requires operation")
         })?;
-        if operation != "enable" && operation != "disable" {
+        if !matches!(
+            operation.as_str(),
+            "enable" | "disable" | "define" | "remove"
+        ) {
             return Err(MezError::invalid_args(
-                "toolchain mutation operation must be enable or disable",
+                "toolchain mutation operation must be enable, disable, define, or remove",
             ));
         }
-        let kind_name = runtime_json_string_field(params, "kind")
-            .ok_or_else(|| MezError::invalid_args("toolchain mutation submission requires kind"))?;
-        let kind = parse_sandbox_toolchain_kind(&kind_name).ok_or_else(|| {
-            MezError::invalid_args("toolchain mutation submission received an unsupported kind")
+        let params_value: serde_json::Value = serde_json::from_str(params).map_err(|error| {
+            MezError::invalid_args(format!(
+                "toolchain mutation params are invalid JSON: {error}"
+            ))
         })?;
+        let (selectors, custom_name, definition, disable) =
+            if matches!(operation.as_str(), "enable" | "disable") {
+                let selectors = match (
+                    params_value.get("selectors"),
+                    runtime_json_string_field(params, "kind"),
+                ) {
+                    (Some(_), Some(_)) => {
+                        return Err(MezError::invalid_args(
+                            "toolchain mutation submission cannot combine kind and selectors",
+                        ));
+                    }
+                    (Some(value), None) => {
+                        let values = value.as_array().ok_or_else(|| {
+                            MezError::invalid_args("toolchain mutation selectors must be an array")
+                        })?;
+                        if values.is_empty() {
+                            return Err(MezError::invalid_args(
+                                "toolchain mutation selectors must not be empty",
+                            ));
+                        }
+                        let mut selectors = Vec::with_capacity(values.len());
+                        for value in values {
+                            let selector = value.as_str().ok_or_else(|| {
+                                MezError::invalid_args(
+                                    "toolchain mutation selectors must contain strings",
+                                )
+                            })?;
+                            let selector = ToolchainSelection::parse(selector)
+                                .map_err(|error| MezError::invalid_args(error.message()))?;
+                            if selectors.contains(&selector) {
+                                return Err(MezError::invalid_args(
+                                    "toolchain mutation selectors contain a duplicate",
+                                ));
+                            }
+                            selectors.push(selector);
+                        }
+                        selectors
+                    }
+                    (None, Some(kind_name)) => {
+                        let kind = parse_sandbox_toolchain_kind(&kind_name).ok_or_else(|| {
+                            MezError::invalid_args(
+                                "toolchain mutation submission received an unsupported kind",
+                            )
+                        })?;
+                        vec![ToolchainSelection::BuiltIn(kind)]
+                    }
+                    (None, None) => {
+                        return Err(MezError::invalid_args(
+                            "toolchain mutation submission requires selectors",
+                        ));
+                    }
+                };
+                (selectors, None, None, false)
+            } else {
+                if params_value.get("selectors").is_some() || params_value.get("kind").is_some() {
+                    return Err(MezError::invalid_args(
+                        "custom toolchain mutations cannot include selectors or kind",
+                    ));
+                }
+                let name = runtime_json_string_field(params, "name").ok_or_else(|| {
+                    MezError::invalid_args("custom toolchain mutation requires name")
+                })?;
+                let name =
+                    CustomToolchainName::parse(name.strip_prefix("custom:").unwrap_or(&name))
+                        .map_err(|error| MezError::invalid_args(error.message()))?;
+                if operation == "define" {
+                    let string_array = |field: &str| -> Result<Vec<String>> {
+                        params_value
+                            .get(field)
+                            .and_then(serde_json::Value::as_array)
+                            .ok_or_else(|| {
+                                MezError::invalid_args(format!(
+                                    "custom toolchain definition requires {field} as an array"
+                                ))
+                            })?
+                            .iter()
+                            .map(|value| {
+                                value.as_str().map(str::to_string).ok_or_else(|| {
+                                    MezError::invalid_args(format!(
+                                        "custom toolchain definition {field} must contain strings"
+                                    ))
+                                })
+                            })
+                            .collect()
+                    };
+                    let environment = params_value
+                        .get("environment")
+                        .and_then(serde_json::Value::as_object)
+                        .map(|values| {
+                            values
+                                .iter()
+                                .map(|(key, value)| {
+                                    value
+                                    .as_str()
+                                    .map(|value| (key.clone(), value.to_string()))
+                                    .ok_or_else(|| {
+                                        MezError::invalid_args(
+                                            "custom toolchain environment values must be strings",
+                                        )
+                                    })
+                                })
+                                .collect::<Result<std::collections::BTreeMap<_, _>>>()
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    let description = match params_value.get("description") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(value) => Some(
+                            value
+                                .as_str()
+                                .ok_or_else(|| {
+                                    MezError::invalid_args(
+                                        "custom toolchain description must be a string",
+                                    )
+                                })?
+                                .to_string(),
+                        ),
+                    };
+                    let definition = CustomToolchainDefinition::new(
+                        description,
+                        string_array("roots")?,
+                        string_array("path_entries")?,
+                        string_array("required_executables")?,
+                        environment,
+                    )
+                    .map_err(|error| MezError::invalid_args(error.message()))?;
+                    (Vec::new(), Some(name), Some(definition), false)
+                } else {
+                    if params_value.get("description").is_some()
+                        || params_value.get("roots").is_some()
+                        || params_value.get("path_entries").is_some()
+                        || params_value.get("required_executables").is_some()
+                        || params_value.get("environment").is_some()
+                    {
+                        return Err(MezError::invalid_args(
+                            "custom toolchain removal cannot include definition fields",
+                        ));
+                    }
+                    (
+                        Vec::new(),
+                        Some(name),
+                        None,
+                        runtime_json_bool_field(params, "disable").unwrap_or(false),
+                    )
+                }
+            };
         let supplied_digest =
             runtime_json_string_field(params, "request_digest").ok_or_else(|| {
                 MezError::invalid_args("toolchain mutation submission requires request_digest")
             })?;
-        let digest = normalized_toolchain_mutation_digest(&operation, kind);
+        let digest = if let Some(name) = &custom_name {
+            normalized_custom_toolchain_mutation_digest(
+                &operation,
+                name,
+                definition.as_ref(),
+                disable,
+            )
+        } else {
+            normalized_toolchain_selectors_digest(&operation, &selectors)
+        };
         if supplied_digest != digest {
             return Err(MezError::forbidden(
                 "toolchain mutation request digest does not match the normalized request",
@@ -832,7 +992,18 @@ impl RuntimeSessionService {
             .with_pane_id(pane_id.clone())
             .with_metadata("origin", "automation_control_request")
             .with_metadata("operation", operation.clone())
-            .with_metadata("kind", kind.as_str())
+            .with_metadata(
+                "selectors",
+                if let Some(name) = &custom_name {
+                    name.selector().to_string()
+                } else {
+                    selectors
+                        .iter()
+                        .map(ToolchainSelection::as_str)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                },
+            )
             .with_metadata("request_digest_prefix", digest[..24].to_string())
             .with_metadata(
                 "config_generation",
@@ -845,18 +1016,31 @@ impl RuntimeSessionService {
             .insert_pending_toolchain_mutation(PendingToolchainMutation {
                 id: request_id.clone(),
                 operation: operation.clone(),
-                kind,
+                selectors: selectors.clone(),
+                custom_name: custom_name.clone(),
+                definition: definition.clone(),
+                disable,
                 digest: digest.clone(),
                 config_generation: self.session.config_generation,
                 pane_id: pane_id.clone(),
                 submitted_by_client_id: submitting_client_id.to_string(),
                 expires_at_unix_seconds,
             });
+        let response_selectors = custom_name.as_ref().map_or_else(
+            || {
+                selectors
+                    .iter()
+                    .map(ToolchainSelection::as_str)
+                    .collect::<Vec<_>>()
+            },
+            |name| vec![name.selector()],
+        );
         Ok(format!(
-            r#"{{"request_id":"{}","state":"pending","operation":"{}","kind":"{}","request_digest":"{}","pane_id":"{}","config_generation":{},"expires_at_unix_seconds":{},"confirmation":"Enter /toolchain confirm {} {} --yes in the attached primary client."}}"#,
+            r#"{{"request_id":"{}","state":"pending","operation":"{}","selectors":{},"request_digest":"{}","pane_id":"{}","config_generation":{},"expires_at_unix_seconds":{},"confirmation":"Enter /toolchain confirm {} {} --yes in the attached primary client."}}"#,
             json_escape(&request_id),
             json_escape(&operation),
-            kind.as_str(),
+            serde_json::to_string(&response_selectors)
+                .map_err(|error| MezError::invalid_state(error.to_string()))?,
             digest,
             json_escape(&pane_id),
             self.session.config_generation,
@@ -1014,15 +1198,82 @@ impl RuntimeSessionService {
 
 /// Returns the versioned digest for one normalized built-in toolchain
 /// selection request.
+#[cfg(test)]
 pub(crate) fn normalized_toolchain_mutation_digest(
     operation: &str,
     kind: SandboxToolchainKind,
 ) -> String {
+    normalized_toolchain_selectors_digest(operation, &[ToolchainSelection::BuiltIn(kind)])
+}
+
+/// Returns the versioned digest for one normalized ordered selector request.
+/// Singleton built-in requests retain the v1 digest for control compatibility.
+pub(crate) fn normalized_toolchain_selectors_digest(
+    operation: &str,
+    selectors: &[ToolchainSelection],
+) -> String {
     let mut digest = Sha256::new();
-    digest.update(b"toolchain-mutation-v1\0");
+    if let [ToolchainSelection::BuiltIn(kind)] = selectors {
+        digest.update(b"toolchain-mutation-v1\0");
+        digest.update(operation.as_bytes());
+        digest.update(b"\0");
+        digest.update(kind.as_str().as_bytes());
+        return digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+    }
+    digest.update(b"toolchain-mutation-v2\0");
+    digest.update(operation.as_bytes());
+    for selector in selectors {
+        digest.update(b"\0");
+        digest.update(selector.as_str().as_bytes());
+    }
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Returns the versioned digest for one constrained custom definition or
+/// removal request without exposing its host roots in audit metadata.
+pub(crate) fn normalized_custom_toolchain_mutation_digest(
+    operation: &str,
+    name: &crate::runtime::CustomToolchainName,
+    definition: Option<&crate::runtime::CustomToolchainDefinition>,
+    disable: bool,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"toolchain-custom-mutation-v1\0");
     digest.update(operation.as_bytes());
     digest.update(b"\0");
-    digest.update(kind.as_str().as_bytes());
+    digest.update(name.name().as_bytes());
+    digest.update([u8::from(disable)]);
+    if let Some(definition) = definition {
+        if let Some(description) = &definition.description {
+            digest.update(description.as_bytes());
+        }
+        for root in &definition.roots {
+            digest.update(b"\0root\0");
+            digest.update(root.as_bytes());
+        }
+        for reference in &definition.path_entries {
+            digest.update(b"\0path\0");
+            digest.update(reference.as_str().as_bytes());
+        }
+        for reference in &definition.required_executables {
+            digest.update(b"\0require\0");
+            digest.update(reference.as_str().as_bytes());
+        }
+        for (variable, reference) in &definition.environment {
+            digest.update(b"\0env\0");
+            digest.update(variable.as_bytes());
+            digest.update(b"=");
+            digest.update(reference.as_str().as_bytes());
+        }
+    }
     digest
         .finalize()
         .iter()

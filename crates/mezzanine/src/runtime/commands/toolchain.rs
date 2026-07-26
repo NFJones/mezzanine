@@ -7,59 +7,82 @@
 //! Discovered host roots are shown only in direct pane-local status output and
 //! are never written to config or durable audit metadata.
 
+use std::collections::BTreeMap;
+
 use super::shell::AgentShellCommandOrigin;
 use super::{
     AgentShellCommandOutcome, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     MezError, Result, RuntimeSessionService, current_unix_seconds, json_escape,
     parse_slash_command, runtime_apply_persisted_config_mutation_batch,
-    runtime_effective_config_value, runtime_primary_config_path,
+    runtime_apply_persisted_config_mutation_batch_atomically, runtime_effective_config_value,
+    runtime_primary_config_path,
 };
 use crate::integrations::agent::slash::AgentShellPresentation;
-use crate::runtime::control::normalized_toolchain_mutation_digest;
-use crate::runtime::{SandboxConfig, SandboxToolchainKind};
+use crate::runtime::control::{
+    normalized_custom_toolchain_mutation_digest, normalized_toolchain_selectors_digest,
+};
+use crate::runtime::{
+    CustomToolchainDefinition, CustomToolchainName, SandboxConfig, SandboxToolchainKind,
+    ToolchainSelection,
+};
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
     SANDBOX_BUN_PATH, SANDBOX_DENO_PATH, SANDBOX_GO_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH,
     SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor,
-    ToolchainPlatform, discover_rust_from_environment_managers, parse_sandbox_toolchain_kind,
-    resolve_toolchain_projection, toolchain_descriptor,
+    ToolchainPlatform, discover_rust_from_environment_managers,
+    resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
+    toolchain_descriptor,
 };
 
 /// Strict operation accepted by `/toolchain`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ToolchainCommand {
     /// Reports configured, discoverable, and effective state.
-    Status,
+    Status(Option<ToolchainSelection>),
     /// Lists stable supported kinds.
     List,
     /// Validates active-pane discovery evidence without mutation.
-    Detect(SandboxToolchainKind),
-    /// Enables one typed projection after explicit confirmation.
-    Enable(SandboxToolchainKind),
-    /// Disables one typed projection after explicit confirmation.
-    Disable(SandboxToolchainKind),
+    Detect(ToolchainSelection),
+    /// Enables ordered typed projections after explicit confirmation.
+    Enable(Vec<ToolchainSelection>),
+    /// Disables ordered typed projections after explicit confirmation.
+    Disable(Vec<ToolchainSelection>),
+    /// Creates or atomically replaces one constrained custom definition.
+    Define {
+        name: CustomToolchainName,
+        definition: CustomToolchainDefinition,
+    },
+    /// Removes one custom definition, optionally disabling it atomically.
+    Remove {
+        name: CustomToolchainName,
+        disable: bool,
+    },
     /// Runs the existing full disk-backed configuration reload.
     Reload,
 }
 
 impl ToolchainCommand {
     /// Returns the stable operation spelling used in output and audit records.
-    const fn as_str(self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
-            Self::Status => "status",
+            Self::Status(_) => "status",
             Self::List => "list",
             Self::Detect(_) => "detect",
             Self::Enable(_) => "enable",
             Self::Disable(_) => "disable",
+            Self::Define { .. } => "define",
+            Self::Remove { .. } => "remove",
             Self::Reload => "reload",
         }
     }
 
     /// Returns the typed kind associated with a kind-specific operation.
-    const fn kind(self) -> Option<SandboxToolchainKind> {
+    const fn kind(&self) -> Option<SandboxToolchainKind> {
         match self {
-            Self::Detect(kind) | Self::Enable(kind) | Self::Disable(kind) => Some(kind),
-            Self::Status | Self::List | Self::Reload => None,
+            Self::Detect(ToolchainSelection::BuiltIn(kind)) => Some(*kind),
+            Self::Detect(ToolchainSelection::Custom(_)) => None,
+            Self::Enable(_) | Self::Disable(_) | Self::Define { .. } | Self::Remove { .. } => None,
+            Self::Status(_) | Self::List | Self::Reload => None,
         }
     }
 }
@@ -121,26 +144,38 @@ impl RuntimeSessionService {
         let operation = parse_toolchain_command(&invocation.args)?;
         if matches!(
             operation,
-            ToolchainCommand::Enable(_) | ToolchainCommand::Disable(_) | ToolchainCommand::Reload
+            ToolchainCommand::Enable(_)
+                | ToolchainCommand::Disable(_)
+                | ToolchainCommand::Define { .. }
+                | ToolchainCommand::Remove { .. }
+                | ToolchainCommand::Reload
         ) && !origin.is_authenticated_primary_input()
         {
             return Err(MezError::forbidden(
                 "toolchain mutations require authenticated primary-client input",
             ));
         }
-        match operation {
-            ToolchainCommand::Status => {
+        match &operation {
+            ToolchainCommand::Status(requested) => {
                 let status = self.toolchain_status_for_pane(pane_id)?;
                 self.append_toolchain_audit(
                     primary_client_id,
                     pane_id,
-                    operation,
+                    &operation,
                     false,
                     "inspected",
                 )?;
                 Ok(AgentShellCommandOutcome::Presented {
                     command: "toolchain".to_string(),
-                    body: render_toolchain_status(pane_id, &status),
+                    body: match requested {
+                        Some(ToolchainSelection::Custom(name)) => {
+                            self.render_custom_toolchain_inspection(pane_id, name, "Status")?
+                        }
+                        Some(ToolchainSelection::BuiltIn(kind)) => {
+                            render_toolchain_status(pane_id, &status, Some(*kind))
+                        }
+                        None => render_toolchain_status(pane_id, &status, None),
+                    },
                     presentation: AgentShellPresentation::Pager,
                 })
             }
@@ -148,54 +183,66 @@ impl RuntimeSessionService {
                 self.append_toolchain_audit(
                     primary_client_id,
                     pane_id,
-                    operation,
+                    &operation,
                     false,
                     "listed",
                 )?;
                 Ok(AgentShellCommandOutcome::Presented {
                     command: "toolchain".to_string(),
-                    body: render_toolchain_list(),
+                    body: render_toolchain_list(&self.configured_permissions().sandbox),
                     presentation: AgentShellPresentation::Pager,
                 })
             }
-            ToolchainCommand::Detect(kind) => {
+            ToolchainCommand::Detect(selection) => {
                 let status = self.toolchain_status_for_pane(pane_id)?;
-                let signature = self.pane_environment_signature(pane_id).ok_or_else(|| {
-                    MezError::invalid_state(
-                        "toolchain detection requires active-pane bootstrap evidence",
-                    )
-                })?;
-                let detail =
-                    detect_toolchain_detail(kind, &signature.environment_managers, &signature.os)?;
+                let body = match selection {
+                    ToolchainSelection::BuiltIn(kind) => {
+                        let signature =
+                            self.pane_environment_signature(pane_id).ok_or_else(|| {
+                                MezError::invalid_state(
+                                    "toolchain detection requires active-pane bootstrap evidence",
+                                )
+                            })?;
+                        let detail = detect_toolchain_detail(
+                            *kind,
+                            &signature.environment_managers,
+                            &signature.os,
+                        )?;
+                        render_toolchain_detection(pane_id, *kind, &detail, &status)
+                    }
+                    ToolchainSelection::Custom(name) => {
+                        self.render_custom_toolchain_inspection(pane_id, name, "Detection")?
+                    }
+                };
                 self.append_toolchain_audit(
                     primary_client_id,
                     pane_id,
-                    operation,
+                    &operation,
                     false,
                     "detected",
                 )?;
                 Ok(AgentShellCommandOutcome::Presented {
                     command: "toolchain".to_string(),
-                    body: render_toolchain_detection(pane_id, kind, &detail, &status),
+                    body,
                     presentation: AgentShellPresentation::Pager,
                 })
             }
-            ToolchainCommand::Enable(kind) => {
-                let signature = self.pane_environment_signature(pane_id).ok_or_else(|| {
-                    MezError::invalid_state(
-                        "toolchain enable requires active-pane bootstrap evidence",
-                    )
-                })?;
-                resolve_toolchain_projection(
-                    &[kind],
-                    &signature.environment_managers,
-                    &signature.os,
-                )
-                .map_err(|error| MezError::invalid_state(error.message()))?;
-                self.mutate_toolchain(primary_client_id, pane_id, operation, kind, true)
+            ToolchainCommand::Enable(selectors) => {
+                self.preflight_toolchain_enable(pane_id, selectors)?;
+                self.mutate_toolchains(primary_client_id, pane_id, &operation, selectors, true)
             }
-            ToolchainCommand::Disable(kind) => {
-                self.mutate_toolchain(primary_client_id, pane_id, operation, kind, false)
+            ToolchainCommand::Disable(selectors) => {
+                self.mutate_toolchains(primary_client_id, pane_id, &operation, selectors, false)
+            }
+            ToolchainCommand::Define { name, definition } => self.define_custom_toolchain(
+                primary_client_id,
+                pane_id,
+                &operation,
+                name,
+                definition,
+            ),
+            ToolchainCommand::Remove { name, disable } => {
+                self.remove_custom_toolchain(primary_client_id, pane_id, &operation, name, *disable)
             }
             ToolchainCommand::Reload => {
                 let before = self.toolchain_status_for_pane(pane_id)?;
@@ -212,7 +259,7 @@ impl RuntimeSessionService {
                 self.append_toolchain_audit(
                     primary_client_id,
                     pane_id,
-                    operation,
+                    &operation,
                     changed,
                     "reloaded",
                 )?;
@@ -263,8 +310,16 @@ impl RuntimeSessionService {
                 "toolchain mutation request is stale because configuration changed",
             ));
         }
-        let normalized_digest =
-            normalized_toolchain_mutation_digest(&pending.operation, pending.kind);
+        let normalized_digest = if let Some(name) = &pending.custom_name {
+            normalized_custom_toolchain_mutation_digest(
+                &pending.operation,
+                name,
+                pending.definition.as_ref(),
+                pending.disable,
+            )
+        } else {
+            normalized_toolchain_selectors_digest(&pending.operation, &pending.selectors)
+        };
         if settlement.digest != pending.digest || pending.digest != normalized_digest {
             return Err(MezError::forbidden(
                 "toolchain mutation confirmation digest does not match the pending request",
@@ -283,41 +338,67 @@ impl RuntimeSessionService {
                 body: format!(
                     "Rejected pending toolchain {} request for {}; no configuration changed.",
                     pending.operation,
-                    pending.kind.as_str(),
+                    pending.custom_name.as_ref().map_or_else(
+                        || pending
+                            .selectors
+                            .iter()
+                            .map(ToolchainSelection::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        |name| name.selector().to_string(),
+                    ),
                 ),
                 presentation: AgentShellPresentation::Notice,
             });
         }
 
         let operation = match pending.operation.as_str() {
-            "enable" => {
-                let signature = self.pane_environment_signature(pane_id).ok_or_else(|| {
-                    MezError::invalid_state(
-                        "toolchain enable requires active-pane bootstrap evidence",
-                    )
-                })?;
-                resolve_toolchain_projection(
-                    &[pending.kind],
-                    &signature.environment_managers,
-                    &signature.os,
-                )
-                .map_err(|error| MezError::invalid_state(error.message()))?;
-                ToolchainCommand::Enable(pending.kind)
-            }
-            "disable" => ToolchainCommand::Disable(pending.kind),
+            "enable" => ToolchainCommand::Enable(pending.selectors.clone()),
+            "disable" => ToolchainCommand::Disable(pending.selectors.clone()),
+            "define" => ToolchainCommand::Define {
+                name: pending.custom_name.clone().ok_or_else(|| {
+                    MezError::invalid_state("pending custom definition is missing its name")
+                })?,
+                definition: pending.definition.clone().ok_or_else(|| {
+                    MezError::invalid_state("pending custom definition is missing its payload")
+                })?,
+            },
+            "remove" => ToolchainCommand::Remove {
+                name: pending.custom_name.clone().ok_or_else(|| {
+                    MezError::invalid_state("pending custom removal is missing its name")
+                })?,
+                disable: pending.disable,
+            },
             _ => {
                 return Err(MezError::invalid_state(
                     "pending toolchain mutation contains an unsupported operation",
                 ));
             }
         };
-        let outcome = self.mutate_toolchain(
-            primary_client_id,
-            pane_id,
-            operation,
-            pending.kind,
-            pending.operation == "enable",
-        )?;
+        let outcome = match &operation {
+            ToolchainCommand::Enable(selectors) => {
+                self.preflight_toolchain_enable(pane_id, selectors)?;
+                self.mutate_toolchains(primary_client_id, pane_id, &operation, selectors, true)?
+            }
+            ToolchainCommand::Disable(selectors) => {
+                self.mutate_toolchains(primary_client_id, pane_id, &operation, selectors, false)?
+            }
+            ToolchainCommand::Define { name, definition } => self.define_custom_toolchain(
+                primary_client_id,
+                pane_id,
+                &operation,
+                name,
+                definition,
+            )?,
+            ToolchainCommand::Remove { name, disable } => self.remove_custom_toolchain(
+                primary_client_id,
+                pane_id,
+                &operation,
+                name,
+                *disable,
+            )?,
+            _ => return Err(MezError::invalid_state("pending mutation is not mutating")),
+        };
         self.append_pending_toolchain_settlement_audit(primary_client_id, &pending, "applied")?;
         self.control
             .remove_pending_toolchain_mutation(&settlement.request_id);
@@ -351,7 +432,20 @@ impl RuntimeSessionService {
             pending.submitted_by_client_id.clone(),
         )
         .with_metadata("operation", pending.operation.clone())
-        .with_metadata("kind", pending.kind.as_str())
+        .with_metadata(
+            "selectors",
+            pending.custom_name.as_ref().map_or_else(
+                || {
+                    pending
+                        .selectors
+                        .iter()
+                        .map(ToolchainSelection::as_str)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                },
+                |name| name.selector().to_string(),
+            ),
+        )
         .with_metadata("request_digest_prefix", pending.digest[..24].to_string())
         .with_metadata(
             "config_generation",
@@ -362,23 +456,25 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Applies one confirmed typed selection mutation transactionally.
-    fn mutate_toolchain(
+    /// Applies one confirmed ordered selection mutation transactionally.
+    fn mutate_toolchains(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
-        operation: ToolchainCommand,
-        kind: SandboxToolchainKind,
+        operation: &ToolchainCommand,
+        selectors: &[ToolchainSelection],
         enable: bool,
     ) -> Result<AgentShellCommandOutcome> {
         let before = self.configured_toolchain_names()?;
         let mut after = before.clone();
         if enable {
-            if !after.iter().any(|name| name == kind.as_str()) {
-                after.push(kind.as_str().to_string());
+            for selector in selectors {
+                if !after.iter().any(|name| name == selector.as_str()) {
+                    after.push(selector.as_str().to_string());
+                }
             }
         } else {
-            after.retain(|name| name != kind.as_str());
+            after.retain(|name| !selectors.iter().any(|selector| selector.as_str() == name));
         }
         let changed = before != after;
         let path = runtime_primary_config_path(self)?.ok_or_else(|| {
@@ -415,15 +511,392 @@ impl RuntimeSessionService {
         )?;
         let action = if enable { "Enabled" } else { "Disabled" };
         let result = if report.changed { "updated" } else { "no-op" };
+        let selector_names = selectors
+            .iter()
+            .map(ToolchainSelection::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
         Ok(AgentShellCommandOutcome::Presented {
             command: "toolchain".to_string(),
             body: format!(
                 "{action} {}; {result}; changed={}; generation {generation_before} → {generation_after}; applies to subsequent actions.",
-                kind.as_str(),
+                selector_names, report.changed,
+            ),
+            presentation: AgentShellPresentation::Notice,
+        })
+    }
+
+    /// Creates or replaces one custom definition through one final-document
+    /// validation, persistence, and live-application transaction.
+    fn define_custom_toolchain(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        operation: &ToolchainCommand,
+        name: &CustomToolchainName,
+        definition: &CustomToolchainDefinition,
+    ) -> Result<AgentShellCommandOutcome> {
+        let SandboxConfig::Bubblewrap(current) = &self.configured_permissions().sandbox else {
+            return Err(MezError::invalid_state(
+                "custom toolchain definition requires the Bubblewrap sandbox backend",
+            ));
+        };
+        if current.custom_toolchains.get(name.name()) == Some(definition) {
+            let generation = self.session.config_generation;
+            self.append_toolchain_audit(primary_client_id, pane_id, operation, false, "no_op")?;
+            return Ok(AgentShellCommandOutcome::Presented {
+                command: "toolchain".to_string(),
+                body: format!(
+                    "Defined custom:{}; no-op; changed=false; generation {generation} → {generation}.",
+                    name.name(),
+                ),
+                presentation: AgentShellPresentation::Notice,
+            });
+        }
+        let mut candidate = current.clone();
+        candidate
+            .custom_toolchains
+            .insert(name.name().to_string(), definition.clone());
+        self.preflight_toolchain_candidate(pane_id, &candidate, Some(name))?;
+
+        let base = format!("permissions.bubblewrap.custom_toolchains.{}", name.name());
+        let mut mutations = vec![ConfigMutation {
+            path: base.clone(),
+            operation: ConfigMutationOperation::Unset,
+        }];
+        if let Some(description) = &definition.description {
+            mutations.push(ConfigMutation {
+                path: format!("{base}.description"),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::String(
+                    description.clone(),
+                )),
+            });
+        }
+        mutations.extend([
+            ConfigMutation {
+                path: format!("{base}.roots"),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(
+                    definition.roots.clone(),
+                )),
+            },
+            ConfigMutation {
+                path: format!("{base}.path_entries"),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(
+                    definition
+                        .path_entries
+                        .iter()
+                        .map(|reference| reference.as_str())
+                        .collect(),
+                )),
+            },
+            ConfigMutation {
+                path: format!("{base}.required_executables"),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(
+                    definition
+                        .required_executables
+                        .iter()
+                        .map(|reference| reference.as_str())
+                        .collect(),
+                )),
+            },
+        ]);
+        for (variable, reference) in &definition.environment {
+            mutations.push(ConfigMutation {
+                path: format!("{base}.environment.{variable}"),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::String(
+                    reference.as_str(),
+                )),
+            });
+        }
+
+        let path = runtime_primary_config_path(self)?.ok_or_else(|| {
+            MezError::invalid_state("custom toolchain definition requires a primary config path")
+        })?;
+        let generation_before = self.session.config_generation;
+        let report = runtime_apply_persisted_config_mutation_batch_atomically(
+            self,
+            path,
+            &mutations,
+            "agent/shell/toolchain-define",
+        )?;
+        let generation_after = self.session.config_generation;
+        self.append_toolchain_audit(
+            primary_client_id,
+            pane_id,
+            operation,
+            report.changed,
+            if report.changed { "applied" } else { "no_op" },
+        )?;
+        Ok(AgentShellCommandOutcome::Presented {
+            command: "toolchain".to_string(),
+            body: format!(
+                "Defined custom:{}; changed={}; generation {generation_before} → {generation_after}; enabled replacements apply to subsequent actions.",
+                name.name(),
                 report.changed,
             ),
             presentation: AgentShellPresentation::Notice,
         })
+    }
+
+    /// Removes one custom definition, optionally disabling its selector in the
+    /// same atomic configuration transaction.
+    fn remove_custom_toolchain(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        operation: &ToolchainCommand,
+        name: &CustomToolchainName,
+        disable: bool,
+    ) -> Result<AgentShellCommandOutcome> {
+        let selector = name.selector();
+        let before = self.configured_toolchain_names()?;
+        let enabled = before.iter().any(|configured| configured == selector);
+        if enabled && !disable {
+            return Err(MezError::conflict(
+                "enabled custom toolchain removal requires --disable",
+            ));
+        }
+        let definition_exists = matches!(
+            &self.configured_permissions().sandbox,
+            SandboxConfig::Bubblewrap(config) if config.custom_toolchains.contains_key(name.name())
+        );
+        if !enabled && !definition_exists {
+            let generation = self.session.config_generation;
+            self.append_toolchain_audit(primary_client_id, pane_id, operation, false, "no_op")?;
+            return Ok(AgentShellCommandOutcome::Presented {
+                command: "toolchain".to_string(),
+                body: format!(
+                    "Removed custom:{}; no-op; changed=false; generation {generation} → {generation}.",
+                    name.name(),
+                ),
+                presentation: AgentShellPresentation::Notice,
+            });
+        }
+        let after = before
+            .into_iter()
+            .filter(|configured| configured != selector)
+            .collect::<Vec<_>>();
+        let mut mutations = Vec::new();
+        if enabled {
+            mutations.push(ConfigMutation {
+                path: "permissions.bubblewrap.toolchains".to_string(),
+                operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(after)),
+            });
+        }
+        mutations.push(ConfigMutation {
+            path: format!("permissions.bubblewrap.custom_toolchains.{}", name.name()),
+            operation: ConfigMutationOperation::Unset,
+        });
+        let path = runtime_primary_config_path(self)?.ok_or_else(|| {
+            MezError::invalid_state("custom toolchain removal requires a primary config path")
+        })?;
+        let generation_before = self.session.config_generation;
+        let report = runtime_apply_persisted_config_mutation_batch_atomically(
+            self,
+            path,
+            &mutations,
+            "agent/shell/toolchain-remove",
+        )?;
+        let generation_after = self.session.config_generation;
+        self.append_toolchain_audit(
+            primary_client_id,
+            pane_id,
+            operation,
+            report.changed,
+            if report.changed { "applied" } else { "no_op" },
+        )?;
+        Ok(AgentShellCommandOutcome::Presented {
+            command: "toolchain".to_string(),
+            body: format!(
+                "Removed custom:{}; changed={}; generation {generation_before} → {generation_after}; applies to subsequent actions.",
+                name.name(),
+                report.changed,
+            ),
+            presentation: AgentShellPresentation::Notice,
+        })
+    }
+
+    /// Resolves the complete candidate selection through the production
+    /// descriptor/custom projection compiler before persistence.
+    fn preflight_toolchain_enable(
+        &self,
+        pane_id: &str,
+        selectors: &[ToolchainSelection],
+    ) -> Result<()> {
+        let SandboxConfig::Bubblewrap(current) = &self.configured_permissions().sandbox else {
+            return Err(MezError::invalid_state(
+                "toolchain enable requires the Bubblewrap sandbox backend",
+            ));
+        };
+        let mut candidate = current.clone();
+        for selector in selectors {
+            if !candidate.toolchain_selections.contains(selector) {
+                candidate.toolchain_selections.push(selector.clone());
+            }
+        }
+        candidate.toolchains = candidate
+            .toolchain_selections
+            .iter()
+            .filter_map(|selector| match selector {
+                ToolchainSelection::BuiltIn(kind) => Some(*kind),
+                ToolchainSelection::Custom(_) => None,
+            })
+            .collect();
+        self.preflight_toolchain_candidate(pane_id, &candidate, None)
+    }
+
+    /// Resolves and authority-checks a complete candidate Bubblewrap
+    /// toolchain configuration without mutating disk or live state.
+    fn preflight_toolchain_candidate(
+        &self,
+        pane_id: &str,
+        candidate: &crate::runtime::BubblewrapConfig,
+        ensure_custom: Option<&CustomToolchainName>,
+    ) -> Result<()> {
+        let signature = self.pane_environment_signature(pane_id).ok_or_else(|| {
+            MezError::invalid_state("toolchain preflight requires active-pane bootstrap evidence")
+        })?;
+        let mut candidate = candidate.clone();
+        if let Some(name) = ensure_custom {
+            let selector = ToolchainSelection::Custom(name.clone());
+            if !candidate.toolchain_selections.contains(&selector) {
+                candidate.toolchain_selections.push(selector);
+            }
+        }
+        let protected_roots = self
+            .integration
+            .config_root()
+            .into_iter()
+            .chain(self.session.socket_path().parent())
+            .map(std::path::PathBuf::from)
+            .collect::<Vec<_>>();
+        let projection = resolve_configured_toolchain_projection_for_project(
+            &candidate,
+            &signature.environment_managers,
+            &signature.os,
+            self.trusted_project_root_for_pane(pane_id).as_deref(),
+            &protected_roots,
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        if let Some(projection) = projection
+            && !projection.custom_names.is_empty()
+        {
+            let authority = self.path_scopes_for_pane(pane_id).ok_or_else(|| {
+                MezError::invalid_state(
+                    "custom toolchain preflight requires resolved pane read authority",
+                )
+            })?;
+            projection
+                .validate_authority(&authority)
+                .map_err(|error| MezError::invalid_state(error.message()))?;
+        }
+        Ok(())
+    }
+
+    /// Renders one configured custom definition after resolving its exact
+    /// fixed projection and validating it against pane read authority.
+    fn render_custom_toolchain_inspection(
+        &self,
+        pane_id: &str,
+        name: &CustomToolchainName,
+        title: &str,
+    ) -> Result<String> {
+        let SandboxConfig::Bubblewrap(config) = &self.configured_permissions().sandbox else {
+            return Err(MezError::invalid_state(
+                "custom toolchain inspection requires the Bubblewrap sandbox backend",
+            ));
+        };
+        let definition = config.custom_toolchains.get(name.name()).ok_or_else(|| {
+            MezError::invalid_args(format!(
+                "custom toolchain definition `{}` is not configured",
+                name.selector()
+            ))
+        })?;
+        let mut candidate = config.clone();
+        candidate.toolchain_selections = vec![ToolchainSelection::Custom(name.clone())];
+        let signature = self.pane_environment_signature(pane_id).ok_or_else(|| {
+            MezError::invalid_state(
+                "custom toolchain inspection requires active-pane bootstrap evidence",
+            )
+        })?;
+        let protected_roots = self
+            .integration
+            .config_root()
+            .into_iter()
+            .chain(self.session.socket_path().parent())
+            .map(std::path::PathBuf::from)
+            .collect::<Vec<_>>();
+        let projection = resolve_configured_toolchain_projection_for_project(
+            &candidate,
+            &signature.environment_managers,
+            &signature.os,
+            self.trusted_project_root_for_pane(pane_id).as_deref(),
+            &protected_roots,
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?
+        .ok_or_else(|| MezError::invalid_state("custom toolchain projection resolved empty"))?;
+        let authority = self.path_scopes_for_pane(pane_id).ok_or_else(|| {
+            MezError::invalid_state(
+                "custom toolchain inspection requires resolved pane read authority",
+            )
+        })?;
+        projection
+            .validate_authority(&authority)
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+        let configured = config
+            .toolchain_selections
+            .contains(&ToolchainSelection::Custom(name.clone()));
+        let roots = projection
+            .roots
+            .iter()
+            .map(|root| {
+                format!(
+                    "`{}` → `{}`",
+                    markdown_cell(&root.host_path.display().to_string()),
+                    markdown_cell(&root.sandbox_destination),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("<br>");
+        let path = projection
+            .path_entries
+            .iter()
+            .map(|entry| format!("`{}`", markdown_cell(entry)))
+            .collect::<Vec<_>>()
+            .join("<br>");
+        let environment = projection
+            .environment
+            .iter()
+            .map(|(variable, value)| {
+                format!("`{}={}`", markdown_cell(variable), markdown_cell(value),)
+            })
+            .collect::<Vec<_>>()
+            .join("<br>");
+        Ok(format!(
+            "# Custom Toolchain {title}\n\n| Field | Value |\n| --- | --- |\n| Identity | `{}` |\n| Description | {} |\n| Configured | {} |\n| Pane | `{}` |\n| Generation | {} |\n| Authority | allowed |\n| Read-only roots | {} |\n| PATH entries | {} |\n| Environment | {} |\n| Required executables | {} |\n",
+            name.selector(),
+            definition
+                .description
+                .as_deref()
+                .map(markdown_cell)
+                .unwrap_or_else(|| "—".to_string()),
+            yes_no(configured),
+            markdown_cell(pane_id),
+            self.session.config_generation,
+            if roots.is_empty() { "—" } else { &roots },
+            if path.is_empty() { "—" } else { &path },
+            if environment.is_empty() {
+                "—"
+            } else {
+                &environment
+            },
+            definition
+                .required_executables
+                .iter()
+                .map(|reference| format!("`{}`", reference.as_str()))
+                .collect::<Vec<_>>()
+                .join("<br>"),
+        ))
     }
 
     /// Builds status from effective config and active-pane bootstrap evidence.
@@ -672,15 +1145,13 @@ impl RuntimeSessionService {
             let name = value.as_str().ok_or_else(|| {
                 MezError::config("permissions.bubblewrap.toolchains must contain strings")
             })?;
-            let kind = parse_sandbox_toolchain_kind(name).ok_or_else(|| {
-                MezError::config("permissions.bubblewrap.toolchains contains an unsupported kind")
-            })?;
-            if names.iter().any(|existing| existing == kind.as_str()) {
+            let selector = ToolchainSelection::parse(name)?;
+            if names.iter().any(|existing| existing == selector.as_str()) {
                 return Err(MezError::config(
-                    "permissions.bubblewrap.toolchains contains duplicate kinds",
+                    "permissions.bubblewrap.toolchains contains duplicate selectors",
                 ));
             }
-            names.push(kind.as_str().to_string());
+            names.push(selector.as_str().to_string());
         }
         Ok(names)
     }
@@ -690,7 +1161,7 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
-        operation: ToolchainCommand,
+        operation: &ToolchainCommand,
         changed: bool,
         outcome: &str,
     ) -> Result<()> {
@@ -752,27 +1223,165 @@ fn parse_toolchain_settlement(args: &str) -> Result<Option<ToolchainMutationSett
 
 /// Parses the exact public grammar, including mandatory mutation confirmation.
 fn parse_toolchain_command(args: &str) -> Result<ToolchainCommand> {
-    let words = args.split_ascii_whitespace().collect::<Vec<_>>();
+    let words = shlex::split(args)
+        .ok_or_else(|| MezError::invalid_args("toolchain arguments contain invalid quoting"))?;
+    let words = words.iter().map(String::as_str).collect::<Vec<_>>();
     match words.as_slice() {
-        [] | ["status"] => Ok(ToolchainCommand::Status),
+        [] | ["status"] => Ok(ToolchainCommand::Status(None)),
+        ["status", selector] => ToolchainSelection::parse(selector)
+            .map(|selection| ToolchainCommand::Status(Some(selection)))
+            .map_err(|error| MezError::invalid_args(error.message())),
         ["list"] => Ok(ToolchainCommand::List),
-        ["detect"] => Ok(ToolchainCommand::Detect(SandboxToolchainKind::Rust)),
-        ["detect", name] => parse_sandbox_toolchain_kind(name)
+        ["detect"] => Ok(ToolchainCommand::Detect(ToolchainSelection::BuiltIn(
+            SandboxToolchainKind::Rust,
+        ))),
+        ["detect", selector] => ToolchainSelection::parse(selector)
             .map(ToolchainCommand::Detect)
-            .ok_or_else(|| MezError::invalid_args("toolchain detect received an unsupported kind")),
-        ["enable", name, "--yes"] => parse_sandbox_toolchain_kind(name)
-            .map(ToolchainCommand::Enable)
-            .ok_or_else(|| MezError::invalid_args("toolchain enable received an unsupported kind")),
-        ["disable", name, "--yes"] => parse_sandbox_toolchain_kind(name)
-            .map(ToolchainCommand::Disable)
-            .ok_or_else(|| {
-                MezError::invalid_args("toolchain disable received an unsupported kind")
-            }),
+            .map_err(|error| MezError::invalid_args(error.message())),
+        ["enable", selectors @ .., "--yes"] => {
+            parse_toolchain_selectors(selectors, "enable").map(ToolchainCommand::Enable)
+        }
+        ["disable", selectors @ .., "--yes"] => {
+            parse_toolchain_selectors(selectors, "disable").map(ToolchainCommand::Disable)
+        }
+        ["define", name, options @ ..] => parse_custom_toolchain_definition(name, options),
+        ["remove", selector, options @ ..] => parse_custom_toolchain_removal(selector, options),
         ["reload"] => Ok(ToolchainCommand::Reload),
         _ => Err(MezError::invalid_args(
-            "toolchain expects status, list, detect [kind], enable kind --yes, disable kind --yes, or reload",
+            "toolchain expects status, list, detect [kind], define, enable, disable, remove, or reload",
         )),
     }
+}
+
+/// Parses one strict custom definition with repeatable root/reference flags.
+fn parse_custom_toolchain_definition(name: &str, words: &[&str]) -> Result<ToolchainCommand> {
+    let name = CustomToolchainName::parse(name)
+        .map_err(|error| MezError::invalid_args(error.message()))?;
+    let mut roots = Vec::new();
+    let mut path_entries = Vec::new();
+    let mut required_executables = Vec::new();
+    let mut environment = BTreeMap::new();
+    let mut description = None;
+    let mut confirmed = false;
+    let mut index = 0;
+    while index < words.len() {
+        let flag = words[index];
+        if flag == "--yes" {
+            if confirmed {
+                return Err(MezError::invalid_args(
+                    "toolchain define received duplicate --yes",
+                ));
+            }
+            confirmed = true;
+            index += 1;
+            continue;
+        }
+        let value = words.get(index + 1).ok_or_else(|| {
+            MezError::invalid_args(format!("toolchain define flag `{flag}` requires a value"))
+        })?;
+        match flag {
+            "--root" => roots.push((*value).to_string()),
+            "--path" => path_entries.push((*value).to_string()),
+            "--require" => required_executables.push((*value).to_string()),
+            "--description" => {
+                if description.replace((*value).to_string()).is_some() {
+                    return Err(MezError::invalid_args(
+                        "toolchain define received duplicate --description",
+                    ));
+                }
+            }
+            "--env-root" => {
+                let (variable, reference) = value.split_once('=').ok_or_else(|| {
+                    MezError::invalid_args("toolchain define --env-root expects NAME=REFERENCE")
+                })?;
+                if environment
+                    .insert(variable.to_string(), reference.to_string())
+                    .is_some()
+                {
+                    return Err(MezError::invalid_args(
+                        "toolchain define received a duplicate environment variable",
+                    ));
+                }
+            }
+            _ => {
+                return Err(MezError::invalid_args(format!(
+                    "toolchain define received unknown flag `{flag}`"
+                )));
+            }
+        }
+        index += 2;
+    }
+    if !confirmed {
+        return Err(MezError::invalid_args(
+            "toolchain define requires explicit --yes confirmation",
+        ));
+    }
+    let definition = CustomToolchainDefinition::new(
+        description,
+        roots,
+        path_entries,
+        required_executables,
+        environment,
+    )
+    .map_err(|error| MezError::invalid_args(error.message()))?;
+    Ok(ToolchainCommand::Define { name, definition })
+}
+
+/// Parses removal of one custom selector with optional atomic disable.
+fn parse_custom_toolchain_removal(selector: &str, words: &[&str]) -> Result<ToolchainCommand> {
+    let name = selector
+        .strip_prefix("custom:")
+        .ok_or_else(|| MezError::invalid_args("toolchain remove requires custom:<name>"))?;
+    let name = CustomToolchainName::parse(name)
+        .map_err(|error| MezError::invalid_args(error.message()))?;
+    let mut disable = false;
+    let mut confirmed = false;
+    for flag in words {
+        match *flag {
+            "--disable" if !disable => disable = true,
+            "--yes" if !confirmed => confirmed = true,
+            "--disable" | "--yes" => {
+                return Err(MezError::invalid_args(
+                    "toolchain remove received a duplicate flag",
+                ));
+            }
+            _ => {
+                return Err(MezError::invalid_args(format!(
+                    "toolchain remove received unknown flag `{flag}`"
+                )));
+            }
+        }
+    }
+    if !confirmed {
+        return Err(MezError::invalid_args(
+            "toolchain remove requires explicit --yes confirmation",
+        ));
+    }
+    Ok(ToolchainCommand::Remove { name, disable })
+}
+
+/// Parses a non-empty, duplicate-free ordered selector list.
+fn parse_toolchain_selectors(words: &[&str], operation: &str) -> Result<Vec<ToolchainSelection>> {
+    if words.is_empty() {
+        return Err(MezError::invalid_args(format!(
+            "toolchain {operation} requires at least one selector"
+        )));
+    }
+    let mut selectors = Vec::with_capacity(words.len());
+    for word in words {
+        let selector = ToolchainSelection::parse(word).map_err(|_| {
+            MezError::invalid_args(format!(
+                "toolchain {operation} received an unsupported selector"
+            ))
+        })?;
+        if selectors.contains(&selector) {
+            return Err(MezError::invalid_args(format!(
+                "toolchain {operation} received a duplicate selector"
+            )));
+        }
+        selectors.push(selector);
+    }
+    Ok(selectors)
 }
 
 /// Renders one successful pane-bootstrap detection without persisting roots.
@@ -887,7 +1496,7 @@ fn detect_toolchain_detail(
 }
 
 /// Renders the stable descriptor catalog as a searchable Markdown table.
-fn render_toolchain_list() -> String {
+fn render_toolchain_list(sandbox: &SandboxConfig) -> String {
     let mut body = String::from(
         "# Supported Toolchains\n\n| Kind | Platform | Evidence | Sandbox projection | Companions |\n| --- | --- | --- | --- | --- |\n",
     );
@@ -902,7 +1511,29 @@ fn render_toolchain_list() -> String {
             descriptor_companions(descriptor),
         ));
     }
-    body.push_str("\nSelections are typed and code-owned; they do not grant arbitrary PATH or mount authority.\n");
+    if let SandboxConfig::Bubblewrap(config) = sandbox
+        && !config.custom_toolchains.is_empty()
+    {
+        body.push_str("\n## Custom Toolchains\n\n| Selector | Description | Configured |\n| --- | --- | --- |\n");
+        for (name, definition) in &config.custom_toolchains {
+            let selector = format!("custom:{name}");
+            body.push_str(&format!(
+                "| `{selector}` | {} | {} |\n",
+                definition
+                    .description
+                    .as_deref()
+                    .map(markdown_cell)
+                    .unwrap_or_else(|| "—".to_string()),
+                yes_no(
+                    config
+                        .toolchain_selections
+                        .iter()
+                        .any(|selection| selection.as_str() == selector)
+                ),
+            ));
+        }
+    }
+    body.push_str("\nSelections are typed and constrained; they do not grant arbitrary PATH or mount authority.\n");
     body
 }
 
@@ -991,7 +1622,11 @@ fn markdown_cell(value: &str) -> String {
 }
 
 /// Renders the complete pane-local status without ambient environment data.
-fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
+fn render_toolchain_status(
+    pane_id: &str,
+    status: &ToolchainStatus,
+    requested: Option<SandboxToolchainKind>,
+) -> String {
     let mut body = format!(
         "# Toolchains\n\n**Pane:** `{}`  \n**Backend:** `{}`  \n**Generation:** {}  \n**Discovery:** {}  \n**Effective state:** {}\n\n| Kind | Configured | Discoverable | Effective | Host evidence | Sandbox projection |\n| --- | --- | --- | --- | --- | --- |\n",
         markdown_cell(pane_id),
@@ -1000,7 +1635,10 @@ fn render_toolchain_status(pane_id: &str, status: &ToolchainStatus) -> String {
         status.discovery_state,
         status.effective_state,
     );
-    for kind in SUPPORTED_SANDBOX_TOOLCHAIN_KINDS {
+    for kind in SUPPORTED_SANDBOX_TOOLCHAIN_KINDS
+        .into_iter()
+        .filter(|kind| requested.is_none_or(|requested| requested == *kind))
+    {
         let descriptor = toolchain_descriptor(kind);
         let configured = status
             .configured
@@ -1110,7 +1748,10 @@ fn reject_control_error(response: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{ToolchainCommand, parse_toolchain_command};
-    use crate::runtime::SandboxToolchainKind;
+    use crate::runtime::{
+        CustomToolchainDefinition, CustomToolchainName, SandboxToolchainKind, ToolchainSelection,
+    };
+    use std::collections::BTreeMap;
 
     /// Verifies the command grammar accepts only documented operations and
     /// requires explicit confirmation for every persisted mutation.
@@ -1118,32 +1759,83 @@ mod tests {
     fn toolchain_parser_is_strict_and_requires_confirmation() {
         assert_eq!(
             parse_toolchain_command("").unwrap(),
-            ToolchainCommand::Status
+            ToolchainCommand::Status(None)
         );
         assert_eq!(
             parse_toolchain_command("detect rust").unwrap(),
-            ToolchainCommand::Detect(SandboxToolchainKind::Rust)
+            ToolchainCommand::Detect(ToolchainSelection::BuiltIn(SandboxToolchainKind::Rust,))
+        );
+        assert_eq!(
+            parse_toolchain_command("status custom:acme").unwrap(),
+            ToolchainCommand::Status(Some(ToolchainSelection::parse("custom:acme").unwrap(),))
+        );
+        assert_eq!(
+            parse_toolchain_command("detect custom:acme").unwrap(),
+            ToolchainCommand::Detect(ToolchainSelection::parse("custom:acme").unwrap())
         );
         assert_eq!(
             parse_toolchain_command("enable rust --yes").unwrap(),
-            ToolchainCommand::Enable(SandboxToolchainKind::Rust)
+            ToolchainCommand::Enable(vec![ToolchainSelection::BuiltIn(
+                SandboxToolchainKind::Rust,
+            )])
         );
         assert_eq!(
             parse_toolchain_command("enable zig --yes").unwrap(),
-            ToolchainCommand::Enable(SandboxToolchainKind::Zig)
+            ToolchainCommand::Enable(vec![
+                ToolchainSelection::BuiltIn(SandboxToolchainKind::Zig,)
+            ])
         );
         assert_eq!(
             parse_toolchain_command("detect python").unwrap(),
-            ToolchainCommand::Detect(SandboxToolchainKind::Python)
+            ToolchainCommand::Detect(ToolchainSelection::BuiltIn(SandboxToolchainKind::Python,))
         );
         assert_eq!(
             parse_toolchain_command("enable python --yes").unwrap(),
-            ToolchainCommand::Enable(SandboxToolchainKind::Python)
+            ToolchainCommand::Enable(vec![ToolchainSelection::BuiltIn(
+                SandboxToolchainKind::Python,
+            )])
+        );
+        assert_eq!(
+            parse_toolchain_command("enable rust custom:acme --yes").unwrap(),
+            ToolchainCommand::Enable(vec![
+                ToolchainSelection::BuiltIn(SandboxToolchainKind::Rust),
+                ToolchainSelection::parse("custom:acme").unwrap(),
+            ])
+        );
+        assert_eq!(
+            parse_toolchain_command(
+                "define acme --root /opt/acme --path 0:bin --require 0:bin/acme --env-root ACME_HOME=0:. --description 'Acme SDK' --yes"
+            )
+            .unwrap(),
+            ToolchainCommand::Define {
+                name: CustomToolchainName::parse("acme").unwrap(),
+                definition: CustomToolchainDefinition::new(
+                    Some("Acme SDK".to_string()),
+                    vec!["/opt/acme".to_string()],
+                    vec!["0:bin".to_string()],
+                    vec!["0:bin/acme".to_string()],
+                    BTreeMap::from([("ACME_HOME".to_string(), "0:.".to_string())]),
+                )
+                .unwrap(),
+            }
+        );
+        assert_eq!(
+            parse_toolchain_command("remove custom:acme --disable --yes").unwrap(),
+            ToolchainCommand::Remove {
+                name: CustomToolchainName::parse("acme").unwrap(),
+                disable: true,
+            }
         );
         for invalid in [
             "enable rust",
             "disable rust",
             "enable rust --yes --yes",
+            "enable rust rust --yes",
+            "define acme --root /opt/acme --path 0:bin",
+            "define acme --root /opt/acme --path 0:bin --description one --description two --yes",
+            "define acme --root /opt/acme --path ../bin --yes",
+            "remove acme --yes",
+            "remove custom:acme --disable --disable --yes",
             "detect unknown",
             "status extra",
             "reload extra",

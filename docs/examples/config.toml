@@ -461,15 +461,18 @@ sandbox = "policy-only"
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
 # Opt-in read-only Rust, Zig, Go, Deno, Bun, Node.js, or Python projections;
-# detect with `--kind rust|zig|go|deno|bun|node|python`, then
-# enable one typed kind with `mez sandbox toolchains enable KIND --yes`.
+# detect with `--kind rust|zig|go|deno|bun|node|python`, then enable ordered
+# built-in or `custom:<name>` selectors with
+# `mez sandbox toolchains enable SELECTOR... --yes`.
 # Existing services then require `/toolchain reload`, `config/reload`, or a
 # restart; `/toolchain enable KIND --yes` hot-applies subsequent actions.
 # toolchains = ["rust", "zig", "go", "deno", "bun", "node", "python"]
-# Custom toolchains are primary-config-only constrained definitions. They are
-# disabled by default and portable sandbox profiles reject them to avoid
-# serializing host roots. Runtime projection also requires existing pane read
-# authority; definitions never grant authority.
+# Custom toolchains are primary-user constrained definitions. They may be
+# managed with `mez sandbox toolchains custom define/remove`, but every CLI
+# mutation still requires authenticated confirmation in the attached primary
+# client. They are disabled by default and portable sandbox profiles reject
+# them to avoid serializing host roots. Runtime projection also requires
+# existing pane read authority; definitions never grant authority.
 # [permissions.bubblewrap.custom_toolchains.acme]
 # description = "Acme compiler SDK"
 # roots = ["/home/user/.local/share/acme-sdk"]

@@ -153,6 +153,20 @@ pub(crate) enum ToolchainSelection {
 }
 
 impl ToolchainSelection {
+    /// Parses one persisted built-in or `custom:<name>` selector.
+    ///
+    /// # Errors
+    /// Returns a configuration error when the selector is neither a supported
+    /// built-in kind nor a valid custom identity.
+    pub(crate) fn parse(selector: &str) -> Result<Self> {
+        if let Some(name) = selector.strip_prefix("custom:") {
+            return CustomToolchainName::parse(name).map(Self::Custom);
+        }
+        parse_sandbox_toolchain_kind(selector)
+            .map(Self::BuiltIn)
+            .ok_or_else(|| MezError::config("unsupported sandbox toolchain selector"))
+    }
+
     /// Returns the stable persisted selector spelling.
     pub(crate) fn as_str(&self) -> &str {
         match self {
@@ -164,7 +178,7 @@ impl ToolchainSelection {
     /// Constructs one validated custom selection for focused sandbox tests.
     #[cfg(test)]
     pub(crate) fn custom_for_test(name: &str) -> Result<Self> {
-        CustomToolchainName::parse(name).map(Self::Custom)
+        Self::parse(&format!("custom:{name}"))
     }
 }
 
@@ -209,6 +223,22 @@ pub(crate) struct CustomToolchainReference {
     pub(crate) relative_path: String,
 }
 
+impl CustomToolchainReference {
+    /// Parses one lexical root-relative reference against a declared root set.
+    ///
+    /// # Errors
+    /// Returns a configuration error for malformed syntax, traversal, absolute
+    /// paths, control characters, or an out-of-range root index.
+    pub(crate) fn parse(reference: &str, root_count: usize) -> Result<Self> {
+        parse_custom_toolchain_reference(reference, root_count)
+    }
+
+    /// Returns the stable persisted `<root-index>:<relative-path>` spelling.
+    pub(crate) fn as_str(&self) -> String {
+        format!("{}:{}", self.root_index, self.relative_path)
+    }
+}
+
 /// Structurally validated custom toolchain configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CustomToolchainDefinition {
@@ -222,6 +252,85 @@ pub(crate) struct CustomToolchainDefinition {
     pub(crate) required_executables: Vec<CustomToolchainReference>,
     /// Narrow synthesized environment references in deterministic key order.
     pub(crate) environment: BTreeMap<String, CustomToolchainReference>,
+}
+
+impl CustomToolchainDefinition {
+    /// Constructs one structurally validated custom toolchain definition.
+    ///
+    /// Filesystem existence, canonicalization, executable shape, protected
+    /// roots, and pane authority remain runtime projection responsibilities.
+    ///
+    /// # Errors
+    /// Returns a configuration error when any schema-v32 structural bound or
+    /// lexical reference invariant is violated.
+    pub(crate) fn new(
+        description: Option<String>,
+        roots: Vec<String>,
+        path_entries: Vec<String>,
+        required_executables: Vec<String>,
+        environment: BTreeMap<String, String>,
+    ) -> Result<Self> {
+        if !(1..=8).contains(&roots.len())
+            || roots.iter().any(|root| {
+                let path = std::path::Path::new(root);
+                !path.is_absolute()
+                    || root.chars().any(char::is_control)
+                    || path
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+            })
+        {
+            return Err(MezError::config(
+                "custom toolchain must declare 1 to 8 absolute printable roots without lexical traversal",
+            ));
+        }
+        if !(1..=16).contains(&path_entries.len()) || required_executables.len() > 16 {
+            return Err(MezError::config(
+                "custom toolchain path entries must contain 1 to 16 references and required executables at most 16 references",
+            ));
+        }
+        if description.as_deref().is_some_and(|description| {
+            description.trim().is_empty()
+                || description.len() > 256
+                || description.chars().any(char::is_control)
+        }) {
+            return Err(MezError::config(
+                "custom toolchain description must be non-empty printable text of at most 256 bytes",
+            ));
+        }
+        if environment.len() > 16
+            || environment
+                .keys()
+                .any(|variable| !valid_custom_toolchain_environment_name(variable))
+        {
+            return Err(MezError::config(
+                "custom toolchain environment contains too many entries or a reserved variable name",
+            ));
+        }
+        let root_count = roots.len();
+        let path_entries = path_entries
+            .iter()
+            .map(|reference| CustomToolchainReference::parse(reference, root_count))
+            .collect::<Result<Vec<_>>>()?;
+        let required_executables = required_executables
+            .iter()
+            .map(|reference| CustomToolchainReference::parse(reference, root_count))
+            .collect::<Result<Vec<_>>>()?;
+        let environment = environment
+            .into_iter()
+            .map(|(variable, reference)| {
+                CustomToolchainReference::parse(&reference, root_count)
+                    .map(|reference| (variable, reference))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        Ok(Self {
+            description,
+            roots,
+            path_entries,
+            required_executables,
+            environment,
+        })
+    }
 }
 
 /// Allowlisted developer toolchains that may be projected read-only.

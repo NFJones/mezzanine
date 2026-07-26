@@ -343,6 +343,48 @@ fn config_mutation_batch_validates_only_the_final_document() {
     );
 }
 
+/// Verifies constrained custom-toolchain fields may be composed through one
+/// final-document batch without exposing an invalid partial definition.
+#[test]
+fn config_mutation_batch_supports_custom_toolchain_definition_paths() {
+    let plan = crate::config::plan_config_mutations(
+        ConfigFormat::Toml,
+        "version = 32\n[permissions]\nsandbox = \"bubblewrap\"\n",
+        ConfigScope::Primary,
+        vec![
+            set_string_array(
+                "permissions.bubblewrap.custom_toolchains.acme.roots",
+                &["/opt/acme"],
+            ),
+            set_string_array(
+                "permissions.bubblewrap.custom_toolchains.acme.path_entries",
+                &["0:bin"],
+            ),
+            set_string_array(
+                "permissions.bubblewrap.custom_toolchains.acme.required_executables",
+                &["0:bin/acme"],
+            ),
+            set_string(
+                "permissions.bubblewrap.custom_toolchains.acme.environment.ACME_HOME",
+                "0:.",
+            ),
+        ],
+    )
+    .unwrap();
+
+    assert!(plan.changed);
+    assert!(plan.validation.valid);
+    let values = extract_config_values(ConfigFormat::Toml, &plan.text);
+    assert_eq!(
+        values.get("permissions.bubblewrap.custom_toolchains.acme.roots"),
+        Some(&r#"["/opt/acme"]"#.to_string())
+    );
+    assert_eq!(
+        values.get("permissions.bubblewrap.custom_toolchains.acme.environment.ACME_HOME"),
+        Some(&"0:.".to_string())
+    );
+}
+
 /// Verifies one invalid final value rejects the whole batch without returning
 /// partially mutated text for persistence.
 #[test]

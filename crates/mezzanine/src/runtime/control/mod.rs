@@ -78,7 +78,11 @@ use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
     parse_skill_prompt_invocation, set_project_guidance_context, skill_context_text,
 };
+#[cfg(test)]
 pub(crate) use mutations::normalized_toolchain_mutation_digest;
+pub(crate) use mutations::{
+    normalized_custom_toolchain_mutation_digest, normalized_toolchain_selectors_digest,
+};
 use protocol::{
     pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,
     runtime_snapshot_resume_plan_json,

@@ -705,7 +705,8 @@ Provider options under a model profile:
 | `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
 | `permissions.bubblewrap.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
-| `permissions.bubblewrap.toolchains` | string array | omitted | Direct-user-selected read-only toolchains. Schema v25 supports only `rust`; arbitrary host paths are not accepted or persisted. |
+| `permissions.bubblewrap.toolchains` | string array | omitted | Ordered direct-user-selected read-only built-in or `custom:<name>` toolchains. Built-in selectors persist identity rather than discovered host paths. |
+| `permissions.bubblewrap.custom_toolchains.<name>` | table | omitted | Schema-v32 primary-user constrained custom definition with `roots`, `path_entries`, optional `required_executables`, `description`, and synthesized root-relative `environment` values. Definitions do not grant filesystem authority. |
 | `permissions.trusted_directories` | string array | `[]` | Trusted directory roots; never converted into mounts. |
 | `permissions.trusted_projects` | string array | `[]` | Trusted project roots for command authorization. A current project trust decision supplies default read-write authority when explicit scopes are omitted. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
@@ -812,14 +813,18 @@ over repository-local identity. It never imports credential helpers, signing
 keys, includes, URL rewrites, hooks, or arbitrary host Git settings. When the
 fields are omitted, repository-local Git identity may still apply.
 
-`mez sandbox toolchains detect [PATH]` performs read-only Rust discovery and
-reports canonical Cargo and Rustup roots without changing configuration.
-`mez sandbox toolchains enable rust --yes` submits a digest-bound request to a
-live service as a non-primary automation client. It does not persist or approve
-the selection. The displayed `/toolchain confirm REQUEST DIGEST --yes` command
-must then be entered directly in the attached primary client; missing, stale,
-tampered, expired, wrong-pane, and replayed confirmations fail closed. At
-execution time Mezzanine uses
+`mez sandbox toolchains list` and `status [SELECTOR] [PATH]` load effective
+configuration without mutation, while `detect [--kind KIND] [PATH]` performs
+read-only built-in discovery. Ordered `enable SELECTOR... --yes`, `disable
+SELECTOR... --yes`, `custom define NAME ... --yes`, and `custom remove NAME
+[--disable] --yes` submit digest-bound requests to a live service as a
+non-primary automation client. They do not persist or approve the request.
+The displayed `/toolchain confirm REQUEST DIGEST --yes` command must then be
+entered directly in the attached primary client; missing, stale, tampered,
+expired, wrong-pane, and replayed confirmations fail closed. Custom roots must
+be canonical existing directories within the issuing pane's resolved read
+authority; required executables and root-relative references are preflighted
+before one atomic disk/live update. At execution time Mezzanine uses
 canonical pane-bootstrap evidence, mounts only Cargo's executable directory
 and the Rustup root read-only below `/opt/mez/toolchains/rust`, and sets PATH to Cargo binaries
 before `/usr/bin:/bin`. It does not mount the complete home, credentials,

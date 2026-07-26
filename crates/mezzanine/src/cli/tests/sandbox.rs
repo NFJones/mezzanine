@@ -184,6 +184,131 @@ fn sandbox_toolchain_enable_requires_confirmation_and_persists_only_kind() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Custom definition previews validate and disclose the exact constrained
+/// request without writing config or requiring a live service.
+#[test]
+fn sandbox_custom_toolchain_define_preview_is_typed_and_read_only() {
+    let (env, home) = test_env("sandbox-custom-toolchain-preview");
+    fs::create_dir_all(home.join("project/.git")).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let exit_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "custom".to_string(),
+            "define".to_string(),
+            "acme".to_string(),
+            "--root".to_string(),
+            "/opt/acme-sdk".to_string(),
+            "--path".to_string(),
+            "0:bin".to_string(),
+            "--require".to_string(),
+            "0:bin/acme".to_string(),
+            "--env-root".to_string(),
+            "ACME_HOME=0:.".to_string(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(exit_code, 1);
+    let preview: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(preview["operation"], "define");
+    assert_eq!(preview["selector"], "custom:acme");
+    assert_eq!(
+        preview["definition"]["roots"],
+        serde_json::json!(["/opt/acme-sdk"])
+    );
+    assert_eq!(preview["definition"]["environment"]["ACME_HOME"], "0:.");
+    assert_eq!(preview["confirmation_required"], true);
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["request_digest"].as_str().unwrap().len(), 64);
+    assert!(stderr.is_empty());
+    assert!(!home.join(".config/mezzanine/config.toml").exists());
+    assert!(!home.join("runtime/mez-0").exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Toolchain list and status load custom identities from effective config
+/// without creating trust, managed-home, or runtime state.
+#[test]
+fn sandbox_toolchain_list_and_status_are_offline_and_read_only() {
+    let (env, home) = test_env("sandbox-toolchain-list-status");
+    let config_root = home.join(".config/mezzanine");
+    fs::create_dir_all(&config_root).unwrap();
+    let config_path = config_root.join("config.toml");
+    fs::write(
+        &config_path,
+        "version = 32\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = [\"custom:acme\"]\n[permissions.bubblewrap.custom_toolchains.acme]\ndescription = \"Acme SDK\"\nroots = [\"/opt/acme-sdk\"]\npath_entries = [\"0:bin\"]\nrequired_executables = [\"0:bin/acme\"]\n",
+    )
+    .unwrap();
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let before = fs::read(&config_path).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let list_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "list".to_string(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(list_code, 0);
+    let list: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert!(
+        list["built_ins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "rust")
+    );
+    assert_eq!(list["custom"], serde_json::json!(["custom:acme"]));
+
+    stdout.clear();
+    let status_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "status".to_string(),
+            "custom:acme".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(status_code, 0);
+    let status: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(status["configured"], serde_json::json!(["custom:acme"]));
+    assert_eq!(status["toolchains"][0]["identity"], "custom:acme");
+    assert_eq!(status["toolchains"][0]["configured"], true);
+    assert_eq!(status["toolchains"][0]["description"], "Acme SDK");
+    assert!(stderr.is_empty());
+    assert_eq!(fs::read(&config_path).unwrap(), before);
+    assert!(!config_root.join("project-trust.tsv").exists());
+    assert!(!home.join("runtime/mez-0").exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Zig detection and activation use the captured CLI search path, preserve
 /// read-only discovery, and persist only the typed kind rather than its root.
 #[test]

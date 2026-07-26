@@ -3027,14 +3027,18 @@ composed projection and require every host root to remain beneath the
 pane-resolved maximum read authority. Toolchain configuration MUST NOT become
 an arbitrary PATH, environment-variable, mount, version-manager-hook, or
 credential-import surface.
-The agent shell `/toolchain` command and `/toolchain status` MUST report
-supported, configured, discoverable, and effective state for the active pane.
-`/toolchain detect [rust]` MUST be read-only and MUST use active-pane bootstrap
-evidence rather than ambient service environment state. `/toolchain enable
-rust --yes` and `/toolchain disable rust --yes` MUST require authenticated
-primary-client input, persist only typed kinds, and apply real changes to
-subsequent sandboxed actions without rewriting existing interactive shells or
-actions that are already running. Text supplied through control, automation,
+The agent shell `/toolchain` command and `/toolchain status [SELECTOR]` MUST
+report supported, configured, discoverable, and effective state for the active
+pane. `/toolchain list` MUST include configured custom identities.
+`/toolchain detect [SELECTOR]` MUST be read-only and MUST use active-pane
+bootstrap evidence rather than ambient service environment state. Ordered
+`/toolchain enable SELECTOR... --yes`, `/toolchain disable SELECTOR... --yes`,
+`/toolchain define NAME ... --yes`, and `/toolchain remove custom:NAME
+[--disable] --yes` MUST require authenticated primary-client input and apply
+real changes to subsequent sandboxed actions without rewriting existing
+interactive shells or actions that are already running. Built-in selections
+MUST persist only typed kinds; custom definitions MUST remain constrained to
+the schema-v32 representation. Text supplied through control, automation,
 agent, hook, macro, MCP, or assistant output MUST NOT acquire this provenance.
 Repeating an already-satisfied mutation MUST be a no-op and MUST NOT advance
 configuration generation. `/toolchain reload` MUST
@@ -3045,14 +3049,18 @@ copyable command pager with structured descriptor-derived Markdown, regardless
 of rendered line count. Successful mutations and reloads MUST use one concise
 transient notice, and usage, discovery, persistence, and reload failures MUST
 use one transient error notice. No `/toolchain` result may append visible
-output to pane history. A standalone `mez sandbox toolchains enable KIND --yes`
-invocation MUST submit a normalized, digest-bound request to a live service as
-an automation client and MUST NOT edit primary configuration itself. `--yes`
-MUST consent only to submission; it MUST NOT approve the mutation. Submission
-MUST fail closed without an attached primary client. The service MUST expose
-the exact request id, operation, kind, digest, pane, captured configuration
-generation, and expiry to the primary client. Only matching authenticated
-primary-client input MAY confirm or reject the request. Confirmation MUST fail
+output to pane history. Standalone `mez sandbox toolchains enable SELECTOR...
+--yes`, `disable SELECTOR... --yes`, `custom define NAME ... --yes`, and
+`custom remove NAME [--disable] --yes` invocations MUST submit normalized,
+digest-bound requests to a live service as an automation client and MUST NOT
+edit primary configuration themselves. Read-only `list`, `status`, and
+`detect` operations MUST remain available without a live service. `--yes` MUST
+consent only to submission; it MUST NOT approve the mutation. Submission MUST
+fail closed without an attached primary client. The service MUST expose the
+exact request id, operation, normalized selector or custom definition digest,
+pane, captured configuration generation, and expiry to the primary client.
+Only matching authenticated primary-client input MAY confirm or reject the
+request. Confirmation MUST fail
 closed for a wrong pane, expired request, changed configuration generation,
 digest mismatch, unsupported operation, or replay. Ordinary Bubblewrap actions
 MUST NOT expose the Mezzanine config root or control/runtime sockets. Explicit
