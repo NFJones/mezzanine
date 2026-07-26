@@ -91,9 +91,24 @@ impl RuntimeSessionService {
         self.process
             .shell_transaction_started_markers
             .insert(marker.to_string());
-        if transaction.kind == RunningShellTransactionKind::Bootstrap {
-            self.observe_agent_subshell_bootstrap_start(pane_id, marker);
+        if transaction.kind == RunningShellTransactionKind::Bootstrap
+            && self.observe_agent_subshell_bootstrap_start(pane_id, marker)
+        {
+            return Ok(1);
         }
+        self.release_agent_shell_transaction_payload_after_start(marker, pane_id)?;
+        Ok(1)
+    }
+
+    /// Releases a deferred transaction payload after its start proof settles.
+    pub(crate) fn release_agent_shell_transaction_payload_after_start(
+        &mut self,
+        marker: &str,
+        pane_id: &str,
+    ) -> Result<()> {
+        let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
+            return Ok(());
+        };
         let kind_name = runtime_running_shell_transaction_kind_name(&transaction.kind).to_string();
         let payload = self
             .process
@@ -104,22 +119,22 @@ impl RuntimeSessionService {
             transaction.started_at_unix_ms = current_unix_millis();
         }
         let Some(payload) = payload else {
-            return Ok(1);
+            return Ok(());
         };
         let payload_len = payload.len();
         if let Err(error) = self.write_runtime_pane_input_priority(pane_id, &payload) {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
-            return Ok(1);
+            return Ok(());
         }
         self.append_agent_trace_turn_event(
             pane_id,
-            turn_id,
+            &transaction.turn_id,
             &format!(
                 "shell_transaction payload_sent marker={} kind={} bytes={}",
                 marker, kind_name, payload_len
             ),
         )?;
-        Ok(1)
+        Ok(())
     }
 
     /// Runs the observe agent shell transaction end operation for this subsystem.

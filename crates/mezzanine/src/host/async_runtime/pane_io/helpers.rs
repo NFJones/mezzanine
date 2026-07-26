@@ -367,16 +367,16 @@ where
     events
 }
 
-/// Waits boundedly for the persistent shell receiver to regain the pane PTY.
+/// Performs one fresh start capture or bounded completion observation.
 ///
-/// Bootstrap end output is written by an isolated child, so a foreground query
-/// at the exact output boundary can legitimately still see that child. The
-/// worker owns the PTY and therefore performs fresh observations until the
-/// process group captured at bootstrap start reappears or the bound expires.
+/// A missing expected group captures the first live foreground process at the
+/// start boundary. At completion, output is written by an isolated child, so
+/// the worker performs fresh observations until the start-captured receiver
+/// group reappears or the bound expires.
 async fn correlated_foreground_process_observation_event<B>(
     driver: &mut AsyncPaneProcessDriver<B>,
     observation_id: String,
-    expected_process_group_id: u32,
+    expected_process_group_id: Option<u32>,
 ) -> RuntimeEvent
 where
     B: AsyncPaneProcessIo,
@@ -385,9 +385,10 @@ where
     for attempt in 0..FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS {
         match driver.foreground_process_observation().await {
             Ok(metadata) => {
-                let matched = metadata
-                    .as_ref()
-                    .is_some_and(|metadata| metadata.process_group_id == expected_process_group_id);
+                let matched = metadata.as_ref().is_some_and(|metadata| {
+                    expected_process_group_id
+                        .is_none_or(|expected| metadata.process_group_id == expected)
+                });
                 last_metadata = metadata;
                 if matched {
                     return driver.foreground_process_observation_event(
@@ -465,7 +466,7 @@ mod tests {
         let event = correlated_foreground_process_observation_event(
             &mut driver,
             "observation-1".to_string(),
-            11,
+            Some(11),
         )
         .await;
 
@@ -479,6 +480,54 @@ mod tests {
                         process_name: Some("sh".to_string()),
                         process_group_id: Some(11),
                         current_working_directory: None,
+                        error: None,
+                    }
+                ),
+            }
+        );
+    }
+
+    /// Verifies start-boundary capture returns the first fresh PTY observation.
+    ///
+    /// Start capture has no expected group because it establishes the receiver
+    /// identity used by completion certification. It must query the backend
+    /// instead of consulting periodic runtime metadata.
+    #[tokio::test(flavor = "current_thread")]
+    async fn correlated_foreground_observation_captures_first_fresh_group() {
+        let instance = PaneProcessInstance {
+            pane_id: "%1".to_string(),
+            generation: 8,
+        };
+        let mut backend = AsyncFakePaneProcessIo::default();
+        backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+            process_name: "bash".to_string(),
+            process_group_id: 41,
+            current_working_directory: Some(std::path::PathBuf::from("/tmp")),
+        })));
+        let mut driver = AsyncPaneProcessDriver::new_for_instance(
+            instance.clone(),
+            backend,
+            AsyncPaneProcessDriverConfig::default(),
+        )
+        .unwrap();
+
+        let event = correlated_foreground_process_observation_event(
+            &mut driver,
+            "observation-start".to_string(),
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            event,
+            RuntimeEvent::PaneProcess {
+                instance,
+                event: PaneProcessEvent::ForegroundProcessObservation(
+                    PaneForegroundProcessObservation {
+                        observation_id: "observation-start".to_string(),
+                        process_name: Some("bash".to_string()),
+                        process_group_id: Some(41),
+                        current_working_directory: Some("/tmp".to_string()),
                         error: None,
                     }
                 ),
@@ -508,7 +557,7 @@ mod tests {
         let event = correlated_foreground_process_observation_event(
             &mut driver,
             "observation-2".to_string(),
-            11,
+            Some(11),
         )
         .await;
 

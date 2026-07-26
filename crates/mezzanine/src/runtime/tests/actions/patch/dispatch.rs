@@ -632,7 +632,7 @@ bootstrap\tcomplete\t1714500000\n";
             _ => None,
         })
         .expect("bootstrap completion should request a correlated foreground observation");
-    assert_eq!(observation_effect.2, subshell_group);
+    assert_eq!(observation_effect.2, Some(subshell_group));
 
     let stale = service
         .apply_pane_foreground_process_observation_transition(

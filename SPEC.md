@@ -3803,10 +3803,11 @@ primary-process identity and shell-interaction epoch. Process names such as
 dispatch authority. A Mezzanine-owned agent-subshell handoff MUST remain
 uncertified until a registered, non-truncated bootstrap succeeds with a parsed
 environment signature and the same persistent receiver process group is
-observed at the transaction start boundary and by an explicitly correlated,
-fresh PTY query after transaction completion. The completion observation MUST
-be performed by the worker that owns the exact pane-process generation; a
-periodic foreground metadata cache MUST NOT settle certification. Parsed
+observed by explicitly correlated, fresh PTY queries at the transaction start
+boundary and after transaction completion. Both observations MUST be performed
+by the worker that owns the exact pane-process generation; a periodic
+foreground metadata cache MUST NOT capture start evidence or settle
+certification. Parsed
 environment, tool, instruction, path, and sandbox authority from that
 bootstrap MUST remain unpublished while the fresh observation is pending.
 Missing, contradictory, failed, bounded-observation-timeout, or stale proof
@@ -3820,13 +3821,15 @@ handoff, or shell-interaction epoch changes.
 
 For streamed transaction wrappers, the start-boundary observation MUST occur
 after the registered start marker is received and before the runtime releases
-the deferred command payload. The persistent shell receiver waiting for that
-payload is the certification candidate. Isolated transaction-child process
-groups observed after payload release and before completion are expected, but
-MUST NOT be promoted as persistent shell identity or treated as a completion
-boundary mismatch. The owning pane worker MUST wait boundedly for the
-start-certified receiver group to regain the PTY and MUST return an explicit
-success or failure event so certification cannot remain pending indefinitely.
+the deferred command payload. For an adapter-owned pane, payload release MUST
+remain pending until the exact worker generation returns the correlated fresh
+start observation. The persistent shell receiver waiting for that payload is
+the certification candidate. Isolated transaction-child process groups
+observed after payload release and before completion are expected, but MUST NOT
+be promoted as persistent shell identity or treated as a completion boundary
+mismatch. The owning pane worker MUST wait boundedly for the start-certified
+receiver group to regain the PTY and MUST return an explicit success or failure
+event so certification cannot remain pending indefinitely.
 
 Certification MUST be invalidated when the agent subshell exits, the pane
 closes, its primary process changes or is replaced, a bootstrap proof fails, or

@@ -169,9 +169,9 @@ pub(super) fn runtime_running_shell_transaction_kind_name(
 /// Returns the next runtime timeout deadline for one shell transaction.
 ///
 /// Transactions with deferred payloads have an additional short start deadline:
-/// the shell must reach the receiver loop and emit its start marker before the
-/// command body is sent. Once that happens the pending payload is cleared and
-/// the ordinary command timeout applies.
+/// the shell must reach the receiver loop and, when required, complete fresh
+/// start observation before the command body is sent. Once the payload is
+/// released, the ordinary command timeout applies.
 fn runtime_shell_transaction_effective_timeout_ms(
     transaction: &RunningShellTransactionRef,
 ) -> Option<u64> {

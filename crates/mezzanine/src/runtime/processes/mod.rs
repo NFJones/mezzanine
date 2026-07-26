@@ -184,6 +184,17 @@ struct RuntimeBootstrapShellCertificationEvidence {
     interaction_generation: u64,
 }
 
+/// Bootstrap start boundary waiting on a fresh pane-worker observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimePendingAgentSubshellStartObservation {
+    /// Exact adapter-owned pane process lifetime that must answer.
+    instance: PaneProcessInstance,
+    /// Correlation token required on the worker observation event.
+    observation_id: String,
+    /// Exact bootstrap marker whose receiver is waiting for its payload.
+    marker: String,
+}
+
 /// Parsed bootstrap context withheld until shell certification succeeds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimePendingBootstrapEnvironment {
@@ -282,6 +293,9 @@ pub(crate) struct RuntimeProcessComponent {
     /// Bootstrap-start foreground evidence keyed by exact transaction marker.
     bootstrap_shell_certification_evidence:
         std::collections::BTreeMap<String, RuntimeBootstrapShellCertificationEvidence>,
+    /// Bootstrap start boundaries awaiting fresh adapter-owned PTY metadata.
+    pending_agent_subshell_start_observations:
+        std::collections::BTreeMap<String, RuntimePendingAgentSubshellStartObservation>,
     /// Parsed bootstrap context awaiting a correlated pane-worker observation.
     pending_agent_subshell_certifications:
         std::collections::BTreeMap<String, RuntimePendingAgentSubshellCertification>,

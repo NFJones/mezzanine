@@ -145,12 +145,12 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
-/// Verifies a Ctrl+D request made after bootstrap payload release exits once
-/// the in-flight bootstrap settles instead of leaving a hidden child shell.
+/// Verifies Ctrl+D after fresh start proof exits once bootstrap certification settles.
 ///
-/// Start-marker observation consumes the deferred payload, so cancellation can
-/// no longer complete the wrapper inline. Bootstrap completion must retry the
-/// already-recorded hidden-shell exit and queue EOF only after settlement.
+/// The correlated start observation consumes the deferred payload, so
+/// cancellation can no longer complete the wrapper inline. Bootstrap
+/// completion must obtain its second correlated observation, retry the
+/// already-recorded hidden-shell exit, and queue EOF only after settlement.
 #[test]
 fn runtime_agent_shell_ctrl_d_waits_for_started_bootstrap_completion() {
     let mut service = test_runtime_service();
@@ -176,6 +176,35 @@ fn runtime_agent_shell_ctrl_d_waits_for_started_bootstrap_completion() {
         .unwrap();
     service
         .observe_agent_shell_transaction_start(&pane_id, &marker, &turn_id, "agent-%1", &pane_id)
+        .unwrap();
+    let start_observation = service
+        .drain_pane_io_transition()
+        .side_effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect:
+                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id,
+                    },
+            } => Some((instance, observation_id, expected_process_group_id)),
+            _ => None,
+        })
+        .expect("bootstrap start should request a fresh foreground observation");
+    assert_eq!(start_observation.2, None);
+    service
+        .apply_pane_foreground_process_observation_transition(
+            start_observation.0,
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: start_observation.1,
+                process_name: Some("sh".to_string()),
+                process_group_id: Some(41),
+                current_working_directory: Some("/tmp".to_string()),
+                error: None,
+            },
+        )
         .unwrap();
     let payload = service.drain_pane_io_transition().side_effects;
     assert_eq!(pane_input_effects(&payload).len(), 1);
@@ -218,6 +247,35 @@ bootstrap\tcomplete\t1714500000\n";
         .observe_agent_shell_transaction_end(&pane_id, &marker, &turn_id, "agent-%1", &pane_id, 0)
         .unwrap();
 
+    let completion_observation = service
+        .drain_pane_io_transition()
+        .side_effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect:
+                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id,
+                    },
+            } => Some((instance, observation_id, expected_process_group_id)),
+            _ => None,
+        })
+        .expect("bootstrap completion should request a fresh foreground observation");
+    assert_eq!(completion_observation.2, Some(41));
+    service
+        .apply_pane_foreground_process_observation_transition(
+            completion_observation.0,
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: completion_observation.1,
+                process_name: Some("sh".to_string()),
+                process_group_id: Some(41),
+                current_working_directory: Some("/tmp".to_string()),
+                error: None,
+            },
+        )
+        .unwrap();
     let exit_effects = service.drain_pane_io_transition().side_effects;
     let exit_inputs = pane_input_effects(&exit_effects);
     assert_eq!(exit_inputs.len(), 1);

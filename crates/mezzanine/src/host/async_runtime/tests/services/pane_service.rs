@@ -653,7 +653,7 @@ async fn async_pane_process_service_waits_for_live_output_before_exit() {
 /// persistent agent shell regains the foreground process group.
 #[tokio::test(flavor = "current_thread")]
 async fn async_agent_subshell_bootstrap_certifies_with_fresh_worker_observation() {
-    let mut service = test_service();
+    let mut service = test_service_with_shell("/bin/bash");
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
@@ -688,10 +688,13 @@ async fn async_agent_subshell_bootstrap_certifies_with_fresh_worker_observation(
         )
         .await;
         if let Err(error) = result {
-            assert_eq!(
-                error.message(),
-                "async runtime session actor is closed",
-                "pane supervisor failed before actor shutdown"
+            assert!(
+                matches!(
+                    error.message(),
+                    "async runtime session actor is closed"
+                        | "async runtime session actor reply was dropped"
+                ),
+                "pane supervisor failed before actor shutdown: {error}"
             );
         }
     };

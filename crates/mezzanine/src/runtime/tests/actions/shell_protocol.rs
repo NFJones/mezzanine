@@ -1109,11 +1109,13 @@ fn runtime_shell_transaction_end_before_start_marker_fails_live_action() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies an agent-subshell bootstrap defers its payload until start observation.
+/// Verifies an adapter-owned agent bootstrap defers payload until fresh start proof.
 ///
 /// The initial handoff must contain only the persistent-shell launch and wrapper.
-/// Keeping the payload registered until the start marker lets certification
-/// sample that persistent receiver before an isolated transaction child starts.
+/// After the start marker, the runtime must request metadata from the exact PTY
+/// worker generation and keep the payload registered until the matching result
+/// arrives. A stale observation must neither record evidence nor release the
+/// isolated transaction child that would replace the foreground process group.
 #[test]
 fn runtime_agent_subshell_bootstrap_waits_for_start_before_releasing_payload() {
     let mut service = test_runtime_service();
@@ -1158,7 +1160,72 @@ fn runtime_agent_subshell_bootstrap_waits_for_start_before_releasing_payload() {
             .get(&marker)
             .unwrap()
             .pending_input_payload
-            .is_none()
+            .is_some(),
+        "payload must remain deferred while fresh start observation is pending"
+    );
+    let observation_effect = service
+        .drain_pane_io_transition()
+        .side_effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect:
+                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id,
+                    },
+            } => Some((instance, observation_id, expected_process_group_id)),
+            _ => None,
+        })
+        .expect("start boundary should request fresh worker metadata");
+    assert_eq!(observation_effect.2, None);
+
+    let stale = service
+        .apply_pane_foreground_process_observation_transition(
+            observation_effect.0.clone(),
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: "stale-start-observation".to_string(),
+                process_name: Some("bash".to_string()),
+                process_group_id: Some(41),
+                current_working_directory: Some("/tmp".to_string()),
+                error: None,
+            },
+        )
+        .unwrap();
+    assert!(!stale.applied);
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .get(&marker)
+            .unwrap()
+            .pending_input_payload
+            .is_some(),
+        "stale observation must not release the payload"
+    );
+    assert!(service.drain_pane_io_transition().side_effects.is_empty());
+
+    let observed = service
+        .apply_pane_foreground_process_observation_transition(
+            observation_effect.0,
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: observation_effect.1,
+                process_name: Some("bash".to_string()),
+                process_group_id: Some(41),
+                current_working_directory: Some("/tmp".to_string()),
+                error: None,
+            },
+        )
+        .unwrap();
+    assert!(observed.applied);
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .get(&marker)
+            .unwrap()
+            .pending_input_payload
+            .is_none(),
+        "matching fresh observation should release the payload"
     );
     let payload = service.drain_pane_io_transition().side_effects;
     assert_eq!(payload.len(), 1);

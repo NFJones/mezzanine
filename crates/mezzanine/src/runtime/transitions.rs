@@ -40,16 +40,18 @@ pub enum PaneProcessIoEffect {
     WriteInputPriority { bytes: Vec<u8> },
     /// Resize this process's PTY.
     Resize { size: Size },
-    /// Observe the foreground process after a bootstrap completion boundary.
+    /// Observe the foreground process at a bootstrap certification boundary.
     ///
-    /// The worker waits for the persistent receiver's process group instead
-    /// of returning a periodic metadata sample that may still describe the
-    /// isolated bootstrap child.
+    /// At start the worker captures the persistent receiver before payload
+    /// release. At completion it waits for that receiver's process group
+    /// instead of returning periodic metadata that may describe the isolated
+    /// bootstrap child.
     ObserveForegroundProcess {
         /// Correlation token bound to the pending runtime certification.
         observation_id: String,
-        /// Persistent receiver process group captured at bootstrap start.
-        expected_process_group_id: u32,
+        /// Process group awaited for completion certification, or `None` when
+        /// capturing the persistent receiver at the start boundary.
+        expected_process_group_id: Option<u32>,
     },
     /// Terminate this exact process instance.
     Terminate { force: bool },

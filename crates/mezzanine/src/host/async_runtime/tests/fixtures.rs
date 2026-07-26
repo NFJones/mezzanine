@@ -2,8 +2,14 @@
 
 use super::*;
 
+/// Builds the shared async runtime fixture with the minimal POSIX shell.
 pub(super) fn test_service() -> RuntimeSessionService {
-    let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
+    test_service_with_shell("/bin/sh")
+}
+
+/// Builds the shared async runtime fixture with an explicit shell executable.
+pub(super) fn test_service_with_shell(shell_path: &str) -> RuntimeSessionService {
+    let shell = resolve_shell(Some(OsString::from(shell_path))).unwrap();
     let size = Size::new(80, 24).unwrap();
     let session = Session::new_default(shell, size);
     RuntimeSessionService::new(

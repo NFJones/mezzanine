@@ -5,8 +5,8 @@ use super::super::{
     RuntimeAgentSubshellCertificationOutcome, RuntimeAgentSubshellCertificationRejection,
     RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
     RuntimePaneCertifiedShellIdentity, RuntimePaneShellHandoff,
-    RuntimePendingAgentSubshellCertification, RuntimePendingBootstrapEnvironment,
-    RuntimeSideEffect, RuntimeTransition,
+    RuntimePendingAgentSubshellCertification, RuntimePendingAgentSubshellStartObservation,
+    RuntimePendingBootstrapEnvironment, RuntimeSideEffect, RuntimeTransition,
 };
 use super::{
     AgentTurnState, EventKind, PaneReadinessState, RenderInvalidationReason, Result,
@@ -191,6 +191,9 @@ impl RuntimeSessionService {
             .pending_agent_subshell_certifications
             .remove(pane_id);
         self.process
+            .pending_agent_subshell_start_observations
+            .remove(pane_id);
+        self.process
             .bootstrap_shell_certification_evidence
             .retain(|_, evidence| evidence.pane_id != pane_id);
         self.process.pane_shell_handoffs.insert(
@@ -227,19 +230,65 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Captures persistent-receiver evidence before releasing bootstrap payload.
+    /// Captures or requests persistent-receiver evidence before payload release.
     ///
     /// The wrapper is blocked in its payload read loop at this boundary, so the
     /// foreground group belongs to the persistent agent subshell rather than an
     /// isolated child launched later by the transaction body.
-    pub(crate) fn observe_agent_subshell_bootstrap_start(&mut self, pane_id: &str, marker: &str) {
+    ///
+    /// Returns `true` when an adapter-owned observation is pending and payload
+    /// release must wait for its correlated result.
+    pub(crate) fn observe_agent_subshell_bootstrap_start(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+    ) -> bool {
+        let Some(handoff) = self.process.pane_shell_handoffs.get(pane_id) else {
+            return false;
+        };
+        if handoff.bootstrap_marker.as_deref() != Some(marker) {
+            return false;
+        }
+        if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
+            let observation_id = format!("{marker}:foreground-start:{}", instance.generation);
+            self.process
+                .pending_agent_subshell_start_observations
+                .insert(
+                    pane_id.to_string(),
+                    RuntimePendingAgentSubshellStartObservation {
+                        instance: instance.clone(),
+                        observation_id: observation_id.clone(),
+                        marker: marker.to_string(),
+                    },
+                );
+            self.persistence
+                .queue_pane_observation(RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect: PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id: None,
+                    },
+                });
+            return true;
+        }
+        let process_group_id = self.pane_foreground_process_group_observation(pane_id).0;
+        self.record_agent_subshell_bootstrap_start_observation(pane_id, marker, process_group_id);
+        false
+    }
+
+    /// Records one fresh persistent-receiver process-group observation.
+    fn record_agent_subshell_bootstrap_start_observation(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+        process_group_id: Option<u32>,
+    ) {
         let Some(handoff) = self.process.pane_shell_handoffs.get(pane_id) else {
             return;
         };
         if handoff.bootstrap_marker.as_deref() != Some(marker) {
             return;
         }
-        let process_group_id = self.pane_foreground_process_group_observation(pane_id).0;
         self.process.bootstrap_shell_certification_evidence.insert(
             marker.to_string(),
             RuntimeBootstrapShellCertificationEvidence {
@@ -343,7 +392,7 @@ impl RuntimeSessionService {
                     instance,
                     effect: PaneProcessIoEffect::ObserveForegroundProcess {
                         observation_id,
-                        expected_process_group_id,
+                        expected_process_group_id: Some(expected_process_group_id),
                     },
                 });
             return RuntimeAgentSubshellCertificationOutcome::Pending;
@@ -383,6 +432,37 @@ impl RuntimeSessionService {
         instance: PaneProcessInstance,
         observation: PaneForegroundProcessObservation,
     ) -> Result<RuntimeTransition> {
+        if let Some(pending) = self
+            .process
+            .pending_agent_subshell_start_observations
+            .get(&instance.pane_id)
+            .cloned()
+            && pending.instance == instance
+            && pending.observation_id == observation.observation_id
+        {
+            self.process
+                .pending_agent_subshell_start_observations
+                .remove(&instance.pane_id);
+            if observation.error.is_none() {
+                self.apply_correlated_pane_foreground_observation(&instance.pane_id, &observation)?;
+            }
+            let process_group_id = if observation.error.is_none() {
+                observation.process_group_id
+            } else {
+                None
+            };
+            self.record_agent_subshell_bootstrap_start_observation(
+                &instance.pane_id,
+                &pending.marker,
+                process_group_id,
+            );
+            self.release_agent_shell_transaction_payload_after_start(
+                &pending.marker,
+                &instance.pane_id,
+            )?;
+            return Ok(self
+                .runtime_transition_with_render(true, Some(RenderInvalidationReason::PaneOutput)));
+        }
         let Some(pending) = self
             .process
             .pending_agent_subshell_certifications
@@ -397,6 +477,9 @@ impl RuntimeSessionService {
         self.process
             .pending_agent_subshell_certifications
             .remove(&instance.pane_id);
+        if observation.error.is_none() {
+            self.apply_correlated_pane_foreground_observation(&instance.pane_id, &observation)?;
+        }
 
         let current_primary_process_id = self.primary_pid_for_live_pane_process(&instance.pane_id);
         let current_interaction_generation = self
@@ -465,6 +548,27 @@ impl RuntimeSessionService {
         }
         self.resume_after_bootstrap_settlement(&instance.pane_id)?;
         Ok(self.runtime_transition_with_render(true, Some(RenderInvalidationReason::FullRedraw)))
+    }
+
+    /// Refreshes pane metadata from one accepted correlated worker observation.
+    fn apply_correlated_pane_foreground_observation(
+        &mut self,
+        pane_id: &str,
+        observation: &PaneForegroundProcessObservation,
+    ) -> Result<()> {
+        let (Some(process_name), Some(process_group_id)) = (
+            observation.process_name.clone(),
+            observation.process_group_id,
+        ) else {
+            return Ok(());
+        };
+        let _ = self.apply_pane_foreground_process_event(
+            pane_id,
+            process_name,
+            process_group_id,
+            observation.current_working_directory.clone(),
+        )?;
+        Ok(())
     }
 
     /// Publishes environment-derived context after certification succeeds.
@@ -559,6 +663,9 @@ impl RuntimeSessionService {
         self.process.pane_certified_shell_identities.remove(pane_id);
         self.process.pane_shell_handoffs.remove(pane_id);
         self.process
+            .pending_agent_subshell_start_observations
+            .remove(pane_id);
+        self.process
             .pending_agent_subshell_certifications
             .remove(pane_id);
         self.process
@@ -618,6 +725,9 @@ impl RuntimeSessionService {
         self.process
             .bootstrap_shell_certification_evidence
             .remove(&marker);
+        self.process
+            .pending_agent_subshell_start_observations
+            .remove(pane_id);
         self.process.pane_bootstrap_pending.remove(pane_id);
         payload
     }
