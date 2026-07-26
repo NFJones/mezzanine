@@ -566,6 +566,53 @@ fn runtime_agent_shell_dotnet_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Confirmed Dart SDK detection and enablement consume exact active-pane
+/// evidence and persist only the typed kind, never host paths or Pub state.
+#[test]
+fn runtime_agent_shell_dart_toolchain_detects_and_persists_only_kind() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-dart-toolchain-mutation", config);
+    let dart_root = path.parent().unwrap().join("dart-sdk");
+    fs::create_dir_all(dart_root.join("bin")).unwrap();
+    fs::create_dir_all(dart_root.join("lib")).unwrap();
+    fs::write(dart_root.join("bin/dart"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        dart_root.join("bin/dart"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let dart_root = dart_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("dart-sdk:{}", dart_root.display())]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"dart-detect","method":"agent/shell/command","params":{"idempotency_key":"dart-detect","input":"/toolchain detect dart"}}"#,
+        &primary,
+    );
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `dart` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable dart --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled dart; updated"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("toolchains = [\"dart\"]"), "{persisted}");
+    assert!(
+        !persisted.contains(&dart_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

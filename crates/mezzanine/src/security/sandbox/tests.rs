@@ -1562,6 +1562,100 @@ fn dotnet_toolchain_discovery_rejects_incomplete_and_symlinked_sdks() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A validated Dart SDK is projected read-only with a deterministic executable
+/// path and project-isolated Pub package state.
+#[test]
+fn dart_toolchain_projection_is_read_only_and_pub_state_isolated() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-dart-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("dart-sdk");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::write(root.join("bin/dart"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        root.join("bin/dart"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let root = root.canonicalize().unwrap();
+
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Dart);
+    assert_eq!(descriptor.aliases, ["dart"]);
+    assert_eq!(descriptor.roots[0].evidence_kind, "dart-sdk");
+    assert_eq!(descriptor.roots[0].sandbox_destination, SANDBOX_DART_ROOT);
+    assert_eq!(descriptor.roots[0].required_executables, ["bin/dart"]);
+    assert_eq!(descriptor.roots[0].required_directories, ["lib"]);
+
+    let managers = [format!("dart-sdk:{}", root.display())];
+    let projection =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Dart], &managers, "linux")
+            .unwrap()
+            .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_DART_PATH);
+    assert_eq!(
+        projection.environment.get("PUB_CACHE").map(String::as_str),
+        Some("/home/mez/.cache/dart-pub")
+    );
+
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Dart];
+    let home_scope = home_authority(&base.canonicalize().unwrap().display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &home_scope, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    let source = root.display().to_string();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_DART_ROOT])
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Dart discovery rejects incomplete and shimmed SDKs instead of accepting a
+/// Flutter installation, manager prefix, or arbitrary executable tree.
+#[test]
+fn dart_toolchain_discovery_rejects_incomplete_and_symlinked_sdks() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-dart-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("dart-sdk");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/dart"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        root.join("bin/dart"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("dart-sdk:{}", root.display())];
+
+    assert!(
+        resolve_toolchain_projection(&[SandboxToolchainKind::Dart], &managers, "linux").is_err()
+    );
+
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    let external = base.join("external-dart");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(root.join("bin/dart")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("bin/dart")).unwrap();
+    let search_path = std::env::join_paths([root.join("bin")]).unwrap();
+    let error = discover_dart_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A validated Node.js distribution is projected read-only with bundled
 /// executables contained in its runtime root and mutable package state managed.
 #[test]
@@ -2276,7 +2370,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet"
+            "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart"
         ]
     );
     assert_eq!(
@@ -2294,6 +2388,10 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("dotnet"),
         Some(SandboxToolchainKind::Dotnet)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("dart"),
+        Some(SandboxToolchainKind::Dart)
     );
     assert_eq!(
         SANDBOX_RUST_PATH,

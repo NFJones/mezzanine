@@ -27,8 +27,8 @@ use crate::runtime::{
 };
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
-    SANDBOX_BUN_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
-    SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
+    SANDBOX_BUN_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH,
+    SANDBOX_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
     SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor, ToolchainPlatform,
     discover_rust_from_environment_managers, resolve_configured_toolchain_projection_for_project,
     resolve_toolchain_projection, toolchain_descriptor,
@@ -105,6 +105,7 @@ struct ToolchainStatus {
     python_root: Option<String>,
     jdk_root: Option<String>,
     dotnet_root: Option<String>,
+    dart_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -918,6 +919,7 @@ impl RuntimeSessionService {
             python_root,
             jdk_root,
             dotnet_root,
+            dart_root,
             discovery_error,
         ) = match self.pane_environment_signature(pane_id) {
             None if self.pane_bootstrap_is_pending(pane_id) => (
@@ -934,10 +936,12 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
                 None,
                 None,
                 None,
@@ -1112,6 +1116,24 @@ impl RuntimeSessionService {
                         None
                     }
                 };
+                let dart_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Dart],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("dart".to_string());
+                        projection
+                            .roots
+                            .first()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("dart:{}", error.message()));
+                        None
+                    }
+                };
                 let state = if discoverable.is_empty() {
                     "unavailable"
                 } else {
@@ -1130,6 +1152,7 @@ impl RuntimeSessionService {
                     python_root,
                     jdk_root,
                     dotnet_root,
+                    dart_root,
                     (!errors.is_empty()).then(|| errors.join(";")),
                 )
             }
@@ -1173,6 +1196,7 @@ impl RuntimeSessionService {
             python_root,
             jdk_root,
             dotnet_root,
+            dart_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -1571,6 +1595,21 @@ fn detect_toolchain_detail(
                 SANDBOX_DOTNET_PATH,
             ))
         }
+        SandboxToolchainKind::Dart => {
+            let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state("Dart projection unexpectedly resolved empty")
+                })?;
+            let root = projection.roots.first().ok_or_else(|| {
+                MezError::invalid_state("Dart projection is missing its SDK root")
+            })?;
+            Ok(format!(
+                "dart_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_DART_PATH,
+            ))
+        }
     }
 }
 
@@ -1805,6 +1844,10 @@ fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &Toolchain
             .into_iter()
             .flatten()
             .collect(),
+        SandboxToolchainKind::Dart => vec![status.dart_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
     };
     if values.is_empty() {
         "—".to_string()
@@ -1900,6 +1943,16 @@ mod tests {
             parse_toolchain_command("enable dotnet --yes").unwrap(),
             ToolchainCommand::Enable(vec![ToolchainSelection::BuiltIn(
                 SandboxToolchainKind::Dotnet,
+            )])
+        );
+        assert_eq!(
+            parse_toolchain_command("detect dart").unwrap(),
+            ToolchainCommand::Detect(ToolchainSelection::BuiltIn(SandboxToolchainKind::Dart,))
+        );
+        assert_eq!(
+            parse_toolchain_command("enable dart --yes").unwrap(),
+            ToolchainCommand::Enable(vec![ToolchainSelection::BuiltIn(
+                SandboxToolchainKind::Dart,
             )])
         );
         assert_eq!(

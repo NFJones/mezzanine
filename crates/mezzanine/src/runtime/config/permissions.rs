@@ -354,6 +354,8 @@ pub(crate) enum SandboxToolchainKind {
     Jdk,
     /// One selected .NET SDK installation.
     Dotnet,
+    /// One selected standalone Dart SDK installation.
+    Dart,
 }
 
 impl SandboxToolchainKind {
@@ -369,6 +371,7 @@ impl SandboxToolchainKind {
             Self::Python => "python",
             Self::Jdk => "jdk",
             Self::Dotnet => "dotnet",
+            Self::Dart => "dart",
         }
     }
 }

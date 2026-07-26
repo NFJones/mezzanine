@@ -25,7 +25,7 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 9] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 10] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
@@ -35,6 +35,7 @@ pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 9] = 
     SandboxToolchainKind::Python,
     SandboxToolchainKind::Jdk,
     SandboxToolchainKind::Dotnet,
+    SandboxToolchainKind::Dart,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -75,6 +76,10 @@ pub(crate) const SANDBOX_JDK_PATH: &str = "/opt/mez/toolchains/jdk/root/bin:/usr
 pub(crate) const SANDBOX_DOTNET_ROOT: &str = "/opt/mez/toolchains/dotnet/root";
 /// Fixed executable search path used when only the .NET SDK is projected.
 pub(crate) const SANDBOX_DOTNET_PATH: &str = "/opt/mez/toolchains/dotnet/root:/usr/bin:/bin";
+/// Fixed Dart SDK projection inside Bubblewrap.
+pub(crate) const SANDBOX_DART_ROOT: &str = "/opt/mez/toolchains/dart/root";
+/// Fixed executable search path used when only the Dart SDK is projected.
+pub(crate) const SANDBOX_DART_PATH: &str = "/opt/mez/toolchains/dart/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -654,6 +659,46 @@ const DOTNET_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const DART_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "dart-sdk",
+    label: "Dart SDK",
+    sandbox_destination: SANDBOX_DART_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/dart"],
+    required_directories: &["lib"],
+}];
+const DART_ENVIRONMENT: [ToolchainEnvironmentVariable; 1] = [ToolchainEnvironmentVariable {
+    name: "PUB_CACHE",
+    value: "/home/mez/.cache/dart-pub",
+}];
+const DART_MANAGED_STATE: [ManagedToolchainState; 1] = [ManagedToolchainState {
+    purpose: "dart-pub-cache",
+    sandbox_path: "/home/mez/.cache/dart-pub",
+}];
+const DART_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Dart,
+    aliases: &["dart"],
+    roots: &DART_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/dart",
+    ],
+    path_entries: &["/opt/mez/toolchains/dart/root/bin"],
+    environment: &DART_ENVIRONMENT,
+    managed_state: &DART_MANAGED_STATE,
+    forbidden_descendants: &["credentials.json", "global_packages", "flutter", "cache"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -974,6 +1019,7 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Python => &PYTHON_DESCRIPTOR,
         SandboxToolchainKind::Jdk => &JDK_DESCRIPTOR,
         SandboxToolchainKind::Dotnet => &DOTNET_DESCRIPTOR,
+        SandboxToolchainKind::Dart => &DART_DESCRIPTOR,
     }
 }
 
@@ -2163,6 +2209,54 @@ pub(crate) fn discover_dotnet_from_search_path(
             )
         })?;
         validate_descriptor_root(&root, &DOTNET_ROOTS[0])?;
+        return Ok(Some(root));
+    }
+    Ok(None)
+}
+
+/// Discovers one selected Dart SDK from an explicit search path without
+/// invoking asdf, mise, Flutter, shell hooks, or manager-owned shims.
+pub(crate) fn discover_dart_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    let Some(search_path) = search_path else {
+        return Ok(None);
+    };
+    for directory in std::env::split_paths(search_path) {
+        let executable = directory.join("dart");
+        let metadata = match fs::symlink_metadata(&executable) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to inspect selected Dart executable: {error}"),
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "selected Dart executable must be a real file, not a shim or symlink",
+            ));
+        }
+        let root = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "selected Dart executable has no SDK root",
+                )
+            })?
+            .canonicalize()
+            .map_err(|error| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to canonicalize selected Dart SDK: {error}"),
+                )
+            })?;
+        validate_descriptor_root(&root, &DART_ROOTS[0])?;
         return Ok(Some(root));
     }
     Ok(None)

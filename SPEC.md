@@ -2971,7 +2971,7 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state.
 Schema v32 MAY define constrained custom toolchains in the primary user layer
@@ -3021,6 +3021,21 @@ the managed home, while telemetry and first-time setup MUST be disabled. Host
 NuGet configuration and credentials, global tools, workloads, diagnostic and
 startup hooks, additional dependency/store paths, inherited environment, and
 unrelated SDKs MUST remain excluded.
+Schema v35 adds the allowlisted `dart` kind. Schema v34 to v35 migration MUST
+preserve existing built-in and custom selections or omission and MUST NOT
+discover or enable a Dart SDK. Direct-user discovery MUST use only the captured
+search path and accept a non-symlink executable exactly at
+`<canonical-root>/bin/dart`. Active-pane discovery MUST use exact
+`dart-sdk:<canonical-root>` bootstrap evidence without invoking asdf, mise,
+Flutter, or other manager hooks and without accepting manager shims. The
+selected root MUST contain a real executable `bin/dart` and a real `lib`
+directory. Incomplete, malformed, symlinked, overlapping, or
+authority-exceeding roots MUST fail closed. The root MUST be mounted read-only
+at `/opt/mez/toolchains/dart/root`; PATH MUST be exactly
+`/opt/mez/toolchains/dart/root/bin:/usr/bin:/bin`, and `PUB_CACHE` MUST point to
+`/home/mez/.cache/dart-pub` in the managed home. Host Pub credentials, globally
+activated executables, Flutter artifacts, manager state, inherited
+environment, and unrelated SDKs MUST remain excluded.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -5965,9 +5980,9 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
-  `node`, `python`, `jdk`, or `dotnet`. Unknown kinds, missing confirmation, duplicate confirmation, and
+  `node`, `python`, `jdk`, `dotnet`, or `dart`. Unknown kinds, missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,

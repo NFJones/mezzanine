@@ -859,6 +859,18 @@ telemetry and first-time setup are disabled. Host NuGet configuration and
 credentials, global tools, workloads, diagnostics and startup hooks, inherited
 environment, and unrelated SDKs remain excluded.
 
+Schema v35 adds the built-in `dart` selector without changing existing
+selections during v34 migration. Direct discovery accepts only a real
+`<canonical-root>/bin/dart` from the captured search path, while active-pane
+discovery consumes exact `dart-sdk:<canonical-root>` evidence; neither path
+invokes asdf, mise, Flutter, or other manager hooks. A complete SDK must
+provide the real executable and a `lib` directory. Mezzanine mounts that root
+read-only at `/opt/mez/toolchains/dart/root`, sets PATH to
+`/opt/mez/toolchains/dart/root/bin:/usr/bin:/bin`, and redirects
+`PUB_CACHE=/home/mez/.cache/dart-pub` into project-isolated managed state. Host
+Pub credentials, globally activated executables, Flutter artifacts, inherited
+environment, and unrelated SDKs remain excluded.
+
 For a trusted project, Bubblewrap uses a persistent managed home below
 `<config-root>/sandbox/cache-homes/<project-profile-key>/home`. The key hashes
 the canonical project root and Bubblewrap runtime-profile version, so panes in

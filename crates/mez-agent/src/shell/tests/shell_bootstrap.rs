@@ -40,6 +40,8 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains("env_manager \"jdk-runtime:"));
     assert!(script.contains("command -v dotnet"));
     assert!(script.contains("env_manager \"dotnet-sdk:"));
+    assert!(script.contains("command -v dart"));
+    assert!(script.contains("env_manager \"dart-sdk:"));
     assert!(script.contains("bootstrap"));
     assert!(script.contains("complete"));
     assert!(script.contains("AGENTS.md"));
@@ -78,6 +80,8 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     assert!(script.contains("env_manager \"jdk-runtime:"));
     assert!(script.contains("command -s dotnet"));
     assert!(script.contains("env_manager \"dotnet-sdk:"));
+    assert!(script.contains("command -s dart"));
+    assert!(script.contains("env_manager \"dart-sdk:"));
 }
 
 #[test]

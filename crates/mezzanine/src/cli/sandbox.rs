@@ -35,10 +35,11 @@ use crate::security::project::{
 };
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
-    SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH, SANDBOX_NODE_PATH,
-    SANDBOX_PYTHON_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
-    SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
-    clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_deno_from_search_path,
+    SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
+    SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
+    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
+    SandboxWorkflowRequest, clear_bubblewrap_managed_home, discover_bun_from_search_path,
+    discover_dart_from_search_path, discover_deno_from_search_path,
     discover_dotnet_from_search_path, discover_go_from_search_path, discover_jdk_from_search_path,
     discover_node_from_search_path, discover_python_from_search_path, discover_rust_from_home,
     discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
@@ -1165,6 +1166,7 @@ struct SandboxToolchainResult {
     python_root: Option<PathBuf>,
     jdk_root: Option<PathBuf>,
     dotnet_root: Option<PathBuf>,
+    dart_root: Option<PathBuf>,
     sandbox_path: &'static str,
     read_only: bool,
     applied: bool,
@@ -1624,6 +1626,7 @@ enum DirectToolchainDetection {
     Python(Option<PathBuf>),
     Jdk(Option<PathBuf>),
     Dotnet(Option<PathBuf>),
+    Dart(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1638,6 +1641,7 @@ impl DirectToolchainDetection {
             Self::Python(root) => root.is_some(),
             Self::Jdk(root) => root.is_some(),
             Self::Dotnet(root) => root.is_some(),
+            Self::Dart(root) => root.is_some(),
         }
     }
 
@@ -1652,6 +1656,7 @@ impl DirectToolchainDetection {
             Self::Python(_) => SandboxToolchainKind::Python,
             Self::Jdk(_) => SandboxToolchainKind::Jdk,
             Self::Dotnet(_) => SandboxToolchainKind::Dotnet,
+            Self::Dart(_) => SandboxToolchainKind::Dart,
         }
     }
 }
@@ -1688,6 +1693,9 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Dotnet => discover_dotnet_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Dotnet)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Dart => discover_dart_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Dart)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
     }
 }
 
@@ -1705,6 +1713,10 @@ fn toolchain_result(
     };
     let dotnet_root = match &detection {
         DirectToolchainDetection::Dotnet(root) => root.clone(),
+        _ => None,
+    };
+    let dart_root = match &detection {
+        DirectToolchainDetection::Dart(root) => root.clone(),
         _ => None,
     };
     let (
@@ -1817,6 +1829,17 @@ fn toolchain_result(
             None,
             SANDBOX_DOTNET_PATH,
         ),
+        DirectToolchainDetection::Dart(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_DART_PATH,
+        ),
     };
     SandboxToolchainResult {
         version: 1,
@@ -1833,6 +1856,7 @@ fn toolchain_result(
         python_root,
         jdk_root,
         dotnet_root,
+        dart_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -1938,6 +1962,14 @@ fn write_toolchain_result<W: Write>(
             "dotnet_root: {}",
             result
                 .dotnet_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "dart_root: {}",
+            result
+                .dart_root
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;

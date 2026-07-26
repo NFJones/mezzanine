@@ -744,6 +744,62 @@ fn sandbox_dotnet_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Dart SDK detection uses only the captured CLI search path, requires a
+/// complete standalone SDK, and persists no host path, Pub state, or tools.
+#[test]
+fn sandbox_dart_toolchain_detects_and_persists_only_kind() {
+    let (mut env, home) = test_env("sandbox-dart-toolchain");
+    let dart_root = home.join("dart-sdk");
+    fs::create_dir_all(dart_root.join("bin")).unwrap();
+    fs::create_dir_all(dart_root.join("lib")).unwrap();
+    fs::write(dart_root.join("bin/dart"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        dart_root.join("bin/dart"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let dart_root = dart_root.canonicalize().unwrap();
+    env.path = Some(dart_root.join("bin").into_os_string());
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let detect_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "detect".to_string(),
+            "--kind".to_string(),
+            "dart".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(detect_code, 0);
+    let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(detected["kind"], "dart");
+    assert_eq!(detected["available"], true);
+    assert_eq!(detected["dart_root"], dart_root.to_string_lossy().as_ref());
+    assert!(!config_path.exists());
+
+    assert_toolchain_enable_requires_live_primary(
+        env,
+        "dart",
+        &config_path,
+        &mut stdout,
+        &mut stderr,
+    );
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]
