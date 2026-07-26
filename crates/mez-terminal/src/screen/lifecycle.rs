@@ -33,6 +33,7 @@ impl TerminalScreen {
             line_wraps: vec![false; usize::from(size.rows)],
             line_copy_texts: vec![None; usize::from(size.rows)],
             wrap_continuation_prefix: None,
+            emoji_width: terminal_emoji_width(),
             cursor: Cursor { row: 0, column: 0 },
             cursor_visible: true,
             autowrap_enabled: true,
@@ -178,7 +179,8 @@ impl TerminalScreen {
     /// sentinels retain the width that was active when output was parsed. This
     /// reflows the live buffer at its current dimensions so later writes,
     /// cursor reports, and resizes all use one consistent footprint model.
-    pub fn rebuild_for_width_policy_change(&mut self) {
+    pub fn rebuild_for_width_policy_change(&mut self, emoji_width: TerminalEmojiWidth) {
+        self.emoji_width = emoji_width;
         let size = self.size;
         // A delayed wrap records that the previous width policy filled the
         // final cell. Recompute the cursor from the rebuilt footprint instead
@@ -251,16 +253,26 @@ impl TerminalScreen {
             && self
                 .leading_column_for_cell(self.cursor.row, self.cursor.column)
                 .is_some_and(|column| {
-                    self.cells[self.cursor.row][column].width() <= usize::from(size.columns)
+                    self.cells[self.cursor.row][column].width(self.emoji_width)
+                        <= usize::from(size.columns)
                 });
         let source_rows = self.current_visible_rows();
-        let cursor = cursor_logical_position(&source_rows, self.cursor.row, self.cursor.column);
-        let logical_lines =
-            merge_wrapped_physical_lines(&source_rows, self.wrap_continuation_prefix.as_deref());
+        let cursor = cursor_logical_position(
+            &source_rows,
+            self.cursor.row,
+            self.cursor.column,
+            self.emoji_width,
+        );
+        let logical_lines = merge_wrapped_physical_lines(
+            &source_rows,
+            self.wrap_continuation_prefix.as_deref(),
+            self.emoji_width,
+        );
         let physical_rows = reflow_logical_lines(
             &logical_lines,
             usize::from(size.columns),
             self.wrap_continuation_prefix.as_deref(),
+            self.emoji_width,
         );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
             physical_rows.len().saturating_sub(new_rows)
@@ -283,6 +295,7 @@ impl TerminalScreen {
                 &row.line,
                 &mut self.cells[row_index],
                 &mut self.renditions[row_index],
+                self.emoji_width,
             );
             self.line_wraps[row_index] = row.wraps_to_next;
             self.line_copy_texts[row_index] = row.line.copy_text.clone();
@@ -297,6 +310,7 @@ impl TerminalScreen {
                 logical_column.saturating_add(usize::from(preserve_delayed_wrap)),
                 usize::from(size.columns),
                 self.wrap_continuation_prefix.as_deref(),
+                self.emoji_width,
             );
             self.cursor.row = absolute_row.saturating_sub(visible_start).min(max_row);
             self.cursor.column = column.min(max_column);
@@ -366,6 +380,7 @@ impl TerminalScreen {
                             &self.cells[row],
                             &self.renditions[row],
                             copy_text,
+                            self.emoji_width,
                         ),
                         self.line_wraps.get(row).copied().unwrap_or(false),
                     );
@@ -458,6 +473,7 @@ impl TerminalScreen {
                 &row.line,
                 &mut self.cells[row_index],
                 &mut self.renditions[row_index],
+                self.emoji_width,
             );
             self.line_wraps[row_index] = row.wraps_to_next;
             self.line_copy_texts[row_index] = row.line.copy_text.clone();
@@ -499,16 +515,26 @@ impl TerminalScreen {
             && self
                 .leading_column_for_cell(self.cursor.row, self.cursor.column)
                 .is_some_and(|column| {
-                    self.cells[self.cursor.row][column].width() <= usize::from(size.columns)
+                    self.cells[self.cursor.row][column].width(self.emoji_width)
+                        <= usize::from(size.columns)
                 });
         let source_rows = self.current_visible_rows();
-        let cursor = cursor_logical_position(&source_rows, self.cursor.row, self.cursor.column);
-        let logical_lines =
-            merge_wrapped_physical_lines(&source_rows, self.wrap_continuation_prefix.as_deref());
+        let cursor = cursor_logical_position(
+            &source_rows,
+            self.cursor.row,
+            self.cursor.column,
+            self.emoji_width,
+        );
+        let logical_lines = merge_wrapped_physical_lines(
+            &source_rows,
+            self.wrap_continuation_prefix.as_deref(),
+            self.emoji_width,
+        );
         let physical_rows = reflow_logical_lines(
             &logical_lines,
             usize::from(size.columns),
             self.wrap_continuation_prefix.as_deref(),
+            self.emoji_width,
         );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
             physical_rows.len().saturating_sub(new_rows)
@@ -535,6 +561,7 @@ impl TerminalScreen {
                 &row.line,
                 &mut self.cells[row_index],
                 &mut self.renditions[row_index],
+                self.emoji_width,
             );
             self.line_wraps[row_index] = row.wraps_to_next;
             self.line_copy_texts[row_index] = row.line.copy_text.clone();
@@ -549,6 +576,7 @@ impl TerminalScreen {
                 logical_column.saturating_add(usize::from(preserve_delayed_wrap)),
                 usize::from(size.columns),
                 self.wrap_continuation_prefix.as_deref(),
+                self.emoji_width,
             );
             self.cursor.row = absolute_row.saturating_sub(visible_start).min(max_row);
             self.cursor.column = column.min(max_column);

@@ -1086,6 +1086,62 @@ fn runtime_agent_shell_native_toolchains_persist_only_kinds() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Swift detection consumes only exact active-pane bootstrap evidence, while
+/// enablement persists the typed kind without serializing the discovered root.
+#[test]
+fn runtime_agent_shell_swift_toolchain_persists_only_kind() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-swift-toolchain-mutation", config);
+    let root = path.parent().unwrap().join("swift");
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::create_dir_all(root.join("lib/swift/linux")).unwrap();
+    for executable in ["swift", "swiftc", "swift-package", "sourcekit-lsp"] {
+        let executable_path = root.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("swift-toolchain:{}", root.display())]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"swift-detect","method":"agent/shell/command","params":{"idempotency_key":"swift-detect","input":"/toolchain detect swift"}}"#,
+        &primary,
+    );
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `swift` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+    assert!(
+        detect.contains(&root.to_string_lossy().into_owned()),
+        "{detect}"
+    );
+    assert!(
+        detect.contains("/opt/mez/toolchains/swift/root/bin:/usr/bin:/bin"),
+        "{detect}"
+    );
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable swift --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(
+        persisted.contains("toolchains = [\"swift\"]"),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

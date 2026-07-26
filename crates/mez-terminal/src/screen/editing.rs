@@ -21,7 +21,7 @@ impl TerminalScreen {
             TerminalCharset::DecSpecialGraphics => dec_special_graphics_char(ch).unwrap_or(ch),
         };
         let text = translated.to_string();
-        let width = terminal_grapheme_width(&text);
+        let width = terminal_grapheme_width(&text, self.emoji_width);
         if width == 0 {
             return;
         }
@@ -190,6 +190,7 @@ impl TerminalScreen {
                         &self.cells[0],
                         &self.renditions[0],
                         self.line_copy_texts.first().cloned().flatten(),
+                        self.emoji_width,
                     ),
                     self.line_wraps.first().copied().unwrap_or(false),
                 );

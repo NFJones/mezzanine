@@ -25,7 +25,7 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 25] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 26] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
@@ -51,6 +51,7 @@ pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 25] =
     SandboxToolchainKind::Cmake,
     SandboxToolchainKind::Ninja,
     SandboxToolchainKind::Meson,
+    SandboxToolchainKind::Swift,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -158,6 +159,10 @@ pub(crate) const SANDBOX_NINJA_PATH: &str = "/opt/mez/toolchains/ninja/root/bin:
 pub(crate) const SANDBOX_MESON_ROOT: &str = "/opt/mez/toolchains/meson/root";
 /// Fixed executable search path used when only Meson is projected.
 pub(crate) const SANDBOX_MESON_PATH: &str = "/opt/mez/toolchains/meson/root/bin:/usr/bin:/bin";
+/// Fixed Swift toolchain projection inside Bubblewrap.
+pub(crate) const SANDBOX_SWIFT_ROOT: &str = "/opt/mez/toolchains/swift/root";
+/// Fixed executable search path used when Swift is projected on Linux.
+pub(crate) const SANDBOX_SWIFT_PATH: &str = "/opt/mez/toolchains/swift/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1368,6 +1373,79 @@ const MESON_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const SWIFT_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "swift-toolchain",
+    label: "Swift Linux toolchain",
+    sandbox_destination: SANDBOX_SWIFT_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &[
+        "bin/swift",
+        "bin/swiftc",
+        "bin/swift-package",
+        "bin/sourcekit-lsp",
+    ],
+    required_directories: &["lib/swift/linux"],
+}];
+const SWIFT_ENVIRONMENT: [ToolchainEnvironmentVariable; 2] = [
+    ToolchainEnvironmentVariable {
+        name: "SWIFTPM_CACHE_PATH",
+        value: "/home/mez/.cache/swiftpm",
+    },
+    ToolchainEnvironmentVariable {
+        name: "SWIFTPM_CONFIG_PATH",
+        value: "/home/mez/.config/swiftpm",
+    },
+];
+const SWIFT_MANAGED_STATE: [ManagedToolchainState; 3] = [
+    ManagedToolchainState {
+        purpose: "swiftpm-cache",
+        sandbox_path: "/home/mez/.cache/swiftpm",
+    },
+    ManagedToolchainState {
+        purpose: "swiftpm-config",
+        sandbox_path: "/home/mez/.config/swiftpm",
+    },
+    ManagedToolchainState {
+        purpose: "swift-build-state",
+        sandbox_path: "/home/mez/.local/state/swiftpm",
+    },
+];
+const SWIFT_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Swift,
+    aliases: &["swift"],
+    roots: &SWIFT_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/swift",
+    ],
+    path_entries: &["/opt/mez/toolchains/swift/root/bin"],
+    environment: &SWIFT_ENVIRONMENT,
+    managed_state: &SWIFT_MANAGED_STATE,
+    forbidden_descendants: &[
+        ".swiftenv",
+        ".asdf",
+        ".local/share/mise",
+        "Xcode.app",
+        "Developer",
+        "credentials",
+        "shims",
+    ],
+    platform: ToolchainPlatform::Linux,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[
+            SandboxToolchainKind::Llvm,
+            SandboxToolchainKind::Cmake,
+            SandboxToolchainKind::Ninja,
+        ],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -1715,6 +1793,7 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Cmake => &CMAKE_DESCRIPTOR,
         SandboxToolchainKind::Ninja => &NINJA_DESCRIPTOR,
         SandboxToolchainKind::Meson => &MESON_DESCRIPTOR,
+        SandboxToolchainKind::Swift => &SWIFT_DESCRIPTOR,
     }
 }
 
@@ -3221,6 +3300,22 @@ pub(crate) fn discover_meson_from_search_path(
         "Meson executable",
         "Meson distribution",
         &MESON_ROOTS[0],
+    )
+}
+
+/// Discovers one standalone Swift Linux toolchain from an explicit search path.
+///
+/// Discovery accepts only a real `<root>/bin/swiftc` executable and validates
+/// the complete distribution without invoking swiftenv, asdf, mise, or hooks.
+pub(crate) fn discover_swift_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "swiftc",
+        "Swift compiler",
+        "Swift Linux toolchain",
+        &SWIFT_ROOTS[0],
     )
 }
 

@@ -3114,6 +3114,98 @@ fn native_toolchains_reject_incomplete_and_symlinked_roots() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A complete standalone Swift distribution is accepted only on Linux, mounts
+/// read-only at its fixed root, and redirects SwiftPM mutable state beneath the
+/// managed home without inheriting Apple SDK or compiler/linker environment.
+#[test]
+fn swift_toolchain_projection_is_linux_only_and_state_isolated() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-swift-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("swift");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib/swift/linux")).unwrap();
+    for executable in ["swift", "swiftc", "swift-package", "sourcekit-lsp"] {
+        let path = root.join("bin").join(executable);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("swift-toolchain:{}", root.display())];
+
+    let projection =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Swift], &managers, "linux")
+            .unwrap()
+            .unwrap();
+    assert_eq!(projection.roots[0].host_path, root);
+    assert_eq!(projection.roots[0].sandbox_destination, SANDBOX_SWIFT_ROOT);
+    assert_eq!(projection.executable_path(), SANDBOX_SWIFT_PATH);
+    assert_eq!(
+        projection.environment.get("SWIFTPM_CACHE_PATH"),
+        Some(&"/home/mez/.cache/swiftpm".to_string())
+    );
+    assert_eq!(
+        projection.environment.get("SWIFTPM_CONFIG_PATH"),
+        Some(&"/home/mez/.config/swiftpm".to_string())
+    );
+    assert_eq!(projection.managed_state.len(), 3);
+    for variable in [
+        "SDKROOT",
+        "DEVELOPER_DIR",
+        "TOOLCHAINS",
+        "CC",
+        "CXX",
+        "CFLAGS",
+        "LDFLAGS",
+    ] {
+        assert!(!projection.environment.contains_key(variable));
+    }
+
+    let unsupported =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Swift], &managers, "macos")
+            .unwrap_err();
+    assert_eq!(
+        unsupported.kind(),
+        SandboxCompileErrorKind::UnsupportedRequirement
+    );
+    assert!(unsupported.message().contains("unsupported on macos"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Swift discovery fails closed for incomplete distributions and manager shims
+/// instead of projecting swiftenv, asdf, mise, or an unrelated host prefix.
+#[test]
+fn swift_toolchain_rejects_incomplete_and_symlinked_distributions() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-swift-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let incomplete = base.join("incomplete");
+    std::fs::create_dir_all(incomplete.join("bin")).unwrap();
+    let swiftc = incomplete.join("bin/swiftc");
+    std::fs::write(&swiftc, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&swiftc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let search_path = std::env::join_paths([incomplete.join("bin")]).unwrap();
+    let incomplete = discover_swift_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(incomplete.kind(), SandboxCompileErrorKind::InvalidInput);
+
+    let external = base.join("external-swiftc");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let shim = base.join("shim/bin");
+    std::fs::create_dir_all(&shim).unwrap();
+    std::os::unix::fs::symlink(&external, shim.join("swiftc")).unwrap();
+    let search_path = std::env::join_paths([shim]).unwrap();
+    let symlink = discover_swift_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(symlink.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Descriptor resolution and final launch validation reject ambiguous
 /// selection and any mutation of code-owned projection metadata or classes.
 #[test]
@@ -3268,7 +3360,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
         vec![
             "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart",
             "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack",
-            "ocaml", "llvm", "gcc", "cmake", "ninja", "meson"
+            "ocaml", "llvm", "gcc", "cmake", "ninja", "meson", "swift"
         ]
     );
     assert_eq!(
@@ -3282,6 +3374,10 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("jdk"),
         Some(SandboxToolchainKind::Jdk)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("swift"),
+        Some(SandboxToolchainKind::Swift)
     );
     assert_eq!(
         parse_sandbox_toolchain_kind("dotnet"),

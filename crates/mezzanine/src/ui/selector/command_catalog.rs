@@ -429,7 +429,7 @@ fn toolchain_argument_candidates(context: &SelectorTokenContext) -> Vec<Selector
     const BUILT_INS: &[&str] = &[
         "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart", "kotlin",
         "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack", "ocaml", "llvm",
-        "gcc", "cmake", "ninja", "meson",
+        "gcc", "cmake", "ninja", "meson", "swift",
     ];
     let Some(operation) = context.tokens_before.get(1).map(String::as_str) else {
         return value_candidates(&[

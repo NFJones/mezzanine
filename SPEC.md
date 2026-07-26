@@ -2971,7 +2971,7 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state, except that OCaml
 detection MUST use only the active pane's trusted project root.
@@ -3165,6 +3165,19 @@ Explicit multi-kind selection MUST compose PATH in descriptor order followed
 by `/usr/bin:/bin`. Mezzanine MUST NOT inherit `CC`, `CXX`, `CFLAGS`,
 `CPPFLAGS`, `LDFLAGS`, plugin or sysroot variables, Homebrew/Linuxbrew state,
 Conan/vcpkg state, package-manager credentials, or unrelated user tools.
+Schema v43 adds the allowlisted `swift` kind. Schema v42 to v43 migration MUST
+preserve existing built-in and custom selections or omission and MUST NOT
+discover or enable Swift. Swift projection MUST support Linux only and MUST use
+an exact `swift-toolchain` active-pane bootstrap root or direct captured-PATH
+discovery. Its canonical standalone root MUST contain real executable
+`bin/swift`, `bin/swiftc`, `bin/swift-package`, and `bin/sourcekit-lsp` files
+and a real `lib/swift/linux` directory. It MUST be mounted read-only at
+`/opt/mez/toolchains/swift/root`, and its PATH MUST be exactly
+`/opt/mez/toolchains/swift/root/bin:/usr/bin:/bin`. SwiftPM mutable state MUST
+be redirected beneath the managed home. Apple/Xcode SDKs, signing and simulator
+state, swiftenv/asdf/mise homes, host package credentials, arbitrary inherited
+compiler or linker flags, unrelated native prefixes, and discovered host roots
+MUST NOT be exposed or persisted.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -6109,11 +6122,11 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
   `node`, `python`, `jdk`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
   `composer`, `erlang`, `elixir`, `ghc`, `cabal`, `stack`, `ocaml`, `llvm`,
-  `gcc`, `cmake`, `ninja`, or `meson`. Unknown kinds,
+  `gcc`, `cmake`, `ninja`, `meson`, or `swift`. Unknown kinds,
   missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish

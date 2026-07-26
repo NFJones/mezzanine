@@ -32,8 +32,8 @@ use crate::security::sandbox::{
     SANDBOX_GHC_CABAL_PATH, SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH,
     SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_LLVM_PATH, SANDBOX_MESON_PATH,
     SANDBOX_NINJA_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH,
-    SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
-    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor, ToolchainPlatform,
+    SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_SWIFT_PATH,
+    SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor, ToolchainPlatform,
     discover_ocaml_project_environment, discover_rust_from_environment_managers,
     resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
     toolchain_descriptor,
@@ -126,6 +126,7 @@ struct ToolchainStatus {
     cmake_root: Option<String>,
     ninja_root: Option<String>,
     meson_root: Option<String>,
+    swift_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -956,6 +957,7 @@ impl RuntimeSessionService {
             cmake_root,
             ninja_root,
             meson_root,
+            swift_root,
             discovery_error,
         ) = match self.pane_environment_signature(pane_id) {
             None if self.pane_bootstrap_is_pending(pane_id) => (
@@ -988,10 +990,12 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
                 None,
                 None,
                 None,
@@ -1400,6 +1404,7 @@ impl RuntimeSessionService {
                 let cmake_root = resolve_native_root(SandboxToolchainKind::Cmake);
                 let ninja_root = resolve_native_root(SandboxToolchainKind::Ninja);
                 let meson_root = resolve_native_root(SandboxToolchainKind::Meson);
+                let swift_root = resolve_native_root(SandboxToolchainKind::Swift);
                 let state = if discoverable.is_empty() {
                     "unavailable"
                 } else {
@@ -1434,6 +1439,7 @@ impl RuntimeSessionService {
                     cmake_root,
                     ninja_root,
                     meson_root,
+                    swift_root,
                     (!errors.is_empty()).then(|| errors.join(";")),
                 )
             }
@@ -1493,6 +1499,7 @@ impl RuntimeSessionService {
             cmake_root,
             ninja_root,
             meson_root,
+            swift_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -2083,7 +2090,8 @@ fn detect_toolchain_detail(
         | SandboxToolchainKind::Gcc
         | SandboxToolchainKind::Cmake
         | SandboxToolchainKind::Ninja
-        | SandboxToolchainKind::Meson => {
+        | SandboxToolchainKind::Meson
+        | SandboxToolchainKind::Swift => {
             let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
                 .map_err(|error| MezError::invalid_state(error.message()))?
                 .ok_or_else(|| {
@@ -2098,6 +2106,7 @@ fn detect_toolchain_detail(
                 SandboxToolchainKind::Cmake => SANDBOX_CMAKE_PATH,
                 SandboxToolchainKind::Ninja => SANDBOX_NINJA_PATH,
                 SandboxToolchainKind::Meson => SANDBOX_MESON_PATH,
+                SandboxToolchainKind::Swift => SANDBOX_SWIFT_PATH,
                 _ => unreachable!("native toolchain arm restricts kind"),
             };
             Ok(format!(
@@ -2402,6 +2411,10 @@ fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &Toolchain
             .flatten()
             .collect(),
         SandboxToolchainKind::Meson => vec![status.meson_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Swift => vec![status.swift_root.as_deref()]
             .into_iter()
             .flatten()
             .collect(),

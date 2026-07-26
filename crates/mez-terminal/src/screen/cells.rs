@@ -20,6 +20,7 @@ impl TerminalScreen {
                     &self.cells[row],
                     &self.renditions[row],
                     self.line_copy_texts.get(row).cloned().flatten(),
+                    self.emoji_width,
                 ),
                 wraps_to_next: self.line_wraps.get(row).copied().unwrap_or(false),
             })
@@ -102,7 +103,9 @@ impl TerminalScreen {
         let Some(leading_column) = self.leading_column_for_cell(row, column) else {
             return;
         };
-        let width = self.cells[row][leading_column].width().max(1);
+        let width = self.cells[row][leading_column]
+            .width(self.emoji_width)
+            .max(1);
         let end = leading_column
             .saturating_add(width)
             .min(self.cells[row].len());
@@ -125,7 +128,7 @@ impl TerminalScreen {
                 column = column.saturating_add(1);
                 continue;
             }
-            let width = self.cells[row][column].width();
+            let width = self.cells[row][column].width(self.emoji_width);
             if width <= 1 {
                 column = column.saturating_add(1);
                 continue;
@@ -173,8 +176,10 @@ impl TerminalScreen {
         if graphemes.next() != Some(candidate.as_str()) || graphemes.next().is_some() {
             return false;
         }
-        let old_width = self.cells[self.cursor.row][leading_column].width().max(1);
-        let new_width = terminal_grapheme_width(&candidate);
+        let old_width = self.cells[self.cursor.row][leading_column]
+            .width(self.emoji_width)
+            .max(1);
+        let new_width = terminal_grapheme_width(&candidate, self.emoji_width);
         if new_width == 0 || leading_column.saturating_add(new_width) > row_cells.len() {
             return false;
         }

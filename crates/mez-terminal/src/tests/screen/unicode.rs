@@ -289,7 +289,7 @@ fn terminal_screen_rebuilds_emoji_footprints_after_width_policy_change() {
     screen.feed("ab⚠️c".as_bytes());
 
     crate::set_terminal_emoji_width(crate::TerminalEmojiWidth::Narrow);
-    screen.rebuild_for_width_policy_change();
+    screen.rebuild_for_width_policy_change(crate::TerminalEmojiWidth::Narrow);
     screen.feed(b"d");
 
     assert_eq!(screen.visible_lines()[0], "ab⚠️cd");

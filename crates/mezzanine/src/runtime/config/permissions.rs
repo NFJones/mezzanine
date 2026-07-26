@@ -386,6 +386,8 @@ pub(crate) enum SandboxToolchainKind {
     Ninja,
     /// One selected standalone Meson distribution.
     Meson,
+    /// One selected standalone Swift toolchain for Linux.
+    Swift,
 }
 
 impl SandboxToolchainKind {
@@ -417,6 +419,7 @@ impl SandboxToolchainKind {
             Self::Cmake => "cmake",
             Self::Ninja => "ninja",
             Self::Meson => "meson",
+            Self::Swift => "swift",
         }
     }
 }

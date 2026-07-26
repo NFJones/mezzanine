@@ -40,21 +40,22 @@ use crate::security::sandbox::{
     SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
     SANDBOX_KOTLIN_JDK_PATH, SANDBOX_LLVM_PATH, SANDBOX_MESON_PATH, SANDBOX_NINJA_PATH,
     SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH,
-    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
-    SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
-    clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_cabal_from_search_path,
-    discover_cmake_from_search_path, discover_composer_from_search_path,
-    discover_dart_from_search_path, discover_deno_from_search_path,
-    discover_dotnet_from_search_path, discover_elixir_from_search_path,
-    discover_erlang_from_search_path, discover_gcc_from_search_path, discover_ghc_from_search_path,
-    discover_go_from_search_path, discover_jdk_from_search_path, discover_kotlin_from_search_path,
+    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_SWIFT_PATH, SANDBOX_ZIG_PATH,
+    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
+    SandboxWorkflowRequest, clear_bubblewrap_managed_home, discover_bun_from_search_path,
+    discover_cabal_from_search_path, discover_cmake_from_search_path,
+    discover_composer_from_search_path, discover_dart_from_search_path,
+    discover_deno_from_search_path, discover_dotnet_from_search_path,
+    discover_elixir_from_search_path, discover_erlang_from_search_path,
+    discover_gcc_from_search_path, discover_ghc_from_search_path, discover_go_from_search_path,
+    discover_jdk_from_search_path, discover_kotlin_from_search_path,
     discover_llvm_from_search_path, discover_meson_from_search_path,
     discover_ninja_from_search_path, discover_node_from_search_path,
     discover_ocaml_project_environment, discover_php_from_search_path,
     discover_python_from_search_path, discover_ruby_from_search_path, discover_rust_from_home,
-    discover_stack_from_search_path, discover_zig_from_search_path,
-    inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind, plan_sandbox_workflow,
-    prune_bubblewrap_managed_homes,
+    discover_stack_from_search_path, discover_swift_from_search_path,
+    discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
+    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -1193,6 +1194,7 @@ struct SandboxToolchainResult {
     cmake_root: Option<PathBuf>,
     ninja_root: Option<PathBuf>,
     meson_root: Option<PathBuf>,
+    swift_root: Option<PathBuf>,
     sandbox_path: String,
     read_only: bool,
     applied: bool,
@@ -1685,6 +1687,7 @@ enum DirectToolchainDetection {
     Cmake(Option<PathBuf>),
     Ninja(Option<PathBuf>),
     Meson(Option<PathBuf>),
+    Swift(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1715,6 +1718,7 @@ impl DirectToolchainDetection {
             Self::Cmake(root) => root.is_some(),
             Self::Ninja(root) => root.is_some(),
             Self::Meson(root) => root.is_some(),
+            Self::Swift(root) => root.is_some(),
         }
     }
 
@@ -1745,6 +1749,7 @@ impl DirectToolchainDetection {
             Self::Cmake(_) => SandboxToolchainKind::Cmake,
             Self::Ninja(_) => SandboxToolchainKind::Ninja,
             Self::Meson(_) => SandboxToolchainKind::Meson,
+            Self::Swift(_) => SandboxToolchainKind::Swift,
         }
     }
 }
@@ -1839,6 +1844,9 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Meson => discover_meson_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Meson)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Swift => discover_swift_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Swift)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
     }
 }
 
@@ -1920,6 +1928,10 @@ fn toolchain_result(
     };
     let meson_root = match &detection {
         DirectToolchainDetection::Meson(root) => root.clone(),
+        _ => None,
+    };
+    let swift_root = match &detection {
+        DirectToolchainDetection::Swift(root) => root.clone(),
         _ => None,
     };
     let (
@@ -2209,6 +2221,17 @@ fn toolchain_result(
             None,
             SANDBOX_MESON_PATH.to_string(),
         ),
+        DirectToolchainDetection::Swift(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_SWIFT_PATH.to_string(),
+        ),
     };
     SandboxToolchainResult {
         version: 1,
@@ -2241,6 +2264,7 @@ fn toolchain_result(
         cmake_root,
         ninja_root,
         meson_root,
+        swift_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -2443,6 +2467,7 @@ fn write_toolchain_result<W: Write>(
             ("cmake_root", result.cmake_root.as_deref()),
             ("ninja_root", result.ninja_root.as_deref()),
             ("meson_root", result.meson_root.as_deref()),
+            ("swift_root", result.swift_root.as_deref()),
         ] {
             writeln!(
                 stdout,

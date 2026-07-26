@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, TerminalSize as Size,
+    DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, TerminalEmojiWidth, TerminalSize as Size,
     terminal_char_width as terminal_char_width_for_policy, terminal_emoji_width,
     terminal_grapheme_width as terminal_grapheme_width_for_policy, terminal_graphemes,
     terminal_text_width as terminal_text_width_for_policy,
@@ -21,19 +21,19 @@ pub use crate::{
     TerminalStyleSpan, TerminalStyledLine, tracked_dec_private_mode,
 };
 
-/// Returns the display width of one scalar under the active compatibility policy.
-fn terminal_char_width(ch: char) -> usize {
-    terminal_char_width_for_policy(ch, terminal_emoji_width())
+/// Returns the display width of one scalar under an explicit screen policy.
+fn terminal_char_width(ch: char, emoji_width: TerminalEmojiWidth) -> usize {
+    terminal_char_width_for_policy(ch, emoji_width)
 }
 
-/// Returns the display width of one grapheme under the active compatibility policy.
-fn terminal_grapheme_width(grapheme: &str) -> usize {
-    terminal_grapheme_width_for_policy(grapheme, terminal_emoji_width())
+/// Returns the display width of one grapheme under an explicit screen policy.
+fn terminal_grapheme_width(grapheme: &str, emoji_width: TerminalEmojiWidth) -> usize {
+    terminal_grapheme_width_for_policy(grapheme, emoji_width)
 }
 
-/// Returns the display width of text under the active compatibility policy.
-fn terminal_text_width(value: &str) -> usize {
-    terminal_text_width_for_policy(value, terminal_emoji_width())
+/// Returns the display width of text under an explicit screen policy.
+fn terminal_text_width(value: &str, emoji_width: TerminalEmojiWidth) -> usize {
+    terminal_text_width_for_policy(value, emoji_width)
 }
 
 // Terminal screen parser, OSC events, and alternate-screen state.
@@ -167,11 +167,11 @@ impl TerminalScreenCell {
     }
 
     /// Returns the display width occupied by this cell's leading text.
-    fn width(&self) -> usize {
+    fn width(&self, emoji_width: TerminalEmojiWidth) -> usize {
         if self.continuation {
             0
         } else {
-            terminal_grapheme_width(&self.text)
+            terminal_grapheme_width(&self.text, emoji_width)
         }
     }
 }
@@ -539,6 +539,8 @@ pub struct TerminalScreen {
     /// terminal parser recognizes it only when the first physical row carries
     /// explicit styling, so ordinary pane output remains unaffected.
     pub(super) wrap_continuation_prefix: Option<String>,
+    /// Emoji-width policy used to parse, reflow, and edit this screen.
+    pub(super) emoji_width: TerminalEmojiWidth,
     /// Stores the cursor value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -735,6 +737,7 @@ fn styled_line_from_row_with_copy_text(
     cells: &[TerminalScreenCell],
     renditions: &[GraphicRendition],
     copy_text: Option<String>,
+    emoji_width: TerminalEmojiWidth,
 ) -> TerminalStyledLine {
     let visible_columns = cells
         .iter()
@@ -763,7 +766,7 @@ fn styled_line_from_row_with_copy_text(
         }
 
         let span_start = display_column;
-        let mut span_width = limited_cells[cell].width().max(1);
+        let mut span_width = limited_cells[cell].width(emoji_width).max(1);
         cell = cell.saturating_add(1);
 
         while cell < limited_cells.len()
@@ -777,7 +780,7 @@ fn styled_line_from_row_with_copy_text(
                 cell = cell.saturating_add(1);
                 continue;
             }
-            span_width = span_width.saturating_add(limited_cells[cell].width().max(1));
+            span_width = span_width.saturating_add(limited_cells[cell].width(emoji_width).max(1));
             cell = cell.saturating_add(1);
         }
 
@@ -835,11 +838,12 @@ fn write_styled_line_to_row(
     line: &TerminalStyledLine,
     cells: &mut [TerminalScreenCell],
     renditions: &mut [GraphicRendition],
+    emoji_width: TerminalEmojiWidth,
 ) {
     let columns = cells.len();
     let mut column = 0usize;
     for grapheme in terminal_graphemes(&line.text) {
-        let width = terminal_grapheme_width(grapheme);
+        let width = terminal_grapheme_width(grapheme, emoji_width);
         if width == 0 {
             continue;
         }
@@ -877,6 +881,7 @@ fn write_styled_line_to_row(
 fn merge_wrapped_physical_lines(
     rows: &[PhysicalStyledLine],
     continuation_prefix: Option<&str>,
+    emoji_width: TerminalEmojiWidth,
 ) -> Vec<TerminalStyledLine> {
     let mut logical_lines = Vec::new();
     let mut current: Option<TerminalStyledLine> = None;
@@ -885,18 +890,20 @@ fn merge_wrapped_physical_lines(
         let starts_logical_line = current.is_none();
         if starts_logical_line {
             current_has_continuation_prefix = continuation_prefix.is_some_and(|prefix| {
-                continuation_prefix_from_styled_line(&row.line, prefix).is_some()
+                continuation_prefix_from_styled_line(&row.line, prefix, emoji_width).is_some()
             });
         }
         let current_line = current.get_or_insert_with(|| TerminalStyledLine::plain(String::new()));
         let source_line = if !starts_logical_line && current_has_continuation_prefix {
             continuation_prefix
-                .and_then(|prefix| strip_continuation_prefix_from_styled_line(&row.line, prefix))
+                .and_then(|prefix| {
+                    strip_continuation_prefix_from_styled_line(&row.line, prefix, emoji_width)
+                })
                 .unwrap_or_else(|| row.line.clone())
         } else {
             row.line.clone()
         };
-        append_styled_line(current_line, &source_line);
+        append_styled_line(current_line, &source_line, emoji_width);
         if !row.wraps_to_next {
             logical_lines.push(
                 current
@@ -920,8 +927,12 @@ fn merge_wrapped_physical_lines(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn append_styled_line(target: &mut TerminalStyledLine, source: &TerminalStyledLine) {
-    let offset = styled_line_width(target);
+fn append_styled_line(
+    target: &mut TerminalStyledLine,
+    source: &TerminalStyledLine,
+    emoji_width: TerminalEmojiWidth,
+) {
+    let offset = styled_line_width(target, emoji_width);
     target.text.push_str(&source.text);
     match (&mut target.copy_text, &source.copy_text) {
         (Some(target_copy), Some(source_copy)) => target_copy.push_str(source_copy),
@@ -946,11 +957,12 @@ fn reflow_logical_lines(
     lines: &[TerminalStyledLine],
     columns: usize,
     continuation_prefix: Option<&str>,
+    emoji_width: TerminalEmojiWidth,
 ) -> Vec<PhysicalStyledLine> {
     let columns = columns.max(1);
     let mut rows = Vec::new();
     for line in lines {
-        reflow_one_logical_line(line, columns, continuation_prefix, &mut rows);
+        reflow_one_logical_line(line, columns, continuation_prefix, emoji_width, &mut rows);
     }
     rows
 }
@@ -961,17 +973,18 @@ fn reflow_one_logical_line(
     line: &TerminalStyledLine,
     columns: usize,
     continuation_prefix: Option<&str>,
+    emoji_width: TerminalEmojiWidth,
     rows: &mut Vec<PhysicalStyledLine>,
 ) {
     let continuation_prefix = continuation_prefix
-        .and_then(|prefix| continuation_prefix_from_styled_line(line, prefix))
+        .and_then(|prefix| continuation_prefix_from_styled_line(line, prefix, emoji_width))
         .filter(|prefix| prefix_width(prefix) < columns);
     let mut source_column = 0usize;
     let mut current = TerminalStyledLine::plain(String::new());
     current.copy_text = line.copy_text.clone();
     let mut current_width = 0usize;
     for grapheme in terminal_graphemes(&line.text) {
-        let width = terminal_grapheme_width(grapheme);
+        let width = terminal_grapheme_width(grapheme, emoji_width);
         if width == 0 {
             source_column = source_column.saturating_add(width);
             continue;
@@ -984,12 +997,12 @@ fn reflow_one_logical_line(
             current = TerminalStyledLine::plain(String::new());
             current_width = 0;
             if let Some(prefix) = continuation_prefix.as_deref() {
-                push_styled_prefix(&mut current, prefix);
+                push_styled_prefix(&mut current, prefix, emoji_width);
                 current_width = prefix_width(prefix);
             }
         }
         let rendition = styled_line_rendition_at(line, source_column);
-        push_styled_grapheme(&mut current, grapheme, width, rendition);
+        push_styled_grapheme(&mut current, grapheme, width, rendition, emoji_width);
         current_width = current_width.saturating_add(width);
         source_column = source_column.saturating_add(width);
     }
@@ -1005,9 +1018,13 @@ fn prefix_width(prefix: &[StyledPrefixCell]) -> usize {
 }
 
 /// Copies a styled prefix into a logical row under construction.
-fn push_styled_prefix(line: &mut TerminalStyledLine, prefix: &[StyledPrefixCell]) {
+fn push_styled_prefix(
+    line: &mut TerminalStyledLine,
+    prefix: &[StyledPrefixCell],
+    emoji_width: TerminalEmojiWidth,
+) {
     for cell in prefix {
-        push_styled_char(line, cell.ch, cell.width, cell.rendition);
+        push_styled_char(line, cell.ch, cell.width, cell.rendition, emoji_width);
     }
 }
 
@@ -1015,13 +1032,14 @@ fn push_styled_prefix(line: &mut TerminalStyledLine, prefix: &[StyledPrefixCell]
 fn continuation_prefix_from_styled_line(
     line: &TerminalStyledLine,
     configured_prefix: &str,
+    emoji_width: TerminalEmojiWidth,
 ) -> Option<Vec<StyledPrefixCell>> {
     let mut source_column = 0usize;
     let mut line_chars = line.text.chars();
     let mut prefix = Vec::new();
     for expected in configured_prefix.chars() {
         let ch = line_chars.next()?;
-        let width = terminal_char_width(ch);
+        let width = terminal_char_width(ch, emoji_width);
         if ch != expected || width == 0 {
             return None;
         }
@@ -1040,8 +1058,9 @@ fn continuation_prefix_from_styled_line(
 fn strip_continuation_prefix_from_styled_line(
     line: &TerminalStyledLine,
     configured_prefix: &str,
+    emoji_width: TerminalEmojiWidth,
 ) -> Option<TerminalStyledLine> {
-    let prefix = continuation_prefix_from_styled_line(line, configured_prefix)?;
+    let prefix = continuation_prefix_from_styled_line(line, configured_prefix, emoji_width)?;
     let prefix_width = prefix_width(&prefix);
     let text = line.text.strip_prefix(configured_prefix)?.to_string();
     let style_spans = line
@@ -1081,10 +1100,11 @@ fn push_styled_char(
     ch: char,
     width: usize,
     rendition: GraphicRendition,
+    emoji_width: TerminalEmojiWidth,
 ) {
     let mut buffer = [0; 4];
     let grapheme = ch.encode_utf8(&mut buffer);
-    push_styled_grapheme(line, grapheme, width, rendition);
+    push_styled_grapheme(line, grapheme, width, rendition, emoji_width);
 }
 
 /// Pushes one grapheme cluster and its display width onto a styled line.
@@ -1099,8 +1119,9 @@ fn push_styled_grapheme(
     grapheme: &str,
     width: usize,
     rendition: GraphicRendition,
+    emoji_width: TerminalEmojiWidth,
 ) {
-    let start = styled_line_width(line);
+    let start = styled_line_width(line, emoji_width);
     line.text.push_str(grapheme);
     if rendition == GraphicRendition::default() {
         return;
@@ -1124,8 +1145,8 @@ fn push_styled_grapheme(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn styled_line_width(line: &TerminalStyledLine) -> usize {
-    terminal_text_width(&line.text)
+fn styled_line_width(line: &TerminalStyledLine, emoji_width: TerminalEmojiWidth) -> usize {
+    terminal_text_width(&line.text, emoji_width)
 }
 
 /// Runs the styled line rendition at operation for this subsystem.
@@ -1151,6 +1172,7 @@ fn cursor_logical_position(
     rows: &[PhysicalStyledLine],
     source_cursor_row: usize,
     source_cursor_column: usize,
+    emoji_width: TerminalEmojiWidth,
 ) -> Option<(usize, usize)> {
     let mut logical_line = 0usize;
     let mut logical_column = 0usize;
@@ -1161,7 +1183,7 @@ fn cursor_logical_position(
                 logical_column.saturating_add(source_cursor_column),
             ));
         }
-        logical_column = logical_column.saturating_add(styled_line_width(&row.line));
+        logical_column = logical_column.saturating_add(styled_line_width(&row.line, emoji_width));
         if !row.wraps_to_next {
             logical_line = logical_line.saturating_add(1);
             logical_column = 0;
@@ -1181,18 +1203,20 @@ fn physical_position_for_logical_cursor(
     logical_column: usize,
     columns: usize,
     continuation_prefix: Option<&str>,
+    emoji_width: TerminalEmojiWidth,
 ) -> (usize, usize) {
     let columns = columns.max(1);
     let row_offset = logical_lines
         .iter()
         .take(logical_line)
-        .map(|line| physical_row_count_for_line(line, columns, continuation_prefix))
+        .map(|line| physical_row_count_for_line(line, columns, continuation_prefix, emoji_width))
         .sum::<usize>();
     let (line_row, column) = physical_position_in_line(
         logical_lines.get(logical_line),
         logical_column,
         columns,
         continuation_prefix,
+        emoji_width,
     );
     (row_offset.saturating_add(line_row), column)
 }
@@ -1202,9 +1226,16 @@ fn physical_row_count_for_line(
     line: &TerminalStyledLine,
     columns: usize,
     continuation_prefix: Option<&str>,
+    emoji_width: TerminalEmojiWidth,
 ) -> usize {
     let mut rows = Vec::new();
-    reflow_one_logical_line(line, columns.max(1), continuation_prefix, &mut rows);
+    reflow_one_logical_line(
+        line,
+        columns.max(1),
+        continuation_prefix,
+        emoji_width,
+        &mut rows,
+    );
     rows.len().max(1)
 }
 
@@ -1215,12 +1246,13 @@ fn physical_position_in_line(
     logical_column: usize,
     columns: usize,
     continuation_prefix: Option<&str>,
+    emoji_width: TerminalEmojiWidth,
 ) -> (usize, usize) {
     let Some(line) = line else {
         return (0, 0);
     };
     let continuation_prefix = continuation_prefix
-        .and_then(|prefix| continuation_prefix_from_styled_line(line, prefix))
+        .and_then(|prefix| continuation_prefix_from_styled_line(line, prefix, emoji_width))
         .filter(|prefix| prefix_width(prefix) < columns);
     let mut row = 0usize;
     let mut source_column = 0usize;
@@ -1229,7 +1261,7 @@ fn physical_position_in_line(
         if source_column >= logical_column {
             return (row, current_width.min(columns.saturating_sub(1)));
         }
-        let width = terminal_grapheme_width(grapheme);
+        let width = terminal_grapheme_width(grapheme, emoji_width);
         if width == 0 {
             continue;
         }

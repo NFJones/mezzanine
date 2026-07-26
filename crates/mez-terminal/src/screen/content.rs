@@ -31,6 +31,7 @@ impl TerminalScreen {
                     cells,
                     renditions,
                     self.line_copy_texts.get(row).cloned().flatten(),
+                    self.emoji_width,
                 )
             })
             .collect()
@@ -180,6 +181,7 @@ impl TerminalScreen {
                         &self.cells[row],
                         &self.renditions[row],
                         self.line_copy_texts.get(row).cloned().flatten(),
+                        self.emoji_width,
                     ),
                     self.line_wraps.get(row).copied().unwrap_or(false),
                 );
@@ -262,6 +264,7 @@ impl TerminalScreen {
                 line,
                 &mut self.cells[row_index],
                 &mut self.renditions[row_index],
+                self.emoji_width,
             );
             self.line_copy_texts[row_index] = line.copy_text.clone();
         }

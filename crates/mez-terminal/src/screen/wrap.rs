@@ -11,7 +11,7 @@ impl TerminalScreen {
     /// line when the first physical row matches the configured policy.
     pub(super) fn current_wrap_continuation_prefix(&self) -> Option<Vec<StyledPrefixCell>> {
         let prefix = self.wrap_continuation_prefix.as_deref()?;
-        if usize::from(self.size.columns) <= terminal_text_width(prefix) {
+        if usize::from(self.size.columns) <= terminal_text_width(prefix, self.emoji_width) {
             return None;
         }
         let mut row = self.cursor.row.min(self.cells.len().saturating_sub(1));
@@ -32,7 +32,7 @@ impl TerminalScreen {
         let mut column = 0usize;
         let mut prefix = Vec::new();
         for expected in configured_prefix.chars() {
-            let width = terminal_char_width(expected);
+            let width = terminal_char_width(expected, self.emoji_width);
             let cell = cells.get(column)?;
             if width == 0 || cell.continuation || cell.text != expected.to_string() {
                 return None;

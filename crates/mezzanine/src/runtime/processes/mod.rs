@@ -485,10 +485,10 @@ impl RuntimeSessionService {
         mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
         if emoji_width_changed {
             for screen in self.process.pane_screens.values_mut() {
-                screen.rebuild_for_width_policy_change();
+                screen.rebuild_for_width_policy_change(terminal_emoji_width);
             }
             for screen in self.process.pane_transaction_osc_screens.values_mut() {
-                screen.rebuild_for_width_policy_change();
+                screen.rebuild_for_width_policy_change(terminal_emoji_width);
             }
         }
         Ok(())

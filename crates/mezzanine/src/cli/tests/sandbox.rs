@@ -1283,6 +1283,59 @@ fn sandbox_native_toolchains_detect_without_persisting_roots() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Swift detection accepts a complete standalone Linux distribution from the
+/// captured CLI search path, reports its canonical root, and remains read-only.
+#[test]
+fn sandbox_swift_toolchain_detects_without_persisting_root() {
+    let (mut env, home) = test_env("sandbox-swift-toolchain");
+    let root = home.join("swift");
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::create_dir_all(root.join("lib/swift/linux")).unwrap();
+    for executable in ["swift", "swiftc", "swift-package", "sourcekit-lsp"] {
+        let path = root.join("bin").join(executable);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+    env.path = Some(std::env::join_paths([root.join("bin")]).unwrap());
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let detect_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "detect".to_string(),
+            "--kind".to_string(),
+            "swift".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+
+    assert_eq!(detect_code, 0);
+    let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(detected["kind"], "swift");
+    assert_eq!(detected["available"], true);
+    assert_eq!(detected["swift_root"], root.to_string_lossy().as_ref());
+    assert_eq!(
+        detected["sandbox_path"],
+        "/opt/mez/toolchains/swift/root/bin:/usr/bin:/bin"
+    );
+    assert!(stderr.is_empty());
+    assert!(!config_path.exists());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]
