@@ -29,8 +29,8 @@ use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
     SANDBOX_BUN_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH,
     SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH,
-    SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor,
-    ToolchainPlatform, discover_rust_from_environment_managers,
+    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    ToolchainDescriptor, ToolchainPlatform, discover_rust_from_environment_managers,
     resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
     toolchain_descriptor,
 };
@@ -108,6 +108,7 @@ struct ToolchainStatus {
     dotnet_root: Option<String>,
     dart_root: Option<String>,
     kotlin_root: Option<String>,
+    ruby_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -923,6 +924,7 @@ impl RuntimeSessionService {
             dotnet_root,
             dart_root,
             kotlin_root,
+            ruby_root,
             discovery_error,
         ) = match self.pane_environment_signature(pane_id) {
             None if self.pane_bootstrap_is_pending(pane_id) => (
@@ -941,10 +943,12 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
                 None,
                 None,
                 None,
@@ -1157,6 +1161,24 @@ impl RuntimeSessionService {
                         None
                     }
                 };
+                let ruby_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Ruby],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("ruby".to_string());
+                        projection
+                            .roots
+                            .first()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("ruby:{}", error.message()));
+                        None
+                    }
+                };
                 let state = if discoverable.is_empty() {
                     "unavailable"
                 } else {
@@ -1177,6 +1199,7 @@ impl RuntimeSessionService {
                     dotnet_root,
                     dart_root,
                     kotlin_root,
+                    ruby_root,
                     (!errors.is_empty()).then(|| errors.join(";")),
                 )
             }
@@ -1222,6 +1245,7 @@ impl RuntimeSessionService {
             dotnet_root,
             dart_root,
             kotlin_root,
+            ruby_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -1654,6 +1678,21 @@ fn detect_toolchain_detail(
                 SANDBOX_KOTLIN_JDK_PATH,
             ))
         }
+        SandboxToolchainKind::Ruby => {
+            let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state("Ruby projection unexpectedly resolved empty")
+                })?;
+            let root = projection.roots.first().ok_or_else(|| {
+                MezError::invalid_state("Ruby projection is missing its runtime root")
+            })?;
+            Ok(format!(
+                "ruby_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_RUBY_PATH,
+            ))
+        }
     }
 }
 
@@ -1893,6 +1932,10 @@ fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &Toolchain
             .flatten()
             .collect(),
         SandboxToolchainKind::Kotlin => vec![status.kotlin_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Ruby => vec![status.ruby_root.as_deref()]
             .into_iter()
             .flatten()
             .collect(),

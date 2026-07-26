@@ -2971,7 +2971,7 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state.
 Schema v32 MAY define constrained custom toolchains in the primary user layer
@@ -3054,6 +3054,24 @@ PATH MUST be exactly
 and `JAVA_HOME` MUST remain `/opt/mez/toolchains/jdk/root`. SDKMAN, asdf, and mise
 state; Gradle and Android state; credentials; inherited environment; unrelated
 compiler versions; and Kotlin/Native or Kotlin/JS tooling MUST remain excluded.
+Schema v37 adds the allowlisted `ruby` kind. Schema v36 to v37 migration MUST
+preserve existing built-in and custom selections or omission and MUST NOT
+discover or enable Ruby. Direct-user discovery MUST use only the captured
+search path and accept a non-symlink executable exactly at
+`<canonical-root>/bin/ruby`. Active-pane discovery MUST use exact
+`ruby-runtime:<canonical-root>` bootstrap evidence without invoking rbenv,
+RVM, asdf, mise, or shell hooks and without accepting manager shims. The
+selected root MUST contain real executable `bin/ruby`, `bin/gem`, and
+`bin/bundle` entries and a real `lib/ruby` directory. Incomplete, malformed,
+symlinked, overlapping, or authority-exceeding roots MUST fail closed. The
+root MUST be mounted read-only at `/opt/mez/toolchains/ruby/root`; PATH MUST be
+exactly `/opt/mez/toolchains/ruby/root/bin:/usr/bin:/bin`. `GEM_HOME`,
+`GEM_PATH`, `BUNDLE_USER_HOME`, `BUNDLE_USER_CACHE`, `BUNDLE_USER_CONFIG`, and
+`BUNDLE_USER_PLUGIN` MUST point beneath the managed home. Host gem credentials,
+global Bundler configuration, manager metadata, unrelated versions and
+gemsets, user executable bins, inherited environment, and host caches MUST
+remain excluded. Repository `.bundle/config` remains project-controlled input
+and MUST NOT expand host authority.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -5998,9 +6016,9 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
-  `node`, `python`, `jdk`, `dotnet`, `dart`, or `kotlin`. Unknown kinds, missing confirmation, duplicate confirmation, and
+  `node`, `python`, `jdk`, `dotnet`, `dart`, `kotlin`, or `ruby`. Unknown kinds, missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,

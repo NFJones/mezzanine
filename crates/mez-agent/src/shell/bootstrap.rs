@@ -190,6 +190,12 @@ if [ -n \"$mez_kotlin_bin\" ] && [ -f \"$mez_kotlin_bin\" ] && [ ! -L \"$mez_kot
   mez_kotlin_root=$(CDPATH= cd -P -- \"$mez_kotlin_bin_dir/..\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_kotlin_root\" ] && [ \"$mez_kotlin_bin\" = \"$mez_kotlin_root/bin/kotlinc\" ] && mez_bootstrap_field env_manager \"kotlin-jvm:$mez_kotlin_root\"\n\
 fi\n\
+mez_ruby_bin=$(command -v ruby 2>/dev/null || true)\n\
+if [ -n \"$mez_ruby_bin\" ] && [ -f \"$mez_ruby_bin\" ] && [ ! -L \"$mez_ruby_bin\" ]; then\n\
+  mez_ruby_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_ruby_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_ruby_root=$(CDPATH= cd -P -- \"$mez_ruby_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_ruby_root\" ] && [ \"$mez_ruby_bin\" = \"$mez_ruby_root/bin/ruby\" ] && mez_bootstrap_field env_manager \"ruby-runtime:$mez_ruby_root\"\n\
+fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -363,6 +369,12 @@ if test -n \"$mez_kotlin_bin\"; and test -f \"$mez_kotlin_bin\"; and not test -L
   set -l mez_kotlin_bin_dir (cd (dirname \"$mez_kotlin_bin\") 2>/dev/null; and pwd -P)\n\
   set -l mez_kotlin_root (cd \"$mez_kotlin_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_kotlin_root\"; and test \"$mez_kotlin_bin\" = \"$mez_kotlin_root/bin/kotlinc\"; and mez_bootstrap_field env_manager \"kotlin-jvm:$mez_kotlin_root\"\n\
+end\n\
+set -l mez_ruby_bin (command -s ruby 2>/dev/null)\n\
+if test -n \"$mez_ruby_bin\"; and test -f \"$mez_ruby_bin\"; and not test -L \"$mez_ruby_bin\"\n\
+  set -l mez_ruby_bin_dir (cd (dirname \"$mez_ruby_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_ruby_root (cd \"$mez_ruby_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_ruby_root\"; and test \"$mez_ruby_bin\" = \"$mez_ruby_root/bin/ruby\"; and mez_bootstrap_field env_manager \"ruby-runtime:$mez_ruby_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\

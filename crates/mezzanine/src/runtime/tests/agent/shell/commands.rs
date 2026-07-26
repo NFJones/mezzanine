@@ -677,6 +677,52 @@ fn runtime_agent_shell_kotlin_toolchain_requires_jdk_and_persists_only_kinds() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Ruby detection consumes exact active-pane runtime evidence and enablement
+/// persists only the typed kind, never host roots, gemsets, or Bundler state.
+#[test]
+fn runtime_agent_shell_ruby_toolchain_detects_and_persists_only_kind() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-ruby-toolchain-mutation", config);
+    let ruby_root = path.parent().unwrap().join("ruby-runtime");
+    fs::create_dir_all(ruby_root.join("bin")).unwrap();
+    fs::create_dir_all(ruby_root.join("lib/ruby")).unwrap();
+    for executable in ["ruby", "gem", "bundle"] {
+        let executable_path = ruby_root.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let ruby_root = ruby_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("ruby-runtime:{}", ruby_root.display())]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"ruby-detect","method":"agent/shell/command","params":{"idempotency_key":"ruby-detect","input":"/toolchain detect ruby"}}"#,
+        &primary,
+    );
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `ruby` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable ruby --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled ruby; updated"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("toolchains = [\"ruby\"]"), "{persisted}");
+    assert!(
+        !persisted.contains(&ruby_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

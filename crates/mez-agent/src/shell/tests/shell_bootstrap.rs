@@ -44,6 +44,8 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains("env_manager \"dart-sdk:"));
     assert!(script.contains("command -v kotlinc"));
     assert!(script.contains("env_manager \"kotlin-jvm:"));
+    assert!(script.contains("command -v ruby"));
+    assert!(script.contains("env_manager \"ruby-runtime:"));
     assert!(script.contains("bootstrap"));
     assert!(script.contains("complete"));
     assert!(script.contains("AGENTS.md"));
@@ -86,6 +88,8 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     assert!(script.contains("env_manager \"dart-sdk:"));
     assert!(script.contains("command -s kotlinc"));
     assert!(script.contains("env_manager \"kotlin-jvm:"));
+    assert!(script.contains("command -s ruby"));
+    assert!(script.contains("env_manager \"ruby-runtime:"));
 }
 
 #[test]

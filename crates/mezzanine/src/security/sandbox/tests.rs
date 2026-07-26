@@ -1583,6 +1583,116 @@ fn kotlin_jvm_discovery_rejects_incomplete_and_symlinked_distributions() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A complete Ruby prefix is projected read-only with only its matching
+/// package executables and project-isolated RubyGems and Bundler state.
+#[test]
+fn ruby_toolchain_projection_is_read_only_and_package_state_isolated() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-ruby-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("ruby-runtime");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib/ruby")).unwrap();
+    for executable in ["ruby", "gem", "bundle"] {
+        let executable_path = root.join("bin").join(executable);
+        std::fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(executable_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Ruby);
+    assert_eq!(descriptor.aliases, ["ruby"]);
+    assert_eq!(descriptor.roots[0].evidence_kind, "ruby-runtime");
+    assert_eq!(descriptor.roots[0].sandbox_destination, SANDBOX_RUBY_ROOT);
+    assert_eq!(
+        descriptor.roots[0].required_executables,
+        ["bin/ruby", "bin/gem", "bin/bundle"]
+    );
+
+    let managers = [format!("ruby-runtime:{}", root.display())];
+    let projection =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Ruby], &managers, "linux")
+            .unwrap()
+            .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_RUBY_PATH);
+    for (name, value) in [
+        ("GEM_HOME", "/home/mez/.local/share/ruby/gems"),
+        ("GEM_PATH", "/home/mez/.local/share/ruby/gems"),
+        ("BUNDLE_USER_HOME", "/home/mez/.local/share/bundle"),
+        ("BUNDLE_USER_CACHE", "/home/mez/.cache/bundle"),
+        ("BUNDLE_USER_CONFIG", "/home/mez/.config/bundle/config"),
+        ("BUNDLE_USER_PLUGIN", "/home/mez/.local/share/bundle/plugin"),
+    ] {
+        assert_eq!(
+            projection.environment.get(name).map(String::as_str),
+            Some(value),
+            "missing {name}"
+        );
+    }
+
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Ruby];
+    let home_scope = home_authority(&base.canonicalize().unwrap().display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &home_scope, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    let source = root.display().to_string();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_RUBY_ROOT])
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Ruby discovery rejects incomplete prefixes and manager shims rather than
+/// broadening to rbenv, RVM, asdf, mise, gemsets, or user executable trees.
+#[test]
+fn ruby_toolchain_discovery_rejects_incomplete_and_symlinked_runtimes() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-ruby-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("ruby-runtime");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib/ruby")).unwrap();
+    std::fs::write(root.join("bin/ruby"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        root.join("bin/ruby"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("ruby-runtime:{}", root.display())];
+
+    assert!(
+        resolve_toolchain_projection(&[SandboxToolchainKind::Ruby], &managers, "linux").is_err()
+    );
+
+    for executable in ["gem", "bundle"] {
+        let executable_path = root.join("bin").join(executable);
+        std::fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(executable_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let external = base.join("external-ruby");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(root.join("bin/ruby")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("bin/ruby")).unwrap();
+    let search_path = std::env::join_paths([root.join("bin")]).unwrap();
+    let error = discover_ruby_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A validated .NET SDK is projected read-only with fixed runtime and managed
 /// state variables while telemetry and first-time setup remain deterministic.
 #[test]
@@ -2492,7 +2602,8 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart", "kotlin"
+            "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart",
+            "kotlin", "ruby"
         ]
     );
     assert_eq!(
@@ -2518,6 +2629,10 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("kotlin"),
         Some(SandboxToolchainKind::Kotlin)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("ruby"),
+        Some(SandboxToolchainKind::Ruby)
     );
     assert_eq!(
         SANDBOX_RUST_PATH,
