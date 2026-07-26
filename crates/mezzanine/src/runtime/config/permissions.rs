@@ -350,6 +350,8 @@ pub(crate) enum SandboxToolchainKind {
     Node,
     /// One selected Python base runtime with an optional trusted-project environment.
     Python,
+    /// One selected Java Development Kit distribution.
+    Jdk,
 }
 
 impl SandboxToolchainKind {
@@ -363,6 +365,7 @@ impl SandboxToolchainKind {
             Self::Bun => "bun",
             Self::Node => "node",
             Self::Python => "python",
+            Self::Jdk => "jdk",
         }
     }
 }

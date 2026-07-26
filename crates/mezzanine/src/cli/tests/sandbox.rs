@@ -629,6 +629,61 @@ fn sandbox_python_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// JDK detection and activation use only the captured CLI search path, require
+/// a complete SDK, and persist no host path, manager home, or build-tool state.
+#[test]
+fn sandbox_jdk_toolchain_detects_and_persists_only_kind() {
+    let (mut env, home) = test_env("sandbox-jdk-toolchain");
+    let jdk_root = home.join("jdk-runtime");
+    fs::create_dir_all(jdk_root.join("bin")).unwrap();
+    fs::create_dir_all(jdk_root.join("lib")).unwrap();
+    for executable in ["java", "javac", "jar"] {
+        let path = jdk_root.join("bin").join(executable);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let jdk_root = jdk_root.canonicalize().unwrap();
+    env.path = Some(jdk_root.join("bin").into_os_string());
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let detect_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "detect".to_string(),
+            "--kind".to_string(),
+            "jdk".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(detect_code, 0);
+    let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(detected["kind"], "jdk");
+    assert_eq!(detected["available"], true);
+    assert_eq!(detected["jdk_root"], jdk_root.to_string_lossy().as_ref());
+    assert!(!config_path.exists());
+
+    assert_toolchain_enable_requires_live_primary(
+        env,
+        "jdk",
+        &config_path,
+        &mut stdout,
+        &mut stderr,
+    );
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]

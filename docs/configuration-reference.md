@@ -833,6 +833,19 @@ config root, or unrelated configuration. Project trust alone never enables a
 toolchain. Explicit `host-access` bypasses the configured projection and is not
 a same-UID privilege boundary.
 
+Schema v33 adds the built-in `jdk` selector without changing existing
+selections during v32 migration. Direct discovery accepts only a real
+`javac` at `<canonical-root>/bin/javac` from the captured search path, while
+active-pane discovery consumes exact `jdk-runtime:<canonical-root>` evidence;
+neither path invokes SDKMAN, asdf, mise, jenv, or other manager hooks. A JDK
+must provide real executable `bin/java`, `bin/javac`, and `bin/jar` entries and
+the expected `lib` directory. Mezzanine mounts that one root read-only at
+`/opt/mez/toolchains/jdk/root`, sets PATH to
+`/opt/mez/toolchains/jdk/root/bin:/usr/bin:/bin`, and synthesizes
+`JAVA_HOME=/opt/mez/toolchains/jdk/root`. Manager homes, unrelated JDKs, Java
+preferences and credentials, Maven and Gradle state, inherited environment,
+and shell hooks remain excluded.
+
 For a trusted project, Bubblewrap uses a persistent managed home below
 `<config-root>/sandbox/cache-homes/<project-profile-key>/home`. The key hashes
 the canonical project root and Bubblewrap runtime-profile version, so panes in

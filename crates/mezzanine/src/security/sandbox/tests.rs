@@ -1348,6 +1348,119 @@ fn bun_toolchain_discovery_rejects_non_executable_and_symlinked_distributions() 
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A validated JDK is projected read-only with a fixed JAVA_HOME and requires
+/// compiler, runtime, and archive executables from one canonical SDK root.
+#[test]
+fn jdk_toolchain_projection_is_read_only_and_complete() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-jdk-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("jdk-runtime");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    for executable in ["java", "javac", "jar"] {
+        std::fs::write(root.join("bin").join(executable), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(
+            root.join("bin").join(executable),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let root = root.canonicalize().unwrap();
+
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Jdk);
+    assert_eq!(descriptor.aliases, ["jdk", "java"]);
+    assert_eq!(descriptor.roots[0].evidence_kind, "jdk-runtime");
+    assert_eq!(descriptor.roots[0].sandbox_destination, SANDBOX_JDK_ROOT);
+    assert_eq!(
+        descriptor.roots[0].required_executables,
+        ["bin/java", "bin/javac", "bin/jar"]
+    );
+
+    let managers = [format!("jdk-runtime:{}", root.display())];
+    let projection = resolve_toolchain_projection(&[SandboxToolchainKind::Jdk], &managers, "linux")
+        .unwrap()
+        .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_JDK_PATH);
+    assert_eq!(
+        projection.environment.get("JAVA_HOME").map(String::as_str),
+        Some(SANDBOX_JDK_ROOT)
+    );
+
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Jdk];
+    let home_scope = home_authority(&base.canonicalize().unwrap().display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &home_scope, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    let source = root.display().to_string();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_JDK_ROOT])
+    );
+    for (name, value) in [("JAVA_HOME", SANDBOX_JDK_ROOT), ("PATH", SANDBOX_JDK_PATH)] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--setenv", name, value]),
+            "missing {name}={value}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// JDK discovery rejects JRE-only and shimmed installations rather than
+/// broadening to a manager home or accepting an incomplete runtime.
+#[test]
+fn jdk_toolchain_discovery_rejects_incomplete_and_symlinked_sdks() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-jdk-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("jdk-runtime");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::write(root.join("bin/java"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        root.join("bin/java"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("jdk-runtime:{}", root.display())];
+
+    assert!(
+        resolve_toolchain_projection(&[SandboxToolchainKind::Jdk], &managers, "linux").is_err()
+    );
+
+    for executable in ["javac", "jar"] {
+        std::fs::write(root.join("bin").join(executable), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(
+            root.join("bin").join(executable),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let external = base.join("external-javac");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(root.join("bin/javac")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("bin/javac")).unwrap();
+    let search_path = std::env::join_paths([root.join("bin")]).unwrap();
+    let error = discover_jdk_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A validated Node.js distribution is projected read-only with bundled
 /// executables contained in its runtime root and mutable package state managed.
 #[test]
@@ -2061,7 +2174,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .iter()
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
-        vec!["rust", "zig", "go", "deno", "bun", "node", "python"]
+        vec!["rust", "zig", "go", "deno", "bun", "node", "python", "jdk"]
     );
     assert_eq!(
         parse_sandbox_toolchain_kind("rust"),
@@ -2070,6 +2183,10 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("python"),
         Some(SandboxToolchainKind::Python)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("jdk"),
+        Some(SandboxToolchainKind::Jdk)
     );
     assert_eq!(
         SANDBOX_RUST_PATH,

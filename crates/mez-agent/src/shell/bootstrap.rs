@@ -167,6 +167,12 @@ if [ -n \"$mez_python_bin\" ] && [ -f \"$mez_python_bin\" ] && [ ! -L \"$mez_pyt
   mez_python_root=$(CDPATH= cd -P -- \"$mez_python_bin_dir/..\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_python_root\" ] && [ \"$mez_python_bin\" = \"$mez_python_root/bin/python3\" ] && mez_bootstrap_field env_manager \"python-runtime:$mez_python_root\"\n\
 fi\n\
+mez_jdk_bin=$(command -v javac 2>/dev/null || true)\n\
+if [ -n \"$mez_jdk_bin\" ] && [ -f \"$mez_jdk_bin\" ] && [ ! -L \"$mez_jdk_bin\" ]; then\n\
+  mez_jdk_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_jdk_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_jdk_root=$(CDPATH= cd -P -- \"$mez_jdk_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_jdk_root\" ] && [ \"$mez_jdk_bin\" = \"$mez_jdk_root/bin/javac\" ] && mez_bootstrap_field env_manager \"jdk-runtime:$mez_jdk_root\"\n\
+fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -317,6 +323,12 @@ if test -n \"$mez_python_bin\"; and test -f \"$mez_python_bin\"; and not test -L
   set -l mez_python_bin_dir (cd (dirname \"$mez_python_bin\") 2>/dev/null; and pwd -P)\n\
   set -l mez_python_root (cd \"$mez_python_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_python_root\"; and test \"$mez_python_bin\" = \"$mez_python_root/bin/python3\"; and mez_bootstrap_field env_manager \"python-runtime:$mez_python_root\"\n\
+end\n\
+set -l mez_jdk_bin (command -s javac 2>/dev/null)\n\
+if test -n \"$mez_jdk_bin\"; and test -f \"$mez_jdk_bin\"; and not test -L \"$mez_jdk_bin\"\n\
+  set -l mez_jdk_bin_dir (cd (dirname \"$mez_jdk_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_jdk_root (cd \"$mez_jdk_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_jdk_root\"; and test \"$mez_jdk_bin\" = \"$mez_jdk_root/bin/javac\"; and mez_bootstrap_field env_manager \"jdk-runtime:$mez_jdk_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\

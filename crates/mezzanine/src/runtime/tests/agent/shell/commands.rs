@@ -469,6 +469,52 @@ fn runtime_agent_shell_python_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Confirmed JDK detection and enablement consume only exact active-pane SDK
+/// evidence and persist the typed kind without host paths or manager state.
+#[test]
+fn runtime_agent_shell_jdk_toolchain_detects_and_persists_only_kind() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-jdk-toolchain-mutation", config);
+    let jdk_root = path.parent().unwrap().join("jdk-runtime");
+    fs::create_dir_all(jdk_root.join("bin")).unwrap();
+    fs::create_dir_all(jdk_root.join("lib")).unwrap();
+    for executable in ["java", "javac", "jar"] {
+        let executable_path = jdk_root.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let jdk_root = jdk_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("jdk-runtime:{}", jdk_root.display())]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"jdk-detect","method":"agent/shell/command","params":{"idempotency_key":"jdk-detect","input":"/toolchain detect jdk"}}"#,
+        &primary,
+    );
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `jdk` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable jdk --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled jdk; updated"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(persisted.contains("toolchains = [\"jdk\"]"), "{persisted}");
+    assert!(
+        !persisted.contains(&jdk_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

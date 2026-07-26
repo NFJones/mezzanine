@@ -35,13 +35,14 @@ use crate::security::project::{
 };
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
-    SANDBOX_DENO_PATH, SANDBOX_GO_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUST_PATH,
-    SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity,
-    SandboxWorkflowPlan, SandboxWorkflowRequest, clear_bubblewrap_managed_home,
-    discover_bun_from_search_path, discover_deno_from_search_path, discover_go_from_search_path,
-    discover_node_from_search_path, discover_python_from_search_path, discover_rust_from_home,
-    discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
-    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
+    SANDBOX_DENO_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH,
+    SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
+    clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_deno_from_search_path,
+    discover_go_from_search_path, discover_jdk_from_search_path, discover_node_from_search_path,
+    discover_python_from_search_path, discover_rust_from_home, discover_zig_from_search_path,
+    inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind, plan_sandbox_workflow,
+    prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -1162,6 +1163,7 @@ struct SandboxToolchainResult {
     bun_root: Option<PathBuf>,
     node_root: Option<PathBuf>,
     python_root: Option<PathBuf>,
+    jdk_root: Option<PathBuf>,
     sandbox_path: &'static str,
     read_only: bool,
     applied: bool,
@@ -1619,6 +1621,7 @@ enum DirectToolchainDetection {
     Bun(Option<PathBuf>),
     Node(Option<PathBuf>),
     Python(Option<PathBuf>),
+    Jdk(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1631,6 +1634,7 @@ impl DirectToolchainDetection {
             Self::Bun(root) => root.is_some(),
             Self::Node(root) => root.is_some(),
             Self::Python(root) => root.is_some(),
+            Self::Jdk(root) => root.is_some(),
         }
     }
 
@@ -1643,6 +1647,7 @@ impl DirectToolchainDetection {
             Self::Bun(_) => SandboxToolchainKind::Bun,
             Self::Node(_) => SandboxToolchainKind::Node,
             Self::Python(_) => SandboxToolchainKind::Python,
+            Self::Jdk(_) => SandboxToolchainKind::Jdk,
         }
     }
 }
@@ -1673,6 +1678,9 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Python => discover_python_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Python)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Jdk => discover_jdk_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Jdk)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
     }
 }
 
@@ -1684,6 +1692,10 @@ fn toolchain_result(
 ) -> SandboxToolchainResult {
     let available = detection.available();
     let kind = detection.kind();
+    let jdk_root = match &detection {
+        DirectToolchainDetection::Jdk(root) => root.clone(),
+        _ => None,
+    };
     let (
         cargo_bin,
         rustup_home,
@@ -1772,6 +1784,17 @@ fn toolchain_result(
             root,
             SANDBOX_PYTHON_PATH,
         ),
+        DirectToolchainDetection::Jdk(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_JDK_PATH,
+        ),
     };
     SandboxToolchainResult {
         version: 1,
@@ -1786,6 +1809,7 @@ fn toolchain_result(
         bun_root,
         node_root,
         python_root,
+        jdk_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -1875,6 +1899,14 @@ fn write_toolchain_result<W: Write>(
             "python_root: {}",
             result
                 .python_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "jdk_root: {}",
+            result
+                .jdk_root
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;
