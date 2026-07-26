@@ -1,8 +1,8 @@
 //! Generic async pane backend contract and per-pane event driver.
 
 use super::{
-    MezError, PaneEvent, PaneProcessEvent, PaneProcessInstance, ProcessEvent, Result, RuntimeEvent,
-    Size,
+    MezError, PaneEvent, PaneForegroundProcessObservation, PaneProcessEvent, PaneProcessInstance,
+    ProcessEvent, Result, RuntimeEvent, Size,
 };
 use std::future::Future;
 use std::path::PathBuf;
@@ -242,6 +242,49 @@ where
                     .map(|path| path.to_string_lossy().to_string()),
             })),
         ))
+    }
+
+    /// Queries foreground metadata for a correlated runtime observation.
+    pub(super) async fn foreground_process_observation(
+        &mut self,
+    ) -> Result<Option<AsyncPaneForegroundProcess>> {
+        self.backend.foreground_process().await
+    }
+
+    /// Wraps one correlated foreground observation in this process instance.
+    pub(super) fn foreground_process_observation_event(
+        &self,
+        observation_id: String,
+        metadata: Option<AsyncPaneForegroundProcess>,
+        error: Option<String>,
+    ) -> RuntimeEvent {
+        let (process_name, process_group_id, current_working_directory) = metadata
+            .map(|metadata| {
+                (
+                    Some(metadata.process_name),
+                    Some(metadata.process_group_id),
+                    metadata
+                        .current_working_directory
+                        .map(|path| path.to_string_lossy().to_string()),
+                )
+            })
+            .unwrap_or((None, None, None));
+        let event =
+            PaneProcessEvent::ForegroundProcessObservation(PaneForegroundProcessObservation {
+                observation_id,
+                process_name,
+                process_group_id,
+                current_working_directory,
+                error,
+            });
+        match self.process_instance.clone() {
+            Some(instance) => RuntimeEvent::PaneProcess { instance, event },
+            None => RuntimeEvent::Pane(PaneEvent::WriteFailed {
+                pane_id: self.pane_id.clone(),
+                error: "InvalidState: correlated foreground observation requires an adapter-owned process"
+                    .to_string(),
+            }),
+        }
     }
 
     /// Writes input and returns the resulting pane I/O event.

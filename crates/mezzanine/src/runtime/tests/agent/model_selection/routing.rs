@@ -1180,8 +1180,9 @@ bootstrap\tcomplete\t1714500000\n",
 
 /// Verifies a routed worker retained for pending bootstrap still fails closed
 /// after that one-shot bootstrap settles without a usable environment
-/// signature. The provider task must be removed instead of deferring forever
-/// or proceeding without canonical sandbox authority.
+/// signature. A retained subshell-certification rejection must replace the
+/// generic missing-environment diagnostic, and the provider task must be
+/// removed instead of deferring forever or proceeding without authority.
 #[test]
 fn runtime_routed_worker_provider_fails_after_unparsed_bootstrap() {
     let root = temp_root("runtime-routed-worker-provider-bootstrap-failure");
@@ -1233,6 +1234,14 @@ fn runtime_routed_worker_provider_fails_after_unparsed_bootstrap() {
             0,
         )
         .unwrap();
+    service.set_pane_agent_subshell_certification_rejection_for_tests(
+        &worker_turn.pane_id,
+        crate::runtime::processes::RuntimeAgentSubshellCertificationRejection::EnvironmentSignatureMissing,
+    );
+    assert_eq!(
+        service.pane_agent_subshell_certification_rejection(&worker_turn.pane_id),
+        Some("environment_signature_missing")
+    );
     assert!(
         service
             .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)

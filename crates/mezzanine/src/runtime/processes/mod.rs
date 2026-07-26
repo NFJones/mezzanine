@@ -37,10 +37,10 @@ use super::{
 use crate::host::terminal::parse_mez_shell_transaction_osc;
 use crate::runtime::service_state::ProgramOwnedPaneTitle;
 use crate::runtime::{
-    PaneEvent, PaneProcessInstance, PaneProcessIoEffect, ProcessEvent, RenderInvalidationReason,
-    RuntimeSideEffect, RuntimeTransition,
+    PaneEvent, PaneForegroundProcessObservation, PaneProcessInstance, PaneProcessIoEffect,
+    ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
 };
-use mez_agent::AgentActionPayload;
+use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_transaction_phase,
 };
@@ -51,6 +51,7 @@ use mez_agent::shell_observation::{
     mez_wrapper_echo_line_visible_bytes, mez_wrapper_filter_bytes_may_contain_boilerplate,
     renderable_shell_transaction_bytes,
 };
+use mez_agent::{AgentActionPayload, ToolInventory};
 use mez_agent::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_END_MARKER,
     SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, bootstrap_script_for_classification,
@@ -133,6 +134,8 @@ impl RuntimeAgentSubshellCertificationRejection {
 pub(crate) enum RuntimeAgentSubshellCertificationOutcome {
     /// The completed bootstrap was not bound to an agent-subshell handoff.
     NotApplicable,
+    /// Static proof passed and an adapter-owned fresh PTY observation is pending.
+    Pending,
     /// Complete proof certified the persistent agent subshell.
     Certified,
     /// Proof was applicable but rejected for a stable reason.
@@ -179,6 +182,32 @@ struct RuntimeBootstrapShellCertificationEvidence {
     process_group_id: Option<u32>,
     /// Shell-interaction generation associated with the bootstrap marker.
     interaction_generation: u64,
+}
+
+/// Parsed bootstrap context withheld until shell certification succeeds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePendingBootstrapEnvironment {
+    /// Environment identity used to key path and tool authority.
+    signature: EnvironmentSignature,
+    /// Tool inventory discovered under the pending environment.
+    tool_inventory: Option<ToolInventory>,
+    /// Project instruction files discovered under the pending environment.
+    instruction_files: Vec<DiscoveredInstructionFile>,
+}
+
+/// Agent-subshell certification waiting on a fresh pane-worker observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimePendingAgentSubshellCertification {
+    /// Exact bootstrap marker that established the protocol boundaries.
+    marker: String,
+    /// Exact adapter-owned pane process lifetime that must answer.
+    instance: PaneProcessInstance,
+    /// Correlation token required on the worker observation event.
+    observation_id: String,
+    /// Start-boundary proof for the persistent receiver.
+    evidence: RuntimeBootstrapShellCertificationEvidence,
+    /// Parsed bootstrap context published only after certification.
+    environment: RuntimePendingBootstrapEnvironment,
 }
 
 /// Owns live process metadata that is private to the pane process subsystem.
@@ -253,6 +282,9 @@ pub(crate) struct RuntimeProcessComponent {
     /// Bootstrap-start foreground evidence keyed by exact transaction marker.
     bootstrap_shell_certification_evidence:
         std::collections::BTreeMap<String, RuntimeBootstrapShellCertificationEvidence>,
+    /// Parsed bootstrap context awaiting a correlated pane-worker observation.
+    pending_agent_subshell_certifications:
+        std::collections::BTreeMap<String, RuntimePendingAgentSubshellCertification>,
     /// Latest actionable agent-subshell certification rejection per pane.
     pane_agent_subshell_certification_rejections:
         std::collections::BTreeMap<String, RuntimeAgentSubshellCertificationRejection>,

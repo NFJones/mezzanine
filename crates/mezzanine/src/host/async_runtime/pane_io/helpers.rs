@@ -10,6 +10,12 @@ use super::{
     run_async_pane_process_service, sleep, watch,
 };
 
+/// Number of fresh PTY foreground queries allowed after bootstrap completion.
+const FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS: usize = 50;
+
+/// Delay between foreground queries while the isolated child relinquishes the PTY.
+const FOREGROUND_CERTIFICATION_OBSERVATION_DELAY: Duration = Duration::from_millis(10);
+
 /// Submits one pane-produced runtime event and accumulates ingress counters.
 pub(super) async fn submit_pane_runtime_event(
     handle: &AsyncRuntimeSessionHandle,
@@ -309,6 +315,21 @@ where
                 ..
             } => driver.resize_event(size).await,
             RuntimeSideEffect::PaneProcessIo {
+                effect:
+                    PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id,
+                    },
+                ..
+            } => {
+                correlated_foreground_process_observation_event(
+                    driver,
+                    observation_id,
+                    expected_process_group_id,
+                )
+                .await
+            }
+            RuntimeSideEffect::PaneProcessIo {
                 effect: PaneProcessIoEffect::Terminate { force },
                 ..
             } => driver.terminate_event(force).await,
@@ -346,6 +367,51 @@ where
     events
 }
 
+/// Waits boundedly for the persistent shell receiver to regain the pane PTY.
+///
+/// Bootstrap end output is written by an isolated child, so a foreground query
+/// at the exact output boundary can legitimately still see that child. The
+/// worker owns the PTY and therefore performs fresh observations until the
+/// process group captured at bootstrap start reappears or the bound expires.
+async fn correlated_foreground_process_observation_event<B>(
+    driver: &mut AsyncPaneProcessDriver<B>,
+    observation_id: String,
+    expected_process_group_id: u32,
+) -> RuntimeEvent
+where
+    B: AsyncPaneProcessIo,
+{
+    let mut last_metadata = None;
+    for attempt in 0..FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS {
+        match driver.foreground_process_observation().await {
+            Ok(metadata) => {
+                let matched = metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.process_group_id == expected_process_group_id);
+                last_metadata = metadata;
+                if matched {
+                    return driver.foreground_process_observation_event(
+                        observation_id,
+                        last_metadata,
+                        None,
+                    );
+                }
+            }
+            Err(error) => {
+                return driver.foreground_process_observation_event(
+                    observation_id,
+                    last_metadata,
+                    Some(error.to_string()),
+                );
+            }
+        }
+        if attempt + 1 < FOREGROUND_CERTIFICATION_OBSERVATION_ATTEMPTS {
+            sleep(FOREGROUND_CERTIFICATION_OBSERVATION_DELAY).await;
+        }
+    }
+    driver.foreground_process_observation_event(observation_id, last_metadata, None)
+}
+
 /// Returns the accepted byte count from legacy or instance-scoped write events.
 fn pane_input_written_bytes(event: &RuntimeEvent) -> Option<usize> {
     match event {
@@ -355,5 +421,117 @@ fn pane_input_written_bytes(event: &RuntimeEvent) -> Option<usize> {
             ..
         } => Some(*bytes),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::async_runtime::{
+        AsyncFakePaneProcessIo, AsyncPaneForegroundProcess, AsyncPaneProcessDriverConfig,
+        PaneForegroundProcessObservation,
+    };
+
+    /// Verifies the explicit observation ignores a transient child group and
+    /// returns only after the persistent receiver group becomes foreground.
+    ///
+    /// This models the real bootstrap race in which the end marker is consumed
+    /// while the isolated `setsid` child still owns the PTY, followed by the
+    /// agent subshell regaining it on the next host observation.
+    #[tokio::test(flavor = "current_thread")]
+    async fn correlated_foreground_observation_waits_for_expected_group() {
+        let instance = PaneProcessInstance {
+            pane_id: "%1".to_string(),
+            generation: 7,
+        };
+        let mut backend = AsyncFakePaneProcessIo::default();
+        backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+            process_name: "setsid".to_string(),
+            process_group_id: 22,
+            current_working_directory: None,
+        })));
+        backend.push_foreground_process_result(Ok(Some(AsyncPaneForegroundProcess {
+            process_name: "sh".to_string(),
+            process_group_id: 11,
+            current_working_directory: None,
+        })));
+        let mut driver = AsyncPaneProcessDriver::new_for_instance(
+            instance.clone(),
+            backend,
+            AsyncPaneProcessDriverConfig::default(),
+        )
+        .unwrap();
+
+        let event = correlated_foreground_process_observation_event(
+            &mut driver,
+            "observation-1".to_string(),
+            11,
+        )
+        .await;
+
+        assert_eq!(
+            event,
+            RuntimeEvent::PaneProcess {
+                instance,
+                event: PaneProcessEvent::ForegroundProcessObservation(
+                    PaneForegroundProcessObservation {
+                        observation_id: "observation-1".to_string(),
+                        process_name: Some("sh".to_string()),
+                        process_group_id: Some(11),
+                        current_working_directory: None,
+                        error: None,
+                    }
+                ),
+            }
+        );
+    }
+
+    /// Verifies a host query failure produces a correlated failure event
+    /// instead of dropping the request and leaving bootstrap pending forever.
+    #[tokio::test(flavor = "current_thread")]
+    async fn correlated_foreground_observation_reports_backend_failure() {
+        let instance = PaneProcessInstance {
+            pane_id: "%1".to_string(),
+            generation: 9,
+        };
+        let mut backend = AsyncFakePaneProcessIo::default();
+        backend.push_foreground_process_result(Err(MezError::invalid_state(
+            "foreground query failed",
+        )));
+        let mut driver = AsyncPaneProcessDriver::new_for_instance(
+            instance.clone(),
+            backend,
+            AsyncPaneProcessDriverConfig::default(),
+        )
+        .unwrap();
+
+        let event = correlated_foreground_process_observation_event(
+            &mut driver,
+            "observation-2".to_string(),
+            11,
+        )
+        .await;
+
+        let RuntimeEvent::PaneProcess {
+            instance: observed_instance,
+            event:
+                PaneProcessEvent::ForegroundProcessObservation(PaneForegroundProcessObservation {
+                    observation_id,
+                    process_group_id,
+                    error,
+                    ..
+                }),
+        } = event
+        else {
+            panic!("expected a correlated pane-process observation event");
+        };
+        assert_eq!(observed_instance, instance);
+        assert_eq!(observation_id, "observation-2");
+        assert_eq!(process_group_id, None);
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|error| error.contains("foreground query failed"))
+        );
     }
 }

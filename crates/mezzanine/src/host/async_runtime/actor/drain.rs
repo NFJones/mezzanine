@@ -384,6 +384,16 @@ impl AsyncRuntimeSessionActor {
                             size,
                         }
                     }
+                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id,
+                    } => RuntimeSideEffect::PaneProcessIo {
+                        instance,
+                        effect: crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                            observation_id,
+                            expected_process_group_id,
+                        },
+                    },
                     crate::runtime::PaneProcessIoEffect::Terminate { force } => {
                         RuntimeSideEffect::TerminatePane {
                             pane_id: instance.pane_id,

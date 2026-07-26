@@ -453,16 +453,20 @@ impl RuntimeSessionService {
             .flatten();
         let path_resolution_required =
             primary_path_resolution_request.is_some() || subagent_path_resolution_request.is_some();
-        if path_resolution_required
-            && self.pane_environment_signature(&turn.pane_id).is_none()
-            && self.pane_bootstrap_is_pending(&turn.pane_id)
-        {
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &turn.turn_id,
-                "provider_task deferred reason=pane_bootstrap_pending",
-            )?;
-            return Ok(None);
+        if path_resolution_required && self.pane_environment_signature(&turn.pane_id).is_none() {
+            if self.pane_bootstrap_is_pending(&turn.pane_id) {
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    "provider_task deferred reason=pane_bootstrap_pending",
+                )?;
+                return Ok(None);
+            }
+            if let Some(reason) = self.pane_agent_subshell_certification_rejection(&turn.pane_id) {
+                return Err(MezError::invalid_state(format!(
+                    "pane agent-subshell bootstrap certification failed: {reason}"
+                )));
+            }
         }
 
         let resolved_primary_path_scopes = if let Some(request) = primary_path_resolution_request {

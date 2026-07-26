@@ -557,6 +557,125 @@ fn runtime_agent_subshell_bootstrap_accepts_transient_isolated_child_group() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies an adapter-owned bootstrap withholds its environment until the
+/// pane worker returns the explicitly correlated persistent receiver group.
+///
+/// Periodic foreground metadata may still describe the isolated `setsid`
+/// bootstrap child when the end marker is parsed. That cache update must not
+/// reject certification, publish path authority, or settle readiness. Only the
+/// observation id and process generation emitted by the pending side effect
+/// may complete the second certification phase.
+#[test]
+fn runtime_agent_subshell_bootstrap_waits_for_correlated_worker_observation() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let subshell_group = primary_pid.saturating_add(1);
+    service.enter_agent_subshell("%1");
+    service.begin_agent_subshell_shell_handoff("%1").unwrap();
+    service.dispatch_bootstrap_to_pane("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", Some(subshell_group));
+    let (marker, turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .unwrap();
+    let output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t/tmp\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_preview = output.to_string();
+    transaction.observed_output_bytes = output.len();
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, &turn_id, "agent-%1", "%1")
+        .unwrap();
+    let mut process = service.take_running_pane_process_for_adapter("%1").unwrap();
+    service
+        .apply_pane_foreground_process_event("%1", "setsid", subshell_group.saturating_add(1), None)
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, &turn_id, "agent-%1", "%1", 0)
+        .unwrap();
+
+    assert!(service.pane_environment_signature("%1").is_none());
+    assert!(service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert_eq!(service.pane_readiness_state("%1"), PaneReadinessState::Busy);
+    let observation_effect = service
+        .drain_pane_io_transition()
+        .side_effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect:
+                    crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id,
+                    },
+            } => Some((instance, observation_id, expected_process_group_id)),
+            _ => None,
+        })
+        .expect("bootstrap completion should request a correlated foreground observation");
+    assert_eq!(observation_effect.2, subshell_group);
+
+    let stale = service
+        .apply_pane_foreground_process_observation_transition(
+            observation_effect.0.clone(),
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: "stale-observation".to_string(),
+                process_name: Some("sh".to_string()),
+                process_group_id: Some(subshell_group),
+                current_working_directory: Some("/tmp".to_string()),
+                error: None,
+            },
+        )
+        .unwrap();
+    assert!(!stale.applied);
+    assert!(service.pane_environment_signature("%1").is_none());
+
+    let settled = service
+        .apply_pane_foreground_process_observation_transition(
+            observation_effect.0,
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: observation_effect.1,
+                process_name: Some("sh".to_string()),
+                process_group_id: Some(subshell_group),
+                current_working_directory: Some("/tmp".to_string()),
+                error: None,
+            },
+        )
+        .unwrap();
+    assert!(settled.applied);
+    assert!(service.pane_environment_signature("%1").is_some());
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Ready
+    );
+    assert!(
+        service
+            .pane_agent_subshell_certification_rejection("%1")
+            .is_none()
+    );
+    let _ = process.terminate(std::time::Duration::from_millis(10));
+}
+
 /// Verifies a Mezzanine-owned agent subshell that completes a registered
 /// bootstrap is accepted for stale-busy recovery without trusting its name.
 #[test]

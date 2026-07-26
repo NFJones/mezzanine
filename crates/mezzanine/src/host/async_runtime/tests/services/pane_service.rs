@@ -643,6 +643,106 @@ async fn async_pane_process_service_waits_for_live_output_before_exit() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies the production async ownership path certifies an agent subshell
+/// after the isolated bootstrap child relinquishes the real pane PTY.
+///
+/// This is the end-to-end regression for the original failure: periodic
+/// foreground metadata can observe the transaction's `setsid` process, but
+/// bootstrap completion must request a fresh correlated worker observation,
+/// retain the parsed environment while pending, and publish it once the
+/// persistent agent shell regains the foreground process group.
+#[tokio::test(flavor = "current_thread")]
+async fn async_agent_subshell_bootstrap_certifies_with_fresh_worker_observation() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let pane_worker_handle = handle.clone();
+    let client_handle = handle.clone();
+    let pane_worker_done = StdArc::new(AtomicBool::new(false));
+    let pane_worker_stop = StdArc::clone(&pane_worker_done);
+
+    let pane_worker = async move {
+        let result = run_async_pane_process_supervisor_service(
+            pane_worker_handle,
+            AsyncPaneProcessSupervisorServiceConfig {
+                max_polls: u64::MAX,
+                take_limit: 8,
+                idle_interval: Duration::from_millis(1),
+                pane_service: AsyncPaneProcessServiceConfig {
+                    max_polls: u64::MAX,
+                    output_drain_limit: 4,
+                    drain_limit: 8,
+                    idle_interval: Duration::from_millis(1),
+                    foreground_metadata_interval: Duration::from_millis(10),
+                },
+            },
+            move |_, state| {
+                pane_worker_stop.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await;
+        if let Err(error) = result {
+            assert_eq!(
+                error.message(),
+                "async runtime session actor is closed",
+                "pane supervisor failed before actor shutdown"
+            );
+        }
+    };
+
+    let client = async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let toggled = tokio::time::timeout(
+            Duration::from_secs(3),
+            client_handle.execute_terminal_command(primary, "agent-shell".to_string()),
+        )
+        .await
+        .expect("agent-shell toggle should not hang")
+        .unwrap();
+        assert!(toggled.contains("agent-shell"), "{toggled}");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        pane_worker_done.store(true, Ordering::SeqCst);
+        assert_eq!(
+            client_handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), (), mut actor_exit) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(client, pane_worker, actor.run())
+    })
+    .await
+    .expect("agent-subshell bootstrap certification should not hang");
+    assert!(
+        actor_exit
+            .service
+            .pane_environment_signature("%1")
+            .is_some(),
+        "certification should publish the parsed pane environment"
+    );
+    assert!(
+        !actor_exit.service.pane_bootstrap_is_pending_for_tests("%1"),
+        "certification should clear the bootstrap pending gate"
+    );
+    assert_eq!(
+        actor_exit.service.pane_readiness_state("%1"),
+        mez_agent::PaneReadinessState::Ready
+    );
+    assert!(
+        actor_exit
+            .service
+            .pane_agent_subshell_certification_rejection("%1")
+            .is_none()
+    );
+    actor_exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that the async-owned pane path keeps the pane shell alive after the
 /// first agent shell command dispatch. This covers the production daemon shape:
 /// a real PTY shell is claimed by the Tokio pane worker, a provider completion

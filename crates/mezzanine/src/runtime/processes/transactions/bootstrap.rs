@@ -2,7 +2,7 @@
 
 use mez_agent::AgentShellVisibility;
 
-use super::super::RuntimeAgentSubshellCertificationOutcome;
+use super::super::{RuntimeAgentSubshellCertificationOutcome, RuntimePendingBootstrapEnvironment};
 use super::{
     AgentTurnState, DEFAULT_BOOTSTRAP_TIMEOUT_MS, EventKind, MezError, PaneReadinessState, Result,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
@@ -114,9 +114,8 @@ impl RuntimeSessionService {
         observed_output_preview: &str,
         observed_output_truncated: bool,
     ) -> Result<usize> {
-        self.process.pane_bootstrap_pending.remove(pane_id);
         let mut bootstrap_parsed = false;
-        let mut bootstrap_signature = None;
+        let mut bootstrap_environment = None;
         if exit_code == 0 {
             let all_output = if observed_output_preview.trim().is_empty() {
                 let screen = self.process.pane_screens.get(pane_id).ok_or_else(|| {
@@ -135,25 +134,11 @@ impl RuntimeSessionService {
 
             if let Some(sig) = signature {
                 bootstrap_parsed = true;
-                bootstrap_signature = Some(sig.clone());
-                // Authority resolved under the previous environment must be
-                // discarded before retained actions resume. Bubblewrap
-                // preflight rebuilds each missing prerequisite under `sig`.
-                self.process
-                    .pane_path_scopes
-                    .retain(|key, _| key.pane_id != pane_id);
-                self.process
-                    .pane_path_scope_failures
-                    .retain(|key, _| key.pane_id != pane_id);
-                self.process
-                    .pane_environment_signatures
-                    .insert(pane_id.to_string(), sig.clone());
-                if let Some(inv) = inventory.clone() {
-                    self.record_agent_tool_inventory(sig, inv);
-                }
-                if !instruction_files.is_empty() {
-                    self.set_pane_agent_instruction_files(pane_id, instruction_files);
-                }
+                bootstrap_environment = Some(RuntimePendingBootstrapEnvironment {
+                    signature: sig,
+                    tool_inventory: inventory,
+                    instruction_files,
+                });
                 self.append_lifecycle_event(
                     EventKind::AgentStatus,
                     format!(
@@ -190,24 +175,55 @@ impl RuntimeSessionService {
             marker,
             exit_code,
             observed_output_truncated,
-            bootstrap_signature.as_ref(),
+            bootstrap_environment.clone(),
         );
-        if let RuntimeAgentSubshellCertificationOutcome::Rejected(reason) = certification {
-            self.append_lifecycle_event(
-                EventKind::Diagnostic,
-                format!(
-                    r#"{{"pane_id":"{}","bootstrap":"certification_failed","marker":"{}","reason":"{}"}}"#,
-                    json_escape(pane_id),
-                    json_escape(marker),
-                    reason.as_str()
-                ),
-            )?;
-            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
-        } else if bootstrap_parsed || exit_code == 0 {
-            self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
-        } else if self.pane_readiness_state(pane_id) == PaneReadinessState::Busy {
-            self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
+        match certification {
+            RuntimeAgentSubshellCertificationOutcome::Pending => {
+                self.append_lifecycle_event(
+                    EventKind::AgentStatus,
+                    format!(
+                        r#"{{"pane_id":"{}","bootstrap":"certification_pending","marker":"{}","observation":"fresh_worker"}}"#,
+                        json_escape(pane_id),
+                        json_escape(marker)
+                    ),
+                )?;
+                return Ok(1);
+            }
+            RuntimeAgentSubshellCertificationOutcome::Rejected(reason) => {
+                self.process.pane_bootstrap_pending.remove(pane_id);
+                self.append_lifecycle_event(
+                    EventKind::Diagnostic,
+                    format!(
+                        r#"{{"pane_id":"{}","bootstrap":"certification_failed","marker":"{}","reason":"{}"}}"#,
+                        json_escape(pane_id),
+                        json_escape(marker),
+                        reason.as_str()
+                    ),
+                )?;
+                self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+            }
+            RuntimeAgentSubshellCertificationOutcome::NotApplicable => {
+                self.process.pane_bootstrap_pending.remove(pane_id);
+                if let Some(environment) = bootstrap_environment {
+                    self.publish_bootstrap_environment(pane_id, environment);
+                }
+                if bootstrap_parsed || exit_code == 0 {
+                    self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+                } else if self.pane_readiness_state(pane_id) == PaneReadinessState::Busy {
+                    self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
+                }
+            }
+            RuntimeAgentSubshellCertificationOutcome::Certified => {
+                self.process.pane_bootstrap_pending.remove(pane_id);
+                self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
+            }
         }
+        self.resume_after_bootstrap_settlement(pane_id)?;
+        Ok(1)
+    }
+
+    /// Resumes deferred agent work only after bootstrap authority is settled.
+    pub(crate) fn resume_after_bootstrap_settlement(&mut self, pane_id: &str) -> Result<()> {
         let pending_shell_turns = self
             .agent_turn_executions()
             .iter()
@@ -233,7 +249,7 @@ impl RuntimeSessionService {
         {
             let _ = self.exit_agent_subshell_if_active(pane_id)?;
         }
-        Ok(1)
+        Ok(())
     }
 
     /// Dispatches hidden bootstrap wrappers for pending panes that have reached

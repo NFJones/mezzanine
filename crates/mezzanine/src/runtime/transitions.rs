@@ -40,8 +40,34 @@ pub enum PaneProcessIoEffect {
     WriteInputPriority { bytes: Vec<u8> },
     /// Resize this process's PTY.
     Resize { size: Size },
+    /// Observe the foreground process after a bootstrap completion boundary.
+    ///
+    /// The worker waits for the persistent receiver's process group instead
+    /// of returning a periodic metadata sample that may still describe the
+    /// isolated bootstrap child.
+    ObserveForegroundProcess {
+        /// Correlation token bound to the pending runtime certification.
+        observation_id: String,
+        /// Persistent receiver process group captured at bootstrap start.
+        expected_process_group_id: u32,
+    },
     /// Terminate this exact process instance.
     Terminate { force: bool },
+}
+
+/// Result of one explicitly correlated foreground-process observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneForegroundProcessObservation {
+    /// Correlation token copied from the observation side effect.
+    pub observation_id: String,
+    /// Foreground process display name when the host supplied one.
+    pub process_name: Option<String>,
+    /// Last foreground process group observed before the bounded wait ended.
+    pub process_group_id: Option<u32>,
+    /// Foreground process current working directory when known.
+    pub current_working_directory: Option<String>,
+    /// Host observation failure when the PTY could not be queried.
+    pub error: Option<String>,
 }
 
 /// Pane-process event carrying the instance identity assigned at handoff.
@@ -51,6 +77,8 @@ pub enum PaneProcessEvent {
     Pane(PaneEvent),
     /// Lifecycle output from one pane worker.
     Process(ProcessEvent),
+    /// Correlated foreground metadata requested by serialized runtime state.
+    ForegroundProcessObservation(PaneForegroundProcessObservation),
 }
 
 /// Source of a runtime event entering the single-owner session actor.

@@ -10,9 +10,10 @@
 
 use super::{
     AsyncRuntimeService, AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, Duration, MezError,
-    PaneEvent, PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect, ProcessEvent, Result,
-    RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport, RuntimeLifecycleState,
-    RuntimeSideEffect, Size, is_terminal_runtime_lifecycle_state,
+    PaneEvent, PaneForegroundProcessObservation, PaneProcessEvent, PaneProcessInstance,
+    PaneProcessIoEffect, ProcessEvent, Result, RuntimeEvent, RuntimeEventBatch,
+    RuntimeEventIngressReport, RuntimeLifecycleState, RuntimeSideEffect, Size,
+    is_terminal_runtime_lifecycle_state,
 };
 use std::collections::{HashSet, VecDeque};
 use std::os::fd::{AsRawFd, OwnedFd};

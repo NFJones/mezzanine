@@ -1,12 +1,16 @@
 //! Shell transaction event observation and foreground-shell state.
 
 use super::super::{
-    EnvironmentSignature, RuntimeAgentSubshellCertificationOutcome,
-    RuntimeAgentSubshellCertificationRejection, RuntimeBootstrapShellCertificationEvidence,
-    RuntimeCertifiedShellSource, RuntimePaneCertifiedShellIdentity, RuntimePaneShellHandoff,
+    PaneForegroundProcessObservation, PaneProcessInstance, PaneProcessIoEffect,
+    RuntimeAgentSubshellCertificationOutcome, RuntimeAgentSubshellCertificationRejection,
+    RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
+    RuntimePaneCertifiedShellIdentity, RuntimePaneShellHandoff,
+    RuntimePendingAgentSubshellCertification, RuntimePendingBootstrapEnvironment,
+    RuntimeSideEffect, RuntimeTransition,
 };
 use super::{
-    AgentTurnState, Result, RuntimeSessionService, TerminalOscEvent,
+    AgentTurnState, EventKind, PaneReadinessState, RenderInvalidationReason, Result,
+    RuntimeSessionService, TerminalOscEvent, json_escape,
     runtime_execution_ready_for_provider_continuation,
 };
 
@@ -184,6 +188,9 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.process.pane_certified_shell_identities.remove(pane_id);
         self.process
+            .pending_agent_subshell_certifications
+            .remove(pane_id);
+        self.process
             .bootstrap_shell_certification_evidence
             .retain(|_, evidence| evidence.pane_id != pane_id);
         self.process.pane_shell_handoffs.insert(
@@ -244,14 +251,14 @@ impl RuntimeSessionService {
         );
     }
 
-    /// Settles a handoff bootstrap and promotes only consistent, complete proof.
+    /// Settles synchronous proof or requests a fresh adapter-owned observation.
     pub(crate) fn settle_agent_subshell_bootstrap_certification(
         &mut self,
         pane_id: &str,
         marker: &str,
         exit_code: i32,
         observed_output_truncated: bool,
-        environment_signature: Option<&EnvironmentSignature>,
+        environment: Option<RuntimePendingBootstrapEnvironment>,
     ) -> RuntimeAgentSubshellCertificationOutcome {
         let Some(handoff) = self.process.pane_shell_handoffs.get(pane_id).cloned() else {
             return RuntimeAgentSubshellCertificationOutcome::NotApplicable;
@@ -259,13 +266,12 @@ impl RuntimeSessionService {
         if handoff.bootstrap_marker.as_deref() != Some(marker) {
             return RuntimeAgentSubshellCertificationOutcome::NotApplicable;
         }
-        self.process.pane_shell_handoffs.remove(pane_id);
         let evidence = self
             .process
             .bootstrap_shell_certification_evidence
-            .remove(marker);
+            .get(marker)
+            .cloned();
         let current_primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
-        let current_foreground_group = self.pane_foreground_process_group_observation(pane_id).0;
         let current_interaction_generation = self
             .process
             .pane_shell_interaction_generations
@@ -286,13 +292,8 @@ impl RuntimeSessionService {
             {
                 Some(RuntimeAgentSubshellCertificationRejection::InteractionGenerationChanged)
             }
-            Some(evidence)
-                if evidence.process_group_id.is_none() || current_foreground_group.is_none() =>
-            {
+            Some(evidence) if evidence.process_group_id.is_none() => {
                 Some(RuntimeAgentSubshellCertificationRejection::ForegroundProcessUnavailable)
-            }
-            Some(evidence) if current_foreground_group != evidence.process_group_id => {
-                Some(RuntimeAgentSubshellCertificationRejection::ForegroundProcessGroupChanged)
             }
             Some(_) if exit_code != 0 => {
                 Some(RuntimeAgentSubshellCertificationRejection::TransactionFailed)
@@ -300,51 +301,254 @@ impl RuntimeSessionService {
             Some(_) if observed_output_truncated => {
                 Some(RuntimeAgentSubshellCertificationRejection::OutputTruncated)
             }
-            Some(_) if environment_signature.is_none() => {
+            Some(_) if environment.is_none() => {
                 Some(RuntimeAgentSubshellCertificationRejection::EnvironmentSignatureMissing)
             }
             Some(_) => None,
         };
-        if let (None, Some(evidence), Some(environment_signature), Some(process_group_id)) = (
-            rejection,
-            evidence,
-            environment_signature,
-            current_foreground_group,
-        ) {
-            self.process.pane_certified_shell_identities.insert(
+        if let Some(rejection) = rejection {
+            self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
+            self.reject_agent_subshell_certification(pane_id, rejection);
+            return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
+        }
+
+        let (Some(evidence), Some(environment)) = (evidence, environment) else {
+            let rejection = RuntimeAgentSubshellCertificationRejection::MissingStartEvidence;
+            self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
+            self.reject_agent_subshell_certification(pane_id, rejection);
+            return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
+        };
+        if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
+            let Some(expected_process_group_id) = evidence.process_group_id else {
+                let rejection =
+                    RuntimeAgentSubshellCertificationRejection::ForegroundProcessUnavailable;
+                self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
+                self.reject_agent_subshell_certification(pane_id, rejection);
+                return RuntimeAgentSubshellCertificationOutcome::Rejected(rejection);
+            };
+            let observation_id = format!("{marker}:foreground:{}", instance.generation);
+            self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
+            self.process.pending_agent_subshell_certifications.insert(
                 pane_id.to_string(),
-                RuntimePaneCertifiedShellIdentity {
-                    primary_process_id: evidence.primary_process_id,
-                    process_group_id,
-                    interaction_generation: evidence.interaction_generation,
-                    environment_signature: environment_signature.clone(),
-                    source: RuntimeCertifiedShellSource::AgentSubshellBootstrap,
+                RuntimePendingAgentSubshellCertification {
+                    marker: marker.to_string(),
+                    instance: instance.clone(),
+                    observation_id: observation_id.clone(),
+                    evidence,
+                    environment,
                 },
             );
-            self.process
-                .pane_agent_subshell_certification_rejections
-                .remove(pane_id);
+            self.persistence
+                .queue_pane_observation(RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect: PaneProcessIoEffect::ObserveForegroundProcess {
+                        observation_id,
+                        expected_process_group_id,
+                    },
+                });
+            return RuntimeAgentSubshellCertificationOutcome::Pending;
+        }
+
+        let current_foreground_group = self.pane_foreground_process_group_observation(pane_id).0;
+        let rejection = match current_foreground_group {
+            None => Some(RuntimeAgentSubshellCertificationRejection::ForegroundProcessUnavailable),
+            Some(process_group_id) if Some(process_group_id) != evidence.process_group_id => {
+                Some(RuntimeAgentSubshellCertificationRejection::ForegroundProcessGroupChanged)
+            }
+            Some(_) => None,
+        };
+        self.remove_agent_subshell_bootstrap_proof(pane_id, marker);
+        if let Some(rejection) = rejection {
+            self.reject_agent_subshell_certification(pane_id, rejection);
+            RuntimeAgentSubshellCertificationOutcome::Rejected(rejection)
+        } else if let Some(process_group_id) = current_foreground_group {
+            self.promote_agent_subshell_certification(
+                pane_id,
+                evidence,
+                environment,
+                process_group_id,
+            );
             RuntimeAgentSubshellCertificationOutcome::Certified
         } else {
-            let rejection = rejection
-                .unwrap_or(RuntimeAgentSubshellCertificationRejection::MissingStartEvidence);
-            self.process.pane_certified_shell_identities.remove(pane_id);
-            self.process.pane_environment_signatures.remove(pane_id);
-            self.process
-                .pane_path_scopes
-                .retain(|key, _| key.pane_id != pane_id);
-            self.process
-                .pane_path_scope_failures
-                .retain(|key, _| key.pane_id != pane_id);
-            self.process
-                .pane_bubblewrap_capabilities
-                .retain(|key, _| key.pane_id != pane_id);
-            self.clear_pane_agent_instruction_files(pane_id);
-            self.process
-                .pane_agent_subshell_certification_rejections
-                .insert(pane_id.to_string(), rejection);
+            let rejection =
+                RuntimeAgentSubshellCertificationRejection::ForegroundProcessUnavailable;
+            self.reject_agent_subshell_certification(pane_id, rejection);
             RuntimeAgentSubshellCertificationOutcome::Rejected(rejection)
         }
+    }
+
+    /// Applies the exact pane-worker observation requested by pending certification.
+    pub(crate) fn apply_pane_foreground_process_observation_transition(
+        &mut self,
+        instance: PaneProcessInstance,
+        observation: PaneForegroundProcessObservation,
+    ) -> Result<RuntimeTransition> {
+        let Some(pending) = self
+            .process
+            .pending_agent_subshell_certifications
+            .get(&instance.pane_id)
+            .cloned()
+        else {
+            return Ok(RuntimeTransition::default());
+        };
+        if pending.instance != instance || pending.observation_id != observation.observation_id {
+            return Ok(RuntimeTransition::default());
+        }
+        self.process
+            .pending_agent_subshell_certifications
+            .remove(&instance.pane_id);
+
+        let current_primary_process_id = self.primary_pid_for_live_pane_process(&instance.pane_id);
+        let current_interaction_generation = self
+            .process
+            .pane_shell_interaction_generations
+            .get(&instance.pane_id)
+            .copied();
+        let rejection = if current_primary_process_id != Some(pending.evidence.primary_process_id) {
+            Some(RuntimeAgentSubshellCertificationRejection::PrimaryProcessChanged)
+        } else if current_interaction_generation != Some(pending.evidence.interaction_generation) {
+            Some(RuntimeAgentSubshellCertificationRejection::InteractionGenerationChanged)
+        } else if observation.error.is_some() || observation.process_group_id.is_none() {
+            Some(RuntimeAgentSubshellCertificationRejection::ForegroundProcessUnavailable)
+        } else if observation.process_group_id != pending.evidence.process_group_id {
+            Some(RuntimeAgentSubshellCertificationRejection::ForegroundProcessGroupChanged)
+        } else {
+            None
+        };
+
+        let outcome = if let Some(rejection) = rejection {
+            self.reject_agent_subshell_certification(&instance.pane_id, rejection);
+            RuntimeAgentSubshellCertificationOutcome::Rejected(rejection)
+        } else if let Some(process_group_id) = observation.process_group_id {
+            self.promote_agent_subshell_certification(
+                &instance.pane_id,
+                pending.evidence,
+                pending.environment,
+                process_group_id,
+            );
+            RuntimeAgentSubshellCertificationOutcome::Certified
+        } else {
+            let rejection =
+                RuntimeAgentSubshellCertificationRejection::ForegroundProcessUnavailable;
+            self.reject_agent_subshell_certification(&instance.pane_id, rejection);
+            RuntimeAgentSubshellCertificationOutcome::Rejected(rejection)
+        };
+        self.process
+            .pane_bootstrap_pending
+            .remove(&instance.pane_id);
+        match outcome {
+            RuntimeAgentSubshellCertificationOutcome::Certified => {
+                self.append_lifecycle_event(
+                    EventKind::AgentStatus,
+                    format!(
+                        r#"{{"pane_id":"{}","bootstrap":"certified","marker":"{}","observation":"fresh_worker"}}"#,
+                        json_escape(&instance.pane_id),
+                        json_escape(&pending.marker)
+                    ),
+                )?;
+                self.set_pane_readiness(&instance.pane_id, PaneReadinessState::Ready);
+            }
+            RuntimeAgentSubshellCertificationOutcome::Rejected(reason) => {
+                self.append_lifecycle_event(
+                    EventKind::Diagnostic,
+                    format!(
+                        r#"{{"pane_id":"{}","bootstrap":"certification_failed","marker":"{}","reason":"{}"}}"#,
+                        json_escape(&instance.pane_id),
+                        json_escape(&pending.marker),
+                        reason.as_str()
+                    ),
+                )?;
+                self.set_pane_readiness(&instance.pane_id, PaneReadinessState::Degraded);
+            }
+            RuntimeAgentSubshellCertificationOutcome::NotApplicable
+            | RuntimeAgentSubshellCertificationOutcome::Pending => {}
+        }
+        self.resume_after_bootstrap_settlement(&instance.pane_id)?;
+        Ok(self.runtime_transition_with_render(true, Some(RenderInvalidationReason::FullRedraw)))
+    }
+
+    /// Publishes environment-derived context after certification succeeds.
+    pub(crate) fn publish_bootstrap_environment(
+        &mut self,
+        pane_id: &str,
+        environment: RuntimePendingBootstrapEnvironment,
+    ) {
+        let RuntimePendingBootstrapEnvironment {
+            signature,
+            tool_inventory,
+            instruction_files,
+        } = environment;
+        self.process
+            .pane_path_scopes
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_environment_signatures
+            .insert(pane_id.to_string(), signature.clone());
+        if let Some(inventory) = tool_inventory {
+            self.record_agent_tool_inventory(signature, inventory);
+        }
+        if !instruction_files.is_empty() {
+            self.set_pane_agent_instruction_files(pane_id, instruction_files);
+        }
+    }
+
+    /// Removes marker-bound handoff state after certification leaves phase one.
+    fn remove_agent_subshell_bootstrap_proof(&mut self, pane_id: &str, marker: &str) {
+        self.process.pane_shell_handoffs.remove(pane_id);
+        self.process
+            .bootstrap_shell_certification_evidence
+            .remove(marker);
+    }
+
+    /// Publishes context and records the certified persistent receiver.
+    fn promote_agent_subshell_certification(
+        &mut self,
+        pane_id: &str,
+        evidence: RuntimeBootstrapShellCertificationEvidence,
+        environment: RuntimePendingBootstrapEnvironment,
+        process_group_id: u32,
+    ) {
+        let environment_signature = environment.signature.clone();
+        self.publish_bootstrap_environment(pane_id, environment);
+        self.process.pane_certified_shell_identities.insert(
+            pane_id.to_string(),
+            RuntimePaneCertifiedShellIdentity {
+                primary_process_id: evidence.primary_process_id,
+                process_group_id,
+                interaction_generation: evidence.interaction_generation,
+                environment_signature,
+                source: RuntimeCertifiedShellSource::AgentSubshellBootstrap,
+            },
+        );
+        self.process
+            .pane_agent_subshell_certification_rejections
+            .remove(pane_id);
+    }
+
+    /// Removes untrusted context and records one stable certification rejection.
+    fn reject_agent_subshell_certification(
+        &mut self,
+        pane_id: &str,
+        rejection: RuntimeAgentSubshellCertificationRejection,
+    ) {
+        self.process.pane_certified_shell_identities.remove(pane_id);
+        self.process.pane_environment_signatures.remove(pane_id);
+        self.process
+            .pane_path_scopes
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_bubblewrap_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
+        self.clear_pane_agent_instruction_files(pane_id);
+        self.process
+            .pane_agent_subshell_certification_rejections
+            .insert(pane_id.to_string(), rejection);
     }
 
     /// Invalidates every non-primary shell proof associated with one pane.
@@ -354,6 +558,9 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.process.pane_certified_shell_identities.remove(pane_id);
         self.process.pane_shell_handoffs.remove(pane_id);
+        self.process
+            .pending_agent_subshell_certifications
+            .remove(pane_id);
         self.process
             .bootstrap_shell_certification_evidence
             .retain(|_, evidence| evidence.pane_id != pane_id);

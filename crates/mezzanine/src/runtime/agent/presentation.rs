@@ -49,7 +49,17 @@ pub(super) fn runtime_agent_execution_prompt_display_lines(
 ) -> Vec<String> {
     let state = runtime_agent_turn_state_name(execution.terminal_state);
     let mut lines = vec![format!("agent: turn {turn_id} {state}")];
-    lines.push(format!("agent: provider {provider_id} responded"));
+    let failed_before_provider_response = execution.terminal_state == AgentTurnState::Failed
+        && execution
+            .response
+            .raw_text
+            .trim_start()
+            .starts_with("provider_error:");
+    if failed_before_provider_response {
+        lines.push(format!("agent: provider {provider_id} selected"));
+    } else {
+        lines.push(format!("agent: provider {provider_id} responded"));
+    }
     if dispatched_actions > 0 {
         lines.push(format!("agent: dispatched {dispatched_actions} actions"));
     }
@@ -612,6 +622,66 @@ mod tests {
             lines
                 .iter()
                 .all(|line| !line.contains("model response did not contain a MAAP action batch"))
+        );
+    }
+
+    /// Verifies local provider preflight failures do not claim that the
+    /// selected provider returned a response.
+    ///
+    /// Path-resolution and bootstrap certification can fail before network
+    /// dispatch. Their synthetic failed execution begins with
+    /// `provider_error:`, which must be presented as provider selection rather
+    /// than a provider response.
+    #[test]
+    fn failed_preflight_execution_does_not_report_provider_response() {
+        let execution = AgentTurnExecution {
+            request: mez_agent::ModelRequest {
+                provider: "openai".to_string(),
+                model: "gpt-test".to_string(),
+                reasoning_effort: None,
+                thinking_enabled: None,
+                latency_preference: None,
+                prompt_cache_retention: None,
+                max_output_tokens: None,
+                temperature: None,
+                stop: None,
+                prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
+                turn_id: "turn-3".to_string(),
+                agent_id: "agent-%1".to_string(),
+                available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
+                issue_actions_enabled: true,
+                interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+                allowed_actions: mez_agent::AllowedActionSet::action_execution_base(),
+                messages: Vec::new(),
+            },
+            response: ModelResponse {
+                provider: "openai".to_string(),
+                model: "gpt-test".to_string(),
+                raw_text: "provider_error: InvalidState: pane agent-subshell bootstrap certification failed: foreground_process_group_changed"
+                    .to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: None,
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: Vec::new(),
+            final_turn: true,
+            terminal_state: AgentTurnState::Failed,
+        };
+
+        let lines =
+            runtime_agent_execution_prompt_display_lines("turn-3", "openai", &execution, 0, 2);
+
+        assert!(lines.contains(&"agent: provider openai selected".to_string()));
+        assert!(
+            lines
+                .iter()
+                .all(|line| line != "agent: provider openai responded")
         );
     }
 }

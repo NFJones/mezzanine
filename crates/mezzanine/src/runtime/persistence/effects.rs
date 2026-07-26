@@ -8,6 +8,11 @@ impl RuntimePersistenceComponent {
         self.queued_pane_input_effects.push(effect);
     }
 
+    /// Queues one ordered pane observation after prior PTY output is applied.
+    pub(crate) fn queue_pane_observation(&mut self, effect: RuntimeSideEffect) {
+        self.queued_pane_input_effects.push(effect);
+    }
+
     /// Replaces the queued resize for one pane.
     pub(crate) fn queue_pane_resize(
         &mut self,
@@ -78,6 +83,7 @@ impl RuntimePersistenceComponent {
                 | RuntimeSideEffect::WritePaneInputPriority {
                     pane_id: target, ..
                 } => target != pane_id,
+                RuntimeSideEffect::PaneProcessIo { instance, .. } => instance.pane_id != pane_id,
                 _ => true,
             });
         self.queued_pane_resize_effects.remove(pane_id);

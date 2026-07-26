@@ -116,10 +116,11 @@ mod terminal_io;
 
 pub use crate::runtime::{
     AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent, ClientEvent,
-    PaneEvent, PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect, PersistenceEvent,
-    PersistenceTarget, PersistenceWriteMode, ProcessEvent, RenderInvalidationReason, RuntimeEvent,
-    RuntimeEventBatch, RuntimeEventIngressReport, RuntimeSideEffect, RuntimeTimerKey,
-    RuntimeTimerKind, RuntimeTransition, ShutdownEvent, TimerEvent,
+    PaneEvent, PaneForegroundProcessObservation, PaneProcessEvent, PaneProcessInstance,
+    PaneProcessIoEffect, PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
+    RenderInvalidationReason, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ShutdownEvent,
+    TimerEvent,
 };
 #[cfg(test)]
 pub use actor_types::{
