@@ -427,9 +427,9 @@ pub(super) fn agent_argument_candidates(
 /// Builds parser-aligned candidates for one `/toolchain` argument position.
 fn toolchain_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
     const BUILT_INS: &[&str] = &[
-        "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart", "kotlin",
-        "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack", "ocaml", "llvm",
-        "gcc", "cmake", "ninja", "meson", "swift",
+        "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "maven", "gradle", "dotnet",
+        "dart", "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack",
+        "ocaml", "llvm", "gcc", "cmake", "ninja", "meson", "swift",
     ];
     let Some(operation) = context.tokens_before.get(1).map(String::as_str) else {
         return value_candidates(&[

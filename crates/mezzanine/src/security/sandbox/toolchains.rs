@@ -25,7 +25,7 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 26] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 28] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
@@ -34,6 +34,8 @@ pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 26] =
     SandboxToolchainKind::Node,
     SandboxToolchainKind::Python,
     SandboxToolchainKind::Jdk,
+    SandboxToolchainKind::Maven,
+    SandboxToolchainKind::Gradle,
     SandboxToolchainKind::Dotnet,
     SandboxToolchainKind::Dart,
     SandboxToolchainKind::Kotlin,
@@ -88,6 +90,16 @@ pub(crate) const SANDBOX_PYTHON_PATH: &str = "/opt/mez/toolchains/python/root/bi
 pub(crate) const SANDBOX_JDK_ROOT: &str = "/opt/mez/toolchains/jdk/root";
 /// Fixed executable search path used when only the JDK is projected.
 pub(crate) const SANDBOX_JDK_PATH: &str = "/opt/mez/toolchains/jdk/root/bin:/usr/bin:/bin";
+/// Fixed Maven distribution projection inside Bubblewrap.
+pub(crate) const SANDBOX_MAVEN_ROOT: &str = "/opt/mez/toolchains/maven/root";
+/// Fixed executable search path when Maven is composed with its required JDK.
+pub(crate) const SANDBOX_JDK_MAVEN_PATH: &str =
+    "/opt/mez/toolchains/jdk/root/bin:/opt/mez/toolchains/maven/root/bin:/usr/bin:/bin";
+/// Fixed Gradle distribution projection inside Bubblewrap.
+pub(crate) const SANDBOX_GRADLE_ROOT: &str = "/opt/mez/toolchains/gradle/root";
+/// Fixed executable search path when Gradle is composed with its required JDK.
+pub(crate) const SANDBOX_JDK_GRADLE_PATH: &str =
+    "/opt/mez/toolchains/jdk/root/bin:/opt/mez/toolchains/gradle/root/bin:/usr/bin:/bin";
 /// Fixed .NET SDK projection inside Bubblewrap.
 pub(crate) const SANDBOX_DOTNET_ROOT: &str = "/opt/mez/toolchains/dotnet/root";
 /// Fixed executable search path used when only the .NET SDK is projected.
@@ -669,6 +681,109 @@ const JDK_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     platform: ToolchainPlatform::Any,
     coupling: ToolchainCoupling {
         required: &[],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
+const MAVEN_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "maven-runtime",
+    label: "Maven distribution",
+    sandbox_destination: SANDBOX_MAVEN_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/mvn"],
+    required_directories: &["lib", "boot"],
+}];
+const MAVEN_ENVIRONMENT: [ToolchainEnvironmentVariable; 1] = [ToolchainEnvironmentVariable {
+    name: "MAVEN_USER_HOME",
+    value: "/home/mez/.m2",
+}];
+const MAVEN_MANAGED_STATE: [ManagedToolchainState; 1] = [ManagedToolchainState {
+    purpose: "maven-user-home",
+    sandbox_path: "/home/mez/.m2",
+}];
+const MAVEN_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Maven,
+    aliases: &["maven", "mvn"],
+    roots: &MAVEN_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/maven",
+    ],
+    path_entries: &["/opt/mez/toolchains/maven/root/bin"],
+    environment: &MAVEN_ENVIRONMENT,
+    managed_state: &MAVEN_MANAGED_STATE,
+    forbidden_descendants: &[
+        ".m2",
+        "settings.xml",
+        "settings-security.xml",
+        "credentials",
+        ".sdkman",
+        ".asdf",
+        "mise",
+    ],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[SandboxToolchainKind::Jdk],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
+const GRADLE_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "gradle-runtime",
+    label: "Gradle distribution",
+    sandbox_destination: SANDBOX_GRADLE_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/gradle"],
+    required_directories: &["lib"],
+}];
+const GRADLE_ENVIRONMENT: [ToolchainEnvironmentVariable; 2] = [
+    ToolchainEnvironmentVariable {
+        name: "GRADLE_USER_HOME",
+        value: "/home/mez/.gradle",
+    },
+    ToolchainEnvironmentVariable {
+        name: "GRADLE_OPTS",
+        value: "-Dorg.gradle.daemon=false",
+    },
+];
+const GRADLE_MANAGED_STATE: [ManagedToolchainState; 1] = [ManagedToolchainState {
+    purpose: "gradle-user-home",
+    sandbox_path: "/home/mez/.gradle",
+}];
+const GRADLE_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Gradle,
+    aliases: &["gradle"],
+    roots: &GRADLE_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/gradle",
+    ],
+    path_entries: &["/opt/mez/toolchains/gradle/root/bin"],
+    environment: &GRADLE_ENVIRONMENT,
+    managed_state: &GRADLE_MANAGED_STATE,
+    forbidden_descendants: &[
+        ".gradle",
+        "gradle.properties",
+        "init.gradle",
+        "init.d",
+        "credentials",
+        ".sdkman",
+        ".asdf",
+        "mise",
+    ],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[SandboxToolchainKind::Jdk],
         optional: &[],
     },
     allow_root_overlap: false,
@@ -1475,6 +1590,8 @@ pub(crate) struct ResolvedProjectEnvironment {
     pub(crate) host_path: PathBuf,
     /// Sandbox-visible path, identical to the trusted project path.
     pub(crate) sandbox_path: String,
+    /// Optional executable directory prepended for directory-style environments.
+    pub(crate) path_entry: Option<String>,
 }
 
 /// Deterministically composed projection consumed by Bubblewrap compilation.
@@ -1560,6 +1677,10 @@ impl ResolvedToolchainProjection {
             digest.update([0]);
             digest.update(environment.sandbox_path.as_bytes());
             digest.update([0]);
+            if let Some(path_entry) = &environment.path_entry {
+                digest.update(path_entry.as_bytes());
+            }
+            digest.update([0]);
         }
         digest
             .finalize()
@@ -1627,7 +1748,16 @@ impl ResolvedToolchainProjection {
         let mut expected_managed_state = Vec::new();
         for kind in &self.kinds {
             let descriptor = toolchain_descriptor(*kind);
-            expected_root_count += descriptor.roots.len();
+            let wrapper_backed = self.project_environments.iter().any(|environment| {
+                environment.kind == *kind
+                    && matches!(
+                        kind,
+                        SandboxToolchainKind::Maven | SandboxToolchainKind::Gradle
+                    )
+            });
+            if !wrapper_backed {
+                expected_root_count += descriptor.roots.len();
+            }
             for directory in descriptor.sandbox_directories {
                 if !expected_directories
                     .iter()
@@ -1636,12 +1766,14 @@ impl ResolvedToolchainProjection {
                     expected_directories.push((*directory).to_string());
                 }
             }
-            expected_path_entries.extend(
-                descriptor
-                    .path_entries
-                    .iter()
-                    .map(|entry| (*entry).to_string()),
-            );
+            if !wrapper_backed {
+                expected_path_entries.extend(
+                    descriptor
+                        .path_entries
+                        .iter()
+                        .map(|entry| (*entry).to_string()),
+                );
+            }
             for variable in descriptor.environment {
                 if expected_environment
                     .insert(variable.name.to_string(), variable.value.to_string())
@@ -1657,7 +1789,7 @@ impl ResolvedToolchainProjection {
                 }
             }
             expected_managed_state.extend_from_slice(descriptor.managed_state);
-            for expected in descriptor.roots {
+            for expected in descriptor.roots.iter().filter(|_| !wrapper_backed) {
                 let root = self
                     .roots
                     .iter()
@@ -1703,6 +1835,18 @@ impl ResolvedToolchainProjection {
                 SandboxToolchainKind::Ocaml => {
                     validate_ocaml_project_environment(&environment.host_path)?;
                 }
+                SandboxToolchainKind::Maven => {
+                    validate_jvm_project_wrapper(
+                        &environment.host_path,
+                        SandboxToolchainKind::Maven,
+                    )?;
+                }
+                SandboxToolchainKind::Gradle => {
+                    validate_jvm_project_wrapper(
+                        &environment.host_path,
+                        SandboxToolchainKind::Gradle,
+                    )?;
+                }
                 _ => {
                     return Err(SandboxCompileError::new(
                         SandboxCompileErrorKind::InvalidInput,
@@ -1714,6 +1858,19 @@ impl ResolvedToolchainProjection {
                 return Err(SandboxCompileError::new(
                     SandboxCompileErrorKind::InvalidInput,
                     "resolved project environment has an invalid sandbox path",
+                ));
+            }
+            let expected_path_entry = match environment.kind {
+                SandboxToolchainKind::Python | SandboxToolchainKind::Ocaml => {
+                    Some(format!("{}/bin", environment.sandbox_path))
+                }
+                SandboxToolchainKind::Maven | SandboxToolchainKind::Gradle => None,
+                _ => unreachable!("project environment kinds were validated above"),
+            };
+            if environment.path_entry != expected_path_entry {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "resolved project environment has an invalid executable path",
                 ));
             }
         }
@@ -1755,7 +1912,7 @@ impl ResolvedToolchainProjection {
     pub(crate) fn executable_path(&self) -> String {
         self.project_environments
             .iter()
-            .map(|environment| format!("{}/bin", environment.sandbox_path))
+            .filter_map(|environment| environment.path_entry.clone())
             .chain(self.path_entries.iter().map(|entry| (*entry).to_string()))
             .chain(["/usr/bin".to_string(), "/bin".to_string()])
             .collect::<Vec<_>>()
@@ -1776,6 +1933,8 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Node => &NODE_DESCRIPTOR,
         SandboxToolchainKind::Python => &PYTHON_DESCRIPTOR,
         SandboxToolchainKind::Jdk => &JDK_DESCRIPTOR,
+        SandboxToolchainKind::Maven => &MAVEN_DESCRIPTOR,
+        SandboxToolchainKind::Gradle => &GRADLE_DESCRIPTOR,
         SandboxToolchainKind::Dotnet => &DOTNET_DESCRIPTOR,
         SandboxToolchainKind::Dart => &DART_DESCRIPTOR,
         SandboxToolchainKind::Kotlin => &KOTLIN_DESCRIPTOR,
@@ -1824,6 +1983,7 @@ pub(crate) fn resolve_toolchain_projection_for_project(
         ));
     }
     let mut resolved = Vec::new();
+    let mut project_environments = Vec::new();
     for kind in SUPPORTED_SANDBOX_TOOLCHAIN_KINDS {
         if !selected_set.contains(&kind) {
             continue;
@@ -1847,9 +2007,18 @@ pub(crate) fn resolve_toolchain_projection_for_project(
                 ));
             }
         }
-        resolved.push(resolve_descriptor(descriptor, environment_managers)?);
+        let (toolchain, project_environment) = resolve_descriptor_with_project_wrapper(
+            descriptor,
+            environment_managers,
+            trusted_project_root,
+        )?;
+        resolved.push(toolchain);
+        if let Some(project_environment) = project_environment {
+            project_environments.push(project_environment);
+        }
     }
     let mut projection = compose_toolchain_projection(&resolved)?;
+    projection.project_environments.extend(project_environments);
     if selected_set.contains(&SandboxToolchainKind::Python)
         && let Some(project_root) = trusted_project_root
         && let Some(environment) = resolve_python_project_environment(project_root)?
@@ -1892,8 +2061,15 @@ pub(crate) fn resolve_configured_toolchain_projection_for_project(
             ToolchainSelection::BuiltIn(kind) => {
                 let descriptor = toolchain_descriptor(*kind);
                 validate_selected_descriptor(descriptor, &selected_built_ins, host_os)?;
-                let resolved = resolve_descriptor(descriptor, environment_managers)?;
+                let (resolved, project_environment) = resolve_descriptor_with_project_wrapper(
+                    descriptor,
+                    environment_managers,
+                    trusted_project_root,
+                )?;
                 append_resolved_descriptor(&mut projection, &resolved)?;
+                if let Some(project_environment) = project_environment {
+                    projection.project_environments.push(project_environment);
+                }
             }
             ToolchainSelection::Custom(name) => {
                 let definition = config.custom_toolchains.get(name.name()).ok_or_else(|| {
@@ -1991,8 +2167,10 @@ fn append_resolved_descriptor(
     for root in &resolved.roots {
         append_projection_root(projection, root.clone())?;
     }
-    for entry in descriptor.path_entries {
-        push_unique(&mut projection.path_entries, entry);
+    if !resolved.roots.is_empty() {
+        for entry in descriptor.path_entries {
+            push_unique(&mut projection.path_entries, entry);
+        }
     }
     for variable in descriptor.environment {
         insert_projection_environment(projection, variable.name, variable.value)?;
@@ -2328,6 +2506,30 @@ fn resolve_descriptor(
     })
 }
 
+/// Prefers a validated repository wrapper for JVM build tools and otherwise
+/// resolves the selected standalone distribution from pane bootstrap evidence.
+fn resolve_descriptor_with_project_wrapper(
+    descriptor: &ToolchainDescriptor,
+    environment_managers: &[String],
+    trusted_project_root: Option<&Path>,
+) -> Result<(ResolvedToolchain, Option<ResolvedProjectEnvironment>), SandboxCompileError> {
+    if matches!(
+        descriptor.kind,
+        SandboxToolchainKind::Maven | SandboxToolchainKind::Gradle
+    ) && let Some(project_root) = trusted_project_root
+        && let Some(environment) = discover_jvm_project_wrapper(project_root, descriptor.kind)?
+    {
+        return Ok((
+            ResolvedToolchain {
+                kind: descriptor.kind,
+                roots: Vec::new(),
+            },
+            Some(environment),
+        ));
+    }
+    resolve_descriptor(descriptor, environment_managers).map(|resolved| (resolved, None))
+}
+
 /// Composes resolved descriptors in stable descriptor priority order.
 fn compose_toolchain_projection(
     resolved: &[ResolvedToolchain],
@@ -2400,7 +2602,11 @@ fn compose_toolchain_projection(
             }
             projection.roots.push(root.clone());
         }
-        for path_entry in descriptor.path_entries {
+        for path_entry in descriptor
+            .path_entries
+            .iter()
+            .filter(|_| !toolchain.roots.is_empty())
+        {
             if projection
                 .path_entries
                 .iter()
@@ -2450,8 +2656,6 @@ fn compose_toolchain_projection(
             projection.managed_state.push(*state);
         }
     }
-    projection.seal();
-    projection.validate()?;
     Ok(projection)
 }
 
@@ -3319,6 +3523,32 @@ pub(crate) fn discover_swift_from_search_path(
     )
 }
 
+/// Discovers one standalone Maven distribution from an explicit search path.
+pub(crate) fn discover_maven_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "mvn",
+        "Maven executable",
+        "Maven distribution",
+        &MAVEN_ROOTS[0],
+    )
+}
+
+/// Discovers one standalone Gradle distribution from an explicit search path.
+pub(crate) fn discover_gradle_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "gradle",
+        "Gradle executable",
+        "Gradle distribution",
+        &GRADLE_ROOTS[0],
+    )
+}
+
 /// Discovers a real `<root>/bin/<executable>` and validates its descriptor root.
 fn discover_single_executable_root(
     search_path: Option<&OsStr>,
@@ -3415,6 +3645,7 @@ fn resolve_python_project_environment(
     Ok(Some(ResolvedProjectEnvironment {
         kind: SandboxToolchainKind::Python,
         sandbox_path: environment.display().to_string(),
+        path_entry: Some(format!("{}/bin", environment.display())),
         host_path: environment,
     }))
 }
@@ -3497,6 +3728,7 @@ pub(crate) fn discover_ocaml_project_environment(
     Ok(Some(ResolvedProjectEnvironment {
         kind: SandboxToolchainKind::Ocaml,
         sandbox_path: environment.display().to_string(),
+        path_entry: Some(format!("{}/bin", environment.display())),
         host_path: environment,
     }))
 }
@@ -3520,6 +3752,158 @@ fn validate_ocaml_project_environment(environment: &Path) -> Result<(), SandboxC
     }
     for executable in ["bin/ocaml", "bin/ocamlc", "bin/ocamlopt", "bin/dune"] {
         validate_distribution_executable(environment, executable, "OCaml local switch")?;
+    }
+    Ok(())
+}
+
+/// Discovers one direct repository wrapper for Maven or Gradle without
+/// executing its script or consulting user-level build-tool configuration.
+pub(crate) fn discover_jvm_project_wrapper(
+    project_root: &Path,
+    kind: SandboxToolchainKind,
+) -> Result<Option<ResolvedProjectEnvironment>, SandboxCompileError> {
+    let project_root = project_root.canonicalize().map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to canonicalize trusted project root: {error}"),
+        )
+    })?;
+    let wrapper_name = match kind {
+        SandboxToolchainKind::Maven => "mvnw",
+        SandboxToolchainKind::Gradle => "gradlew",
+        _ => {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                "project wrapper discovery requires Maven or Gradle",
+            ));
+        }
+    };
+    let wrapper = project_root.join(wrapper_name);
+    match fs::symlink_metadata(&wrapper) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                format!("{wrapper_name} must be a real repository file"),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                format!("failed to inspect {wrapper_name}: {error}"),
+            ));
+        }
+    }
+    validate_jvm_project_wrapper(&project_root, kind)?;
+    Ok(Some(ResolvedProjectEnvironment {
+        kind,
+        sandbox_path: project_root.display().to_string(),
+        path_entry: None,
+        host_path: project_root,
+    }))
+}
+
+/// Validates one repository wrapper script and its pinned HTTPS distribution
+/// metadata without downloading content or granting network access.
+fn validate_jvm_project_wrapper(
+    project_root: &Path,
+    kind: SandboxToolchainKind,
+) -> Result<(), SandboxCompileError> {
+    let (wrapper_name, metadata_path, label) = match kind {
+        SandboxToolchainKind::Maven => (
+            "mvnw",
+            ".mvn/wrapper/maven-wrapper.properties",
+            "Maven wrapper",
+        ),
+        SandboxToolchainKind::Gradle => (
+            "gradlew",
+            "gradle/wrapper/gradle-wrapper.properties",
+            "Gradle wrapper",
+        ),
+        _ => {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                "project wrapper validation requires Maven or Gradle",
+            ));
+        }
+    };
+    let metadata = fs::symlink_metadata(project_root).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to inspect trusted project root: {error}"),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            "trusted project root must be a real directory",
+        ));
+    }
+    validate_distribution_executable(project_root, wrapper_name, label)?;
+    let properties = project_root.join(metadata_path);
+    let properties_metadata = fs::symlink_metadata(&properties).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to inspect {label} metadata: {error}"),
+        )
+    })?;
+    if properties_metadata.file_type().is_symlink() || !properties_metadata.is_file() {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("{label} metadata must be a real repository file"),
+        ));
+    }
+    if properties_metadata.len() > 64 * 1024 {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("{label} metadata exceeds the 64 KiB limit"),
+        ));
+    }
+    let contents = fs::read_to_string(&properties).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("failed to read {label} metadata: {error}"),
+        )
+    })?;
+    let mut distribution_url = None;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("distributionUrl=")
+            && distribution_url.replace(value.trim()).is_some()
+        {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::InvalidInput,
+                format!("{label} metadata contains duplicate distributionUrl values"),
+            ));
+        }
+    }
+    let distribution_url = distribution_url.ok_or_else(|| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("{label} metadata is missing distributionUrl"),
+        )
+    })?;
+    let distribution_url = distribution_url.replace("\\:", ":").replace("\\/", "/");
+    let parsed = reqwest::Url::parse(&distribution_url).map_err(|_| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::InvalidInput,
+            format!("{label} distributionUrl must be a valid HTTPS URL"),
+        )
+    })?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("{label} distributionUrl must be credential-free HTTPS"),
+        ));
     }
     Ok(())
 }

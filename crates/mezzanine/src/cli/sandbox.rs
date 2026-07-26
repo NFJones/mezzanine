@@ -37,19 +37,20 @@ use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
     SANDBOX_CMAKE_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH,
     SANDBOX_ERLANG_ELIXIR_PATH, SANDBOX_ERLANG_PATH, SANDBOX_GCC_PATH, SANDBOX_GHC_CABAL_PATH,
-    SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
-    SANDBOX_KOTLIN_JDK_PATH, SANDBOX_LLVM_PATH, SANDBOX_MESON_PATH, SANDBOX_NINJA_PATH,
-    SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH,
-    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_SWIFT_PATH, SANDBOX_ZIG_PATH,
-    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
-    SandboxWorkflowRequest, clear_bubblewrap_managed_home, discover_bun_from_search_path,
-    discover_cabal_from_search_path, discover_cmake_from_search_path,
-    discover_composer_from_search_path, discover_dart_from_search_path,
-    discover_deno_from_search_path, discover_dotnet_from_search_path,
-    discover_elixir_from_search_path, discover_erlang_from_search_path,
-    discover_gcc_from_search_path, discover_ghc_from_search_path, discover_go_from_search_path,
-    discover_jdk_from_search_path, discover_kotlin_from_search_path,
-    discover_llvm_from_search_path, discover_meson_from_search_path,
+    SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_GRADLE_PATH,
+    SANDBOX_JDK_MAVEN_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_LLVM_PATH,
+    SANDBOX_MESON_PATH, SANDBOX_NINJA_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH,
+    SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH,
+    SANDBOX_SWIFT_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
+    clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_cabal_from_search_path,
+    discover_cmake_from_search_path, discover_composer_from_search_path,
+    discover_dart_from_search_path, discover_deno_from_search_path,
+    discover_dotnet_from_search_path, discover_elixir_from_search_path,
+    discover_erlang_from_search_path, discover_gcc_from_search_path, discover_ghc_from_search_path,
+    discover_go_from_search_path, discover_gradle_from_search_path, discover_jdk_from_search_path,
+    discover_jvm_project_wrapper, discover_kotlin_from_search_path, discover_llvm_from_search_path,
+    discover_maven_from_search_path, discover_meson_from_search_path,
     discover_ninja_from_search_path, discover_node_from_search_path,
     discover_ocaml_project_environment, discover_php_from_search_path,
     discover_python_from_search_path, discover_ruby_from_search_path, discover_rust_from_home,
@@ -1177,6 +1178,8 @@ struct SandboxToolchainResult {
     node_root: Option<PathBuf>,
     python_root: Option<PathBuf>,
     jdk_root: Option<PathBuf>,
+    maven_root: Option<PathBuf>,
+    gradle_root: Option<PathBuf>,
     dotnet_root: Option<PathBuf>,
     dart_root: Option<PathBuf>,
     kotlin_root: Option<PathBuf>,
@@ -1670,6 +1673,8 @@ enum DirectToolchainDetection {
     Node(Option<PathBuf>),
     Python(Option<PathBuf>),
     Jdk(Option<PathBuf>),
+    Maven(Option<PathBuf>),
+    Gradle(Option<PathBuf>),
     Dotnet(Option<PathBuf>),
     Dart(Option<PathBuf>),
     Kotlin(Option<PathBuf>),
@@ -1701,6 +1706,8 @@ impl DirectToolchainDetection {
             Self::Node(root) => root.is_some(),
             Self::Python(root) => root.is_some(),
             Self::Jdk(root) => root.is_some(),
+            Self::Maven(root) => root.is_some(),
+            Self::Gradle(root) => root.is_some(),
             Self::Dotnet(root) => root.is_some(),
             Self::Dart(root) => root.is_some(),
             Self::Kotlin(root) => root.is_some(),
@@ -1732,6 +1739,8 @@ impl DirectToolchainDetection {
             Self::Node(_) => SandboxToolchainKind::Node,
             Self::Python(_) => SandboxToolchainKind::Python,
             Self::Jdk(_) => SandboxToolchainKind::Jdk,
+            Self::Maven(_) => SandboxToolchainKind::Maven,
+            Self::Gradle(_) => SandboxToolchainKind::Gradle,
             Self::Dotnet(_) => SandboxToolchainKind::Dotnet,
             Self::Dart(_) => SandboxToolchainKind::Dart,
             Self::Kotlin(_) => SandboxToolchainKind::Kotlin,
@@ -1784,6 +1793,28 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Jdk => discover_jdk_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Jdk)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Maven => {
+            if let Some(project_root) = project_root
+                && let Some(wrapper) = discover_jvm_project_wrapper(project_root, kind)
+                    .map_err(|error| MezError::invalid_state(error.to_string()))?
+            {
+                return Ok(DirectToolchainDetection::Maven(Some(wrapper.host_path)));
+            }
+            discover_maven_from_search_path(env.path.as_deref())
+                .map(DirectToolchainDetection::Maven)
+                .map_err(|error| MezError::invalid_state(error.to_string()))
+        }
+        SandboxToolchainKind::Gradle => {
+            if let Some(project_root) = project_root
+                && let Some(wrapper) = discover_jvm_project_wrapper(project_root, kind)
+                    .map_err(|error| MezError::invalid_state(error.to_string()))?
+            {
+                return Ok(DirectToolchainDetection::Gradle(Some(wrapper.host_path)));
+            }
+            discover_gradle_from_search_path(env.path.as_deref())
+                .map(DirectToolchainDetection::Gradle)
+                .map_err(|error| MezError::invalid_state(error.to_string()))
+        }
         SandboxToolchainKind::Dotnet => discover_dotnet_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Dotnet)
             .map_err(|error| MezError::invalid_state(error.to_string())),
@@ -1860,6 +1891,14 @@ fn toolchain_result(
     let kind = detection.kind();
     let jdk_root = match &detection {
         DirectToolchainDetection::Jdk(root) => root.clone(),
+        _ => None,
+    };
+    let maven_root = match &detection {
+        DirectToolchainDetection::Maven(root) => root.clone(),
+        _ => None,
+    };
+    let gradle_root = match &detection {
+        DirectToolchainDetection::Gradle(root) => root.clone(),
         _ => None,
     };
     let dotnet_root = match &detection {
@@ -2032,6 +2071,36 @@ fn toolchain_result(
             None,
             None,
             SANDBOX_JDK_PATH.to_string(),
+        ),
+        DirectToolchainDetection::Maven(root) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            if root.as_deref() == Some(project_root.as_path()) {
+                SANDBOX_JDK_PATH.to_string()
+            } else {
+                SANDBOX_JDK_MAVEN_PATH.to_string()
+            },
+        ),
+        DirectToolchainDetection::Gradle(root) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            if root.as_deref() == Some(project_root.as_path()) {
+                SANDBOX_JDK_PATH.to_string()
+            } else {
+                SANDBOX_JDK_GRADLE_PATH.to_string()
+            },
         ),
         DirectToolchainDetection::Dotnet(_) => (
             None,
@@ -2247,6 +2316,8 @@ fn toolchain_result(
         node_root,
         python_root,
         jdk_root,
+        maven_root,
+        gradle_root,
         dotnet_root,
         dart_root,
         kotlin_root,
@@ -2468,6 +2539,8 @@ fn write_toolchain_result<W: Write>(
             ("ninja_root", result.ninja_root.as_deref()),
             ("meson_root", result.meson_root.as_deref()),
             ("swift_root", result.swift_root.as_deref()),
+            ("maven_root", result.maven_root.as_deref()),
+            ("gradle_root", result.gradle_root.as_deref()),
         ] {
             writeln!(
                 stdout,

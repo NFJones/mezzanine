@@ -691,8 +691,8 @@ fn selector_shadow_hint_completes_toolchain_command_name() {
 
 /// Verifies `/toolchain` completion follows its strict grammar from operation
 /// through typed Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, Dart,
-/// Kotlin, Ruby, PHP, Composer, Erlang, Elixir, GHC, Cabal, Stack, OCaml,
-/// LLVM, GCC, CMake, Ninja, Meson, or Swift selection and confirmation.
+/// Maven, Gradle, Kotlin, Ruby, PHP, Composer, Erlang, Elixir, GHC, Cabal,
+/// Stack, OCaml, LLVM, GCC, CMake, Ninja, Meson, or Swift selection and confirmation.
 #[test]
 fn selector_shadow_hint_completes_toolchain_grammar() {
     let cases = [
@@ -705,6 +705,8 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ("/toolchain detect n", "ode", SelectorCandidateKind::Value),
         ("/toolchain detect py", "thon", SelectorCandidateKind::Value),
         ("/toolchain detect j", "dk", SelectorCandidateKind::Value),
+        ("/toolchain detect mav", "en", SelectorCandidateKind::Value),
+        ("/toolchain detect gra", "dle", SelectorCandidateKind::Value),
         ("/toolchain detect dot", "net", SelectorCandidateKind::Value),
         ("/toolchain detect dar", "t", SelectorCandidateKind::Value),
         ("/toolchain detect k", "otlin", SelectorCandidateKind::Value),
@@ -735,6 +737,8 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ("/toolchain enable n", "ode", SelectorCandidateKind::Value),
         ("/toolchain enable py", "thon", SelectorCandidateKind::Value),
         ("/toolchain enable j", "dk", SelectorCandidateKind::Value),
+        ("/toolchain enable mav", "en", SelectorCandidateKind::Value),
+        ("/toolchain enable gra", "dle", SelectorCandidateKind::Value),
         ("/toolchain enable dot", "net", SelectorCandidateKind::Value),
         ("/toolchain enable dar", "t", SelectorCandidateKind::Value),
         ("/toolchain enable k", "otlin", SelectorCandidateKind::Value),

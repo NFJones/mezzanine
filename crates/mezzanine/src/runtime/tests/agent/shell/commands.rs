@@ -1142,6 +1142,95 @@ fn runtime_agent_shell_swift_toolchain_persists_only_kind() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Maven and Gradle detection prefers trusted-project wrappers and enabling
+/// the explicit JDK bundle persists only its typed kinds.
+#[test]
+fn runtime_agent_shell_jvm_wrappers_persist_only_kinds() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-jvm-wrapper-toolchain-mutation", config);
+    let jdk = path.parent().unwrap().join("jdk");
+    fs::create_dir_all(jdk.join("bin")).unwrap();
+    fs::create_dir_all(jdk.join("lib")).unwrap();
+    for executable in ["java", "javac", "jar"] {
+        let executable_path = jdk.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let project = path.parent().unwrap().join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    fs::create_dir_all(project.join(".mvn/wrapper")).unwrap();
+    fs::create_dir_all(project.join("gradle/wrapper")).unwrap();
+    for wrapper in ["mvnw", "gradlew"] {
+        let executable_path = project.join(wrapper);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::write(
+        project.join(".mvn/wrapper/maven-wrapper.properties"),
+        "distributionUrl=https://repo.maven.apache.org/maven.zip\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("gradle/wrapper/gradle-wrapper.properties"),
+        "distributionUrl=https\\://services.gradle.org/distributions/gradle.zip\n",
+    )
+    .unwrap();
+    let jdk = jdk.canonicalize().unwrap();
+    let project = project.canonicalize().unwrap();
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            project.clone(),
+            TrustDecision::Trusted,
+            Some(project.join(".git")),
+            1,
+        )
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_current_working_directory("%1".to_string(), project.clone());
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("jdk-runtime:{}", jdk.display())]),
+    );
+
+    for kind in ["maven", "gradle"] {
+        let detect = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"{kind}-detect","method":"agent/shell/command","params":{{"idempotency_key":"{kind}-detect","input":"/toolchain detect {kind}"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+        assert!(detect.contains(&format!("| Kind | `{kind}` |")), "{detect}");
+        assert!(detect.contains("| Available | yes |"), "{detect}");
+        assert!(
+            detect.contains(&project.to_string_lossy().into_owned()),
+            "{detect}"
+        );
+    }
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable jdk maven gradle --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(
+        persisted.contains("toolchains = [\"jdk\", \"maven\", \"gradle\"]"),
+        "{persisted}"
+    );
+    for root in [&jdk, &project] {
+        assert!(
+            !persisted.contains(&root.to_string_lossy().into_owned()),
+            "{persisted}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

@@ -30,13 +30,14 @@ use crate::security::sandbox::{
     SANDBOX_BUN_PATH, SANDBOX_CMAKE_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH,
     SANDBOX_DOTNET_PATH, SANDBOX_ERLANG_ELIXIR_PATH, SANDBOX_ERLANG_PATH, SANDBOX_GCC_PATH,
     SANDBOX_GHC_CABAL_PATH, SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH,
-    SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_LLVM_PATH, SANDBOX_MESON_PATH,
-    SANDBOX_NINJA_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH,
-    SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_SWIFT_PATH,
-    SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor, ToolchainPlatform,
+    SANDBOX_JDK_GRADLE_PATH, SANDBOX_JDK_MAVEN_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH,
+    SANDBOX_LLVM_PATH, SANDBOX_MESON_PATH, SANDBOX_NINJA_PATH, SANDBOX_NODE_PATH,
+    SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH,
+    SANDBOX_RUST_PATH, SANDBOX_SWIFT_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
+    ToolchainDescriptor, ToolchainPlatform, discover_jvm_project_wrapper,
     discover_ocaml_project_environment, discover_rust_from_environment_managers,
     resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
-    toolchain_descriptor,
+    resolve_toolchain_projection_for_project, toolchain_descriptor,
 };
 
 /// Strict operation accepted by `/toolchain`.
@@ -109,6 +110,8 @@ struct ToolchainStatus {
     node_root: Option<String>,
     python_root: Option<String>,
     jdk_root: Option<String>,
+    maven_root: Option<String>,
+    gradle_root: Option<String>,
     dotnet_root: Option<String>,
     dart_root: Option<String>,
     kotlin_root: Option<String>,
@@ -928,6 +931,7 @@ impl RuntimeSessionService {
     fn toolchain_status_for_pane(&self, pane_id: &str) -> Result<ToolchainStatus> {
         let configured = self.configured_toolchain_names()?;
         let backend = self.configured_permissions().sandbox.as_str();
+        let trusted_project_root = self.trusted_project_root_for_pane(pane_id);
         let (
             discovery_state,
             discoverable,
@@ -940,6 +944,8 @@ impl RuntimeSessionService {
             node_root,
             python_root,
             jdk_root,
+            maven_root,
+            gradle_root,
             dotnet_root,
             dart_root,
             kotlin_root,
@@ -991,10 +997,14 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1168,6 +1178,35 @@ impl RuntimeSessionService {
                         None
                     }
                 };
+                let mut resolve_jvm_build_tool =
+                    |kind: SandboxToolchainKind| match resolve_toolchain_projection_for_project(
+                        &[SandboxToolchainKind::Jdk, kind],
+                        &signature.environment_managers,
+                        &signature.os,
+                        trusted_project_root.as_deref(),
+                    ) {
+                        Ok(Some(projection)) => {
+                            discoverable.push(kind.as_str().to_string());
+                            projection
+                                .project_environments
+                                .iter()
+                                .find(|environment| environment.kind == kind)
+                                .map(|environment| environment.host_path.display().to_string())
+                                .or_else(|| {
+                                    projection
+                                        .roots
+                                        .last()
+                                        .map(|root| root.host_path.display().to_string())
+                                })
+                        }
+                        Ok(None) => None,
+                        Err(error) => {
+                            errors.push(format!("{}:{}", kind.as_str(), error.message()));
+                            None
+                        }
+                    };
+                let maven_root = resolve_jvm_build_tool(SandboxToolchainKind::Maven);
+                let gradle_root = resolve_jvm_build_tool(SandboxToolchainKind::Gradle);
                 let dotnet_root = match resolve_toolchain_projection(
                     &[SandboxToolchainKind::Dotnet],
                     &signature.environment_managers,
@@ -1422,6 +1461,8 @@ impl RuntimeSessionService {
                     node_root,
                     python_root,
                     jdk_root,
+                    maven_root,
+                    gradle_root,
                     dotnet_root,
                     dart_root,
                     kotlin_root,
@@ -1482,6 +1523,8 @@ impl RuntimeSessionService {
             node_root,
             python_root,
             jdk_root,
+            maven_root,
+            gradle_root,
             dotnet_root,
             dart_root,
             kotlin_root,
@@ -1882,6 +1925,40 @@ fn detect_toolchain_detail(
                 "jdk_root={} sandbox_path={}",
                 json_escape(&root.host_path.display().to_string()),
                 SANDBOX_JDK_PATH,
+            ))
+        }
+        SandboxToolchainKind::Maven | SandboxToolchainKind::Gradle => {
+            if let Some(project_root) = trusted_project_root
+                && let Some(wrapper) = discover_jvm_project_wrapper(project_root, kind)
+                    .map_err(|error| MezError::invalid_state(error.message()))?
+            {
+                return Ok(format!(
+                    "{}_root={} sandbox_path={}",
+                    kind.as_str(),
+                    json_escape(&wrapper.host_path.display().to_string()),
+                    SANDBOX_JDK_PATH,
+                ));
+            }
+            let projection = resolve_toolchain_projection(
+                &[SandboxToolchainKind::Jdk, kind],
+                environment_managers,
+                host_os,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?
+            .ok_or_else(|| MezError::invalid_state("JVM build-tool projection resolved empty"))?;
+            let root = projection.roots.last().ok_or_else(|| {
+                MezError::invalid_state("JVM build-tool projection is missing its companion root")
+            })?;
+            let sandbox_path = match kind {
+                SandboxToolchainKind::Maven => SANDBOX_JDK_MAVEN_PATH,
+                SandboxToolchainKind::Gradle => SANDBOX_JDK_GRADLE_PATH,
+                _ => unreachable!("JVM build-tool arm restricts kind"),
+            };
+            Ok(format!(
+                "{}_root={} sandbox_path={}",
+                kind.as_str(),
+                json_escape(&root.host_path.display().to_string()),
+                sandbox_path,
             ))
         }
         SandboxToolchainKind::Dotnet => {
@@ -2343,6 +2420,14 @@ fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &Toolchain
             .flatten()
             .collect(),
         SandboxToolchainKind::Jdk => vec![status.jdk_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Maven => vec![status.maven_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Gradle => vec![status.gradle_root.as_deref()]
             .into_iter()
             .flatten()
             .collect(),

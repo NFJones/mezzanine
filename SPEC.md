@@ -2971,7 +2971,7 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state, except that OCaml
 detection MUST use only the active pane's trusted project root.
@@ -3178,6 +3178,22 @@ be redirected beneath the managed home. Apple/Xcode SDKs, signing and simulator
 state, swiftenv/asdf/mise homes, host package credentials, arbitrary inherited
 compiler or linker flags, unrelated native prefixes, and discovered host roots
 MUST NOT be exposed or persisted.
+Schema v44 adds the allowlisted `maven` and `gradle` kinds. Schema v43 to v44
+migration MUST preserve existing built-in and custom selections or omission and
+MUST NOT discover or enable either build tool. Both kinds MUST require an
+explicitly selected JDK. Detection MUST prefer a real executable repository-root
+`mvnw` or `gradlew` under trusted project authority with its real wrapper
+properties file and one credential-free HTTPS `distributionUrl`. Symlinks,
+malformed or duplicate URLs, embedded credentials, fragments, and missing
+metadata MUST fail closed. Detection MUST NOT download wrapper distributions or
+grant network access. If no wrapper exists, exact `maven-runtime` or
+`gradle-runtime` pane evidence and captured-PATH discovery MAY select a validated
+standalone distribution mounted read-only at its fixed root. Maven local state
+MUST use `/home/mez/.m2`; Gradle user, cache, wrapper, and daemon state MUST use
+`/home/mez/.gradle`, and Gradle daemon reuse MUST be disabled. Host Maven
+settings/security, Gradle properties/init/enterprise configuration, repository
+credentials, signing keys, manager homes, host caches, and existing daemons MUST
+remain hidden. Persistence MUST contain only typed kind names.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -6122,9 +6138,9 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
-  `node`, `python`, `jdk`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
+  `node`, `python`, `jdk`, `maven`, `gradle`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
   `composer`, `erlang`, `elixir`, `ghc`, `cabal`, `stack`, `ocaml`, `llvm`,
   `gcc`, `cmake`, `ninja`, `meson`, or `swift`. Unknown kinds,
   missing confirmation, duplicate confirmation, and

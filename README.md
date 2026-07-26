@@ -434,7 +434,7 @@ Current support reflects behavior implemented in the repository today.
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
 - `mez sandbox toolchains list`, `status [SELECTOR] [PATH]`, and
-  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift] [PATH]` inspect effective
+  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift] [PATH]` inspect effective
   toolchain configuration and canonical built-in roots without mutation.
   `enable SELECTOR... --yes` and `disable SELECTOR... --yes` preserve ordered
   built-in or `custom:<name>` selections. `custom define NAME ... --yes` and
@@ -453,8 +453,13 @@ Current support reflects behavior implemented in the repository today.
   only a validated standalone Linux toolchain, redirects SwiftPM state beneath
   the managed home, and excludes Apple SDK, signing, simulator, manager,
   credential, and unrelated native-tool state. JDK projection synthesizes
-  `JAVA_HOME` and includes only the selected SDK, not Java manager homes,
-  preferences, credentials, Maven or Gradle state, or shell hooks. .NET
+  `JAVA_HOME` and includes only the selected SDK. Maven and Gradle require that
+  JDK, prefer validated repository `mvnw` and `gradlew` wrappers, fall back to
+  exact standalone pane evidence, and isolate user homes, caches, wrapper
+  distributions, and daemon state beneath `/home/mez`. Host settings,
+  properties, init scripts, credentials, signing keys, manager homes, and
+  existing daemons remain hidden. Wrapper downloads still use normal sandbox
+  network policy and are never performed during detection. .NET
   projection synthesizes `DOTNET_ROOT`, redirects CLI and NuGet package state
   into the managed home, and disables telemetry and first-time setup. It does
   not expose host NuGet configuration or credentials, global tools, workloads,
@@ -493,8 +498,9 @@ Current support reflects behavior implemented in the repository today.
   expired, or it was already settled.
 - In the agent shell, `/toolchain` and `/toolchain status` report supported,
   configured, discoverable, and effective state for the active pane.
-  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]` is read-only and uses
-  active-pane bootstrap evidence or the pane's trusted project root for OCaml.
+  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]` is read-only and uses
+  active-pane bootstrap evidence or the pane's trusted project root for OCaml
+  and Maven/Gradle wrappers.
   `/toolchain define NAME ... --yes`, ordered
   `/toolchain enable SELECTOR... --yes`, `/toolchain disable SELECTOR... --yes`,
   and `/toolchain remove custom:NAME [--disable] --yes` require direct

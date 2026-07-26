@@ -1461,6 +1461,192 @@ fn jdk_toolchain_discovery_rejects_incomplete_and_symlinked_sdks() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Repository Maven and Gradle wrappers take precedence over standalone
+/// distributions, retain the selected JDK, and isolate all mutable build-tool
+/// state without adding the repository root or host configuration to PATH.
+#[test]
+fn jvm_build_tool_wrappers_prefer_trusted_project_and_isolate_state() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-jvm-wrapper-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let jdk = base.join("jdk");
+    std::fs::create_dir_all(jdk.join("bin")).unwrap();
+    std::fs::create_dir_all(jdk.join("lib")).unwrap();
+    for executable in ["java", "javac", "jar"] {
+        let path = jdk.join("bin").join(executable);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let project = base.join("project");
+    std::fs::create_dir_all(project.join(".mvn/wrapper")).unwrap();
+    std::fs::create_dir_all(project.join("gradle/wrapper")).unwrap();
+    for wrapper in ["mvnw", "gradlew"] {
+        let path = project.join(wrapper);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(
+        project.join(".mvn/wrapper/maven-wrapper.properties"),
+        "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.zip\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("gradle/wrapper/gradle-wrapper.properties"),
+        "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.12-bin.zip\n",
+    )
+    .unwrap();
+    let jdk = jdk.canonicalize().unwrap();
+    let project = project.canonicalize().unwrap();
+    let managers = [format!("jdk-runtime:{}", jdk.display())];
+
+    let projection = resolve_toolchain_projection_for_project(
+        &[
+            SandboxToolchainKind::Jdk,
+            SandboxToolchainKind::Maven,
+            SandboxToolchainKind::Gradle,
+        ],
+        &managers,
+        "linux",
+        Some(&project),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(projection.roots.len(), 1);
+    assert_eq!(projection.roots[0].sandbox_destination, SANDBOX_JDK_ROOT);
+    assert_eq!(projection.project_environments.len(), 2);
+    assert_eq!(projection.executable_path(), SANDBOX_JDK_PATH);
+    assert_eq!(
+        projection
+            .environment
+            .get("MAVEN_USER_HOME")
+            .map(String::as_str),
+        Some("/home/mez/.m2")
+    );
+    assert_eq!(
+        projection
+            .environment
+            .get("GRADLE_USER_HOME")
+            .map(String::as_str),
+        Some("/home/mez/.gradle")
+    );
+    assert_eq!(
+        projection
+            .environment
+            .get("GRADLE_OPTS")
+            .map(String::as_str),
+        Some("-Dorg.gradle.daemon=false")
+    );
+    assert_eq!(projection.managed_state.len(), 2);
+    for variable in ["MAVEN_OPTS", "MAVEN_CONFIG", "GRADLE_HOME"] {
+        assert!(!projection.environment.contains_key(variable));
+    }
+
+    let missing_jdk = resolve_toolchain_projection_for_project(
+        &[SandboxToolchainKind::Maven],
+        &managers,
+        "linux",
+        Some(&project),
+    )
+    .unwrap_err();
+    assert_eq!(
+        missing_jdk.kind(),
+        SandboxCompileErrorKind::UnsupportedRequirement
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Maven and Gradle fall back to exact standalone pane evidence when wrappers
+/// are absent, while malformed, credential-bearing, or symlinked repository
+/// wrapper metadata fails closed instead of importing host build-tool state.
+#[test]
+fn jvm_build_tools_validate_standalone_fallback_and_wrapper_metadata() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-jvm-wrapper-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let mut managers = Vec::new();
+    for (evidence, name, executable, directories) in [
+        ("jdk-runtime", "jdk", "java", ["lib", "bin"]),
+        ("maven-runtime", "maven", "mvn", ["lib", "boot"]),
+        ("gradle-runtime", "gradle", "gradle", ["lib", "bin"]),
+    ] {
+        let root = base.join(name);
+        for directory in directories {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let mut executables = vec![executable];
+        if name == "jdk" {
+            executables.extend(["javac", "jar"]);
+        }
+        for executable in executables {
+            let path = root.join("bin").join(executable);
+            std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        managers.push(format!(
+            "{evidence}:{}",
+            root.canonicalize().unwrap().display()
+        ));
+    }
+    let project = base.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+    let projection = resolve_toolchain_projection_for_project(
+        &[
+            SandboxToolchainKind::Jdk,
+            SandboxToolchainKind::Maven,
+            SandboxToolchainKind::Gradle,
+        ],
+        &managers,
+        "linux",
+        Some(&project),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(projection.roots.len(), 3);
+    assert_eq!(projection.roots[1].sandbox_destination, SANDBOX_MAVEN_ROOT);
+    assert_eq!(projection.roots[2].sandbox_destination, SANDBOX_GRADLE_ROOT);
+    assert_eq!(
+        projection.executable_path(),
+        "/opt/mez/toolchains/jdk/root/bin:/opt/mez/toolchains/maven/root/bin:/opt/mez/toolchains/gradle/root/bin:/usr/bin:/bin"
+    );
+
+    std::fs::create_dir_all(project.join("gradle/wrapper")).unwrap();
+    std::fs::write(project.join("gradlew"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        project.join("gradlew"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("gradle/wrapper/gradle-wrapper.properties"),
+        "distributionUrl=https://user:secret@example.invalid/gradle.zip\n",
+    )
+    .unwrap();
+    let credential_url =
+        discover_jvm_project_wrapper(&project, SandboxToolchainKind::Gradle).unwrap_err();
+    assert_eq!(
+        credential_url.kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    std::fs::remove_file(project.join("gradlew")).unwrap();
+    let external = base.join("external-gradlew");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&external, project.join("gradlew")).unwrap();
+    let symlink = discover_jvm_project_wrapper(&project, SandboxToolchainKind::Gradle).unwrap_err();
+    assert_eq!(symlink.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A standalone Kotlin/JVM compiler distribution composes read-only with an
 /// explicitly selected JDK and preserves the JDK-owned JAVA_HOME contract.
 #[test]
@@ -3358,9 +3544,9 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart",
-            "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack",
-            "ocaml", "llvm", "gcc", "cmake", "ninja", "meson", "swift"
+            "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "maven", "gradle",
+            "dotnet", "dart", "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc",
+            "cabal", "stack", "ocaml", "llvm", "gcc", "cmake", "ninja", "meson", "swift"
         ]
     );
     assert_eq!(
@@ -3374,6 +3560,14 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("jdk"),
         Some(SandboxToolchainKind::Jdk)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("maven"),
+        Some(SandboxToolchainKind::Maven)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("gradle"),
+        Some(SandboxToolchainKind::Gradle)
     );
     assert_eq!(
         parse_sandbox_toolchain_kind("swift"),

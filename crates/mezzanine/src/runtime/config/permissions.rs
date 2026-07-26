@@ -352,6 +352,10 @@ pub(crate) enum SandboxToolchainKind {
     Python,
     /// One selected Java Development Kit distribution.
     Jdk,
+    /// One selected Maven build-tool companion or trusted project wrapper.
+    Maven,
+    /// One selected Gradle build-tool companion or trusted project wrapper.
+    Gradle,
     /// One selected .NET SDK installation.
     Dotnet,
     /// One selected standalone Dart SDK installation.
@@ -402,6 +406,8 @@ impl SandboxToolchainKind {
             Self::Node => "node",
             Self::Python => "python",
             Self::Jdk => "jdk",
+            Self::Maven => "maven",
+            Self::Gradle => "gradle",
             Self::Dotnet => "dotnet",
             Self::Dart => "dart",
             Self::Kotlin => "kotlin",

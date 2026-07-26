@@ -1336,6 +1336,72 @@ fn sandbox_swift_toolchain_detects_without_persisting_root() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Maven and Gradle detection prefers complete repository wrappers over host
+/// distributions, reports the canonical project root, and remains read-only.
+#[test]
+fn sandbox_jvm_build_tool_wrappers_detect_without_persisting_roots() {
+    let (env, home) = test_env("sandbox-jvm-build-tool-wrappers");
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    fs::create_dir_all(project.join(".mvn/wrapper")).unwrap();
+    fs::create_dir_all(project.join("gradle/wrapper")).unwrap();
+    for wrapper in ["mvnw", "gradlew"] {
+        let path = project.join(wrapper);
+        fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::write(
+        project.join(".mvn/wrapper/maven-wrapper.properties"),
+        "distributionUrl=https://repo.maven.apache.org/maven.zip\n",
+    )
+    .unwrap();
+    fs::write(
+        project.join("gradle/wrapper/gradle-wrapper.properties"),
+        "distributionUrl=https\\://services.gradle.org/distributions/gradle.zip\n",
+    )
+    .unwrap();
+    let project = project.canonicalize().unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+
+    for kind in ["maven", "gradle"] {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let detect_code = block_on_cli_code(crate::cli::run_with(
+            with_json_output(vec![
+                "mez".to_string(),
+                "sandbox".to_string(),
+                "toolchains".to_string(),
+                "detect".to_string(),
+                "--kind".to_string(),
+                kind.to_string(),
+                project.to_string_lossy().into_owned(),
+            ]),
+            env.clone(),
+            false,
+            &mut stdout,
+            &mut stderr,
+        ))
+        .unwrap();
+
+        assert_eq!(detect_code, 0);
+        let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(detected["kind"], kind);
+        assert_eq!(detected["available"], true);
+        assert_eq!(
+            detected[format!("{kind}_root")],
+            project.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            detected["sandbox_path"],
+            "/opt/mez/toolchains/jdk/root/bin:/usr/bin:/bin"
+        );
+        assert!(stderr.is_empty());
+        assert!(!config_path.exists());
+    }
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]
