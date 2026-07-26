@@ -25,7 +25,7 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 12] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 14] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
@@ -38,6 +38,8 @@ pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 12] =
     SandboxToolchainKind::Dart,
     SandboxToolchainKind::Kotlin,
     SandboxToolchainKind::Ruby,
+    SandboxToolchainKind::Php,
+    SandboxToolchainKind::Composer,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -91,6 +93,15 @@ pub(crate) const SANDBOX_KOTLIN_JDK_PATH: &str =
 pub(crate) const SANDBOX_RUBY_ROOT: &str = "/opt/mez/toolchains/ruby/root";
 /// Fixed executable search path used when Ruby is projected.
 pub(crate) const SANDBOX_RUBY_PATH: &str = "/opt/mez/toolchains/ruby/root/bin:/usr/bin:/bin";
+/// Fixed PHP runtime projection inside Bubblewrap.
+pub(crate) const SANDBOX_PHP_ROOT: &str = "/opt/mez/toolchains/php/root";
+/// Fixed executable search path used when only PHP is projected.
+pub(crate) const SANDBOX_PHP_PATH: &str = "/opt/mez/toolchains/php/root/bin:/usr/bin:/bin";
+/// Fixed Composer companion projection inside Bubblewrap.
+pub(crate) const SANDBOX_COMPOSER_ROOT: &str = "/opt/mez/toolchains/composer/root";
+/// Fixed executable search path when Composer is composed with PHP.
+pub(crate) const SANDBOX_PHP_COMPOSER_PATH: &str =
+    "/opt/mez/toolchains/php/root/bin:/opt/mez/toolchains/composer/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -818,6 +829,98 @@ const RUBY_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const PHP_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "php-runtime",
+    label: "PHP runtime",
+    sandbox_destination: SANDBOX_PHP_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/php"],
+    required_directories: &["lib/php"],
+}];
+const PHP_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Php,
+    aliases: &["php"],
+    roots: &PHP_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/php",
+    ],
+    path_entries: &["/opt/mez/toolchains/php/root/bin"],
+    environment: &[],
+    managed_state: &[],
+    forbidden_descendants: &["auth.json", "credentials", "global", "shims"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[],
+        optional: &[SandboxToolchainKind::Composer],
+    },
+    allow_root_overlap: false,
+};
+
+const COMPOSER_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "composer-runtime",
+    label: "Composer companion",
+    sandbox_destination: SANDBOX_COMPOSER_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::UserTools,
+    required_executables: &["bin/composer"],
+    required_directories: &[],
+}];
+const COMPOSER_ENVIRONMENT: [ToolchainEnvironmentVariable; 3] = [
+    ToolchainEnvironmentVariable {
+        name: "COMPOSER_HOME",
+        value: "/home/mez/.config/composer",
+    },
+    ToolchainEnvironmentVariable {
+        name: "COMPOSER_CACHE_DIR",
+        value: "/home/mez/.cache/composer",
+    },
+    ToolchainEnvironmentVariable {
+        name: "COMPOSER_VENDOR_DIR",
+        value: "/home/mez/.local/share/composer/vendor",
+    },
+];
+const COMPOSER_MANAGED_STATE: [ManagedToolchainState; 3] = [
+    ManagedToolchainState {
+        purpose: "composer-home",
+        sandbox_path: "/home/mez/.config/composer",
+    },
+    ManagedToolchainState {
+        purpose: "composer-cache",
+        sandbox_path: "/home/mez/.cache/composer",
+    },
+    ManagedToolchainState {
+        purpose: "composer-vendor",
+        sandbox_path: "/home/mez/.local/share/composer/vendor",
+    },
+];
+const COMPOSER_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Composer,
+    aliases: &["composer"],
+    roots: &COMPOSER_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/composer",
+    ],
+    path_entries: &["/opt/mez/toolchains/composer/root/bin"],
+    environment: &COMPOSER_ENVIRONMENT,
+    managed_state: &COMPOSER_MANAGED_STATE,
+    forbidden_descendants: &["auth.json", "credentials", "keys", "certificates", "global"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[SandboxToolchainKind::Php],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -1141,6 +1244,8 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Dart => &DART_DESCRIPTOR,
         SandboxToolchainKind::Kotlin => &KOTLIN_DESCRIPTOR,
         SandboxToolchainKind::Ruby => &RUBY_DESCRIPTOR,
+        SandboxToolchainKind::Php => &PHP_DESCRIPTOR,
+        SandboxToolchainKind::Composer => &COMPOSER_DESCRIPTOR,
     }
 }
 
@@ -2474,6 +2579,85 @@ pub(crate) fn discover_ruby_from_search_path(
                 )
             })?;
         validate_descriptor_root(&root, &RUBY_ROOTS[0])?;
+        return Ok(Some(root));
+    }
+    Ok(None)
+}
+
+/// Discovers one selected PHP runtime from an explicit search path without
+/// invoking asdf, mise, shell hooks, or manager-owned shims.
+pub(crate) fn discover_php_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "php",
+        "PHP executable",
+        "PHP runtime",
+        &PHP_ROOTS[0],
+    )
+}
+
+/// Discovers one selected Composer companion from an explicit search path
+/// without reading host Composer configuration or invoking manager hooks.
+pub(crate) fn discover_composer_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    discover_single_executable_root(
+        search_path,
+        "composer",
+        "Composer executable",
+        "Composer companion",
+        &COMPOSER_ROOTS[0],
+    )
+}
+
+/// Discovers a real `<root>/bin/<executable>` and validates its descriptor root.
+fn discover_single_executable_root(
+    search_path: Option<&OsStr>,
+    executable_name: &str,
+    executable_label: &str,
+    root_label: &str,
+    descriptor: &ToolchainRootDescriptor,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    let Some(search_path) = search_path else {
+        return Ok(None);
+    };
+    for directory in std::env::split_paths(search_path) {
+        let executable = directory.join(executable_name);
+        let metadata = match fs::symlink_metadata(&executable) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to inspect selected {executable_label}: {error}"),
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                format!("selected {executable_label} must be a real file, not a shim or symlink"),
+            ));
+        }
+        let root = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("selected {executable_label} has no root"),
+                )
+            })?
+            .canonicalize()
+            .map_err(|error| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to canonicalize selected {root_label}: {error}"),
+                )
+            })?;
+        validate_descriptor_root(&root, descriptor)?;
         return Ok(Some(root));
     }
     Ok(None)

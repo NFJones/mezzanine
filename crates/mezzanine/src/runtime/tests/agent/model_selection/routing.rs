@@ -1111,12 +1111,13 @@ env\tgit_repo\t0\n\
 bootstrap\tcomplete\t1714500000\n",
         root.to_string_lossy()
     );
-    let transaction = service
-        .running_shell_transactions_mut_for_tests()
-        .get_mut(&bootstrap_marker)
+    let process_group_id = service
+        .pane_processes()
+        .primary_pid(&worker_turn.pane_id)
         .unwrap();
-    transaction.observed_output_bytes = bootstrap_output.len();
-    transaction.observed_output_preview = bootstrap_output;
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&worker_turn.pane_id, Some(process_group_id));
     service
         .observe_agent_shell_transaction_start(
             &worker_turn.pane_id,
@@ -1126,6 +1127,12 @@ bootstrap\tcomplete\t1714500000\n",
             &worker_turn.pane_id,
         )
         .unwrap();
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&bootstrap_marker)
+        .unwrap();
+    transaction.observed_output_bytes = bootstrap_output.len();
+    transaction.observed_output_preview = bootstrap_output;
     service
         .observe_agent_shell_transaction_end(
             &worker_turn.pane_id,

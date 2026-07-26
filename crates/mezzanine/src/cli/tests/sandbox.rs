@@ -913,6 +913,76 @@ fn sandbox_ruby_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// PHP and Composer detection use only captured CLI search-path entries,
+/// report canonical roots, and never persist host paths or package state.
+#[test]
+fn sandbox_php_and_composer_toolchains_detect_without_persisting_roots() {
+    let (mut env, home) = test_env("sandbox-php-composer-toolchain");
+    let php_root = home.join("php-runtime");
+    fs::create_dir_all(php_root.join("bin")).unwrap();
+    fs::create_dir_all(php_root.join("lib/php")).unwrap();
+    fs::write(php_root.join("bin/php"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(php_root.join("bin/php"), fs::Permissions::from_mode(0o755)).unwrap();
+    let composer_root = home.join("composer-runtime");
+    fs::create_dir_all(composer_root.join("bin")).unwrap();
+    fs::write(composer_root.join("bin/composer"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        composer_root.join("bin/composer"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let php_root = php_root.canonicalize().unwrap();
+    let composer_root = composer_root.canonicalize().unwrap();
+    env.path =
+        Some(std::env::join_paths([php_root.join("bin"), composer_root.join("bin")]).unwrap());
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    for (kind, field, root) in [
+        ("php", "php_root", &php_root),
+        ("composer", "composer_root", &composer_root),
+    ] {
+        stdout.clear();
+        stderr.clear();
+        let detect_code = block_on_cli_code(crate::cli::run_with(
+            with_json_output(vec![
+                "mez".to_string(),
+                "sandbox".to_string(),
+                "toolchains".to_string(),
+                "detect".to_string(),
+                "--kind".to_string(),
+                kind.to_string(),
+                project.to_string_lossy().into_owned(),
+            ]),
+            env.clone(),
+            false,
+            &mut stdout,
+            &mut stderr,
+        ))
+        .unwrap();
+        assert_eq!(detect_code, 0);
+        let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(detected["kind"], kind);
+        assert_eq!(detected["available"], true);
+        assert_eq!(detected[field], root.to_string_lossy().as_ref());
+        assert!(stderr.is_empty());
+        assert!(!config_path.exists());
+    }
+
+    assert_toolchain_enable_requires_live_primary(
+        env,
+        "composer",
+        &config_path,
+        &mut stdout,
+        &mut stderr,
+    );
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]

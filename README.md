@@ -434,7 +434,7 @@ Current support reflects behavior implemented in the repository today.
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
 - `mez sandbox toolchains list`, `status [SELECTOR] [PATH]`, and
-  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby] [PATH]` inspect effective
+  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer] [PATH]` inspect effective
   toolchain configuration and canonical built-in roots without mutation.
   `enable SELECTOR... --yes` and `disable SELECTOR... --yes` preserve ordered
   built-in or `custom:<name>` selections. `custom define NAME ... --yes` and
@@ -442,7 +442,8 @@ Current support reflects behavior implemented in the repository today.
   changes. Mutations submit an exact digest-bound request to a live service for
   confirmation in the attached primary client; they do not edit configuration
   offline or approve their own request. Rust mounts Cargo and Rustup read-only;
-  Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, Dart, Kotlin/JVM, and Ruby mount one
+  Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, Dart, Kotlin/JVM, Ruby, PHP,
+  and Composer mount one
   self-contained distribution, SDK, or runtime read-only. JDK projection synthesizes
   `JAVA_HOME` and includes only the selected SDK, not Java manager homes,
   preferences, credentials, Maven or Gradle state, or shell hooks. .NET
@@ -457,7 +458,11 @@ Current support reflects behavior implemented in the repository today.
   unrelated compiler versions, and Kotlin/Native or Kotlin/JS tooling. Ruby
   redirects RubyGems and Bundler state beneath the managed home and excludes
   host gem credentials, global Bundler configuration, manager state, gemsets,
-  user executable bins, and unrelated runtimes. Custom roots must already be
+  user executable bins, and unrelated runtimes. Composer requires the selected
+  PHP runtime, redirects its home, cache, and vendor state beneath the managed
+  home, and excludes host authentication, global configuration and packages,
+  certificates, private keys, manager state, and unrelated PHP installations.
+  Custom roots must already be
   within the pane's
   resolved read authority and are projected read-only at fixed sandbox paths.
   Writable cache and package state is redirected beneath
@@ -473,7 +478,7 @@ Current support reflects behavior implemented in the repository today.
   expired, or it was already settled.
 - In the agent shell, `/toolchain` and `/toolchain status` report supported,
   configured, discoverable, and effective state for the active pane.
-  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby]` is read-only and uses only
+  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer]` is read-only and uses only
   active-pane bootstrap evidence. `/toolchain define NAME ... --yes`, ordered
   `/toolchain enable SELECTOR... --yes`, `/toolchain disable SELECTOR... --yes`,
   and `/toolchain remove custom:NAME [--disable] --yes` require direct

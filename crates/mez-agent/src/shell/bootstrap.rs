@@ -196,6 +196,18 @@ if [ -n \"$mez_ruby_bin\" ] && [ -f \"$mez_ruby_bin\" ] && [ ! -L \"$mez_ruby_bi
   mez_ruby_root=$(CDPATH= cd -P -- \"$mez_ruby_bin_dir/..\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_ruby_root\" ] && [ \"$mez_ruby_bin\" = \"$mez_ruby_root/bin/ruby\" ] && mez_bootstrap_field env_manager \"ruby-runtime:$mez_ruby_root\"\n\
 fi\n\
+mez_php_bin=$(command -v php 2>/dev/null || true)\n\
+if [ -n \"$mez_php_bin\" ] && [ -f \"$mez_php_bin\" ] && [ ! -L \"$mez_php_bin\" ]; then\n\
+  mez_php_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_php_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_php_root=$(CDPATH= cd -P -- \"$mez_php_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_php_root\" ] && [ \"$mez_php_bin\" = \"$mez_php_root/bin/php\" ] && mez_bootstrap_field env_manager \"php-runtime:$mez_php_root\"\n\
+fi\n\
+mez_composer_bin=$(command -v composer 2>/dev/null || true)\n\
+if [ -n \"$mez_composer_bin\" ] && [ -f \"$mez_composer_bin\" ] && [ ! -L \"$mez_composer_bin\" ]; then\n\
+  mez_composer_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_composer_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_composer_root=$(CDPATH= cd -P -- \"$mez_composer_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_composer_root\" ] && [ \"$mez_composer_bin\" = \"$mez_composer_root/bin/composer\" ] && mez_bootstrap_field env_manager \"composer-runtime:$mez_composer_root\"\n\
+fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -375,6 +387,18 @@ if test -n \"$mez_ruby_bin\"; and test -f \"$mez_ruby_bin\"; and not test -L \"$
   set -l mez_ruby_bin_dir (cd (dirname \"$mez_ruby_bin\") 2>/dev/null; and pwd -P)\n\
   set -l mez_ruby_root (cd \"$mez_ruby_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_ruby_root\"; and test \"$mez_ruby_bin\" = \"$mez_ruby_root/bin/ruby\"; and mez_bootstrap_field env_manager \"ruby-runtime:$mez_ruby_root\"\n\
+end\n\
+set -l mez_php_bin (command -s php 2>/dev/null)\n\
+if test -n \"$mez_php_bin\"; and test -f \"$mez_php_bin\"; and not test -L \"$mez_php_bin\"\n\
+  set -l mez_php_bin_dir (cd (dirname \"$mez_php_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_php_root (cd \"$mez_php_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_php_root\"; and test \"$mez_php_bin\" = \"$mez_php_root/bin/php\"; and mez_bootstrap_field env_manager \"php-runtime:$mez_php_root\"\n\
+end\n\
+set -l mez_composer_bin (command -s composer 2>/dev/null)\n\
+if test -n \"$mez_composer_bin\"; and test -f \"$mez_composer_bin\"; and not test -L \"$mez_composer_bin\"\n\
+  set -l mez_composer_bin_dir (cd (dirname \"$mez_composer_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_composer_root (cd \"$mez_composer_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_composer_root\"; and test \"$mez_composer_bin\" = \"$mez_composer_root/bin/composer\"; and mez_bootstrap_field env_manager \"composer-runtime:$mez_composer_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\

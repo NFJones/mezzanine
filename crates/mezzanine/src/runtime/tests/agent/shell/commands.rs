@@ -723,6 +723,67 @@ fn runtime_agent_shell_ruby_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Composer detection requires exact PHP and Composer evidence, while
+/// enablement preserves both typed selections without persisting host roots.
+#[test]
+fn runtime_agent_shell_composer_requires_php_and_persists_only_kinds() {
+    let config = "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = [\"php\"]\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-php-composer-toolchain-mutation", config);
+    let php_root = path.parent().unwrap().join("php-runtime");
+    fs::create_dir_all(php_root.join("bin")).unwrap();
+    fs::create_dir_all(php_root.join("lib/php")).unwrap();
+    fs::write(php_root.join("bin/php"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(php_root.join("bin/php"), fs::Permissions::from_mode(0o755)).unwrap();
+    let composer_root = path.parent().unwrap().join("composer-runtime");
+    fs::create_dir_all(composer_root.join("bin")).unwrap();
+    fs::write(composer_root.join("bin/composer"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        composer_root.join("bin/composer"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let php_root = php_root.canonicalize().unwrap();
+    let composer_root = composer_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![
+            format!("php-runtime:{}", php_root.display()),
+            format!("composer-runtime:{}", composer_root.display()),
+        ]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"composer-detect","method":"agent/shell/command","params":{"idempotency_key":"composer-detect","input":"/toolchain detect composer"}}"#,
+        &primary,
+    );
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `composer` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable composer --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled composer; updated"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(
+        persisted.contains("toolchains = [\"php\", \"composer\"]"),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&php_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&composer_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

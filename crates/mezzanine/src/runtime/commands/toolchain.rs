@@ -28,11 +28,11 @@ use crate::runtime::{
 use crate::security::audit::{AuditActor, AuditRecord};
 use crate::security::sandbox::{
     SANDBOX_BUN_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH,
-    SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH,
-    SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
-    ToolchainDescriptor, ToolchainPlatform, discover_rust_from_environment_managers,
-    resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
-    toolchain_descriptor,
+    SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH,
+    SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
+    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor, ToolchainPlatform,
+    discover_rust_from_environment_managers, resolve_configured_toolchain_projection_for_project,
+    resolve_toolchain_projection, toolchain_descriptor,
 };
 
 /// Strict operation accepted by `/toolchain`.
@@ -109,6 +109,8 @@ struct ToolchainStatus {
     dart_root: Option<String>,
     kotlin_root: Option<String>,
     ruby_root: Option<String>,
+    php_root: Option<String>,
+    composer_root: Option<String>,
     discovery_error: Option<String>,
     generation: u64,
 }
@@ -925,6 +927,8 @@ impl RuntimeSessionService {
             dart_root,
             kotlin_root,
             ruby_root,
+            php_root,
+            composer_root,
             discovery_error,
         ) = match self.pane_environment_signature(pane_id) {
             None if self.pane_bootstrap_is_pending(pane_id) => (
@@ -944,10 +948,14 @@ impl RuntimeSessionService {
                 None,
                 None,
                 None,
+                None,
+                None,
             ),
             None => (
                 "environment-unavailable",
                 Vec::new(),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -1179,6 +1187,42 @@ impl RuntimeSessionService {
                         None
                     }
                 };
+                let php_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Php],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("php".to_string());
+                        projection
+                            .roots
+                            .first()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("php:{}", error.message()));
+                        None
+                    }
+                };
+                let composer_root = match resolve_toolchain_projection(
+                    &[SandboxToolchainKind::Php, SandboxToolchainKind::Composer],
+                    &signature.environment_managers,
+                    &signature.os,
+                ) {
+                    Ok(Some(projection)) => {
+                        discoverable.push("composer".to_string());
+                        projection
+                            .roots
+                            .last()
+                            .map(|root| root.host_path.display().to_string())
+                    }
+                    Ok(None) => None,
+                    Err(error) => {
+                        errors.push(format!("composer:{}", error.message()));
+                        None
+                    }
+                };
                 let state = if discoverable.is_empty() {
                     "unavailable"
                 } else {
@@ -1200,6 +1244,8 @@ impl RuntimeSessionService {
                     dart_root,
                     kotlin_root,
                     ruby_root,
+                    php_root,
+                    composer_root,
                     (!errors.is_empty()).then(|| errors.join(";")),
                 )
             }
@@ -1246,6 +1292,8 @@ impl RuntimeSessionService {
             dart_root,
             kotlin_root,
             ruby_root,
+            php_root,
+            composer_root,
             discovery_error,
             generation: self.session.config_generation,
         })
@@ -1693,6 +1741,40 @@ fn detect_toolchain_detail(
                 SANDBOX_RUBY_PATH,
             ))
         }
+        SandboxToolchainKind::Php => {
+            let projection = resolve_toolchain_projection(&[kind], environment_managers, host_os)
+                .map_err(|error| MezError::invalid_state(error.message()))?
+                .ok_or_else(|| {
+                    MezError::invalid_state("PHP projection unexpectedly resolved empty")
+                })?;
+            let root = projection.roots.first().ok_or_else(|| {
+                MezError::invalid_state("PHP projection is missing its runtime root")
+            })?;
+            Ok(format!(
+                "php_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_PHP_PATH,
+            ))
+        }
+        SandboxToolchainKind::Composer => {
+            let projection = resolve_toolchain_projection(
+                &[SandboxToolchainKind::Php, kind],
+                environment_managers,
+                host_os,
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?
+            .ok_or_else(|| {
+                MezError::invalid_state("Composer projection unexpectedly resolved empty")
+            })?;
+            let root = projection.roots.last().ok_or_else(|| {
+                MezError::invalid_state("Composer projection is missing its companion root")
+            })?;
+            Ok(format!(
+                "composer_root={} sandbox_path={}",
+                json_escape(&root.host_path.display().to_string()),
+                SANDBOX_PHP_COMPOSER_PATH,
+            ))
+        }
     }
 }
 
@@ -1936,6 +2018,14 @@ fn toolchain_status_host_evidence(kind: SandboxToolchainKind, status: &Toolchain
             .flatten()
             .collect(),
         SandboxToolchainKind::Ruby => vec![status.ruby_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Php => vec![status.php_root.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        SandboxToolchainKind::Composer => vec![status.composer_root.as_deref()]
             .into_iter()
             .flatten()
             .collect(),

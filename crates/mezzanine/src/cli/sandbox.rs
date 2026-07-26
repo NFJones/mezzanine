@@ -36,16 +36,17 @@ use crate::security::project::{
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
     SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
-    SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH,
-    SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
-    SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
-    clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_dart_from_search_path,
+    SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH,
+    SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
+    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
+    SandboxWorkflowRequest, clear_bubblewrap_managed_home, discover_bun_from_search_path,
+    discover_composer_from_search_path, discover_dart_from_search_path,
     discover_deno_from_search_path, discover_dotnet_from_search_path, discover_go_from_search_path,
     discover_jdk_from_search_path, discover_kotlin_from_search_path,
-    discover_node_from_search_path, discover_python_from_search_path,
-    discover_ruby_from_search_path, discover_rust_from_home, discover_zig_from_search_path,
-    inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind, plan_sandbox_workflow,
-    prune_bubblewrap_managed_homes,
+    discover_node_from_search_path, discover_php_from_search_path,
+    discover_python_from_search_path, discover_ruby_from_search_path, discover_rust_from_home,
+    discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
+    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -1171,6 +1172,8 @@ struct SandboxToolchainResult {
     dart_root: Option<PathBuf>,
     kotlin_root: Option<PathBuf>,
     ruby_root: Option<PathBuf>,
+    php_root: Option<PathBuf>,
+    composer_root: Option<PathBuf>,
     sandbox_path: &'static str,
     read_only: bool,
     applied: bool,
@@ -1633,6 +1636,8 @@ enum DirectToolchainDetection {
     Dart(Option<PathBuf>),
     Kotlin(Option<PathBuf>),
     Ruby(Option<PathBuf>),
+    Php(Option<PathBuf>),
+    Composer(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1650,6 +1655,8 @@ impl DirectToolchainDetection {
             Self::Dart(root) => root.is_some(),
             Self::Kotlin(root) => root.is_some(),
             Self::Ruby(root) => root.is_some(),
+            Self::Php(root) => root.is_some(),
+            Self::Composer(root) => root.is_some(),
         }
     }
 
@@ -1667,6 +1674,8 @@ impl DirectToolchainDetection {
             Self::Dart(_) => SandboxToolchainKind::Dart,
             Self::Kotlin(_) => SandboxToolchainKind::Kotlin,
             Self::Ruby(_) => SandboxToolchainKind::Ruby,
+            Self::Php(_) => SandboxToolchainKind::Php,
+            Self::Composer(_) => SandboxToolchainKind::Composer,
         }
     }
 }
@@ -1712,6 +1721,12 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Ruby => discover_ruby_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Ruby)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Php => discover_php_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Php)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Composer => discover_composer_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Composer)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
     }
 }
 
@@ -1741,6 +1756,14 @@ fn toolchain_result(
     };
     let ruby_root = match &detection {
         DirectToolchainDetection::Ruby(root) => root.clone(),
+        _ => None,
+    };
+    let php_root = match &detection {
+        DirectToolchainDetection::Php(root) => root.clone(),
+        _ => None,
+    };
+    let composer_root = match &detection {
+        DirectToolchainDetection::Composer(root) => root.clone(),
         _ => None,
     };
     let (
@@ -1886,6 +1909,28 @@ fn toolchain_result(
             None,
             SANDBOX_RUBY_PATH,
         ),
+        DirectToolchainDetection::Php(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_PHP_PATH,
+        ),
+        DirectToolchainDetection::Composer(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_PHP_COMPOSER_PATH,
+        ),
     };
     SandboxToolchainResult {
         version: 1,
@@ -1905,6 +1950,8 @@ fn toolchain_result(
         dart_root,
         kotlin_root,
         ruby_root,
+        php_root,
+        composer_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -2034,6 +2081,22 @@ fn write_toolchain_result<W: Write>(
             "ruby_root: {}",
             result
                 .ruby_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "php_root: {}",
+            result
+                .php_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "composer_root: {}",
+            result
+                .composer_root
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;

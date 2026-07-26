@@ -360,6 +360,10 @@ pub(crate) enum SandboxToolchainKind {
     Kotlin,
     /// One selected standalone Ruby runtime distribution.
     Ruby,
+    /// One selected standalone PHP runtime distribution.
+    Php,
+    /// One selected standalone Composer companion distribution.
+    Composer,
 }
 
 impl SandboxToolchainKind {
@@ -378,6 +382,8 @@ impl SandboxToolchainKind {
             Self::Dart => "dart",
             Self::Kotlin => "kotlin",
             Self::Ruby => "ruby",
+            Self::Php => "php",
+            Self::Composer => "composer",
         }
     }
 }

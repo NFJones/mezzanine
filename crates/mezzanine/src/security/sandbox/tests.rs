@@ -1693,6 +1693,135 @@ fn ruby_toolchain_discovery_rejects_incomplete_and_symlinked_runtimes() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A complete PHP runtime composes read-only with an optional standalone
+/// Composer companion whose mutable home and cache remain project-isolated.
+#[test]
+fn php_and_composer_toolchains_compose_with_managed_package_state() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-php-composer-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let php_root = base.join("php-runtime");
+    std::fs::create_dir_all(php_root.join("bin")).unwrap();
+    std::fs::create_dir_all(php_root.join("lib/php")).unwrap();
+    std::fs::write(php_root.join("bin/php"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        php_root.join("bin/php"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let composer_root = base.join("composer-runtime");
+    std::fs::create_dir_all(composer_root.join("bin")).unwrap();
+    std::fs::write(composer_root.join("bin/composer"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        composer_root.join("bin/composer"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let php_root = php_root.canonicalize().unwrap();
+    let composer_root = composer_root.canonicalize().unwrap();
+    let managers = [
+        format!("php-runtime:{}", php_root.display()),
+        format!("composer-runtime:{}", composer_root.display()),
+    ];
+
+    let missing =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Composer], &managers, "linux")
+            .unwrap_err();
+    assert_eq!(
+        missing.kind(),
+        SandboxCompileErrorKind::UnsupportedRequirement
+    );
+
+    let php = toolchain_descriptor(SandboxToolchainKind::Php);
+    assert_eq!(php.aliases, ["php"]);
+    assert_eq!(php.roots[0].evidence_kind, "php-runtime");
+    assert_eq!(php.roots[0].sandbox_destination, SANDBOX_PHP_ROOT);
+    let composer = toolchain_descriptor(SandboxToolchainKind::Composer);
+    assert_eq!(composer.aliases, ["composer"]);
+    assert_eq!(composer.roots[0].evidence_kind, "composer-runtime");
+    assert_eq!(composer.roots[0].sandbox_destination, SANDBOX_COMPOSER_ROOT);
+    assert_eq!(composer.coupling.required, [SandboxToolchainKind::Php]);
+
+    let projection = resolve_toolchain_projection(
+        &[SandboxToolchainKind::Php, SandboxToolchainKind::Composer],
+        &managers,
+        "linux",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_PHP_COMPOSER_PATH);
+    for (name, value) in [
+        ("COMPOSER_HOME", "/home/mez/.config/composer"),
+        ("COMPOSER_CACHE_DIR", "/home/mez/.cache/composer"),
+        (
+            "COMPOSER_VENDOR_DIR",
+            "/home/mez/.local/share/composer/vendor",
+        ),
+    ] {
+        assert_eq!(
+            projection.environment.get(name).map(String::as_str),
+            Some(value),
+            "missing {name}"
+        );
+    }
+    assert_eq!(projection.roots.len(), 2);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// PHP and Composer discovery reject incomplete roots and manager shims rather
+/// than broadening to asdf, mise, host configuration, or global package trees.
+#[test]
+fn php_and_composer_discovery_rejects_incomplete_and_symlinked_roots() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-php-composer-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let php_root = base.join("php-runtime");
+    std::fs::create_dir_all(php_root.join("bin")).unwrap();
+    std::fs::write(php_root.join("bin/php"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        php_root.join("bin/php"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let php_root = php_root.canonicalize().unwrap();
+    let managers = [format!("php-runtime:{}", php_root.display())];
+    assert!(
+        resolve_toolchain_projection(&[SandboxToolchainKind::Php], &managers, "linux").is_err()
+    );
+
+    std::fs::create_dir_all(php_root.join("lib/php")).unwrap();
+    let external_php = base.join("external-php");
+    std::fs::write(&external_php, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external_php, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(php_root.join("bin/php")).unwrap();
+    std::os::unix::fs::symlink(&external_php, php_root.join("bin/php")).unwrap();
+    let php_path = std::env::join_paths([php_root.join("bin")]).unwrap();
+    let php_error = discover_php_from_search_path(Some(&php_path)).unwrap_err();
+    assert_eq!(php_error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let composer_root = base.join("composer-runtime");
+    std::fs::create_dir_all(composer_root.join("bin")).unwrap();
+    let external_composer = base.join("external-composer");
+    std::fs::write(&external_composer, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external_composer, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&external_composer, composer_root.join("bin/composer")).unwrap();
+    let composer_path = std::env::join_paths([composer_root.join("bin")]).unwrap();
+    let composer_error = discover_composer_from_search_path(Some(&composer_path)).unwrap_err();
+    assert_eq!(
+        composer_error.kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A validated .NET SDK is projected read-only with fixed runtime and managed
 /// state variables while telemetry and first-time setup remain deterministic.
 #[test]
@@ -2603,7 +2732,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .collect::<Vec<_>>(),
         vec![
             "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart",
-            "kotlin", "ruby"
+            "kotlin", "ruby", "php", "composer"
         ]
     );
     assert_eq!(
@@ -2633,6 +2762,14 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("ruby"),
         Some(SandboxToolchainKind::Ruby)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("php"),
+        Some(SandboxToolchainKind::Php)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("composer"),
+        Some(SandboxToolchainKind::Composer)
     );
     assert_eq!(
         SANDBOX_RUST_PATH,

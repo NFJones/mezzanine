@@ -2971,7 +2971,7 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state.
 Schema v32 MAY define constrained custom toolchains in the primary user layer
@@ -3072,6 +3072,27 @@ global Bundler configuration, manager metadata, unrelated versions and
 gemsets, user executable bins, inherited environment, and host caches MUST
 remain excluded. Repository `.bundle/config` remains project-controlled input
 and MUST NOT expand host authority.
+Schema v38 adds the allowlisted `php` and `composer` kinds. Schema v37 to v38
+migration MUST preserve existing built-in and custom selections or omission
+and MUST NOT discover or enable either kind. Direct-user discovery MUST use
+only the captured search path and accept non-symlink executables exactly at
+`<canonical-php-root>/bin/php` and
+`<canonical-composer-root>/bin/composer`. Active-pane discovery MUST use exact
+`php-runtime:<canonical-root>` and `composer-runtime:<canonical-root>`
+bootstrap evidence without invoking asdf, mise, Composer configuration, or
+shell hooks and without accepting manager shims. The PHP root MUST contain a
+real executable `bin/php` and real `lib/php` directory; the Composer root MUST
+contain a real executable `bin/composer`. Incomplete, malformed, symlinked,
+overlapping, or authority-exceeding roots MUST fail closed. Selecting
+`composer` MUST also require selecting `php`; no ambient PHP runtime may
+satisfy that dependency. The roots MUST be mounted read-only at
+`/opt/mez/toolchains/php/root` and `/opt/mez/toolchains/composer/root`; their
+composed PATH MUST be exactly
+`/opt/mez/toolchains/php/root/bin:/opt/mez/toolchains/composer/root/bin:/usr/bin:/bin`.
+`COMPOSER_HOME`, `COMPOSER_CACHE_DIR`, and `COMPOSER_VENDOR_DIR` MUST point
+beneath the managed home. Host `auth.json`, tokens, global Composer
+configuration and packages, certificates, private keys, manager state,
+inherited environment, and unrelated PHP installations MUST remain excluded.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -6016,9 +6037,10 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin|ruby|php|composer]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
-  `node`, `python`, `jdk`, `dotnet`, `dart`, `kotlin`, or `ruby`. Unknown kinds, missing confirmation, duplicate confirmation, and
+  `node`, `python`, `jdk`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
+  `composer`. Unknown kinds, missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,
