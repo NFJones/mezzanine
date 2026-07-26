@@ -318,7 +318,7 @@ enum SandboxCustomToolchainCommand {
         /// Optional printable description.
         #[arg(long)]
         description: Option<String>,
-        /// Confirms submission to the attached primary client.
+        /// Consents to submission; the attached primary client must approve.
         #[arg(long)]
         yes: bool,
     },
@@ -329,7 +329,7 @@ enum SandboxCustomToolchainCommand {
         /// Also remove the selector from the enabled projection.
         #[arg(long)]
         disable: bool,
-        /// Confirms submission to the attached primary client.
+        /// Consents to submission; the attached primary client must approve.
         #[arg(long)]
         yes: bool,
     },

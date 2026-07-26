@@ -139,7 +139,14 @@ live service. The primary client must enter the displayed `/toolchain confirm
 REQUEST DIGEST --yes` command or reject it with `/toolchain reject REQUEST
 DIGEST`. `--yes` consents only to submission. Control-origin text, absent
 primary clients, stale or tampered requests, and replayed confirmations fail
-closed. List and status remain available offline and read-only.
+closed. List, status, and built-in detection remain available offline and
+read-only. A mutation that already matches effective configuration is a no-op
+and does not advance configuration generation. Successful changes are used
+only when compiling subsequent sandbox actions; running actions and existing
+interactive shells retain their original projection. Custom identities may
+appear in completion, but completion reads effective configuration only and
+never probes or displays their host roots. Portable sandbox profiles reject
+custom selectors and definitions so those roots cannot be exported.
 | `/remember` | Generate durable memories from the current context or a supplied statement while opportunistically pruning expired persistent records. |
 | `/loop` | Re-run a prompt until an iteration completes without `apply_patch` actions or the loop limit is reached; pass `--fork` to use fresh parent-conversation forks, `--new` to use fresh empty conversations, or `--limit <int>` to override the loop limit for that command. |
 | `/new` | Start a fresh pane conversation. |

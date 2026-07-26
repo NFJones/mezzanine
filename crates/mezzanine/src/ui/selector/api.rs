@@ -25,8 +25,23 @@ pub struct SelectorExtraCandidate {
     pub command: String,
     /// Required preceding option when the candidate is valid only as its value.
     pub preceding_option: Option<String>,
+    /// Optional subcommand argument slot restricting this dynamic candidate.
+    pub subcommand_slot: Option<SelectorExtraCandidateSubcommandSlot>,
     /// Candidate value and display metadata.
     pub candidate: SelectorCandidate,
+}
+
+/// Positional scope for one runtime-provided subcommand argument candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectorExtraCandidateSubcommandSlot {
+    /// Required first argument after the canonical command.
+    pub subcommand: String,
+    /// Minimum number of completed tokens, including the command token.
+    pub minimum_tokens_before: usize,
+    /// Optional maximum number of completed tokens, including the command.
+    pub maximum_tokens_before: Option<usize>,
+    /// Optional terminal token after which the candidate is suppressed.
+    pub terminal_token: Option<String>,
 }
 
 impl SelectorExtraCandidate {
@@ -40,6 +55,7 @@ impl SelectorExtraCandidate {
             surface,
             command: command.into(),
             preceding_option: None,
+            subcommand_slot: None,
             candidate,
         }
     }
@@ -55,6 +71,31 @@ impl SelectorExtraCandidate {
             surface,
             command: command.into(),
             preceding_option: Some(option.into()),
+            subcommand_slot: None,
+            candidate,
+        }
+    }
+
+    /// Builds a candidate restricted to a positional subcommand argument.
+    pub fn after_subcommand(
+        surface: SelectorSurface,
+        command: impl Into<String>,
+        subcommand: impl Into<String>,
+        minimum_tokens_before: usize,
+        maximum_tokens_before: Option<usize>,
+        terminal_token: Option<&str>,
+        candidate: SelectorCandidate,
+    ) -> Self {
+        Self {
+            surface,
+            command: command.into(),
+            preceding_option: None,
+            subcommand_slot: Some(SelectorExtraCandidateSubcommandSlot {
+                subcommand: subcommand.into(),
+                minimum_tokens_before,
+                maximum_tokens_before,
+                terminal_token: terminal_token.map(str::to_string),
+            }),
             candidate,
         }
     }
@@ -211,6 +252,19 @@ fn parameter_shadow_hint(
         return None;
     }
     if surface == SelectorSurface::AgentCommand
+        && context
+            .tokens_before
+            .first()
+            .is_some_and(|command| command.trim_start_matches('/') == "toolchain")
+        && let Some(text) = toolchain_parameter_shadow_text(context)
+    {
+        return Some(SelectorShadowHint {
+            insert_at: cursor,
+            text,
+            kind: SelectorCandidateKind::Value,
+        });
+    }
+    if surface == SelectorSurface::AgentCommand
         && context.tokens_before.len() == 2
         && context.tokens_before[0].trim_start_matches('/') == "routing"
         && context.tokens_before[1] == "policy"
@@ -237,4 +291,68 @@ fn parameter_shadow_hint(
         text: text.to_string(),
         kind: SelectorCandidateKind::Value,
     })
+}
+
+/// Returns a position-sensitive hint for the strict `/toolchain` grammar.
+fn toolchain_parameter_shadow_text(context: &SelectorTokenContext) -> Option<String> {
+    let arguments = context.tokens_before.get(1..)?;
+    match arguments {
+        [] => Some(
+            " <status|list|detect|define|enable|disable|remove|reload>".to_string(),
+        ),
+        [operation] if operation == "status" || operation == "detect" => {
+            Some(" [SELECTOR]".to_string())
+        }
+        [operation] if operation == "enable" || operation == "disable" => {
+            Some(" <SELECTOR...> --yes".to_string())
+        }
+        [operation, rest @ ..]
+            if (operation == "enable" || operation == "disable")
+                && !rest.iter().any(|token| token == "--yes") =>
+        {
+            Some(" [SELECTOR...] --yes".to_string())
+        }
+        [operation] if operation == "define" => Some(
+            " <NAME> --root <PATH> --path <REF> [--require <REF>] [--env-root <NAME=REF>] [--description <TEXT>] --yes"
+                .to_string(),
+        ),
+        [operation, _name, rest @ ..] if operation == "define" => {
+            match rest.last().map(String::as_str) {
+                Some("--root") => Some(" <absolute-path>".to_string()),
+                Some("--path" | "--require") => {
+                    Some(" <root-index:relative-path>".to_string())
+                }
+                Some("--env-root") => {
+                    Some(" <NAME=root-index:relative-path>".to_string())
+                }
+                Some("--description") => Some(" <text>".to_string()),
+                Some("--yes") => None,
+                _ => {
+                    let mut flags = vec!["--root", "--path", "--require", "--env-root"];
+                    if !rest.iter().any(|token| token == "--description") {
+                        flags.push("--description");
+                    }
+                    if !rest.iter().any(|token| token == "--yes") {
+                        flags.push("--yes");
+                    }
+                    (!flags.is_empty()).then(|| format!(" <{}>", flags.join("|")))
+                }
+            }
+        }
+        [operation] if operation == "remove" => {
+            Some(" <custom:NAME> [--disable] --yes".to_string())
+        }
+        [operation, _selector, rest @ ..] if operation == "remove" => {
+            let disable = !rest.iter().any(|token| token == "--disable");
+            let yes = !rest.iter().any(|token| token == "--yes");
+            match (disable, yes) {
+                (true, true) => Some(" [--disable] --yes".to_string()),
+                (true, false) => Some(" [--disable]".to_string()),
+                (false, true) => Some(" --yes".to_string()),
+                (false, false) => None,
+            }
+        }
+        [operation] if operation == "list" || operation == "reload" => None,
+        _ => None,
+    }
 }

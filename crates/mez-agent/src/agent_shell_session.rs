@@ -866,7 +866,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "memory" => "inspect or change persistent memory enablement.",
         "show-memories" => "browse durable memory records and open memory details.",
         "remember" => "generate durable memories from the current context or a statement.",
-        "toolchain" => "inspect or manage typed sandbox toolchain projections.",
+        "toolchain" => {
+            "inspect typed or custom sandbox toolchains; status/list/detect are read-only, while define, ordered enable/disable, remove, and reload require authenticated primary input and affect subsequent actions only."
+        }
         "model" => "inspect or change model and reasoning settings.",
         "thinking" => "inspect or toggle pane-local model reasoning visibility.",
         "latency" => "inspect or change latency/cost preference.",
@@ -1063,10 +1065,12 @@ mod tests {
         let help = agent_shell_help_display();
 
         assert!(help.contains("`/toolchain`"), "{help}");
+        assert!(help.contains("status/list/detect are read-only"), "{help}");
         assert!(
-            help.contains("inspect or manage typed sandbox toolchain projections"),
+            help.contains("define, ordered enable/disable, remove, and reload require authenticated primary input"),
             "{help}"
         );
+        assert!(help.contains("affect subsequent actions only"), "{help}");
     }
 
     /// Verifies agent shell rejects mismatched turn completion.

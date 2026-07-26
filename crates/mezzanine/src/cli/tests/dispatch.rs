@@ -89,6 +89,51 @@ fn clap_renders_config_help_for_help_flag_and_empty_command() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies command-local toolchain help exposes custom management grammar
+/// and distinguishes submission consent from authenticated approval.
+#[test]
+fn clap_renders_custom_toolchain_management_help() {
+    let (env, home) = test_env("toolchain-help");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    run_with_plain(
+        vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "custom".to_string(),
+            "define".to_string(),
+            "--help".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let output = String::from_utf8(stdout).unwrap();
+    assert!(
+        output.contains("Usage: mez sandbox toolchains custom define"),
+        "{output}"
+    );
+    for flag in [
+        "--root",
+        "--path",
+        "--require",
+        "--env-root",
+        "--description",
+        "--yes",
+    ] {
+        assert!(output.contains(flag), "missing {flag} in {output}");
+    }
+    assert!(output.contains("primary client must approve"), "{output}");
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies legacy top-level command aliases still dispatch through the typed
 /// clap command tree.
 ///

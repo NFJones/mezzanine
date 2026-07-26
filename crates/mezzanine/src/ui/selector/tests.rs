@@ -759,6 +759,204 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
     }
 }
 
+/// Verifies custom identities are offered only in parser-supported selector
+/// positions and never expose their configured host roots.
+#[test]
+fn selector_completes_dynamic_custom_toolchains_in_valid_positions() {
+    let extra = ["status", "detect", "enable", "disable", "remove"]
+        .into_iter()
+        .map(|subcommand| {
+            SelectorExtraCandidate::after_subcommand(
+                SelectorSurface::AgentCommand,
+                "toolchain",
+                subcommand,
+                2,
+                matches!(subcommand, "status" | "detect" | "remove").then_some(2),
+                matches!(subcommand, "enable" | "disable").then_some("--yes"),
+                SelectorCandidate::new("custom:acme", SelectorCandidateKind::Value, true),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for line in [
+        "/toolchain status custom:a",
+        "/toolchain detect custom:a",
+        "/toolchain enable custom:a",
+        "/toolchain disable custom:a",
+        "/toolchain remove custom:a",
+    ] {
+        let plan =
+            plan_selector_with_extra(SelectorSurface::AgentCommand, line, line.len(), &extra)
+                .unwrap();
+        assert_eq!(plan.candidates[0].value, "custom:acme", "{line}");
+        assert_eq!(plan.candidates[0].detail, None);
+        assert!(
+            plan.candidates
+                .iter()
+                .all(|candidate| !candidate.value.contains("/private")),
+            "{line}"
+        );
+    }
+
+    assert!(
+        plan_selector_with_extra(
+            SelectorSurface::AgentCommand,
+            "/toolchain list custom:a",
+            "/toolchain list custom:a".len(),
+            &extra,
+        )
+        .is_none()
+    );
+    assert!(
+        plan_selector_with_extra(
+            SelectorSurface::AgentCommand,
+            "/toolchain enable custom:acme custom:a",
+            "/toolchain enable custom:acme custom:a".len(),
+            &extra,
+        )
+        .is_none()
+    );
+    assert!(
+        plan_selector_with_extra(
+            SelectorSurface::AgentCommand,
+            "/toolchain enable custom:acme --yes custom:a",
+            "/toolchain enable custom:acme --yes custom:a".len(),
+            &extra,
+        )
+        .is_none()
+    );
+}
+
+/// Verifies toolchain completion never inspects explicit host paths, including
+/// custom-definition root value slots that intentionally accept path text.
+#[test]
+fn selector_does_not_probe_filesystem_for_toolchain_arguments() {
+    let directory = std::env::temp_dir().join(format!(
+        "mez-toolchain-selector-no-probe-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("private-sdk"), b"secret").unwrap();
+    let query = format!("/toolchain define acme --root {}/pri", directory.display());
+
+    let plan = plan_selector_with_extra_in_working_directory(
+        SelectorSurface::AgentCommand,
+        &query,
+        query.len(),
+        &[],
+        Some(&directory),
+    );
+
+    assert!(plan.is_none());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+/// Verifies definition and removal completion mirrors repeatable and
+/// singleton flags from the strict parser without suggesting values as flags.
+#[test]
+fn selector_completes_custom_toolchain_flags_by_position() {
+    let define = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/toolchain define acme --",
+        "/toolchain define acme --".len(),
+    )
+    .unwrap();
+    for flag in [
+        "--root",
+        "--path",
+        "--require",
+        "--env-root",
+        "--description",
+        "--yes",
+    ] {
+        assert!(
+            define
+                .candidates
+                .iter()
+                .any(|candidate| candidate.value == flag),
+            "missing {flag}"
+        );
+    }
+
+    let after_singletons = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/toolchain define acme --description SDK --yes --",
+        "/toolchain define acme --description SDK --yes --".len(),
+    )
+    .unwrap();
+    assert!(
+        after_singletons
+            .candidates
+            .iter()
+            .all(|candidate| !matches!(candidate.value.as_str(), "--description" | "--yes"))
+    );
+    assert!(
+        plan_selector(
+            SelectorSurface::AgentCommand,
+            "/toolchain define acme --root /",
+            "/toolchain define acme --root /".len(),
+        )
+        .is_none()
+    );
+
+    let remove = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/toolchain remove custom:acme --",
+        "/toolchain remove custom:acme --".len(),
+    )
+    .unwrap();
+    let remove_flags = remove
+        .candidates
+        .iter()
+        .map(|candidate| candidate.value.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        remove_flags,
+        std::collections::BTreeSet::from(["--disable", "--yes"])
+    );
+}
+
+/// Verifies empty-token shadow text follows every parser-supported custom
+/// definition value slot and suppresses hints after terminal confirmation.
+#[test]
+fn selector_hints_custom_toolchain_value_positions() {
+    for (line, expected) in [
+        ("/toolchain status ", " [SELECTOR]"),
+        ("/toolchain enable ", " <SELECTOR...> --yes"),
+        (
+            "/toolchain define ",
+            " <NAME> --root <PATH> --path <REF> [--require <REF>] [--env-root <NAME=REF>] [--description <TEXT>] --yes",
+        ),
+        ("/toolchain define acme --root ", " <absolute-path>"),
+        (
+            "/toolchain define acme --path ",
+            " <root-index:relative-path>",
+        ),
+        (
+            "/toolchain define acme --env-root ",
+            " <NAME=root-index:relative-path>",
+        ),
+        ("/toolchain define acme --description ", " <text>"),
+        ("/toolchain remove ", " <custom:NAME> [--disable] --yes"),
+        ("/toolchain remove custom:acme --disable ", " --yes"),
+    ] {
+        let hint = shadow_hint(SelectorSurface::AgentCommand, line, line.len()).unwrap();
+        assert_eq!(hint.text, expected, "{line}");
+    }
+
+    for line in [
+        "/toolchain list ",
+        "/toolchain reload ",
+        "/toolchain remove custom:acme --disable --yes ",
+        "/toolchain define acme --root /opt/acme --path 0:bin --yes ",
+    ] {
+        assert!(
+            shadow_hint(SelectorSurface::AgentCommand, line, line.len()).is_none(),
+            "unexpected hint for {line}"
+        );
+    }
+}
+
 /// Verifies dynamic argument candidates can provide shadow completion text.
 #[test]
 fn selector_shadow_hint_completes_dynamic_resume_candidate() {
@@ -826,7 +1024,7 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
     assert_eq!(routing_hint.text, " <on|off|toggle|status|policy>");
     assert_eq!(
         toolchain_hint.text,
-        " <status|list|detect|enable|disable|reload>"
+        " <status|list|detect|define|enable|disable|remove|reload>"
     );
     assert_eq!(
         personality_hint.text,

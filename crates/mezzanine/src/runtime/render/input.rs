@@ -588,6 +588,36 @@ impl RuntimeSessionService {
                     }),
             );
         }
+        if let crate::runtime::SandboxConfig::Bubblewrap(config) =
+            &self.configured_permissions().sandbox
+        {
+            candidates.extend(config.custom_toolchains.keys().flat_map(|name| {
+                let selector = format!("custom:{name}");
+                [
+                    ("status", 2, Some(2), None),
+                    ("detect", 2, Some(2), None),
+                    ("enable", 2, None, Some("--yes")),
+                    ("disable", 2, None, Some("--yes")),
+                    ("remove", 2, Some(2), None),
+                ]
+                .into_iter()
+                .map(move |(subcommand, minimum, maximum, terminal)| {
+                    SelectorExtraCandidate::after_subcommand(
+                        SelectorSurface::AgentCommand,
+                        "toolchain",
+                        subcommand,
+                        minimum,
+                        maximum,
+                        terminal,
+                        SelectorCandidate::new(
+                            selector.clone(),
+                            SelectorCandidateKind::Value,
+                            true,
+                        ),
+                    )
+                })
+            }));
+        }
         let Some(store) = self.persistence.transcript_store() else {
             return candidates;
         };

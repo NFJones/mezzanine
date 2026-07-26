@@ -106,6 +106,20 @@ pub(super) fn selector_candidates(
                             .last()
                             .is_some_and(|token| token == option)
                     })
+                    && extra.subcommand_slot.as_ref().is_none_or(|slot| {
+                        context.tokens_before.get(1) == Some(&slot.subcommand)
+                            && context.tokens_before.len() >= slot.minimum_tokens_before
+                            && slot
+                                .maximum_tokens_before
+                                .is_none_or(|maximum| context.tokens_before.len() <= maximum)
+                            && slot.terminal_token.as_ref().is_none_or(|terminal| {
+                                !context.tokens_before.iter().any(|token| token == terminal)
+                            })
+                            && !context
+                                .tokens_before
+                                .iter()
+                                .any(|token| token == &extra.candidate.value)
+                    })
             })
             .map(|extra| extra.candidate.clone()),
     );
@@ -314,23 +328,7 @@ pub(super) fn agent_argument_candidates(
     context: &SelectorTokenContext,
 ) -> Vec<SelectorCandidate> {
     if command == "toolchain" {
-        let candidates = match context.tokens_before.get(1).map(String::as_str) {
-            None => value_candidates(&["status", "list", "detect", "enable", "disable", "reload"]),
-            Some("detect" | "enable" | "disable") if context.tokens_before.len() == 2 => {
-                value_candidates(&["rust", "zig", "go", "deno", "bun", "node", "python"])
-            }
-            Some("enable" | "disable")
-                if context.tokens_before.get(2).is_some_and(|kind| {
-                    matches!(
-                        kind.as_str(),
-                        "rust" | "zig" | "go" | "deno" | "bun" | "node" | "python"
-                    )
-                }) =>
-            {
-                flag_candidates(&["--yes"])
-            }
-            _ => Vec::new(),
-        };
+        let candidates = toolchain_argument_candidates(context);
         return dedupe_selector_candidates(candidates);
     }
     if command == "routing"
@@ -424,4 +422,68 @@ pub(super) fn agent_argument_candidates(
         _ => Vec::new(),
     };
     dedupe_selector_candidates(candidates)
+}
+
+/// Builds parser-aligned candidates for one `/toolchain` argument position.
+fn toolchain_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
+    const BUILT_INS: &[&str] = &["rust", "zig", "go", "deno", "bun", "node", "python"];
+    let Some(operation) = context.tokens_before.get(1).map(String::as_str) else {
+        return value_candidates(&[
+            "status", "list", "detect", "define", "enable", "disable", "remove", "reload",
+        ]);
+    };
+    match operation {
+        "status" | "detect" if context.tokens_before.len() == 2 => value_candidates(BUILT_INS),
+        "enable" | "disable"
+            if context.tokens_before.len() >= 2
+                && !context.tokens_before.iter().any(|token| token == "--yes") =>
+        {
+            let mut candidates = BUILT_INS
+                .iter()
+                .filter(|selector| {
+                    !context
+                        .tokens_before
+                        .iter()
+                        .any(|token| token == **selector)
+                })
+                .flat_map(|selector| value_candidates(&[*selector]))
+                .collect::<Vec<_>>();
+            if context.tokens_before.len() > 2 {
+                candidates.extend(flag_candidates(&["--yes"]));
+            }
+            candidates
+        }
+        "define" if context.tokens_before.len() >= 3 => {
+            if context.tokens_before.last().is_some_and(|token| {
+                matches!(
+                    token.as_str(),
+                    "--root" | "--path" | "--require" | "--env-root" | "--description"
+                )
+            }) {
+                return Vec::new();
+            }
+            let singleton_flags = ["--description", "--yes"];
+            [
+                "--root",
+                "--path",
+                "--require",
+                "--env-root",
+                "--description",
+                "--yes",
+            ]
+            .into_iter()
+            .filter(|flag| {
+                !singleton_flags.contains(flag)
+                    || !context.tokens_before.iter().any(|token| token == flag)
+            })
+            .flat_map(|flag| flag_candidates(&[flag]))
+            .collect()
+        }
+        "remove" if context.tokens_before.len() >= 3 => ["--disable", "--yes"]
+            .into_iter()
+            .filter(|flag| !context.tokens_before.iter().any(|token| token == flag))
+            .flat_map(|flag| flag_candidates(&[flag]))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
