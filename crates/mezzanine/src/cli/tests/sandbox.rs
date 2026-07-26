@@ -684,6 +684,66 @@ fn sandbox_jdk_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// .NET SDK detection uses only the captured CLI search path, requires a
+/// complete installation, and persists no host path, NuGet state, or tools.
+#[test]
+fn sandbox_dotnet_toolchain_detects_and_persists_only_kind() {
+    let (mut env, home) = test_env("sandbox-dotnet-toolchain");
+    let dotnet_root = home.join("dotnet-sdk");
+    for directory in ["sdk", "shared", "packs"] {
+        fs::create_dir_all(dotnet_root.join(directory)).unwrap();
+    }
+    fs::write(dotnet_root.join("dotnet"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        dotnet_root.join("dotnet"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let dotnet_root = dotnet_root.canonicalize().unwrap();
+    env.path = Some(dotnet_root.clone().into_os_string());
+    let project = home.join("project");
+    fs::create_dir_all(project.join(".git")).unwrap();
+    let config_path = home.join(".config/mezzanine/config.toml");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let detect_code = block_on_cli_code(crate::cli::run_with(
+        with_json_output(vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "toolchains".to_string(),
+            "detect".to_string(),
+            "--kind".to_string(),
+            "dotnet".to_string(),
+            project.to_string_lossy().into_owned(),
+        ]),
+        env.clone(),
+        false,
+        &mut stdout,
+        &mut stderr,
+    ))
+    .unwrap();
+    assert_eq!(detect_code, 0);
+    let detected: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(detected["kind"], "dotnet");
+    assert_eq!(detected["available"], true);
+    assert_eq!(
+        detected["dotnet_root"],
+        dotnet_root.to_string_lossy().as_ref()
+    );
+    assert!(!config_path.exists());
+
+    assert_toolchain_enable_requires_live_primary(
+        env,
+        "dotnet",
+        &config_path,
+        &mut stdout,
+        &mut stderr,
+    );
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Guided setup planning is strictly read-only and reports the complete
 /// code-owned preset mutation set without creating config or trust state.
 #[test]

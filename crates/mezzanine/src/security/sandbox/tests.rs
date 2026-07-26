@@ -1461,6 +1461,107 @@ fn jdk_toolchain_discovery_rejects_incomplete_and_symlinked_sdks() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A validated .NET SDK is projected read-only with fixed runtime and managed
+/// state variables while telemetry and first-time setup remain deterministic.
+#[test]
+fn dotnet_toolchain_projection_is_read_only_and_state_isolated() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-dotnet-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("dotnet-sdk");
+    for directory in ["sdk", "shared", "packs"] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    std::fs::write(root.join("dotnet"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(root.join("dotnet"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = root.canonicalize().unwrap();
+
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Dotnet);
+    assert_eq!(descriptor.aliases, ["dotnet", ".net"]);
+    assert_eq!(descriptor.roots[0].evidence_kind, "dotnet-sdk");
+    assert_eq!(descriptor.roots[0].sandbox_destination, SANDBOX_DOTNET_ROOT);
+    assert_eq!(descriptor.roots[0].required_executables, ["dotnet"]);
+    assert_eq!(
+        descriptor.roots[0].required_directories,
+        ["sdk", "shared", "packs"]
+    );
+
+    let managers = [format!("dotnet-sdk:{}", root.display())];
+    let projection =
+        resolve_toolchain_projection(&[SandboxToolchainKind::Dotnet], &managers, "linux")
+            .unwrap()
+            .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_DOTNET_PATH);
+    for (name, value) in [
+        ("DOTNET_ROOT", SANDBOX_DOTNET_ROOT),
+        ("DOTNET_CLI_HOME", "/home/mez/.dotnet"),
+        ("NUGET_PACKAGES", "/home/mez/.cache/nuget/packages"),
+        ("DOTNET_CLI_TELEMETRY_OPTOUT", "1"),
+        ("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1"),
+        ("DOTNET_NOLOGO", "1"),
+    ] {
+        assert_eq!(
+            projection.environment.get(name).map(String::as_str),
+            Some(value)
+        );
+    }
+
+    let mut config = config();
+    config.toolchains = vec![SandboxToolchainKind::Dotnet];
+    let home_scope = home_authority(&base.canonicalize().unwrap().display().to_string());
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &home_scope, &evaluation);
+    compile_request.toolchain_projection = Some(&projection);
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    let source = root.display().to_string();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", source.as_str(), SANDBOX_DOTNET_ROOT])
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// .NET discovery rejects runtime-only and shimmed installations instead of
+/// broadening to a manager prefix or accepting an incomplete SDK.
+#[test]
+fn dotnet_toolchain_discovery_rejects_incomplete_and_symlinked_sdks() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-dotnet-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("dotnet-sdk");
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    std::fs::write(root.join("dotnet"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(root.join("dotnet"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("dotnet-sdk:{}", root.display())];
+
+    assert!(
+        resolve_toolchain_projection(&[SandboxToolchainKind::Dotnet], &managers, "linux").is_err()
+    );
+
+    for directory in ["sdk", "packs"] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    let external = base.join("external-dotnet");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(root.join("dotnet")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("dotnet")).unwrap();
+    let search_path = std::env::join_paths([root.clone()]).unwrap();
+    let error = discover_dotnet_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A validated Node.js distribution is projected read-only with bundled
 /// executables contained in its runtime root and mutable package state managed.
 #[test]
@@ -2174,7 +2275,9 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .iter()
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
-        vec!["rust", "zig", "go", "deno", "bun", "node", "python", "jdk"]
+        vec![
+            "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet"
+        ]
     );
     assert_eq!(
         parse_sandbox_toolchain_kind("rust"),
@@ -2187,6 +2290,10 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("jdk"),
         Some(SandboxToolchainKind::Jdk)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("dotnet"),
+        Some(SandboxToolchainKind::Dotnet)
     );
     assert_eq!(
         SANDBOX_RUST_PATH,

@@ -38,6 +38,8 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains("env_manager \"python-runtime:"));
     assert!(script.contains("command -v javac"));
     assert!(script.contains("env_manager \"jdk-runtime:"));
+    assert!(script.contains("command -v dotnet"));
+    assert!(script.contains("env_manager \"dotnet-sdk:"));
     assert!(script.contains("bootstrap"));
     assert!(script.contains("complete"));
     assert!(script.contains("AGENTS.md"));
@@ -74,6 +76,8 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     assert!(script.contains("env_manager \"python-runtime:"));
     assert!(script.contains("command -s javac"));
     assert!(script.contains("env_manager \"jdk-runtime:"));
+    assert!(script.contains("command -s dotnet"));
+    assert!(script.contains("env_manager \"dotnet-sdk:"));
 }
 
 #[test]

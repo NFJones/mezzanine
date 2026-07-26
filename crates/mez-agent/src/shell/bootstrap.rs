@@ -173,6 +173,11 @@ if [ -n \"$mez_jdk_bin\" ] && [ -f \"$mez_jdk_bin\" ] && [ ! -L \"$mez_jdk_bin\"
   mez_jdk_root=$(CDPATH= cd -P -- \"$mez_jdk_bin_dir/..\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_jdk_root\" ] && [ \"$mez_jdk_bin\" = \"$mez_jdk_root/bin/javac\" ] && mez_bootstrap_field env_manager \"jdk-runtime:$mez_jdk_root\"\n\
 fi\n\
+	mez_dotnet_bin=$(command -v dotnet 2>/dev/null || true)\n\
+	if [ -n \"$mez_dotnet_bin\" ] && [ -f \"$mez_dotnet_bin\" ] && [ ! -L \"$mez_dotnet_bin\" ]; then\n\
+	  mez_dotnet_root=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_dotnet_bin\")\" 2>/dev/null && pwd -P)\n\
+	  [ -n \"$mez_dotnet_root\" ] && [ \"$mez_dotnet_bin\" = \"$mez_dotnet_root/dotnet\" ] && mez_bootstrap_field env_manager \"dotnet-sdk:$mez_dotnet_root\"\n\
+	fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -330,6 +335,11 @@ if test -n \"$mez_jdk_bin\"; and test -f \"$mez_jdk_bin\"; and not test -L \"$me
   set -l mez_jdk_root (cd \"$mez_jdk_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_jdk_root\"; and test \"$mez_jdk_bin\" = \"$mez_jdk_root/bin/javac\"; and mez_bootstrap_field env_manager \"jdk-runtime:$mez_jdk_root\"\n\
 end\n\
+	set -l mez_dotnet_bin (command -s dotnet 2>/dev/null)\n\
+	if test -n \"$mez_dotnet_bin\"; and test -f \"$mez_dotnet_bin\"; and not test -L \"$mez_dotnet_bin\"\n\
+	  set -l mez_dotnet_root (cd (dirname \"$mez_dotnet_bin\") 2>/dev/null; and pwd -P)\n\
+	  test -n \"$mez_dotnet_root\"; and test \"$mez_dotnet_bin\" = \"$mez_dotnet_root/dotnet\"; and mez_bootstrap_field env_manager \"dotnet-sdk:$mez_dotnet_root\"\n\
+	end\n\
 \n\
 set -l mez_inst_max 32768\n\
 set -l mez_inst_current \"$mez_cwd\"\n\

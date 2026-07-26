@@ -846,6 +846,19 @@ the expected `lib` directory. Mezzanine mounts that one root read-only at
 preferences and credentials, Maven and Gradle state, inherited environment,
 and shell hooks remain excluded.
 
+Schema v34 adds the built-in `dotnet` selector without changing existing
+selections during v33 migration. Direct discovery accepts only a real `dotnet`
+host at `<canonical-root>/dotnet` from the captured search path, while
+active-pane discovery consumes exact `dotnet-sdk:<canonical-root>` evidence;
+neither path invokes asdf, mise, or other manager hooks. A complete SDK must
+provide the real host plus `sdk`, `shared`, and `packs` directories. Mezzanine
+mounts that root read-only at `/opt/mez/toolchains/dotnet/root`, sets PATH to
+`/opt/mez/toolchains/dotnet/root:/usr/bin:/bin`, and synthesizes `DOTNET_ROOT`.
+`DOTNET_CLI_HOME` and `NUGET_PACKAGES` use project-isolated managed-home paths;
+telemetry and first-time setup are disabled. Host NuGet configuration and
+credentials, global tools, workloads, diagnostics and startup hooks, inherited
+environment, and unrelated SDKs remain excluded.
+
 For a trusted project, Bubblewrap uses a persistent managed home below
 `<config-root>/sandbox/cache-homes/<project-profile-key>/home`. The key hashes
 the canonical project root and Bubblewrap runtime-profile version, so panes in

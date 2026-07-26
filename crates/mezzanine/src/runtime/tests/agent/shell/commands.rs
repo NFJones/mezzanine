@@ -515,6 +515,57 @@ fn runtime_agent_shell_jdk_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Confirmed .NET SDK detection and enablement consume exact active-pane
+/// evidence and persist only the typed kind, never host paths or NuGet state.
+#[test]
+fn runtime_agent_shell_dotnet_toolchain_detects_and_persists_only_kind() {
+    let config =
+        "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = []\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-dotnet-toolchain-mutation", config);
+    let dotnet_root = path.parent().unwrap().join("dotnet-sdk");
+    for directory in ["sdk", "shared", "packs"] {
+        fs::create_dir_all(dotnet_root.join(directory)).unwrap();
+    }
+    fs::write(dotnet_root.join("dotnet"), "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(
+        dotnet_root.join("dotnet"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let dotnet_root = dotnet_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![format!("dotnet-sdk:{}", dotnet_root.display())]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"dotnet-detect","method":"agent/shell/command","params":{"idempotency_key":"dotnet-detect","input":"/toolchain detect dotnet"}}"#,
+        &primary,
+    );
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `dotnet` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable dotnet --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled dotnet; updated"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(
+        persisted.contains("toolchains = [\"dotnet\"]"),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&dotnet_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

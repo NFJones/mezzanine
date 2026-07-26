@@ -2971,7 +2971,7 @@ migration MUST preserve an existing selection or omission and MUST NOT
 discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
 Schema v30 to v31 migration MUST preserve an existing selection or omission
 and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk`; omission MUST retain the existing Rust
+`--kind rust|zig|go|deno|bun|node|python|jdk|dotnet`; omission MUST retain the existing Rust
 default. Active-pane detection, enablement, and status MUST use bootstrap
 evidence rather than ambient service process state.
 Schema v32 MAY define constrained custom toolchains in the primary user layer
@@ -3004,6 +3004,23 @@ closed. The root MUST be mounted read-only at
 synthesized as `/opt/mez/toolchains/jdk/root`. Java manager homes, unrelated
 JDKs, preferences, credentials, Maven and Gradle state, arbitrary inherited
 environment, and shell hooks MUST remain excluded.
+Schema v34 adds the allowlisted `dotnet` kind. Schema v33 to v34 migration MUST
+preserve existing built-in and custom selections or omission and MUST NOT
+discover or enable a .NET SDK. Direct-user discovery MUST use only the captured
+search path and accept a non-symlink executable exactly at
+`<canonical-root>/dotnet`. Active-pane discovery MUST use exact
+`dotnet-sdk:<canonical-root>` bootstrap evidence without invoking asdf, mise,
+or other manager hooks and without accepting manager shims. The selected root
+MUST contain a real executable `dotnet` host and real `sdk`, `shared`, and
+`packs` directories. Runtime-only, malformed, symlinked, overlapping, or
+authority-exceeding roots MUST fail closed. The root MUST be mounted read-only
+at `/opt/mez/toolchains/dotnet/root`; PATH MUST be exactly
+`/opt/mez/toolchains/dotnet/root:/usr/bin:/bin`, and `DOTNET_ROOT` MUST name the
+fixed sandbox root. `DOTNET_CLI_HOME` and `NUGET_PACKAGES` MUST point beneath
+the managed home, while telemetry and first-time setup MUST be disabled. Host
+NuGet configuration and credentials, global tools, workloads, diagnostic and
+startup hooks, additional dependency/store paths, inherited environment, and
+unrelated SDKs MUST remain excluded.
 Custom definitions and `custom:*` selections MUST be rejected from project
 overlays and live/model-authored configuration layers. Portable sandbox profile
 export MUST fail when a custom selection is enabled and MUST NOT serialize its
@@ -5948,9 +5965,9 @@ The baseline command capabilities are:
   it MUST provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk]`, `enable KIND --yes`, `disable KIND
+  `detect [rust|zig|go|deno|bun|node|python|jdk|dotnet]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
-  `node`, `python`, or `jdk`. Unknown kinds, missing confirmation, duplicate confirmation, and
+  `node`, `python`, `jdk`, or `dotnet`. Unknown kinds, missing confirmation, duplicate confirmation, and
   extra arguments MUST
   produce a pane-local usage error without mutation. Status MUST distinguish
   active, selected-but-inactive, selected-but-unavailable,

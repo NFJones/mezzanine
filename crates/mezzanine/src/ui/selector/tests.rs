@@ -690,7 +690,7 @@ fn selector_shadow_hint_completes_toolchain_command_name() {
 }
 
 /// Verifies `/toolchain` completion follows its strict grammar from operation
-/// through typed Rust, Zig, Go, Deno, Bun, Node.js, Python, or JDK selection and confirmation.
+/// through typed Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, or .NET selection and confirmation.
 #[test]
 fn selector_shadow_hint_completes_toolchain_grammar() {
     let cases = [
@@ -703,6 +703,7 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ("/toolchain detect n", "ode", SelectorCandidateKind::Value),
         ("/toolchain detect p", "ython", SelectorCandidateKind::Value),
         ("/toolchain detect j", "dk", SelectorCandidateKind::Value),
+        ("/toolchain detect dot", "net", SelectorCandidateKind::Value),
         ("/toolchain enable r", "ust", SelectorCandidateKind::Value),
         ("/toolchain enable z", "ig", SelectorCandidateKind::Value),
         ("/toolchain enable g", "o", SelectorCandidateKind::Value),
@@ -711,6 +712,7 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ("/toolchain enable n", "ode", SelectorCandidateKind::Value),
         ("/toolchain enable p", "ython", SelectorCandidateKind::Value),
         ("/toolchain enable j", "dk", SelectorCandidateKind::Value),
+        ("/toolchain enable dot", "net", SelectorCandidateKind::Value),
         ("/toolchain disable r", "ust", SelectorCandidateKind::Value),
         (
             "/toolchain enable rust --y",
@@ -754,6 +756,11 @@ fn selector_shadow_hint_completes_toolchain_grammar() {
         ),
         (
             "/toolchain enable jdk --y",
+            "es",
+            SelectorCandidateKind::Flag,
+        ),
+        (
+            "/toolchain enable dotnet --y",
             "es",
             SelectorCandidateKind::Flag,
         ),

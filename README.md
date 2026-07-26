@@ -434,7 +434,7 @@ Current support reflects behavior implemented in the repository today.
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
 - `mez sandbox toolchains list`, `status [SELECTOR] [PATH]`, and
-  `detect [--kind rust|zig|go|deno|bun|node|python|jdk] [PATH]` inspect effective
+  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|dotnet] [PATH]` inspect effective
   toolchain configuration and canonical built-in roots without mutation.
   `enable SELECTOR... --yes` and `disable SELECTOR... --yes` preserve ordered
   built-in or `custom:<name>` selections. `custom define NAME ... --yes` and
@@ -442,11 +442,15 @@ Current support reflects behavior implemented in the repository today.
   changes. Mutations submit an exact digest-bound request to a live service for
   confirmation in the attached primary client; they do not edit configuration
   offline or approve their own request. Rust mounts Cargo and Rustup read-only;
-  Zig, Go, Deno, Bun, Node.js, Python, and JDK mount one self-contained
+  Zig, Go, Deno, Bun, Node.js, Python, JDK, and .NET mount one self-contained
   distribution, SDK, or runtime read-only. JDK projection synthesizes
   `JAVA_HOME` and includes only the selected SDK, not Java manager homes,
-  preferences, credentials, Maven or Gradle state, or shell hooks. Custom roots
-  must already be within the pane's
+  preferences, credentials, Maven or Gradle state, or shell hooks. .NET
+  projection synthesizes `DOTNET_ROOT`, redirects CLI and NuGet package state
+  into the managed home, and disables telemetry and first-time setup. It does
+  not expose host NuGet configuration or credentials, global tools, workloads,
+  diagnostic/startup hooks, or unrelated SDKs. Custom roots must already be
+  within the pane's
   resolved read authority and are projected read-only at fixed sandbox paths.
   Writable cache and package state is redirected beneath
   `/home/mez`; host credentials, caches, Deno authentication and certificate
@@ -461,7 +465,7 @@ Current support reflects behavior implemented in the repository today.
   expired, or it was already settled.
 - In the agent shell, `/toolchain` and `/toolchain status` report supported,
   configured, discoverable, and effective state for the active pane.
-  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk]` is read-only and uses only
+  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|dotnet]` is read-only and uses only
   active-pane bootstrap evidence. `/toolchain define NAME ... --yes`, ordered
   `/toolchain enable SELECTOR... --yes`, `/toolchain disable SELECTOR... --yes`,
   and `/toolchain remove custom:NAME [--disable] --yes` require direct

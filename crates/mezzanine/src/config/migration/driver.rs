@@ -22,12 +22,13 @@ use super::v29_v30::migrate_v29_to_v30;
 use super::v30_v31::migrate_v30_to_v31;
 use super::v31_v32::migrate_v31_to_v32;
 use super::v32_v33::migrate_v32_to_v33;
+use super::v33_v34::migrate_v33_to_v34;
 use super::{
     ConfigFormat, MezError, Path, Result, extract_config_values, fs, write_private_config_file,
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 33;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 34;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +201,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             32 => {
                 current_text = migrate_v32_to_v33(format, &current_text)?;
                 current_version = 33;
+            }
+            33 => {
+                current_text = migrate_v33_to_v34(format, &current_text)?;
+                current_version = 34;
             }
             unsupported => {
                 return Err(MezError::config(format!(
