@@ -25,7 +25,7 @@ use super::{
 };
 
 /// Stable supported toolchain kinds in display and completion order.
-pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 10] = [
+pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 11] = [
     SandboxToolchainKind::Rust,
     SandboxToolchainKind::Zig,
     SandboxToolchainKind::Go,
@@ -36,6 +36,7 @@ pub(crate) const SUPPORTED_SANDBOX_TOOLCHAIN_KINDS: [SandboxToolchainKind; 10] =
     SandboxToolchainKind::Jdk,
     SandboxToolchainKind::Dotnet,
     SandboxToolchainKind::Dart,
+    SandboxToolchainKind::Kotlin,
 ];
 
 /// Fixed Cargo executable projection inside Bubblewrap.
@@ -80,6 +81,11 @@ pub(crate) const SANDBOX_DOTNET_PATH: &str = "/opt/mez/toolchains/dotnet/root:/u
 pub(crate) const SANDBOX_DART_ROOT: &str = "/opt/mez/toolchains/dart/root";
 /// Fixed executable search path used when only the Dart SDK is projected.
 pub(crate) const SANDBOX_DART_PATH: &str = "/opt/mez/toolchains/dart/root/bin:/usr/bin:/bin";
+/// Fixed Kotlin/JVM compiler projection inside Bubblewrap.
+pub(crate) const SANDBOX_KOTLIN_ROOT: &str = "/opt/mez/toolchains/kotlin/root";
+/// Fixed executable search path when Kotlin/JVM is composed with its required JDK.
+pub(crate) const SANDBOX_KOTLIN_JDK_PATH: &str =
+    "/opt/mez/toolchains/jdk/root/bin:/opt/mez/toolchains/kotlin/root/bin:/usr/bin:/bin";
 
 /// Security class assigned to one descriptor-owned projection resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -699,6 +705,38 @@ const DART_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
     allow_root_overlap: false,
 };
 
+const KOTLIN_ROOTS: [ToolchainRootDescriptor; 1] = [ToolchainRootDescriptor {
+    evidence_kind: "kotlin-jvm",
+    label: "Kotlin/JVM compiler",
+    sandbox_destination: SANDBOX_KOTLIN_ROOT,
+    allowed_names: &[],
+    allowed_parent_names: &[],
+    authority_class: ToolchainAuthorityClass::Runtime,
+    required_executables: &["bin/kotlinc", "bin/kotlin"],
+    required_directories: &["lib"],
+}];
+const KOTLIN_DESCRIPTOR: ToolchainDescriptor = ToolchainDescriptor {
+    kind: SandboxToolchainKind::Kotlin,
+    aliases: &["kotlin", "kotlin-jvm"],
+    roots: &KOTLIN_ROOTS,
+    sandbox_directories: &[
+        "/opt",
+        "/opt/mez",
+        "/opt/mez/toolchains",
+        "/opt/mez/toolchains/kotlin",
+    ],
+    path_entries: &["/opt/mez/toolchains/kotlin/root/bin"],
+    environment: &[],
+    managed_state: &[],
+    forbidden_descendants: &[".gradle", "credentials", "android", "native", "js"],
+    platform: ToolchainPlatform::Any,
+    coupling: ToolchainCoupling {
+        required: &[SandboxToolchainKind::Jdk],
+        optional: &[],
+    },
+    allow_root_overlap: false,
+};
+
 /// One validated host root and its fixed sandbox destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedToolchainRoot {
@@ -1020,6 +1058,7 @@ pub(crate) const fn toolchain_descriptor(
         SandboxToolchainKind::Jdk => &JDK_DESCRIPTOR,
         SandboxToolchainKind::Dotnet => &DOTNET_DESCRIPTOR,
         SandboxToolchainKind::Dart => &DART_DESCRIPTOR,
+        SandboxToolchainKind::Kotlin => &KOTLIN_DESCRIPTOR,
     }
 }
 
@@ -2257,6 +2296,54 @@ pub(crate) fn discover_dart_from_search_path(
                 )
             })?;
         validate_descriptor_root(&root, &DART_ROOTS[0])?;
+        return Ok(Some(root));
+    }
+    Ok(None)
+}
+
+/// Discovers one standalone Kotlin/JVM compiler from an explicit search path
+/// without invoking SDKMAN, asdf, mise, shell hooks, or manager-owned shims.
+pub(crate) fn discover_kotlin_from_search_path(
+    search_path: Option<&OsStr>,
+) -> Result<Option<PathBuf>, SandboxCompileError> {
+    let Some(search_path) = search_path else {
+        return Ok(None);
+    };
+    for directory in std::env::split_paths(search_path) {
+        let executable = directory.join("kotlinc");
+        let metadata = match fs::symlink_metadata(&executable) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to inspect selected Kotlin compiler: {error}"),
+                ));
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "selected Kotlin compiler must be a real file, not a shim or symlink",
+            ));
+        }
+        let root = executable
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    "selected Kotlin compiler has no distribution root",
+                )
+            })?
+            .canonicalize()
+            .map_err(|error| {
+                SandboxCompileError::new(
+                    SandboxCompileErrorKind::InvalidInput,
+                    format!("failed to canonicalize selected Kotlin distribution: {error}"),
+                )
+            })?;
+        validate_descriptor_root(&root, &KOTLIN_ROOTS[0])?;
         return Ok(Some(root));
     }
     Ok(None)

@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 35
+version = 36
 
 [terminal]
 profile = "xterm-compatible"
@@ -472,13 +472,13 @@ sandbox = "policy-only"
 # [permissions.bubblewrap]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
-# Opt-in read-only Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, or Dart projections;
-# detect with `--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart`, then enable ordered
+# Opt-in read-only Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, Dart, or Kotlin/JVM projections;
+# detect with `--kind rust|zig|go|deno|bun|node|python|jdk|dotnet|dart|kotlin`, then enable ordered
 # built-in or `custom:<name>` selectors with
 # `mez sandbox toolchains enable SELECTOR... --yes`.
 # Existing services then require `/toolchain reload`, `config/reload`, or a
 # restart; `/toolchain enable KIND --yes` hot-applies subsequent actions.
-# toolchains = ["rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart"]
+# toolchains = ["rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart", "kotlin"]
 # Custom toolchains are primary-user constrained definitions. They may be
 # managed with `mez sandbox toolchains custom define/remove`, but every CLI
 # mutation still requires authenticated confirmation in the attached primary

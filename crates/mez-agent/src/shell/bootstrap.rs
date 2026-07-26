@@ -184,6 +184,12 @@ if [ -n \"$mez_dart_bin\" ] && [ -f \"$mez_dart_bin\" ] && [ ! -L \"$mez_dart_bi
   mez_dart_root=$(CDPATH= cd -P -- \"$mez_dart_bin_dir/..\" 2>/dev/null && pwd -P)\n\
   [ -n \"$mez_dart_root\" ] && [ \"$mez_dart_bin\" = \"$mez_dart_root/bin/dart\" ] && mez_bootstrap_field env_manager \"dart-sdk:$mez_dart_root\"\n\
 fi\n\
+mez_kotlin_bin=$(command -v kotlinc 2>/dev/null || true)\n\
+if [ -n \"$mez_kotlin_bin\" ] && [ -f \"$mez_kotlin_bin\" ] && [ ! -L \"$mez_kotlin_bin\" ]; then\n\
+  mez_kotlin_bin_dir=$(CDPATH= cd -P -- \"$(dirname -- \"$mez_kotlin_bin\")\" 2>/dev/null && pwd -P)\n\
+  mez_kotlin_root=$(CDPATH= cd -P -- \"$mez_kotlin_bin_dir/..\" 2>/dev/null && pwd -P)\n\
+  [ -n \"$mez_kotlin_root\" ] && [ \"$mez_kotlin_bin\" = \"$mez_kotlin_root/bin/kotlinc\" ] && mez_bootstrap_field env_manager \"kotlin-jvm:$mez_kotlin_root\"\n\
+fi\n\
 \n\
 mez_inst_max=32768\n\
 mez_inst_cwd=\"$(pwd 2>/dev/null || printf '/')\"\n\
@@ -351,6 +357,12 @@ if test -n \"$mez_dart_bin\"; and test -f \"$mez_dart_bin\"; and not test -L \"$
   set -l mez_dart_bin_dir (cd (dirname \"$mez_dart_bin\") 2>/dev/null; and pwd -P)\n\
   set -l mez_dart_root (cd \"$mez_dart_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
   test -n \"$mez_dart_root\"; and test \"$mez_dart_bin\" = \"$mez_dart_root/bin/dart\"; and mez_bootstrap_field env_manager \"dart-sdk:$mez_dart_root\"\n\
+end\n\
+set -l mez_kotlin_bin (command -s kotlinc 2>/dev/null)\n\
+if test -n \"$mez_kotlin_bin\"; and test -f \"$mez_kotlin_bin\"; and not test -L \"$mez_kotlin_bin\"\n\
+  set -l mez_kotlin_bin_dir (cd (dirname \"$mez_kotlin_bin\") 2>/dev/null; and pwd -P)\n\
+  set -l mez_kotlin_root (cd \"$mez_kotlin_bin_dir/..\" 2>/dev/null; and pwd -P)\n\
+  test -n \"$mez_kotlin_root\"; and test \"$mez_kotlin_bin\" = \"$mez_kotlin_root/bin/kotlinc\"; and mez_bootstrap_field env_manager \"kotlin-jvm:$mez_kotlin_root\"\n\
 end\n\
 \n\
 set -l mez_inst_max 32768\n\

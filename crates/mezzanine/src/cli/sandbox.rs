@@ -36,14 +36,15 @@ use crate::security::project::{
 use crate::security::sandbox::{
     BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
     SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_PATH,
-    SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUST_PATH, SANDBOX_ZIG_PATH,
-    SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
-    SandboxWorkflowRequest, clear_bubblewrap_managed_home, discover_bun_from_search_path,
-    discover_dart_from_search_path, discover_deno_from_search_path,
+    SANDBOX_KOTLIN_JDK_PATH, SANDBOX_NODE_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUST_PATH,
+    SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, SandboxDiagnosticSeverity,
+    SandboxWorkflowPlan, SandboxWorkflowRequest, clear_bubblewrap_managed_home,
+    discover_bun_from_search_path, discover_dart_from_search_path, discover_deno_from_search_path,
     discover_dotnet_from_search_path, discover_go_from_search_path, discover_jdk_from_search_path,
-    discover_node_from_search_path, discover_python_from_search_path, discover_rust_from_home,
-    discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
-    plan_sandbox_workflow, prune_bubblewrap_managed_homes,
+    discover_kotlin_from_search_path, discover_node_from_search_path,
+    discover_python_from_search_path, discover_rust_from_home, discover_zig_from_search_path,
+    inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind, plan_sandbox_workflow,
+    prune_bubblewrap_managed_homes,
 };
 
 /// Typed arguments accepted by `mez sandbox`.
@@ -1167,6 +1168,7 @@ struct SandboxToolchainResult {
     jdk_root: Option<PathBuf>,
     dotnet_root: Option<PathBuf>,
     dart_root: Option<PathBuf>,
+    kotlin_root: Option<PathBuf>,
     sandbox_path: &'static str,
     read_only: bool,
     applied: bool,
@@ -1627,6 +1629,7 @@ enum DirectToolchainDetection {
     Jdk(Option<PathBuf>),
     Dotnet(Option<PathBuf>),
     Dart(Option<PathBuf>),
+    Kotlin(Option<PathBuf>),
 }
 
 impl DirectToolchainDetection {
@@ -1642,6 +1645,7 @@ impl DirectToolchainDetection {
             Self::Jdk(root) => root.is_some(),
             Self::Dotnet(root) => root.is_some(),
             Self::Dart(root) => root.is_some(),
+            Self::Kotlin(root) => root.is_some(),
         }
     }
 
@@ -1657,6 +1661,7 @@ impl DirectToolchainDetection {
             Self::Jdk(_) => SandboxToolchainKind::Jdk,
             Self::Dotnet(_) => SandboxToolchainKind::Dotnet,
             Self::Dart(_) => SandboxToolchainKind::Dart,
+            Self::Kotlin(_) => SandboxToolchainKind::Kotlin,
         }
     }
 }
@@ -1696,6 +1701,9 @@ fn detect_direct_toolchain(
         SandboxToolchainKind::Dart => discover_dart_from_search_path(env.path.as_deref())
             .map(DirectToolchainDetection::Dart)
             .map_err(|error| MezError::invalid_state(error.to_string())),
+        SandboxToolchainKind::Kotlin => discover_kotlin_from_search_path(env.path.as_deref())
+            .map(DirectToolchainDetection::Kotlin)
+            .map_err(|error| MezError::invalid_state(error.to_string())),
     }
 }
 
@@ -1717,6 +1725,10 @@ fn toolchain_result(
     };
     let dart_root = match &detection {
         DirectToolchainDetection::Dart(root) => root.clone(),
+        _ => None,
+    };
+    let kotlin_root = match &detection {
+        DirectToolchainDetection::Kotlin(root) => root.clone(),
         _ => None,
     };
     let (
@@ -1840,6 +1852,17 @@ fn toolchain_result(
             None,
             SANDBOX_DART_PATH,
         ),
+        DirectToolchainDetection::Kotlin(_) => (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SANDBOX_KOTLIN_JDK_PATH,
+        ),
     };
     SandboxToolchainResult {
         version: 1,
@@ -1857,6 +1880,7 @@ fn toolchain_result(
         jdk_root,
         dotnet_root,
         dart_root,
+        kotlin_root,
         sandbox_path,
         read_only: true,
         applied,
@@ -1970,6 +1994,14 @@ fn write_toolchain_result<W: Write>(
             "dart_root: {}",
             result
                 .dart_root
+                .as_deref()
+                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
+        )?;
+        writeln!(
+            stdout,
+            "kotlin_root: {}",
+            result
+                .kotlin_root
                 .as_deref()
                 .map_or_else(|| "none".to_string(), |path| path.display().to_string())
         )?;

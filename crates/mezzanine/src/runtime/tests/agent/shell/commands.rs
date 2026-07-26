@@ -613,6 +613,70 @@ fn runtime_agent_shell_dart_toolchain_detects_and_persists_only_kind() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Kotlin/JVM detection requires exact compiler and JDK evidence, and
+/// enablement persists only both typed selections rather than either host root.
+#[test]
+fn runtime_agent_shell_kotlin_toolchain_requires_jdk_and_persists_only_kinds() {
+    let config = "[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ntoolchains = [\"jdk\"]\n";
+    let (mut service, primary, path) =
+        toolchain_command_service("runtime-kotlin-toolchain-mutation", config);
+    let jdk_root = path.parent().unwrap().join("jdk-runtime");
+    fs::create_dir_all(jdk_root.join("bin")).unwrap();
+    fs::create_dir_all(jdk_root.join("lib")).unwrap();
+    for executable in ["java", "javac", "jar"] {
+        let executable_path = jdk_root.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let kotlin_root = path.parent().unwrap().join("kotlin-compiler");
+    fs::create_dir_all(kotlin_root.join("bin")).unwrap();
+    fs::create_dir_all(kotlin_root.join("lib")).unwrap();
+    for executable in ["kotlinc", "kotlin"] {
+        let executable_path = kotlin_root.join("bin").join(executable);
+        fs::write(&executable_path, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(executable_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let jdk_root = jdk_root.canonicalize().unwrap();
+    let kotlin_root = kotlin_root.canonicalize().unwrap();
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        toolchain_environment(vec![
+            format!("jdk-runtime:{}", jdk_root.display()),
+            format!("kotlin-jvm:{}", kotlin_root.display()),
+        ]),
+    );
+
+    let detect = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"kotlin-detect","method":"agent/shell/command","params":{"idempotency_key":"kotlin-detect","input":"/toolchain detect kotlin"}}"#,
+        &primary,
+    );
+    assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
+    assert!(detect.contains("| Kind | `kotlin` |"), "{detect}");
+    assert!(detect.contains("| Available | yes |"), "{detect}");
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/toolchain enable kotlin --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
+    assert!(enabled.contains("Enabled kotlin; updated"), "{enabled}");
+    assert!(enabled.contains("changed=true"), "{enabled}");
+    let persisted = fs::read_to_string(&path).unwrap();
+    assert!(
+        persisted.contains("toolchains = [\"jdk\", \"kotlin\"]"),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&jdk_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+    assert!(
+        !persisted.contains(&kotlin_root.to_string_lossy().into_owned()),
+        "{persisted}"
+    );
+
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
 /// Verifies `/toolchain reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]

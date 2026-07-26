@@ -1461,6 +1461,128 @@ fn jdk_toolchain_discovery_rejects_incomplete_and_symlinked_sdks() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A standalone Kotlin/JVM compiler distribution composes read-only with an
+/// explicitly selected JDK and preserves the JDK-owned JAVA_HOME contract.
+#[test]
+fn kotlin_jvm_toolchain_requires_and_composes_with_jdk() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-kotlin-jvm-projection-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let jdk_root = base.join("jdk-runtime");
+    std::fs::create_dir_all(jdk_root.join("bin")).unwrap();
+    std::fs::create_dir_all(jdk_root.join("lib")).unwrap();
+    for executable in ["java", "javac", "jar"] {
+        std::fs::write(jdk_root.join("bin").join(executable), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(
+            jdk_root.join("bin").join(executable),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let kotlin_root = base.join("kotlin-compiler");
+    std::fs::create_dir_all(kotlin_root.join("bin")).unwrap();
+    std::fs::create_dir_all(kotlin_root.join("lib")).unwrap();
+    for executable in ["kotlinc", "kotlin"] {
+        std::fs::write(
+            kotlin_root.join("bin").join(executable),
+            "#!/bin/sh\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            kotlin_root.join("bin").join(executable),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let jdk_root = jdk_root.canonicalize().unwrap();
+    let kotlin_root = kotlin_root.canonicalize().unwrap();
+    let managers = [
+        format!("jdk-runtime:{}", jdk_root.display()),
+        format!("kotlin-jvm:{}", kotlin_root.display()),
+    ];
+
+    let missing = resolve_toolchain_projection(&[SandboxToolchainKind::Kotlin], &managers, "linux")
+        .unwrap_err();
+    assert_eq!(
+        missing.kind(),
+        SandboxCompileErrorKind::UnsupportedRequirement
+    );
+
+    let descriptor = toolchain_descriptor(SandboxToolchainKind::Kotlin);
+    assert_eq!(descriptor.aliases, ["kotlin", "kotlin-jvm"]);
+    assert_eq!(descriptor.roots[0].evidence_kind, "kotlin-jvm");
+    assert_eq!(descriptor.roots[0].sandbox_destination, SANDBOX_KOTLIN_ROOT);
+    assert_eq!(descriptor.coupling.required, [SandboxToolchainKind::Jdk]);
+
+    let projection = resolve_toolchain_projection(
+        &[SandboxToolchainKind::Jdk, SandboxToolchainKind::Kotlin],
+        &managers,
+        "linux",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(projection.executable_path(), SANDBOX_KOTLIN_JDK_PATH);
+    assert_eq!(
+        projection.environment.get("JAVA_HOME").map(String::as_str),
+        Some(SANDBOX_JDK_ROOT)
+    );
+    assert_eq!(projection.roots.len(), 2);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Kotlin discovery rejects incomplete distributions and manager shims rather
+/// than broadening to SDKMAN, asdf, mise, or unrelated compiler versions.
+#[test]
+fn kotlin_jvm_discovery_rejects_incomplete_and_symlinked_distributions() {
+    let base = std::env::temp_dir().join(format!(
+        "mez-kotlin-jvm-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let root = base.join("kotlin-compiler");
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin/kotlinc"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        root.join("bin/kotlinc"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let root = root.canonicalize().unwrap();
+    let managers = [format!("kotlin-jvm:{}", root.display())];
+
+    assert!(
+        resolve_toolchain_projection(
+            &[SandboxToolchainKind::Jdk, SandboxToolchainKind::Kotlin],
+            &managers,
+            "linux",
+        )
+        .is_err()
+    );
+
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::write(root.join("bin/kotlin"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        root.join("bin/kotlin"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let external = base.join("external-kotlinc");
+    std::fs::write(&external, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&external, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(root.join("bin/kotlinc")).unwrap();
+    std::os::unix::fs::symlink(&external, root.join("bin/kotlinc")).unwrap();
+    let search_path = std::env::join_paths([root.join("bin")]).unwrap();
+    let error = discover_kotlin_from_search_path(Some(&search_path)).unwrap_err();
+    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A validated .NET SDK is projected read-only with fixed runtime and managed
 /// state variables while telemetry and first-time setup remain deterministic.
 #[test]
@@ -2370,7 +2492,7 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
             .map(|kind| kind.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart"
+            "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "dotnet", "dart", "kotlin"
         ]
     );
     assert_eq!(
@@ -2392,6 +2514,10 @@ fn rust_toolchain_discovery_accepts_strict_records_and_shared_metadata() {
     assert_eq!(
         parse_sandbox_toolchain_kind("dart"),
         Some(SandboxToolchainKind::Dart)
+    );
+    assert_eq!(
+        parse_sandbox_toolchain_kind("kotlin"),
+        Some(SandboxToolchainKind::Kotlin)
     );
     assert_eq!(
         SANDBOX_RUST_PATH,
