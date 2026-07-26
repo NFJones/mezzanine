@@ -147,6 +147,12 @@ const RUNTIME_SHELL_TRANSACTION_START_TIMEOUT_MS: u64 = 30_000;
 /// agent shell actions. Keeping their timeout in the transaction module keeps
 /// timeout policy beside the dispatch and settlement code that consumes it.
 const RUNTIME_READINESS_PROBE_TIMEOUT_MS: u64 = 5_000;
+/// Maximum runtime wait for a correlated agent-subshell completion observation.
+///
+/// The pane worker normally finishes its bounded foreground query in under one
+/// second. This larger runtime deadline owns recovery if its exact event is
+/// lost, stale, or discarded before application.
+pub(super) const RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS: u64 = 2_000;
 /// Runs the runtime running shell transaction kind name operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -172,7 +178,7 @@ pub(super) fn runtime_running_shell_transaction_kind_name(
 /// the shell must reach the receiver loop and, when required, complete fresh
 /// start observation before the command body is sent. Once the payload is
 /// released, the ordinary command timeout applies.
-fn runtime_shell_transaction_effective_timeout_ms(
+pub(super) fn runtime_shell_transaction_effective_timeout_ms(
     transaction: &RunningShellTransactionRef,
 ) -> Option<u64> {
     let timeout_ms = transaction.timeout_ms?;

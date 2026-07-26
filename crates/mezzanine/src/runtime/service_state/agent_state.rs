@@ -347,7 +347,7 @@ pub enum RuntimeShellTransactionTimerKind {
     AgentAction,
     /// Readiness probe timeout.
     ReadinessProbe,
-    /// Pane bootstrap timeout.
+    /// Pane bootstrap transaction or completion-certification timeout.
     Bootstrap,
     /// Pane-shell canonical path-resolution timeout.
     PathResolution,
@@ -357,7 +357,8 @@ pub enum RuntimeShellTransactionTimerKind {
     FocusedShellHook,
 }
 
-/// Timer-visible snapshot of a live shell transaction.
+/// Timer-visible snapshot of live shell work, including post-transaction
+/// certification that still gates bootstrap settlement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeShellTransactionTimerRef {
     /// Unique transaction marker used as the timer owner identity.

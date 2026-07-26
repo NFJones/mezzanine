@@ -1178,6 +1178,259 @@ bootstrap\tcomplete\t1714500000\n",
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies a routed worker retained behind adapter-owned bootstrap
+/// certification fails terminally when the exact completion observation never
+/// settles.
+///
+/// The timeout must clear the bootstrap gate and record a stable rejection so
+/// the next provider claim fails the worker instead of preserving the routed
+/// parent in `WaitingForWorkerResult` indefinitely.
+#[test]
+fn runtime_routed_worker_provider_fails_after_bootstrap_certification_timeout() {
+    let root = temp_root("runtime-routed-worker-provider-certification-timeout");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 bound routed worker certification");
+    configure_routed_path_resolution_bubblewrap(&mut service, &root);
+    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    let (bootstrap_marker, bootstrap_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.pane_id == worker_turn.pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("fresh routed worker should retain its bootstrap transaction");
+    let bootstrap_output = format!(
+        "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t{}\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n",
+        root.to_string_lossy()
+    );
+    let process_group_id = service
+        .pane_processes()
+        .primary_pid(&worker_turn.pane_id)
+        .unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test(&worker_turn.pane_id, Some(process_group_id));
+    service
+        .observe_agent_shell_transaction_start(
+            &worker_turn.pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &worker_turn.agent_id,
+            &worker_turn.pane_id,
+        )
+        .unwrap();
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&bootstrap_marker)
+        .unwrap();
+    transaction.observed_output_bytes = bootstrap_output.len();
+    transaction.observed_output_preview = bootstrap_output;
+    let mut worker_process = service
+        .take_running_pane_process_for_adapter(&worker_turn.pane_id)
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end(
+            &worker_turn.pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &worker_turn.agent_id,
+            &worker_turn.pane_id,
+            0,
+        )
+        .unwrap();
+
+    let certification_timer = service
+        .running_shell_transaction_timers()
+        .into_iter()
+        .find(|timer| {
+            timer.kind == crate::runtime::RuntimeShellTransactionTimerKind::Bootstrap
+                && timer
+                    .marker
+                    .starts_with(&format!("{bootstrap_marker}:foreground:"))
+        })
+        .expect("pending routed certification should own a bootstrap timer");
+    let deadline = certification_timer
+        .started_at_unix_ms
+        .saturating_add(certification_timer.timeout_ms);
+    assert!(
+        service
+            .apply_shell_transaction_timer_event(deadline)
+            .unwrap()
+            >= 1
+    );
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
+    assert_eq!(
+        service.pane_agent_subshell_certification_rejection(&worker_turn.pane_id),
+        Some("foreground_observation_timed_out")
+    );
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert_ne!(
+        service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
+    );
+
+    let _ = worker_process.terminate(std::time::Duration::from_millis(10));
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies provider deferral refuses a bare bootstrap-pending flag when no
+/// bounded transaction or certification owns eventual settlement.
+///
+/// This covers the earlier lifecycle form of the deadlock: an ownerless pane
+/// gate must fail the worker and release its routed parent rather than count the
+/// retained provider task itself as proof of progress.
+#[test]
+fn runtime_routed_worker_provider_rejects_ownerless_bootstrap_gate() {
+    let root = temp_root("runtime-routed-worker-provider-ownerless-bootstrap");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 reject ownerless routed bootstrap");
+    configure_routed_path_resolution_bubblewrap(&mut service, &root);
+    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.pane_id == worker_turn.pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| marker.clone())
+        })
+        .expect("fresh routed worker should begin with a bounded bootstrap");
+    service
+        .running_shell_transactions_mut_for_tests()
+        .remove(&bootstrap_marker);
+
+    assert!(service.pane_bootstrap_is_pending_for_tests(&worker_turn.pane_id));
+    assert!(!service.pane_bootstrap_has_bounded_progress_owner(&worker_turn.pane_id));
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+
+    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert_ne!(
+        service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies prompt-like readiness can replace an ownerless bootstrap flag with
+/// a fresh timed bootstrap before provider deferral.
+///
+/// The bounded-owner guard must not fail a recoverable readiness race: once the
+/// pane is safe for hidden input, claiming the provider task should create a new
+/// bootstrap transaction and retain the worker behind that concrete deadline.
+#[test]
+fn runtime_routed_worker_provider_restarts_prompt_ready_ownerless_bootstrap() {
+    let root = temp_root("runtime-routed-worker-provider-restart-bootstrap");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, _parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 restart prompt-ready routed bootstrap");
+    configure_routed_path_resolution_bubblewrap(&mut service, &root);
+    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
+    let bootstrap_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.pane_id == worker_turn.pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| marker.clone())
+        })
+        .expect("fresh routed worker should begin with a bounded bootstrap");
+    service
+        .running_shell_transactions_mut_for_tests()
+        .remove(&bootstrap_marker);
+    service.clear_shell_transaction_protocol_state(&bootstrap_marker);
+    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::Ready);
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+
+    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    assert!(service.pane_bootstrap_has_bounded_progress_owner(&worker_turn.pane_id));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .iter()
+            .any(|(marker, transaction)| {
+                marker != &bootstrap_marker
+                    && transaction.pane_id == worker_turn.pane_id
+                    && transaction.kind == RunningShellTransactionKind::Bootstrap
+                    && transaction.timeout_ms.is_some()
+            })
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies a routed worker retained for pending bootstrap still fails closed
 /// after that one-shot bootstrap settles without a usable environment
 /// signature. A retained subshell-certification rejection must replace the

@@ -2828,14 +2828,18 @@ environment.
 
 A provider request that requires pane-resolved filesystem authority MUST remain
 pending while that pane's one-shot bootstrap is pending and no environment
-signature exists. Parsed bootstrap evidence MUST allow canonical path
-resolution to resume before provider dispatch only after any required
-agent-subshell certification has settled. Bootstrap completion, certification
-rejection, timeout, protocol failure, or write failure without a usable
-signature MUST fail the waiting provider request closed with the retained
-certification reason when one exists; the runtime MUST NOT fall back to
-unresolved or unsandboxed execution. Repeated claims while bootstrap or
-certification is pending MUST be idempotent.
+signature exists only while a bounded runtime progress owner can settle or
+expire that bootstrap. Prompt-like readiness MAY start the one-shot bootstrap
+before the request is deferred. A bare pending flag without a timed shell
+transaction or timed completion-certification phase MUST fail the request
+closed instead of being treated as progress. Parsed bootstrap evidence MUST
+allow canonical path resolution to resume before provider dispatch only after
+any required agent-subshell certification has settled. Bootstrap completion,
+certification rejection, timeout, protocol failure, or write failure without a
+usable signature MUST fail the waiting provider request closed with the
+retained certification reason when one exists; the runtime MUST NOT fall back
+to unresolved or unsandboxed execution. Repeated claims while bounded bootstrap
+or certification work is pending MUST be idempotent.
 
 An explicit configured allow rule MAY declare complete or unknown read, write,
 network, credential, and process-control requirements; such declarations MAY
@@ -3814,7 +3818,13 @@ certification. Parsed
 environment, tool, instruction, path, and sandbox authority from that
 bootstrap MUST remain unpublished while the fresh observation is pending.
 Missing, contradictory, failed, bounded-observation-timeout, or stale proof
-MUST fail closed.
+MUST fail closed. When completion certification becomes pending, the runtime
+MUST register its own bounded deadline independently of the pane worker's query
+loop. The deadline MUST remain live after the completed bootstrap transaction
+is removed. Expiry MUST discard the unpublished environment, retain a stable
+certification rejection, clear the pane bootstrap gate, and resume or fail
+deferred provider work. A late exact observation after expiry MUST NOT publish
+the discarded environment or restore certification.
 
 When agent-subshell certification proof is rejected, the runtime MUST retain a
 stable machine-readable rejection reason for the current pane shell-interaction
@@ -3832,7 +3842,9 @@ observed after payload release and before completion are expected, but MUST NOT
 be promoted as persistent shell identity or treated as a completion boundary
 mismatch. The owning pane worker MUST wait boundedly for the start-certified
 receiver group to regain the PTY and MUST return an explicit success or failure
-event so certification cannot remain pending indefinitely.
+event. The runtime MUST still enforce its independent completion-certification
+deadline so a missing, discarded, or stale event cannot leave certification
+pending indefinitely.
 
 Certification MUST be invalidated when the agent subshell exits, the pane
 closes, its primary process changes or is replaced, a bootstrap proof fails, or
@@ -4246,11 +4258,12 @@ audit logging is enabled.
 If bootstrap discovery fails, the harness MUST continue with degraded context
 and MUST disclose the failed discovery to the agent.
 
-A bootstrap attempt MUST be bounded and one-shot for the observed pane
-readiness epoch. Completing or failing a bootstrap wrapper MUST clear the
-pending bootstrap dispatch for that pane. Mezzanine MUST NOT repeatedly
-dispatch the same bootstrap wrapper on subsequent ticks solely because the
-hidden bootstrap output could not be parsed.
+A bootstrap attempt and every asynchronous certification phase that gates its
+settlement MUST be bounded and one-shot for the observed pane readiness epoch.
+Completing or failing a bootstrap wrapper, including certification timeout,
+MUST clear the pending bootstrap dispatch for that pane. Mezzanine MUST NOT
+repeatedly dispatch the same bootstrap wrapper on subsequent ticks solely
+because the hidden bootstrap output could not be parsed.
 
 For remote or nested interactive environments, bootstrap MUST be treated as a
 readiness state machine with at least `unknown`, `prompt-candidate`, `probing`,

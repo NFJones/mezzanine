@@ -9,16 +9,19 @@ use super::{
 use std::collections::{BTreeMap, HashSet};
 
 impl RuntimeSessionService {
-    /// Applies a runtime timer firing for live Mezzanine-owned shell
-    /// transactions.
+    /// Applies a runtime timer firing for live Mezzanine-owned shell work,
+    /// including post-transaction bootstrap certification.
     ///
-    /// Returns the number of transactions that were expired. A zero return
-    /// means the timer was accepted but no live transaction had reached its
-    /// deadline.
+    /// Returns the number of transactions, certifications, and focused hooks
+    /// that were expired. A zero return means the timer was accepted but no
+    /// live work had reached its deadline.
     pub fn apply_shell_transaction_timer_event(&mut self, now_unix_ms: u64) -> Result<usize> {
         let expired = self.expire_timed_out_shell_transactions(now_unix_ms)?;
+        let certifications = self.expire_timed_out_agent_subshell_certifications(now_unix_ms)?;
         let focused = self.expire_timed_out_focused_shell_hooks(now_unix_ms)?;
-        Ok(expired.saturating_add(focused))
+        Ok(expired
+            .saturating_add(certifications)
+            .saturating_add(focused))
     }
 
     /// Applies shell-transaction expiry through the transport-neutral transition contract.
@@ -33,8 +36,8 @@ impl RuntimeSessionService {
         ))
     }
 
-    /// Returns timer-visible snapshots for live shell transactions with
-    /// configured timeouts.
+    /// Returns timer-visible snapshots for live shell work with configured
+    /// timeouts.
     pub fn running_shell_transaction_timers(&self) -> Vec<RuntimeShellTransactionTimerRef> {
         let mut timers = self
             .process
@@ -50,6 +53,17 @@ impl RuntimeSessionService {
                 })
             })
             .collect::<Vec<_>>();
+        timers.extend(
+            self.process
+                .pending_agent_subshell_certifications
+                .values()
+                .map(|pending| RuntimeShellTransactionTimerRef {
+                    marker: pending.observation_id.clone(),
+                    kind: RuntimeShellTransactionTimerKind::Bootstrap,
+                    started_at_unix_ms: pending.started_at_unix_ms,
+                    timeout_ms: pending.timeout_ms,
+                }),
+        );
         timers.extend(
             self.integration
                 .focused_shell_hook_transactions()

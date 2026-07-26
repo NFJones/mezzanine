@@ -9,9 +9,9 @@ use super::super::{
     RuntimePendingBootstrapEnvironment, RuntimeSideEffect, RuntimeTransition,
 };
 use super::{
-    AgentTurnState, EventKind, PaneReadinessState, RenderInvalidationReason, Result,
-    RuntimeSessionService, TerminalOscEvent, json_escape,
-    runtime_execution_ready_for_provider_continuation,
+    AgentTurnState, EventKind, PaneReadinessState, RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS,
+    RenderInvalidationReason, Result, RuntimeSessionService, TerminalOscEvent, current_unix_millis,
+    json_escape, runtime_execution_ready_for_provider_continuation,
 };
 
 /// Best-effort foreground-process information attached to a readiness failure.
@@ -385,6 +385,8 @@ impl RuntimeSessionService {
                     observation_id: observation_id.clone(),
                     evidence,
                     environment,
+                    started_at_unix_ms: current_unix_millis(),
+                    timeout_ms: RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS,
                 },
             );
             self.persistence
@@ -548,6 +550,69 @@ impl RuntimeSessionService {
         }
         self.resume_after_bootstrap_settlement(&instance.pane_id)?;
         Ok(self.runtime_transition_with_render(true, Some(RenderInvalidationReason::FullRedraw)))
+    }
+
+    /// Expires adapter-owned completion certifications whose exact correlated
+    /// worker event did not settle before the runtime-owned deadline.
+    pub(super) fn expire_timed_out_agent_subshell_certifications(
+        &mut self,
+        now_unix_ms: u64,
+    ) -> Result<usize> {
+        let expired = self
+            .process
+            .pending_agent_subshell_certifications
+            .iter()
+            .filter_map(|(pane_id, pending)| {
+                let elapsed_ms = now_unix_ms.saturating_sub(pending.started_at_unix_ms);
+                (elapsed_ms >= pending.timeout_ms).then(|| {
+                    (
+                        pane_id.clone(),
+                        pending.marker.clone(),
+                        pending.observation_id.clone(),
+                        pending.timeout_ms,
+                        elapsed_ms,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut expired_count = 0usize;
+        for (pane_id, marker, observation_id, timeout_ms, elapsed_ms) in expired {
+            let still_pending = self
+                .process
+                .pending_agent_subshell_certifications
+                .get(&pane_id)
+                .is_some_and(|pending| {
+                    pending.marker == marker && pending.observation_id == observation_id
+                });
+            if !still_pending {
+                continue;
+            }
+            self.process
+                .pending_agent_subshell_certifications
+                .remove(&pane_id);
+            self.reject_agent_subshell_certification(
+                &pane_id,
+                RuntimeAgentSubshellCertificationRejection::ForegroundObservationTimedOut,
+            );
+            self.process.pane_bootstrap_pending.remove(&pane_id);
+            self.set_pane_readiness(&pane_id, PaneReadinessState::Degraded);
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","bootstrap":"certification_failed","marker":"{}","reason":"{}","observation_id":"{}","timeout_ms":{},"elapsed_ms":{}}}"#,
+                    json_escape(&pane_id),
+                    json_escape(&marker),
+                    RuntimeAgentSubshellCertificationRejection::ForegroundObservationTimedOut
+                        .as_str(),
+                    json_escape(&observation_id),
+                    timeout_ms,
+                    elapsed_ms
+                ),
+            )?;
+            self.resume_after_bootstrap_settlement(&pane_id)?;
+            expired_count = expired_count.saturating_add(1);
+        }
+        Ok(expired_count)
     }
 
     /// Refreshes pane metadata from one accepted correlated worker observation.

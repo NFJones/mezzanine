@@ -17,7 +17,7 @@ use mez_agent::{
 use super::AgentTurnExecution;
 use super::{
     AgentId, AgentTurnRecord, AgentTurnState, DEFAULT_PROVIDER_TIMEOUT_MS, EventKind, HookEvent,
-    MezError, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
+    MezError, PaneReadinessState, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
     RuntimeAgentProviderClaim, RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
     RuntimeAgentProviderTask, RuntimeProviderConfig, RuntimeSessionService, assemble_model_request,
     current_unix_millis, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
@@ -455,6 +455,19 @@ impl RuntimeSessionService {
             primary_path_resolution_request.is_some() || subagent_path_resolution_request.is_some();
         if path_resolution_required && self.pane_environment_signature(&turn.pane_id).is_none() {
             if self.pane_bootstrap_is_pending(&turn.pane_id) {
+                if !self.pane_bootstrap_has_bounded_progress_owner(&turn.pane_id)
+                    && matches!(
+                        self.pane_readiness_state(&turn.pane_id),
+                        PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+                    )
+                {
+                    self.dispatch_bootstrap_to_pane(&turn.pane_id)?;
+                }
+                if !self.pane_bootstrap_has_bounded_progress_owner(&turn.pane_id) {
+                    return Err(MezError::invalid_state(
+                        "pane bootstrap is pending without a bounded runtime progress owner",
+                    ));
+                }
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     &turn.turn_id,

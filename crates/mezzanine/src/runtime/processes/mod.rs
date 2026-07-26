@@ -111,6 +111,8 @@ pub(crate) enum RuntimeAgentSubshellCertificationRejection {
     OutputTruncated,
     /// Successful output did not contain a parseable environment signature.
     EnvironmentSignatureMissing,
+    /// The exact completion observation did not settle before its runtime deadline.
+    ForegroundObservationTimedOut,
 }
 
 impl RuntimeAgentSubshellCertificationRejection {
@@ -125,6 +127,7 @@ impl RuntimeAgentSubshellCertificationRejection {
             Self::TransactionFailed => "transaction_failed",
             Self::OutputTruncated => "output_truncated",
             Self::EnvironmentSignatureMissing => "environment_signature_missing",
+            Self::ForegroundObservationTimedOut => "foreground_observation_timed_out",
         }
     }
 }
@@ -219,6 +222,10 @@ struct RuntimePendingAgentSubshellCertification {
     evidence: RuntimeBootstrapShellCertificationEvidence,
     /// Parsed bootstrap context published only after certification.
     environment: RuntimePendingBootstrapEnvironment,
+    /// Unix timestamp when runtime-owned completion certification began.
+    started_at_unix_ms: u64,
+    /// Maximum runtime wait for the exact correlated completion observation.
+    timeout_ms: u64,
 }
 
 /// Owns live process metadata that is private to the pane process subsystem.
@@ -452,6 +459,23 @@ impl RuntimeSessionService {
             .running_shell_transactions
             .values()
             .any(|transaction| transaction.pane_id == pane_id)
+    }
+
+    /// Reports whether a pending pane bootstrap has a bounded runtime progress
+    /// owner capable of settling or timing out.
+    pub(crate) fn pane_bootstrap_has_bounded_progress_owner(&self, pane_id: &str) -> bool {
+        self.process
+            .pending_agent_subshell_certifications
+            .contains_key(pane_id)
+            || self
+                .process
+                .running_shell_transactions
+                .values()
+                .any(|transaction| {
+                    transaction.pane_id == pane_id
+                        && transactions::runtime_shell_transaction_effective_timeout_ms(transaction)
+                            .is_some()
+                })
     }
 
     /// Returns marker and pane pairs for every live transaction in one turn.
