@@ -38,6 +38,11 @@ use mez_agent::AgentAction;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const RUNTIME_SHELL_TRANSACTION_OBSERVATION_LIMIT_BYTES: usize = 256 * 1024;
+/// Additional bounded space reserved for encoded transport framing and trusted
+/// Bubblewrap lifecycle status after the payload output frame.
+const RUNTIME_SANDBOX_STATUS_TRANSPORT_RESERVE_BYTES: usize = 4 * 1024;
+/// Width used by the shell `base64` utility for wrapped encoded output.
+const RUNTIME_SHELL_TRANSPORT_BASE64_LINE_BYTES: usize = 76;
 /// Maximum retained snapshot bytes for the read phase of `apply_patch`.
 ///
 /// The read phase carries remote file bytes that Rust must patch internally, so
@@ -237,8 +242,13 @@ fn pane_write_failure_terminal_observation(
 ///
 /// # Parameters
 /// - `transaction`: The transaction whose observed output is being retained.
-fn runtime_shell_transaction_observation_limit(transaction: &RunningShellTransactionRef) -> usize {
-    if matches!(
+/// - `sandboxed`: Whether the transaction must also retain trusted Bubblewrap
+///   status after its base64-framed payload output.
+fn runtime_shell_transaction_observation_limit(
+    transaction: &RunningShellTransactionRef,
+    sandboxed: bool,
+) -> usize {
+    let raw_limit = if matches!(
         transaction.kind,
         RunningShellTransactionKind::AgentAction { .. }
     ) && apply_patch_transaction_phase(&transaction.command)
@@ -247,7 +257,15 @@ fn runtime_shell_transaction_observation_limit(transaction: &RunningShellTransac
         RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES
     } else {
         RUNTIME_SHELL_TRANSACTION_OBSERVATION_LIMIT_BYTES
+    };
+    if !sandboxed {
+        return raw_limit;
     }
+    let encoded_bytes = raw_limit.div_ceil(3).saturating_mul(4);
+    let encoded_lines = encoded_bytes.div_ceil(RUNTIME_SHELL_TRANSPORT_BASE64_LINE_BYTES);
+    encoded_bytes
+        .saturating_add(encoded_lines)
+        .saturating_add(RUNTIME_SANDBOX_STATUS_TRANSPORT_RESERVE_BYTES)
 }
 
 mod agent_actions;

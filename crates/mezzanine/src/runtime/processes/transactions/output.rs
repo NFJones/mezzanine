@@ -137,7 +137,12 @@ impl RuntimeSessionService {
                 transaction.observed_output_bytes = transaction
                     .observed_output_bytes
                     .saturating_add(observed_bytes.len());
-                let observation_limit = runtime_shell_transaction_observation_limit(transaction);
+                let observation_limit = runtime_shell_transaction_observation_limit(
+                    transaction,
+                    self.process
+                        .sandboxed_shell_transaction_markers
+                        .contains(marker),
+                );
                 if transaction.observed_output_preview.len() >= observation_limit {
                     if !observed_bytes.is_empty() {
                         transaction.observed_output_truncated = true;

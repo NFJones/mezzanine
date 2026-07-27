@@ -64,6 +64,67 @@ fn runtime_shell_transaction_observation_is_bounded_and_truncated() {
     assert!(transaction.observed_output_truncated);
 }
 
+/// Verifies the sandbox transaction observation bound retains a complete
+/// maximum-size encoded payload followed by trusted Bubblewrap status.
+///
+/// Non-stateful action output is base64-framed before the status descriptor is
+/// emitted. Bounding the encoded PTY stream at the raw-output limit discards
+/// the trailing status frame and falsely reports a completed sandbox action as
+/// an invalid Bubblewrap transport.
+#[test]
+fn runtime_shell_transaction_observation_retains_trailing_bubblewrap_status() {
+    let mut service = test_runtime_service();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "marker-1".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "a1".to_string(),
+            },
+            pane_id: "%1".to_string(),
+            command: "produce bounded output".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    service.register_sandboxed_shell_transaction_marker("marker-1");
+    let encoded_bytes = mez_agent::SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+        .div_ceil(3)
+        .saturating_mul(4);
+    let encoded_payload = "e"
+        .repeat(encoded_bytes)
+        .as_bytes()
+        .chunks(76)
+        .map(|chunk| std::str::from_utf8(chunk).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let output = format!(
+        "{}\n{}\n{}\n{}\neyJjaGlsZC1waWQiOjQyfQp7ImV4aXQtY29kZSI6MH0K\n{}\n",
+        mez_agent::SHELL_OUTPUT_BASE64_BEGIN_MARKER,
+        encoded_payload,
+        mez_agent::SHELL_OUTPUT_BASE64_END_MARKER,
+        mez_agent::SHELL_STATUS_BASE64_BEGIN_MARKER,
+        mez_agent::SHELL_STATUS_BASE64_END_MARKER,
+    );
+    assert!(output.len() > 256 * 1024);
+
+    service.record_running_shell_transaction_output("%1", output.as_bytes());
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
+    assert!(!transaction.observed_output_truncated);
+    assert_eq!(
+        mez_agent::decode_shell_status_transport(&transaction.observed_output_preview).unwrap(),
+        "{\"child-pid\":42}\n{\"exit-code\":0}\n"
+    );
+}
+
 /// Verifies retained transaction output reconstructs one UTF-8 scalar split
 /// across arbitrary PTY reads instead of replacing each partial chunk.
 #[test]
