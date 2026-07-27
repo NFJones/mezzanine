@@ -81,7 +81,10 @@ impl RuntimeSessionService {
             "Summary".to_string(),
         ]);
         browser.set_help(
-            Some("**Keys:** `Enter` open · `a` approve once · `d` deny · `/` search".to_string()),
+            Some(
+                "**Keys:** `↑`/`↓` focus approval ID · `Enter` open · `a` approve once · `d` deny · `/` search"
+                    .to_string(),
+            ),
             Some("**Keys:** `Esc` back · `a` approve once · `d` deny · `/` search".to_string()),
         );
         browser.set_empty_message(Some("No pending approvals.".to_string()));

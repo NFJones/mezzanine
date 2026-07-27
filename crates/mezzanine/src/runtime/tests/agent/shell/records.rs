@@ -850,6 +850,27 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
             .any(|line| line.contains("agent-second"))
     );
     assert_eq!(overlay.selections.len(), 2);
+    assert_eq!(overlay.active_selection_index, Some(0));
+    let first_selection = &overlay.selections[0];
+    assert_eq!(
+        first_selection.command,
+        format!("/show-approvals {first_id}")
+    );
+    assert_eq!(first_selection.width, first_id.len());
+    assert!(
+        overlay.lines[first_selection.line_index].contains(&first_id),
+        "{overlay:?}"
+    );
+    let second_selection = &overlay.selections[1];
+    assert_eq!(
+        second_selection.command,
+        format!("/show-approvals {second_id}")
+    );
+    assert_eq!(second_selection.width, second_id.len());
+    assert!(
+        overlay.lines[second_selection.line_index].contains(&second_id),
+        "{overlay:?}"
+    );
     let view = service
         .render_client_view(
             ClientViewRole::Primary,
@@ -861,8 +882,88 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
     let footer = view.lines.last().cloned().unwrap_or_default();
     assert!(footer.contains("a: approve once"), "{footer}");
     assert!(footer.contains("d: deny"), "{footer}");
+    let first_row = view
+        .lines
+        .iter()
+        .position(|line| line.contains(&first_id))
+        .expect("approval pager should render the first approval ID link");
+    let second_row = view
+        .lines
+        .iter()
+        .position(|line| line.contains(&second_id))
+        .expect("approval pager should render the second approval ID link");
+    let first_column = display_column_for_fragment(&view.lines[first_row], &first_id);
+    let second_column = display_column_for_fragment(&view.lines[second_row], &second_id);
+    let first_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: view.lines[first_row].clone(),
+            style_spans: view.line_style_spans[first_row].clone(),
+            copy_text: None,
+        },
+        first_column,
+    );
+    let second_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: view.lines[second_row].clone(),
+            style_spans: view.line_style_spans[second_row].clone(),
+            copy_text: None,
+        },
+        second_column,
+    );
+    assert!(first_rendition.underline, "{view:?}");
+    assert_eq!(
+        first_rendition.background,
+        Some(service.ui_theme().colors.agent_model.background),
+        "{view:?}"
+    );
+    assert_ne!(
+        second_rendition.background,
+        Some(service.ui_theme().colors.agent_model.background),
+        "{view:?}"
+    );
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.active_selection_index, Some(1));
+    assert_eq!(
+        overlay.selections[1].command,
+        format!("/show-approvals {second_id}")
+    );
+    let moved_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(120, 14).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let moved_first_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: moved_view.lines[first_row].clone(),
+            style_spans: moved_view.line_style_spans[first_row].clone(),
+            copy_text: None,
+        },
+        first_column,
+    );
+    let moved_second_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: moved_view.lines[second_row].clone(),
+            style_spans: moved_view.line_style_spans[second_row].clone(),
+            copy_text: None,
+        },
+        second_column,
+    );
+    assert_ne!(
+        moved_first_rendition.background,
+        Some(service.ui_theme().colors.agent_model.background),
+        "{moved_view:?}"
+    );
+    assert!(moved_second_rendition.underline, "{moved_view:?}");
+    assert_eq!(
+        moved_second_rendition.background,
+        Some(service.ui_theme().colors.agent_model.background),
+        "{moved_view:?}"
+    );
     apply_record_browser_input(&mut service, &primary, b"a");
 
     assert_eq!(

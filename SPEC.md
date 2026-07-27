@@ -6316,9 +6316,10 @@ The baseline command capabilities are:
 - `/show-approvals`: Browse all pending blocked approvals in the live session,
   ordered deterministically. Its list MUST show pane id, requesting agent id,
   action kind, and the full actionable summary with exactly one selectable
-  stable-id link per request. It MUST provide detail and empty states, preserve
-  generic `/` search, use `a` to approve the selected request once, and use `d`
-  to deny it.
+  stable-id link per request. Arrow-key navigation MUST focus those stable-id
+  links using the standard pager link-selection treatment. It MUST provide
+  detail and empty states, preserve generic `/` search, use `a` to approve the
+  request represented by the focused link once, and use `d` to deny it.
 - `/show-context`: Browse durable transcript entries for the current pane conversation
   in transcript order. It MUST support arrow-key selection, `Enter` for entry
   details, `/` search, and `d` to delete the selected entry from durable context.

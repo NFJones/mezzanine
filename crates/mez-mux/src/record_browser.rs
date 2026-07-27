@@ -971,6 +971,13 @@ mod tests {
         let page = browser.render_page();
 
         assert_eq!(page.raw_markdown.matches("](mez-agent:").count(), 1);
+        assert!(
+            page.raw_markdown
+                .contains("[`ba1`](mez-agent:%2Fshow-approvals%20ba1)"),
+            "{}",
+            page.raw_markdown
+        );
+        assert_eq!(page.raw_markdown.matches("[`ba1`](mez-agent:").count(), 1);
         assert!(page.raw_markdown.contains("\\|"), "{}", page.raw_markdown);
         assert!(
             !page.raw_markdown.contains("now\nthen"),
