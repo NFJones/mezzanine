@@ -24,7 +24,7 @@ use super::{
     runtime_mezzanine_error_code, runtime_pane_readiness_state_name,
     runtime_pre_shell_hook_payload,
 };
-use crate::runtime::RuntimeSandboxFallbackAudit;
+use crate::runtime::{RuntimeSandboxFallbackAudit, SandboxConfig};
 
 /// Describes why an `apply_patch` snapshot cannot safely reach write planning.
 ///
