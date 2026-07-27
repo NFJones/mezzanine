@@ -653,6 +653,141 @@ bootstrap\tcomplete\t1714500000\n";
     }
 }
 
+/// Verifies stranded-shell recovery defers to pane-scoped bootstrap
+/// certification instead of exhausting foreground-process recovery attempts.
+///
+/// A routed child can request a shell action while its pane is still proving
+/// the persistent agent-subshell process group. That bounded certification is
+/// not owned by the child turn, so idle recovery must neither increment the
+/// fail-closed counter nor queue a premature provider retry. Once the exact
+/// certification observation settles, bootstrap resumption must advance the
+/// original shell action.
+#[test]
+fn runtime_shell_recovery_waits_for_pane_subshell_certification() {
+    let mut fixture = pending_agent_subshell_certification_fixture();
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = fixture
+        .service
+        .start_agent_prompt_turn("%1", "inspect after certification")
+        .unwrap();
+    let turn = fixture
+        .service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "shell-awaiting-certification".to_string(),
+        rationale: "inspect through the pending agent subshell".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the working directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    fixture.service.agent_turn_executions_mut().insert(
+        turn.turn_id.clone(),
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run shell action after certification".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "inspect with the certified shell".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::running(
+                &turn,
+                &action,
+                Vec::new(),
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+    fixture
+        .service
+        .remove_pending_agent_provider_task(&turn.turn_id);
+
+    for _ in 0..3 {
+        assert_eq!(
+            fixture
+                .service
+                .recover_stranded_agent_shell_dispatches()
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            fixture
+                .service
+                .pending_shell_dispatch_blocked_recovery_attempts(&turn.turn_id, &action.id),
+            0
+        );
+        assert!(
+            !fixture
+                .service
+                .agent_provider_task_is_pending(&turn.turn_id)
+        );
+    }
+
+    let settled = fixture
+        .service
+        .apply_pane_foreground_process_observation_transition(
+            fixture.instance,
+            crate::runtime::PaneForegroundProcessObservation {
+                observation_id: fixture.observation_id,
+                process_name: Some("sh".to_string()),
+                process_group_id: Some(fixture.subshell_group),
+                current_working_directory: Some("/tmp".to_string()),
+                error: None,
+            },
+        )
+        .unwrap();
+
+    assert!(settled.applied);
+    assert!(!fixture.service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(fixture.service.pane_environment_signature("%1").is_some());
+    assert!(
+        fixture
+            .service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| transaction.turn_id == turn.turn_id)
+    );
+    let execution = fixture
+        .service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .unwrap();
+    assert_eq!(execution.action_results[0].status, ActionStatus::Running);
+    assert!(execution.action_results[0].error.is_none());
+    let _ = fixture
+        .process
+        .terminate(std::time::Duration::from_millis(10));
+}
+
 /// Verifies an adapter-owned bootstrap withholds its environment until the
 /// pane worker returns the explicitly correlated persistent receiver group.
 ///

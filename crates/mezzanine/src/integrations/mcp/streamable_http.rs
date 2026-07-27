@@ -323,6 +323,9 @@ async fn execute_streamable_http_post(
     body: &str,
     timeout: Duration,
 ) -> Result<McpStreamableHttpResponse> {
+    let url = url
+        .parse::<reqwest::Url>()
+        .map_err(|_| MezError::invalid_args("streamable HTTP MCP URL is invalid"))?;
     let mut request_headers = reqwest::header::HeaderMap::new();
     for (name, value) in headers {
         let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
@@ -332,12 +335,15 @@ async fn execute_streamable_http_post(
         request_headers.insert(name, value);
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(timeout)
-        .build()
-        .map_err(|error| {
-            MezError::invalid_state(format!("streamable HTTP MCP client setup failed: {error}"))
-        })?;
+    let builder = reqwest::Client::builder().timeout(timeout);
+    let builder = if url.scheme() == "http" {
+        builder.tls_certs_only(std::iter::empty::<reqwest::Certificate>())
+    } else {
+        builder
+    };
+    let client = builder.build().map_err(|error| {
+        MezError::invalid_state(format!("streamable HTTP MCP client setup failed: {error}"))
+    })?;
     let mut response = client
         .post(url)
         .headers(request_headers)

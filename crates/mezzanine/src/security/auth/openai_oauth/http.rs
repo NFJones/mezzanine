@@ -118,7 +118,7 @@ pub(super) async fn poll_device_authorization_async(
             json_escape(&device_code.device_auth_id),
             json_escape(&device_code.user_code)
         );
-        let response = async_http_client()
+        let response = async_http_client(&endpoint)?
             .post(&endpoint)
             .header("Content-Type", "application/json")
             .body(body)
@@ -159,7 +159,7 @@ pub(super) async fn post_form_async<T: for<'de> Deserialize<'de>>(
     body: String,
     label: &str,
 ) -> Result<T> {
-    let response = async_http_client()
+    let response = async_http_client(endpoint)?
         .post(endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
@@ -179,7 +179,7 @@ pub(super) async fn post_json_async<T: for<'de> Deserialize<'de>>(
     body: String,
     label: &str,
 ) -> Result<T> {
-    let response = async_http_client()
+    let response = async_http_client(endpoint)?
         .post(endpoint)
         .header("Content-Type", "application/json")
         .body(body)
@@ -217,11 +217,19 @@ pub(super) async fn parse_provider_response_async<T: for<'de> Deserialize<'de>>(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn async_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(HTTP_CLIENT_TIMEOUT)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+pub(super) fn async_http_client(endpoint: &str) -> Result<reqwest::Client> {
+    let endpoint = endpoint
+        .parse::<reqwest::Url>()
+        .map_err(|_| MezError::invalid_args("OpenAI auth URL is invalid"))?;
+    let builder = reqwest::Client::builder().timeout(HTTP_CLIENT_TIMEOUT);
+    let builder = if endpoint.scheme() == "http" {
+        builder.tls_certs_only(std::iter::empty::<reqwest::Certificate>())
+    } else {
+        builder
+    };
+    builder.build().map_err(|error| {
+        MezError::invalid_state(format!("OpenAI auth HTTP client setup failed: {error}"))
+    })
 }
 
 /// Runs the provider transport error operation for this subsystem.

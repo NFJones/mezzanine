@@ -819,6 +819,16 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             .into_iter()
             .find(|task| task.turn_id == "turn-1")
             .expect("agent prompt should queue turn-1 provider task");
+        assert_eq!(
+            client_handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque(task.agent_id.clone()).unwrap(),
+                turn_id: task.turn_id.clone(),
+            }]
+        );
         let turn = mez_agent::AgentTurnRecord {
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
@@ -953,6 +963,17 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         }
         let next_task =
             next_task.expect("first shell transaction should queue provider continuation");
+        assert_eq!(
+            client_handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque(next_task.agent_id.clone()).unwrap(),
+                turn_id: next_task.turn_id.clone(),
+            }],
+            "shell settlement must publish the provider continuation without fallback polling"
+        );
         let ready_again = client_handle
             .execute_terminal_command(
                 primary.clone(),

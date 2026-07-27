@@ -135,7 +135,11 @@ async fn resolve_mcp_oauth_resource_async(
 /// Discovers an RFC 9728 protected-resource identifier when metadata exists.
 async fn discover_mcp_protected_resource_async(server_url: &str) -> Result<Option<String>> {
     let metadata_url = protected_resource_metadata_url(server_url)?;
-    let response = match async_http_client().get(&metadata_url).send().await {
+    let response = match async_http_client(&metadata_url)?
+        .get(&metadata_url)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(_) => return Ok(None),
     };
@@ -237,9 +241,13 @@ async fn discover_mcp_oauth_metadata(server_url: &str) -> Result<McpOAuthMetadat
 }
 
 async fn fetch_oauth_metadata(url: &str) -> Result<McpOAuthMetadata> {
-    let response = async_http_client().get(url).send().await.map_err(|error| {
-        MezError::invalid_state(format!("MCP OAuth metadata request failed: {error}"))
-    })?;
+    let response = async_http_client(url)?
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| {
+            MezError::invalid_state(format!("MCP OAuth metadata request failed: {error}"))
+        })?;
     if !response.status().is_success() {
         return Err(MezError::invalid_state(format!(
             "MCP OAuth metadata returned status {}",
@@ -284,7 +292,7 @@ async fn register_mcp_oauth_client_async(
     redirect_uri: &str,
 ) -> Result<String> {
     let request = dynamic_client_registration_body(redirect_uri);
-    let response = async_http_client()
+    let response = async_http_client(registration_endpoint)?
         .post(registration_endpoint)
         .header("Content-Type", "application/json")
         .body(request)
@@ -388,7 +396,7 @@ fn refresh_token_form(
 }
 
 async fn post_token_form(token_endpoint: &str, form: &BTreeMap<&str, String>) -> Result<Value> {
-    let response = async_http_client()
+    let response = async_http_client(token_endpoint)?
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(form_body(form))
@@ -667,11 +675,19 @@ fn http_url_origin(url: &str) -> Result<String> {
     Ok(format!("{}://{}", scheme.to_ascii_lowercase(), authority))
 }
 
-fn async_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+fn async_http_client(url: &str) -> Result<reqwest::Client> {
+    let url = url
+        .parse::<reqwest::Url>()
+        .map_err(|_| MezError::invalid_args("MCP OAuth URL is invalid"))?;
+    let builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
+    let builder = if url.scheme() == "http" {
+        builder.tls_certs_only(std::iter::empty::<reqwest::Certificate>())
+    } else {
+        builder
+    };
+    builder.build().map_err(|error| {
+        MezError::invalid_state(format!("MCP OAuth HTTP client setup failed: {error}"))
+    })
 }
 
 fn browser_login_launch_message(auth_url: &str, browser_opened: bool) -> String {

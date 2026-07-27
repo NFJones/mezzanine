@@ -983,3 +983,637 @@ async fn async_agent_provider_service_does_not_serialize_provider_requests_acros
         .unwrap();
     let _ = std::fs::remove_dir_all(auth_root);
 }
+
+/// Test-owned executable that implements Bubblewrap's probe and status
+/// protocols without claiming to provide filesystem or namespace confinement.
+///
+/// The deterministic lifecycle regression uses this fixture so routing,
+/// transaction settlement, and provider redispatch remain covered on hosts
+/// where user namespaces are unavailable. Real confinement is covered by a
+/// separate explicit host acceptance test below.
+#[cfg(unix)]
+struct BubblewrapProtocolFixture {
+    root: PathBuf,
+    executable: PathBuf,
+}
+
+#[cfg(unix)]
+impl BubblewrapProtocolFixture {
+    /// Creates an executable that accepts the production Bubblewrap argv,
+    /// runs the materialized command file, and emits trusted status documents.
+    fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-routed-bubblewrap-protocol-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let executable = root.join("bubblewrap-protocol-fixture");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\n\
+             if [ \"$1\" != \"--json-status-fd\" ]; then\n\
+               printf '%s' 'mez-bubblewrap-capability-v1'\n\
+               exit 0\n\
+             fi\n\
+             host_command=\n\
+             while [ \"$#\" -gt 2 ]; do\n\
+               if [ \"$1\" = \"--ro-bind\" ] && [ \"$3\" = \"/run/mez/command\" ]; then\n\
+                 host_command=$2\n\
+                 break\n\
+               fi\n\
+               shift\n\
+             done\n\
+             if [ -z \"$host_command\" ]; then exit 64; fi\n\
+             printf '{\"child-pid\":%s}\\n' \"$$\" >&3\n\
+             /bin/sh \"$host_command\"\n\
+             status=$?\n\
+             printf '{\"exit-code\":%s}\\n' \"$status\" >&3\n\
+             exit \"$status\"\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        Self { root, executable }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for BubblewrapProtocolFixture {
+    /// Removes the test-owned executable after the routed sequence settles.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Requires this Linux host to execute the exact production Bubblewrap
+/// capability profile used by routed shell actions.
+#[cfg(target_os = "linux")]
+fn assert_real_bubblewrap_profile_is_available() -> PathBuf {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "real-bubblewrap-probe".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[permissions]\nsandbox = \"bubblewrap\"\n".to_string(),
+        }])
+        .unwrap();
+    let crate::runtime::SandboxConfig::Bubblewrap(config) =
+        &service.configured_permissions().sandbox
+    else {
+        unreachable!();
+    };
+    if !Path::new(&config.executable).is_file() {
+        panic!("real Bubblewrap acceptance requires {}", config.executable);
+    }
+    let plan =
+        crate::security::sandbox::bubblewrap_capability_probe_plan(config, "/bin/sh").unwrap();
+    let output = std::process::Command::new(&plan.executable)
+        .args(&plan.arguments)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "real Bubblewrap acceptance requires the production capability profile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        plan.expected_stdout,
+        "real Bubblewrap acceptance requires the exact production capability sentinel"
+    );
+    PathBuf::from(&plan.executable)
+}
+
+/// Verifies the complete routed continuation lifecycle independently of host
+/// namespace support using a deterministic Bubblewrap-protocol executable.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn async_routed_subagent_settles_with_bubblewrap_protocol_fixture() {
+    let fixture = BubblewrapProtocolFixture::new();
+    assert_routed_subagent_settles_after_in_place_selection(
+        &fixture.executable,
+        "printf '%s%s\\n' 'ROUTED_SANDBOX_' 'ACTION'",
+        "ROUTED_SANDBOX_ACTION",
+    )
+    .await;
+}
+
+/// Verifies a lineage-owned subagent completes the exact routed sequence with
+/// a genuine production-profile Bubblewrap launch and cannot write through the
+/// configured read-only project mount. This acceptance test is ignored by
+/// default because an explicit run must fail, rather than pass by skipping,
+/// when the host cannot create the required user namespaces.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires a Linux host with production Bubblewrap namespace support"]
+async fn async_routed_subagent_settles_with_real_bubblewrap() {
+    let denied_write_path = std::env::current_dir().unwrap().join(format!(
+        ".mez-routed-bubblewrap-write-{}",
+        std::process::id()
+    ));
+    std::fs::write(&denied_write_path, b"host write preflight").unwrap();
+    std::fs::remove_file(&denied_write_path).unwrap();
+    let quoted_path = format!(
+        "'{}'",
+        denied_write_path.to_string_lossy().replace('\'', "'\"'\"'")
+    );
+    let payload = format!(
+        "if : > {quoted_path}; then rm -f {quoted_path}; printf '%s%s\\n' 'ROUTED_SANDBOX_' 'ESCAPE'; exit 97; fi; printf '%s%s\\n' 'ROUTED_SANDBOX_' 'ACTION'"
+    );
+    let command = format!("sh -c '{}'", payload.replace('\'', "'\"'\"'"));
+    let effects = mez_agent::permissions::classify_shell_command(&command, None).unwrap();
+    assert_eq!(effects.len(), 1);
+    assert!(effects[0].unknown);
+    assert!(effects[0].writes.is_empty());
+    assert!(effects[0].creates.is_empty());
+    let bubblewrap_executable = assert_real_bubblewrap_profile_is_available();
+    assert_routed_subagent_settles_after_in_place_selection(
+        &bubblewrap_executable,
+        &command,
+        "ROUTED_SANDBOX_ACTION",
+    )
+    .await;
+    assert!(
+        !denied_write_path.exists(),
+        "the real Bubblewrap action must not create a host project file"
+    );
+}
+
+/// Runs the shared async in-place routing sequence for one Bubblewrap
+/// executable after the owning test has established what that executable
+/// proves.
+///
+/// The same turn must first reach the router model, apply its selection once,
+/// redispatch through the actor/provider-service boundary to the selected
+/// model, execute a sandboxed shell action, redispatch after pane settlement,
+/// and finally settle visible output. The four HTTP request models make a
+/// lost redispatch or accidental second routing pass fail at its exact
+/// boundary rather than passing through queue-state inspection alone.
+#[cfg(unix)]
+async fn assert_routed_subagent_settles_after_in_place_selection(
+    bubblewrap_executable: &Path,
+    sandbox_command: &str,
+    sandbox_output: &str,
+) {
+    assert!(
+        !sandbox_command.contains(sandbox_output),
+        "the expected shell output must not appear literally in action history"
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let bubblewrap_executable = bubblewrap_executable.to_string_lossy();
+    let sandbox_command = sandbox_command.to_string();
+    let project_root = std::env::current_dir()
+        .unwrap()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let server_requests = requests.clone();
+    let server = tokio::spawn(async move {
+        for (request_index, expected_model) in [
+            "router-model",
+            "selected-model",
+            "selected-model",
+            "selected-model",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = async_provider_concurrency_read_http_request(&mut stream).await;
+            assert!(
+                request.contains(&format!(r#""model":"{expected_model}""#)),
+                "unexpected routed provider request: {request}"
+            );
+            server_requests.lock().unwrap().push(request);
+            if request_index == 0 {
+                async_provider_concurrency_write_chat_content_response(
+                    &mut stream,
+                    expected_model,
+                    r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":0.99,"rationale":"routed subagent needs the selected model"}"#,
+                )
+                .await;
+            } else if request_index == 1 {
+                let content = serde_json::json!({
+                    "rationale": "request the sandbox action surface",
+                    "thought": null,
+                    "actions": [{
+                        "type": "request_capability",
+                        "capability": "shell",
+                        "reason": "Run the routed sandbox marker command."
+                    }]
+                })
+                .to_string();
+                async_provider_concurrency_write_chat_content_response(
+                    &mut stream,
+                    expected_model,
+                    &content,
+                )
+                .await;
+            } else if request_index == 2 {
+                let content = serde_json::json!({
+                    "rationale": "exercise the routed subagent sandbox",
+                    "thought": null,
+                    "actions": [{
+                        "type": "shell_command",
+                        "summary": "Print the routed sandbox marker.",
+                        "command": sandbox_command
+                    }]
+                })
+                .to_string();
+                async_provider_concurrency_write_chat_content_response(
+                    &mut stream,
+                    expected_model,
+                    &content,
+                )
+                .await;
+            } else {
+                let content = serde_json::json!({
+                    "rationale": "complete the routed subagent turn",
+                    "thought": null,
+                    "actions": [{
+                        "type": "say",
+                        "status": "final",
+                        "content_type": "text/plain; charset=utf-8",
+                        "text": "Routed subagent completed."
+                    }]
+                })
+                .to_string();
+                async_provider_concurrency_write_chat_content_response(
+                    &mut stream,
+                    expected_model,
+                    &content,
+                )
+                .await;
+            }
+        }
+    });
+
+    let mut service = test_service_with_event_log();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                r#"
+[agents]
+default_provider = "local-routing"
+default_model_profile = "default"
+routing = true
+max_concurrent_agents = 4
+
+[agents.auto_sizing]
+router_model_profile = "router"
+small_model_profile = "small"
+medium_model_profile = "medium"
+large_model_profile = "large"
+allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
+fallback_policy = "use-default-profile"
+
+[providers.local-routing]
+kind = "openai-compatible"
+base_url = "http://{address}/v1"
+models = ["router-model", "small-model", "medium-model", "selected-model"]
+default_model = "medium-model"
+
+[providers.local-routing.options]
+maap_output = "structured_json"
+structured_output = "json_schema"
+
+[model_profiles.default]
+provider = "local-routing"
+model = "medium-model"
+reasoning_profile = "medium"
+
+[model_profiles.router]
+provider = "local-routing"
+model = "router-model"
+reasoning_profile = "low"
+
+[model_profiles.small]
+provider = "local-routing"
+model = "small-model"
+reasoning_profile = "medium"
+
+[model_profiles.medium]
+provider = "local-routing"
+model = "medium-model"
+reasoning_profile = "medium"
+
+[model_profiles.large]
+provider = "local-routing"
+model = "selected-model"
+reasoning_profile = "high"
+
+[permissions]
+sandbox = "bubblewrap"
+read_scopes = ["{project_root}"]
+write_scopes = []
+
+[permissions.bubblewrap]
+executable = "{bubblewrap_executable}"
+"#
+            ),
+        }])
+        .unwrap();
+    let auth_root = std::env::temp_dir().join(format!(
+        "mez-async-routed-subagent-auth-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&auth_root);
+    service.set_auth_store(crate::security::auth::AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 20)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", mez_agent::AgentLogLevel::Verbose)
+        .unwrap();
+    service.permission_policy_mut().set_approval_bypass(true);
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "worker".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::OwnedWrite,
+                cooperation_mode_defaulted: false,
+                read_scopes: vec![project_root],
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                task_prompt: "finish this routed subagent task".to_string(),
+                explicit_user_approval: true,
+                skip_initial_turn: false,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: false,
+            },
+        )
+        .unwrap();
+    let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
+    let child_agent_id = spawned["agent"]["id"]
+        .as_str()
+        .expect("spawned child agent id")
+        .to_string();
+    let child_pane_id = spawned["pane"]["pane_id"]
+        .as_str()
+        .expect("spawned child pane id")
+        .to_string();
+    let child_turn_id = spawned["turn"]["id"]
+        .as_str()
+        .expect("spawned child turn id")
+        .to_string();
+    assert_ne!(child_pane_id, "%1");
+    assert_eq!(child_agent_id, format!("agent-{child_pane_id}"));
+    service
+        .agent_shell_store_mut()
+        .set_log_level(&child_pane_id, mez_agent::AgentLogLevel::Verbose)
+        .unwrap();
+    let pending = service.pending_agent_provider_tasks();
+    assert_eq!(pending.len(), 1, "{pending:?}");
+    assert_eq!(pending[0].agent_id, child_agent_id);
+    assert_eq!(pending[0].pane_id, child_pane_id);
+    assert_eq!(pending[0].turn_id, child_turn_id);
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let workers_done = StdArc::new(AtomicBool::new(false));
+    let provider_handle = handle.clone();
+    let provider_stop = StdArc::clone(&workers_done);
+    let (provider_stopped_tx, provider_stopped_rx) = tokio::sync::oneshot::channel();
+    let provider = async move {
+        let report = run_async_agent_provider_service(
+            &provider_handle,
+            AsyncAgentProviderServiceConfig::new(1)
+                .unwrap()
+                .with_idle_interval(Duration::from_millis(5))
+                .unwrap(),
+            move |_, state| {
+                provider_stop.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await
+        .unwrap();
+        let _ = provider_stopped_tx.send(());
+        report
+    };
+    let pane_worker_handle = handle.clone();
+    let pane_worker_stop = StdArc::clone(&workers_done);
+    let (pane_worker_stopped_tx, pane_worker_stopped_rx) = tokio::sync::oneshot::channel();
+    let pane_worker = async move {
+        let report = run_async_pane_process_supervisor_service(
+            pane_worker_handle,
+            AsyncPaneProcessSupervisorServiceConfig {
+                max_polls: u64::MAX,
+                take_limit: 8,
+                idle_interval: Duration::from_millis(1),
+                pane_service: AsyncPaneProcessServiceConfig {
+                    max_polls: u64::MAX,
+                    output_drain_limit: 1,
+                    drain_limit: 8,
+                    idle_interval: Duration::from_millis(1),
+                    foreground_metadata_interval: Duration::from_secs(60),
+                },
+            },
+            move |_, state| {
+                pane_worker_stop.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await
+        .unwrap();
+        let _ = pane_worker_stopped_tx.send(());
+        report
+    };
+    let client_handle = handle.clone();
+    let client_child_agent_id = child_agent_id.clone();
+    let client_child_turn_id = child_turn_id.clone();
+    let client = async move {
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        let queued = client_handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id: AgentId::opaque(client_child_agent_id).unwrap(),
+                turn_id: client_child_turn_id.clone(),
+            }])
+            .await
+            .unwrap();
+        assert_eq!(queued, 1);
+        for _ in 0..1_000 {
+            if !client_handle
+                .agent_turn_is_running(&client_child_turn_id)
+                .await
+                .unwrap()
+            {
+                workers_done.store(true, Ordering::SeqCst);
+                provider_stopped_rx
+                    .await
+                    .expect("provider worker should stop after routed turn settlement");
+                pane_worker_stopped_rx
+                    .await
+                    .expect("pane worker should stop after routed turn settlement");
+                return client_handle.shutdown().await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("routed sandbox continuation did not settle");
+    };
+
+    let (report, lifecycle_before_actor_exit, supervisor_report, mut exit) =
+        tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::join!(provider, client, pane_worker, actor.run())
+        })
+        .await
+        .expect("routed sandbox provider sequence should not stall");
+    let requests_snapshot = requests.lock().unwrap().clone();
+    let pane_text = exit
+        .service
+        .pane_screen(&child_pane_id)
+        .map(|screen| screen.normal_content_lines().join("\n"))
+        .unwrap_or_else(|| "<pane unavailable>".to_string());
+    let retained_events = exit
+        .service
+        .event_log()
+        .map(|event_log| event_log.replay_for(&EventAudience::Primary))
+        .unwrap_or_default();
+    let failed_execution = exit
+        .service
+        .agent_turn_executions()
+        .get(&child_turn_id)
+        .map(|execution| execution.response.raw_text.clone());
+    assert_eq!(
+        lifecycle_before_actor_exit,
+        RuntimeLifecycleState::Running,
+        "report={report:?} supervisor={supervisor_report:?} requests={requests_snapshot:#?} turns={:#?} pane={pane_text} events={retained_events:#?} failed_execution={failed_execution:#?}",
+        exit.service.agent_turn_ledger().turns()
+    );
+    assert_eq!(
+        report.executions,
+        2,
+        "report={report:?} supervisor={supervisor_report:?} requests={requests_snapshot:#?} turns={:#?} pane={pane_text} events={retained_events:#?} failed_execution={failed_execution:#?}",
+        exit.service.agent_turn_ledger().turns()
+    );
+    assert_eq!(report.terminal_state, RuntimeLifecycleState::Running);
+    assert!(supervisor_report.spawned_workers >= 1);
+    assert_eq!(
+        supervisor_report.terminal_state,
+        RuntimeLifecycleState::Running
+    );
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(
+        requests.len(),
+        4,
+        "lifecycle={lifecycle_before_actor_exit:?} report={report:?} supervisor={supervisor_report:?} requests={requests:#?}"
+    );
+    assert!(requests[0].contains(r#""model":"router-model""#));
+    assert!(requests[1].contains(r#""model":"selected-model""#));
+    assert!(requests[2].contains(r#""model":"selected-model""#));
+    assert!(requests[3].contains(r#""model":"selected-model""#));
+    assert!(
+        !requests[2].contains(sandbox_output),
+        "the shell action request must not contain the expected output marker: {}",
+        requests[2]
+    );
+    assert!(
+        requests[3].contains(sandbox_output),
+        "the post-settlement selected-model request must contain the sandbox action output: {}",
+        requests[3]
+    );
+    assert!(
+        !requests[3].contains("ROUTED_SANDBOX_ESCAPE"),
+        "the real Bubblewrap action must not report a successful write through the read-only mount: {}",
+        requests[3]
+    );
+    assert_eq!(
+        exit.service.runtime_metrics().shell_actions_dispatched,
+        1,
+        "the routed sandbox action must reach pane dispatch exactly once"
+    );
+    assert!(
+        exit.service.runtime_metrics().shell_transactions_succeeded >= 1,
+        "the routed sandbox action must settle successfully through the pane"
+    );
+    assert_eq!(
+        exit.service.runtime_metrics().shell_transactions_failed,
+        0,
+        "the routed sandbox sequence must not hide a failed shell transaction"
+    );
+    assert!(exit.service.pending_agent_provider_tasks().is_empty());
+    assert!(!exit.service.agent_turn_is_running(&child_turn_id));
+    assert_eq!(exit.service.agent_scheduler().snapshot().running, 0);
+    let turn = exit
+        .service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == child_turn_id)
+        .expect("routed subagent turn should remain in the ledger");
+    assert_eq!(turn.agent_id, child_agent_id);
+    assert_eq!(turn.pane_id, child_pane_id);
+    assert_eq!(turn.state, mez_agent::AgentTurnState::Completed);
+    let trace = exit
+        .service
+        .agent_pane_trace_log_text(&child_pane_id)
+        .expect("routed subagent trace should survive terminal pane cleanup");
+    assert_eq!(
+        trace
+            .matches(
+                "routing selected policy: in place, provider: local-routing, model: selected-model",
+            )
+            .count(),
+        1,
+        "{trace}"
+    );
+    let message_state = exit.service.message_service().snapshot_state();
+    let terminal_result = message_state
+        .accepted_messages
+        .iter()
+        .find(|message| {
+            message.envelope.id == format!("{child_turn_id}:task_result:final")
+                && message.envelope.message_type == "task_result"
+        })
+        .expect("terminal subagent output should remain durable after child-pane cleanup");
+    let terminal_payload =
+        serde_json::from_str::<serde_json::Value>(&terminal_result.envelope.payload).unwrap();
+    assert_eq!(terminal_payload["task_id"], child_turn_id);
+    assert_eq!(terminal_payload["success"], true);
+    assert!(
+        terminal_payload["output"]
+            .as_str()
+            .is_some_and(|output| output.contains("Routed subagent completed.")),
+        "{terminal_payload}"
+    );
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(auth_root);
+}

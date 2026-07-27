@@ -54,7 +54,10 @@ async fn async_actor_drains_render_side_effects_without_stealing_provider_dispat
         }));
         let report = handle.submit_runtime_events(batch).await.unwrap();
         assert_eq!(report.accepted, 2);
-        assert_eq!(report.applied, 2);
+        assert_eq!(
+            report.applied, 1,
+            "pane output must publish the provider dispatch before the later poll timer is deduplicated"
+        );
         assert_eq!(report.side_effects, 3);
 
         let render_effects = handle.drain_render_side_effects(8).await.unwrap();

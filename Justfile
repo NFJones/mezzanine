@@ -34,6 +34,11 @@ clippy:
 test:
     cargo test --workspace --all-targets --all-features --no-fail-fast --quiet
 
+# Run the strict routed lifecycle acceptance with genuine Bubblewrap confinement
+test-real-bubblewrap:
+    test "$(uname -s)" = Linux
+    timeout 120s cargo test -p mezzanine --lib --all-features --quiet -- --exact host::async_runtime::tests::services::providers::async_routed_subagent_settles_with_real_bubblewrap --ignored --nocapture
+
 # Clean build artifacts
 clean:
     cargo clean

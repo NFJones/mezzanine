@@ -223,6 +223,9 @@ impl AsyncRuntimeSessionActor {
                             &pane_id_for_pipe_health,
                         )?,
                     );
+                    transition
+                        .side_effects
+                        .extend(self.pending_provider_dispatch_side_effects()?);
                 }
                 Ok(transition)
             }

@@ -116,6 +116,13 @@ impl RuntimeSessionService {
                             else {
                                 continue;
                             };
+                            if self.pane_bootstrap_has_bounded_progress_owner(&turn.pane_id) {
+                                self.clear_pending_shell_dispatch_blocked_recovery_attempt(
+                                    &turn.turn_id,
+                                    &action_id,
+                                );
+                                continue;
+                            }
                             let attempts = self
                                 .record_pending_shell_dispatch_blocked_recovery_attempt(
                                     &turn.turn_id,

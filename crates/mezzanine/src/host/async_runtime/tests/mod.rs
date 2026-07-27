@@ -46,10 +46,12 @@ use crate::host::terminal::AttachedTerminalClientStepPlan;
 use crate::integrations::hooks::{HookEvent, HookExecutionPlan, HookOnFailure};
 use crate::protocol::event::EventAudience;
 use crate::runtime::{
-    RuntimeLifecycleState, RuntimeSessionService, current_effective_uid, pane_environment,
+    RuntimeLifecycleState, RuntimeSessionService, RuntimeSubagentPlacement, current_effective_uid,
+    pane_environment,
 };
 use crate::storage::registry::SessionRegistry;
 use mez_agent::messaging::MessageConnection;
+use mez_agent::{CooperationMode, SubagentSpawnRequest};
 use mez_core::ids::{AgentId, ClientId, IdFactory};
 use mez_mux::presentation::{AttachedTerminalOutputModes, ClientViewRole};
 use mez_mux::process::{PaneProcessLaunch, spawn_pane_process};
@@ -71,7 +73,7 @@ use crate::host::terminal::{
 use crate::runtime::RuntimeEventConnectionTable;
 use crate::storage::transcript::AgentTranscriptStore;
 use mez_mux::input::MuxAction;
-use mez_mux::layout::Size;
+use mez_mux::layout::{Size, SplitDirection};
 use mez_mux::presentation::{ClientStatusKind, ClientStatusLine};
 use mez_mux::session::{ClientState, Session};
 use mez_terminal::TerminalStyleSpan;

@@ -510,7 +510,7 @@ use service_state::{
     RuntimeHttpMcpTransportState, RuntimeMcpRetryReport, RuntimeMcpTransportSet,
     RuntimeModelProfileOverrideScope, RuntimePathResolutionCacheKey,
     RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
-    RuntimeShellTransactionActionFailure, RuntimeSubagentPlacement,
+    RuntimeShellTransactionActionFailure,
 };
 #[cfg(test)]
 use sockets::effective_uid;
@@ -519,6 +519,7 @@ use sockets::{ensure_absolute, ensure_no_mez_separator};
 pub(crate) use service_state::{
     RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
+    RuntimeSubagentPlacement,
 };
 
 /// Exposes the tests module boundary.

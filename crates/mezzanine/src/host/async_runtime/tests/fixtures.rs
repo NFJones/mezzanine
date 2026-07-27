@@ -909,8 +909,6 @@ pub(super) async fn async_provider_concurrency_write_chat_response(
     stream: &mut tokio::net::TcpStream,
     text: &str,
 ) {
-    use tokio::io::AsyncWriteExt;
-
     let content = serde_json::json!({
         "rationale": "provider concurrency fixture completed the turn",
         "thought": null,
@@ -924,8 +922,23 @@ pub(super) async fn async_provider_concurrency_write_chat_response(
         ]
     })
     .to_string();
+    async_provider_concurrency_write_chat_content_response(stream, "local-chat-model", &content)
+        .await;
+}
+
+/// Writes raw assistant content through the local OpenAI-compatible fixture.
+///
+/// Routing tests use this lower-level form for the internal JSON sizing
+/// decision before returning an ordinary structured MAAP response.
+pub(super) async fn async_provider_concurrency_write_chat_content_response(
+    stream: &mut tokio::net::TcpStream,
+    model: &str,
+    content: &str,
+) {
+    use tokio::io::AsyncWriteExt;
+
     let body = serde_json::json!({
-        "model": "local-chat-model",
+        "model": model,
         "choices": [
             {
                 "message": {

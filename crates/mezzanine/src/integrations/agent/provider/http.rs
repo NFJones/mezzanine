@@ -60,20 +60,29 @@ pub struct ReqwestProviderHttpTransport;
 /// Provider responses are expected to be UTF-8 JSON or event-stream text.
 /// Compression adds an extra body-decoding failure path before Mezzanine can
 /// inspect provider diagnostics, so this transport explicitly avoids automatic
-/// decompression. The client also avoids reqwest's whole-request timeout
-/// because that deadline includes reading the entire model response body.
-fn provider_http_client_builder(timeout_ms: u64) -> reqwest::ClientBuilder {
+/// decompression. Plain HTTP does not need certificate roots, so disabling
+/// their discovery for that scheme keeps loopback and private plaintext
+/// providers usable on hosts without a CA bundle. HTTPS retains reqwest's
+/// verified platform-root behavior. The client also avoids reqwest's
+/// whole-request timeout because that deadline includes reading the entire
+/// model response body.
+fn provider_http_client_builder(timeout_ms: u64, scheme: &str) -> reqwest::ClientBuilder {
     let timeout = Duration::from_millis(timeout_ms);
     let connect_timeout =
         Duration::from_millis(timeout_ms.clamp(1, DEFAULT_PROVIDER_CONNECT_TIMEOUT_MS));
 
-    reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .connect_timeout(connect_timeout)
         .read_timeout(timeout)
         .no_gzip()
         .no_brotli()
         .no_deflate()
-        .no_zstd()
+        .no_zstd();
+    if scheme == "http" {
+        builder.tls_certs_only(std::iter::empty::<reqwest::Certificate>())
+    } else {
+        builder
+    }
 }
 
 /// Adds provider transport headers that keep response handling deterministic.
@@ -180,6 +189,10 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                     request.method
                 ))
             })?;
+            let url = request
+                .url
+                .parse::<reqwest::Url>()
+                .map_err(|_| ProviderHttpError::invalid_args("provider HTTP URL is invalid"))?;
             let mut headers = reqwest::header::HeaderMap::new();
             for (name, value) in &request.headers {
                 let name =
@@ -193,7 +206,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
             }
             apply_provider_transport_default_headers(&mut headers);
 
-            let client = provider_http_client_builder(request.timeout_ms)
+            let client = provider_http_client_builder(request.timeout_ms, url.scheme())
                 .build()
                 .map_err(|error| {
                     ProviderHttpError::invalid_state(format!(
@@ -201,7 +214,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                     ))
                 })?;
             let mut response = client
-                .request(method, &request.url)
+                .request(method, url)
                 .headers(headers)
                 .body(request.body.clone())
                 .send()
