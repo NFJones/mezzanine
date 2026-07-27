@@ -539,6 +539,7 @@ pub fn latest_agent_shell_transaction_output_lines(output: &str, max_lines: usiz
         if let Some((_before, tail)) = raw_output.rsplit_once("__MEZ_SHELL_OUTPUT_BASE64_END__")
             && !tail.trim().is_empty()
             && !tail.contains("__MEZ_SHELL_OUTPUT_BASE64_")
+            && !tail.contains("__MEZ_SHELL_STATUS_BASE64_")
         {
             output.push_str(tail);
         }
@@ -778,6 +779,16 @@ mod tests {
         let lines = latest_agent_shell_transaction_output_lines(output, 5);
 
         assert_eq!(lines, vec!["ASYNC_PANE_STILL_ALIVE".to_string()]);
+    }
+
+    /// Verifies Bubblewrap's private status transport after encoded command
+    /// output cannot replace the decoded command preview in hidden live mode.
+    #[test]
+    fn latest_agent_shell_transaction_output_lines_ignores_bubblewrap_status_tail() {
+        let output = "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nU0FOREJPWF9PVVRQVVRfT0sK\n__MEZ_SHELL_OUTPUT_BASE64_END__\n__MEZ_SHELL_STATUS_BASE64_BEGIN__\neyJjaGlsZC1waWQiOjQyCnsiZXhpdC1jb2RlIjowfQo=\n__MEZ_SHELL_STATUS_BASE64_END__\n";
+        let lines = latest_agent_shell_transaction_output_lines(output, 5);
+
+        assert_eq!(lines, vec!["SANDBOX_OUTPUT_OK".to_string()]);
     }
 
     /// Verifies prompt detection correctly identifies common prompt patterns.
