@@ -64,7 +64,16 @@ fn runtime_status_refresh_required_by_config(config: &TerminalClientLoopConfig) 
     let agent_status_requires_refresh = config.frame_context.panes.values().any(|pane| {
         let active = matches!(
             pane.agent_status.as_deref(),
-            Some("queued" | "running" | "thinking" | "executing" | "waiting" | "compacting")
+            Some(
+                "queued"
+                    | "running"
+                    | "thinking"
+                    | "executing"
+                    | "waiting"
+                    | "bootstrapping"
+                    | "certifying_sandbox"
+                    | "compacting"
+            )
         );
         let visible_surface = config.pane_frames_enabled
             || pane.agent_prompt.is_some()

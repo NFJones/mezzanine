@@ -409,7 +409,7 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_status_rendition(
 ) -> GraphicRendition {
     match status {
         "queued" | "running" | "remembering" | "memorizing" | "thinking" | "routing"
-        | "executing" | "waiting" | "compacting" => {
+        | "executing" | "waiting" | "bootstrapping" | "certifying_sandbox" | "compacting" => {
             ui_theme.colors.agent_status_running.rendition()
         }
         "blocked" | "waiting_approval" => ui_theme.colors.agent_status_blocked.rendition(),
@@ -431,6 +431,8 @@ pub(in crate::host::terminal::render) fn pane_frame_agent_status_is_active(statu
             | "routing"
             | "executing"
             | "waiting"
+            | "bootstrapping"
+            | "certifying_sandbox"
             | "compacting"
     )
 }

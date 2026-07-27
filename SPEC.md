@@ -9091,6 +9091,13 @@ worker iterations and handoff MUST use the pinned selected profile; parent
 presentation and failure explanation MUST use the invoking parent's ordinary
 profile.
 
+Pane-frame and prompt-footer status MUST report `routing` only while an
+auto-sizing decision has not yet been applied. A routed turn waiting on its
+one-shot environment bootstrap MUST report `bootstrapping`; after parsed
+environment evidence transfers to bounded foreground-process certification,
+it MUST report `certifying sandbox`. These post-routing states MUST NOT be
+presented as a repeated routing decision.
+
 The auto-sizing router prompt MUST include:
 
 - the user's submitted task or subagent task prompt, quoted as untrusted data;

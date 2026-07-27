@@ -1088,6 +1088,20 @@ fn runtime_routed_worker_provider_waits_for_bootstrap_before_path_resolution() {
             .map(|workflow| workflow.phase.clone()),
         Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
     );
+    let frame_context = service.terminal_frame_context();
+    let pane_context = frame_context
+        .panes
+        .get(&worker_turn.pane_id)
+        .expect("routed bootstrap pane context should exist");
+    assert_eq!(pane_context.agent_status.as_deref(), Some("bootstrapping"));
+    assert!(
+        pane_context
+            .agent_display_lines
+            .iter()
+            .any(|line| line.starts_with("bootstrapping (")
+                && line.contains(" • esc to interrupt")),
+        "{pane_context:?}"
+    );
 
     let (bootstrap_marker, bootstrap_turn_id) = service
         .running_shell_transactions_for_tests()
@@ -1257,6 +1271,24 @@ bootstrap\tcomplete\t1714500000\n",
             0,
         )
         .unwrap();
+    assert!(service.pane_agent_subshell_certification_is_pending(&worker_turn.pane_id));
+    let frame_context = service.terminal_frame_context();
+    let pane_context = frame_context
+        .panes
+        .get(&worker_turn.pane_id)
+        .expect("routed certification pane context should exist");
+    assert_eq!(
+        pane_context.agent_status.as_deref(),
+        Some("certifying_sandbox")
+    );
+    assert!(
+        pane_context
+            .agent_display_lines
+            .iter()
+            .any(|line| line.starts_with("certifying sandbox (")
+                && line.contains(" • esc to interrupt")),
+        "{pane_context:?}"
+    );
 
     let certification_timer = service
         .running_shell_transaction_timers()

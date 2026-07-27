@@ -671,6 +671,8 @@ impl RuntimeSessionService {
             "waiting" => "waiting",
             "compacting" => "compacting",
             "routing" => "routing",
+            "bootstrapping" => "bootstrapping",
+            "certifying_sandbox" => "certifying sandbox",
             "running" => "running",
             "waiting_approval" => "waiting approval",
             "completed" => "completed",
@@ -1018,6 +1020,8 @@ impl RuntimeSessionService {
                         | "thinking"
                         | "executing"
                         | "waiting"
+                        | "bootstrapping"
+                        | "certifying_sandbox"
                         | "compacting"
                 )
             })
@@ -1411,6 +1415,12 @@ impl RuntimeSessionService {
             return "routing";
         }
         if self.agent_provider_task_is_owned(&turn.turn_id) {
+            if self.pane_agent_subshell_certification_is_pending(&turn.pane_id) {
+                return "certifying_sandbox";
+            }
+            if self.pane_bootstrap_is_pending(&turn.pane_id) {
+                return "bootstrapping";
+            }
             return "thinking";
         }
         "running"
@@ -1418,6 +1428,9 @@ impl RuntimeSessionService {
     /// Returns whether a running turn is still in the auto-sizing router phase.
     fn runtime_agent_turn_is_auto_sizing_routing(&self, turn: &AgentTurnRecord) -> bool {
         if !self.agent_routing_enabled_for_pane(&turn.pane_id) {
+            return false;
+        }
+        if self.agent_turn_routing_applied(&turn.turn_id) {
             return false;
         }
         if self.agent_turn_executions().contains_key(&turn.turn_id) {

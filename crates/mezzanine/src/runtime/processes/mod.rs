@@ -478,6 +478,14 @@ impl RuntimeSessionService {
                 })
     }
 
+    /// Reports whether one pane is awaiting correlated foreground-process
+    /// certification for parsed bootstrap evidence.
+    pub(crate) fn pane_agent_subshell_certification_is_pending(&self, pane_id: &str) -> bool {
+        self.process
+            .pending_agent_subshell_certifications
+            .contains_key(pane_id)
+    }
+
     /// Returns marker and pane pairs for every live transaction in one turn.
     pub(crate) fn running_shell_transaction_targets_for_turn(
         &self,
