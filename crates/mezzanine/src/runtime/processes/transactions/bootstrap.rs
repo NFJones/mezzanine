@@ -261,6 +261,7 @@ impl RuntimeSessionService {
             .iter()
             .filter(|(k, v)| {
                 self.process.pane_bootstrap_pending.contains(k.as_str())
+                    && !self.pane_agent_subshell_certification_is_pending(k.as_str())
                     && !self
                         .process
                         .running_shell_transactions

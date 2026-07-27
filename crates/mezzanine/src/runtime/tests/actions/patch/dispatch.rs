@@ -814,6 +814,19 @@ fn runtime_agent_subshell_bootstrap_waits_for_correlated_worker_observation() {
             .any(|timer| timer.marker == certification_timer_owner)
     );
 
+    fixture
+        .service
+        .set_pane_readiness("%1", PaneReadinessState::Ready);
+    assert_eq!(fixture.service.maybe_bootstrap_ready_panes().unwrap(), 0);
+    assert!(fixture.service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(
+        fixture
+            .service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap)
+    );
+
     let stale = fixture
         .service
         .apply_pane_foreground_process_observation_transition(

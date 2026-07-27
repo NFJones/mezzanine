@@ -194,12 +194,20 @@ impl AsyncRuntimeSessionActor {
                         Box::pin(self.apply_runtime_event(RuntimeEvent::Process(process_event)))
                             .await
                     }
-                    PaneProcessEvent::ForegroundProcessObservation(observation) => self
-                        .service
-                        .apply_pane_foreground_process_observation_transition(
-                            instance,
-                            observation,
-                        ),
+                    PaneProcessEvent::ForegroundProcessObservation(observation) => {
+                        let mut transition = self
+                            .service
+                            .apply_pane_foreground_process_observation_transition(
+                                instance,
+                                observation,
+                            )?;
+                        if transition.applied {
+                            transition
+                                .side_effects
+                                .extend(self.pending_provider_dispatch_side_effects()?);
+                        }
+                        Ok(transition)
+                    }
                 }
             }
             RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }) => {
