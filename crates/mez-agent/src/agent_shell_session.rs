@@ -838,7 +838,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
             "inspect or change pane-subtree approval mode; inherit clears the pane override; host-access means no prompts and host execution outside the configured sandbox."
         }
         "approve" => "approve a pending pane-local agent action.",
-        "trust" => "inspect or decide pending project trust requests.",
+        "trust" => {
+            "trust an explicit project root or inspect and decide pending project trust requests."
+        }
         "list-macros" => "list available macros and their #macro prompt names.",
         "list-sessions" => "list resumable saved agent conversations.",
         "list-skills" => "list available skills and their $skill prompt names.",

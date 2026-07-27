@@ -1200,6 +1200,52 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies `/trust` accepts a relative nested file path for a project without
+/// a pending overlay and persists trust for the canonical Git root.
+///
+/// This regression protects explicit project trust from regressing to the
+/// pending-request-only behavior while ensuring relative paths use the active
+/// pane directory rather than the Mez process working directory.
+#[test]
+fn runtime_agent_trust_command_trusts_explicit_relative_project_path() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("runtime-agent-explicit-trust-command");
+    let nested = root.join("workspace/src");
+    fs::create_dir_all(root.join(".git")).unwrap();
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("main.rs"), "fn main() {}\n").unwrap();
+    let trust_path = root.join("trust.tsv");
+    service.set_project_trust_store(ProjectTrustStore::default(), Some(trust_path.clone()));
+    service.set_pane_current_working_directory("%1".to_string(), nested.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let trust = service
+        .execute_agent_shell_command(&primary, "/trust main.rs")
+        .unwrap();
+
+    assert!(trust.contains(r#""kind":"mutated""#), "{trust}");
+    assert!(trust.contains("project trust granted"), "{trust}");
+    assert!(trust.contains("overlays=0"), "{trust}");
+    assert_eq!(
+        service
+            .project_trust_store()
+            .unwrap()
+            .get(&root)
+            .unwrap()
+            .state,
+        TrustDecision::Trusted
+    );
+    let persisted = ProjectTrustStore::load_from_file(&trust_path).unwrap();
+    assert_eq!(persisted.get(&root).unwrap().state, TrustDecision::Trusted);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that clickable pane-frame agent status pills cover live toggles
 /// beyond model selection. Automatic reasoning should apply immediately like a
 /// button, while approval policy should open the same selector flow used by

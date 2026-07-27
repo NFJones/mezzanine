@@ -2901,6 +2901,12 @@ mounts, the synthetic home, the minimal executable path, enforced shell network
 policy, and hidden host credentials. Diagnostics MUST NOT expose raw Bubblewrap
 arguments, environment values, or unrelated host paths.
 
+Live Bubblewrap preparation, path-resolution, capability-probe, and lifecycle
+failures MUST provide a concise direct-user remediation that points to
+`mez sandbox status --verbose` for structured executable, authority, and
+configuration diagnostics. The remediation MUST NOT suggest automatic
+authority broadening or host fallback.
+
 `mez sandbox status [PATH] [--verbose]` MUST build one deterministic, read-only
 workflow projection containing configured and effective sandbox boundaries,
 approval policy, canonical project-root discovery and source, trust state, scope
@@ -6163,9 +6169,10 @@ The baseline command capabilities are:
 - `/approve`: Approve a pending pane-local agent action. It MUST accept an
   approval id, `latest`, or the only pending approval for the active pane, and
   it MUST support `once`, `session`, `project`, and `global` approval scopes.
-- `/trust`: Trust a pending project overlay root. It MUST accept a project root,
-  `latest`, or the only pending project trust request for the live session, and
-  it MUST provide a list view for pending project trust requests.
+- `/trust`: Trust an explicit project root or a pending project overlay root. It
+  MUST resolve explicit relative paths from the active pane working directory,
+  accept `latest` or the only pending project trust request for the live session,
+  and provide a list view for pending project trust requests.
 - `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
   active pane. It MUST accept no argument or `status`, `list`,
   `detect [rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]`, `enable KIND --yes`, `disable KIND

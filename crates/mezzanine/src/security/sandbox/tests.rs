@@ -182,6 +182,16 @@ fn bubblewrap_status_parser_validates_payload_execution_evidence() {
     assert!(parse_bubblewrap_status("not-json\n").is_err());
 }
 
+/// Live Bubblewrap failures provide one concise, authority-preserving command
+/// that expands into the existing structured sandbox diagnostics and remedies.
+#[test]
+fn bubblewrap_failure_remediation_points_to_verbose_status() {
+    assert_eq!(
+        bubblewrap_failure_remediation("Bubblewrap probe failed."),
+        "Bubblewrap probe failed. Run `mez sandbox status --verbose` to inspect the executable, authority, and configuration remedies."
+    );
+}
+
 /// Unknown effects retain configured maximum authority without exposing host
 /// root, host networking, IPC sockets, or inherited environment variables.
 #[test]

@@ -1342,7 +1342,17 @@ impl RuntimeSessionService {
         self.append_sandbox_fallback_result_audit(&turn.turn_id, &action.id, "failed")?;
         self.clear_sandbox_bypass_for_action(&turn.turn_id, &action.id);
         let error_kind = runtime_mezzanine_error_code(error.kind());
-        let error_message = format!("{stage}: {}", error.message());
+        let failure_message = if stage.starts_with("bubblewrap_")
+            || (stage == "shell_dispatch"
+                && matches!(
+                    self.configured_permissions().sandbox,
+                    SandboxConfig::Bubblewrap(_)
+                )) {
+            crate::security::sandbox::bubblewrap_failure_remediation(error.message())
+        } else {
+            error.message().to_string()
+        };
+        let error_message = format!("{stage}: {failure_message}");
         let mut result = ActionResult::failed(
             turn,
             action,
@@ -1367,7 +1377,7 @@ impl RuntimeSessionService {
                 "command": runtime_agent_context_command(action, command),
                 "error": {
                     "kind": error_kind,
-                    "message": error.message()
+                    "message": failure_message
                 }
             }),
         ));
@@ -1375,7 +1385,7 @@ impl RuntimeSessionService {
             &turn.pane_id,
             &format!(
                 "agent: shell command failed before execution: {}",
-                error.message()
+                failure_message
             ),
         );
         let _ = self.append_agent_trace_turn_event(

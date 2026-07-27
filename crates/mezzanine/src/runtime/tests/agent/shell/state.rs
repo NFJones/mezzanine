@@ -1639,6 +1639,7 @@ fn runtime_bubblewrap_probe_failure_settles_all_waiters() {
     assert!(trace.contains(&action_id), "{trace}");
     assert!(trace.contains("second-waiter"), "{trace}");
     assert!(trace.contains("bubblewrap_probe_failed"), "{trace}");
+    assert!(trace.contains("mez sandbox status --verbose"), "{trace}");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1795,6 +1796,7 @@ fn runtime_bubblewrap_probe_nonzero_exit_retains_typed_evidence() {
     assert!(trace.contains("\"combined_output_bytes\": 40"), "{trace}");
     assert!(trace.contains("bwrap: namespace denied"), "{trace}");
     assert!(trace.contains("\\\\u{1b}"), "{trace}");
+    assert!(trace.contains("mez sandbox status --verbose"), "{trace}");
     assert!(service.bubblewrap_capability(&cache_key).is_none());
     fs::remove_dir_all(root).unwrap();
 }

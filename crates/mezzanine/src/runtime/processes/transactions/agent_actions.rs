@@ -286,6 +286,9 @@ impl RuntimeSessionService {
                     )? {
                         return Ok(1);
                     }
+                    let message = crate::security::sandbox::bubblewrap_failure_remediation(
+                        "Bubblewrap failed before payload execution",
+                    );
                     return self.fail_running_shell_transaction_action(
                         &transaction_ref,
                         marker,
@@ -293,7 +296,7 @@ impl RuntimeSessionService {
                             action_id: action_id.clone(),
                             status: ActionStatus::Failed,
                             code: "bubblewrap_pre_payload_failure".to_string(),
-                            message: "Bubblewrap failed before payload execution".to_string(),
+                            message,
                             sent_to_pane: true,
                             terminal_observation: serde_json::json!({
                                 "source": "bubblewrap_status",
@@ -307,6 +310,9 @@ impl RuntimeSessionService {
                     );
                 }
                 Ok(status) if status.exit_code != Some(exit_code) => {
+                    let message = crate::security::sandbox::bubblewrap_failure_remediation(
+                        "Bubblewrap status exit code contradicts the shell transaction",
+                    );
                     return self.fail_running_shell_transaction_action(
                         &transaction_ref,
                         marker,
@@ -314,9 +320,7 @@ impl RuntimeSessionService {
                             action_id: action_id.clone(),
                             status: ActionStatus::Failed,
                             code: "bubblewrap_status_mismatch".to_string(),
-                            message:
-                                "Bubblewrap status exit code contradicts the shell transaction"
-                                    .to_string(),
+                            message,
                             sent_to_pane: true,
                             terminal_observation: serde_json::json!({
                                 "source": "bubblewrap_status",
@@ -330,6 +334,9 @@ impl RuntimeSessionService {
                     );
                 }
                 Err(message) => {
+                    let failure_message = crate::security::sandbox::bubblewrap_failure_remediation(
+                        &format!("Bubblewrap status was invalid: {message}"),
+                    );
                     return self.fail_running_shell_transaction_action(
                         &transaction_ref,
                         marker,
@@ -337,7 +344,7 @@ impl RuntimeSessionService {
                             action_id: action_id.clone(),
                             status: ActionStatus::Failed,
                             code: "bubblewrap_status_invalid".to_string(),
-                            message: format!("Bubblewrap status was invalid: {message}"),
+                            message: failure_message,
                             sent_to_pane: true,
                             terminal_observation: serde_json::json!({
                                 "source": "bubblewrap_status",

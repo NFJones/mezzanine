@@ -250,6 +250,7 @@ impl RuntimeSessionService {
         message: &str,
     ) -> Result<usize> {
         let timed_out = status == ActionStatus::TimedOut;
+        let message = crate::security::sandbox::bubblewrap_failure_remediation(message);
         let terminal_observation = serde_json::json!({
             "source": "pty",
             "stream": "pty_combined",
@@ -277,7 +278,7 @@ impl RuntimeSessionService {
                     action_id,
                     status,
                     code: code.to_string(),
-                    message: message.to_string(),
+                    message: message.clone(),
                     sent_to_pane: false,
                     terminal_observation: terminal_observation.clone(),
                     trace_reason: code.to_string(),

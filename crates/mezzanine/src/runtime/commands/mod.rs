@@ -81,10 +81,10 @@ mod toolchain;
 pub(crate) use issues::{runtime_issue_database_path, runtime_issues_enabled};
 
 use approval::{
-    AgentProjectTrustRequest, agent_approval_summary_preview, agent_approve_control_error_message,
-    agent_approve_pending_display, agent_path_preview, agent_project_trust_log_line,
-    agent_project_trust_pending_display, agent_select_project_trust_request,
-    parse_agent_approve_selection,
+    AgentProjectTrustRequest, AgentProjectTrustTarget, agent_approval_summary_preview,
+    agent_approve_control_error_message, agent_approve_pending_display, agent_path_preview,
+    agent_project_trust_log_line, agent_project_trust_pending_display,
+    agent_resolve_project_trust_target, parse_agent_approve_selection,
 };
 #[cfg(test)]
 use compaction::{
@@ -436,7 +436,7 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Executes `/trust` by trusting a pending project overlay root.
+    /// Executes `/trust` by trusting a pending request or explicit project root.
     ///
     /// Trust decisions reuse the runtime `project/trust/decide` path so the
     /// trust database, config-layer reload, lifecycle events, and audit records
@@ -467,8 +467,18 @@ impl RuntimeSessionService {
                 body: agent_project_trust_pending_display(&pending),
             });
         }
-        let selection = agent_select_project_trust_request(args, &pending)?;
-        let root = selection.project_root;
+        let pane_current_working_directory = self.pane_current_working_directory(pane_id);
+        let selection = agent_resolve_project_trust_target(
+            args,
+            &pending,
+            pane_current_working_directory.as_deref(),
+        )?;
+        let (root, overlays) = match selection {
+            AgentProjectTrustTarget::Pending(request) => {
+                (request.project_root, request.overlay_files.len())
+            }
+            AgentProjectTrustTarget::Explicit(root) => (root, 0),
+        };
         let root_text = root.to_string_lossy().to_string();
         let idempotency_key = format!(
             "agent-trust-{}-{}",
@@ -496,7 +506,7 @@ impl RuntimeSessionService {
                 agent_path_preview(&root),
                 self.integration.project_trust_database_path().is_some(),
                 agent_approval_summary_preview(&persistence_path),
-                selection.overlay_files.len()
+                overlays
             ),
             visibility,
         })

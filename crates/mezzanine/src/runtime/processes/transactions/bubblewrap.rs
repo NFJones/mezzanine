@@ -498,6 +498,8 @@ impl RuntimeSessionService {
         for (turn_id, action_ids) in waiters_by_turn {
             let mut waiter_transaction = transaction.clone();
             waiter_transaction.turn_id = turn_id;
+            let message =
+                crate::security::sandbox::bubblewrap_failure_remediation(evidence.message);
             let failures = action_ids
                 .into_iter()
                 .map(|action_id| RuntimeShellTransactionActionFailure {
@@ -508,7 +510,7 @@ impl RuntimeSessionService {
                         ActionStatus::Failed
                     },
                     code: evidence.code.to_string(),
-                    message: evidence.message.to_string(),
+                    message: message.clone(),
                     sent_to_pane: false,
                     terminal_observation: terminal_observation.clone(),
                     trace_reason: evidence.code.to_string(),

@@ -111,6 +111,18 @@ pub(crate) const BUBBLEWRAP_RESTRICTION_IDS: [&str; 5] = [
     "host-credentials-hidden",
 ];
 
+/// Adds the direct-user sandbox diagnostic command to one concise live error.
+///
+/// Runtime failures use this shared wording so pane, transcript, and model
+/// consumers receive an actionable next step without exposing launch argv or
+/// suggesting that sandbox authority be broadened.
+pub(crate) fn bubblewrap_failure_remediation(message: &str) -> String {
+    format!(
+        "{}. Run `mez sandbox status --verbose` to inspect the executable, authority, and configuration remedies.",
+        message.trim().trim_end_matches('.')
+    )
+}
+
 /// Inputs required to compile one authorized command into a launch plan.
 #[derive(Debug, Clone)]
 pub(crate) struct BubblewrapCompileRequest<'a> {

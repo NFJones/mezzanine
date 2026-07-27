@@ -736,7 +736,10 @@ it in provider requests. The discovery filenames are configurable under
 
 Project overlays are discovered from the project root and remain pending until
 the primary client trusts or rejects them. Use `mez config trust list` to see
-records and `mez config trust trust PATH` to trust a root.
+records and `mez config trust trust PATH` to trust a root. In the pane-local
+agent shell, `/trust PATH` trusts an explicit project root (with relative paths
+resolved from the active pane), while `/trust`, `/trust latest`, and `/trust
+list` manage pending requests.
 
 ### What happens when a command needs approval?
 

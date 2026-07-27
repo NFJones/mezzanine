@@ -5,9 +5,8 @@
 //! parent runtime command module while isolating the approval-selection and
 //! project-trust formatting rules shared by those execution paths.
 
-use super::super::{
-    BlockedApprovalRequest, MezError, Path, PathBuf, Result, Value, discover_project_root,
-};
+use super::super::{BlockedApprovalRequest, MezError, Path, PathBuf, Result, Value};
+use crate::security::project::{ProjectRootInputSource, discover_project_root_with_metadata};
 
 /// Carries Agent Approve Scope state for this subsystem.
 ///
@@ -306,15 +305,28 @@ pub(super) fn agent_project_trust_pending_display(pending: &[AgentProjectTrustRe
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_select_project_trust_request(
+pub(super) enum AgentProjectTrustTarget {
+    /// Selects a pending request so the command can retain its overlay metadata.
+    Pending(AgentProjectTrustRequest),
+    /// Selects an explicit canonical project root with no pending-request metadata.
+    Explicit(PathBuf),
+}
+
+/// Resolves one `/trust` argument to either pending work or an explicit project root.
+///
+/// Empty input and `latest` intentionally remain pending-only shortcuts. Explicit
+/// paths are resolved relative to the active pane directory before strict project
+/// discovery canonicalizes them to a Git root or directory fallback.
+pub(super) fn agent_resolve_project_trust_target(
     args: &str,
     pending: &[AgentProjectTrustRequest],
-) -> Result<AgentProjectTrustRequest> {
+    pane_current_working_directory: Option<&Path>,
+) -> Result<AgentProjectTrustTarget> {
     let args = args.trim();
     match args {
         "" => match pending {
             [] => Err(MezError::invalid_args("no pending project trust requests")),
-            [request] => Ok(request.clone()),
+            [request] => Ok(AgentProjectTrustTarget::Pending(request.clone())),
             _ => Err(MezError::invalid_args(format!(
                 "multiple pending project trust requests; use /trust <project-root>\n{}",
                 agent_project_trust_pending_display(pending)
@@ -323,22 +335,35 @@ pub(super) fn agent_select_project_trust_request(
         "latest" => pending
             .last()
             .cloned()
+            .map(AgentProjectTrustTarget::Pending)
             .ok_or_else(|| MezError::invalid_args("no pending project trust requests")),
         "list" | "pending" => Err(MezError::invalid_state(
             "project trust list requests must be handled before selection",
         )),
         path => {
-            let requested_root = discover_project_root(&PathBuf::from(path));
-            pending
+            let path = PathBuf::from(path);
+            let requested_path = if path.is_absolute() {
+                path
+            } else {
+                pane_current_working_directory
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "relative trust paths require the active pane working directory",
+                        )
+                    })?
+                    .join(path)
+            };
+            let requested_root = discover_project_root_with_metadata(
+                &requested_path,
+                ProjectRootInputSource::ExplicitPath,
+            )?
+            .canonical_root;
+            Ok(pending
                 .iter()
                 .find(|request| project_trust_root_matches(&request.project_root, &requested_root))
                 .cloned()
-                .ok_or_else(|| {
-                    MezError::invalid_args(format!(
-                        "pending project trust request {} was not found",
-                        requested_root.display()
-                    ))
-                })
+                .map(AgentProjectTrustTarget::Pending)
+                .unwrap_or(AgentProjectTrustTarget::Explicit(requested_root)))
         }
     }
 }
