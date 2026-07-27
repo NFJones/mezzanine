@@ -6,6 +6,16 @@ use super::selection_adapter::*;
 use crate::runtime::render::*;
 use crate::ui::selector::record_browser_save_path_candidates;
 
+/// Resolves record-browser focus from a physical selection fragment to its
+/// logical record index.
+fn record_browser_active_index(overlay: &RuntimeDisplayOverlay, default: usize) -> usize {
+    overlay
+        .active_selection_index
+        .and_then(|index| overlay.selections.get(index))
+        .map(|selection| selection.logical_id)
+        .unwrap_or(default)
+}
+
 impl RuntimeSessionService {
     /// Reflows an active record browser after terminal geometry changes.
     ///
@@ -50,9 +60,10 @@ impl RuntimeSessionService {
                         let record_browser = overlay.record_browser.as_ref()?;
                         let mut stack = record_browser.stack.clone();
                         let mut browser = record_browser.browser.clone();
-                        if let Some(active_index) = overlay.active_selection_index {
-                            browser.set_active_index(active_index);
-                        }
+                        browser.set_active_index(record_browser_active_index(
+                            overlay,
+                            browser.active_index(),
+                        ));
                         stack.push(
                             crate::runtime::service_state::RuntimeRecordBrowserOverlayFrame {
                                 command: record_browser.command.clone(),
@@ -137,9 +148,8 @@ impl RuntimeSessionService {
             Some(RuntimeRecordBrowserOverlaySource::Approvals)
         ) && matches!(input, b"a" | b"d")
         {
-            let active_index = overlay
-                .active_selection_index
-                .unwrap_or_else(|| record_browser.browser.active_index());
+            let active_index =
+                record_browser_active_index(overlay, record_browser.browser.active_index());
             let mut selected = record_browser.browser.clone();
             selected.set_active_index(active_index);
             let Some(approval_id) = selected.active_record_id().map(str::to_string) else {
@@ -193,9 +203,8 @@ impl RuntimeSessionService {
         if input == b"a" {
             let source = record_browser.source.clone();
             if let Some(source) = source {
-                let active_index = overlay
-                    .active_selection_index
-                    .unwrap_or_else(|| record_browser.browser.active_index());
+                let active_index =
+                    record_browser_active_index(overlay, record_browser.browser.active_index());
                 let source = self.record_browser_source_toggled_scope(&source);
                 let mut browser = self.refresh_record_browser_overlay_source(&source)?;
                 browser.set_active_index(active_index);
@@ -219,9 +228,8 @@ impl RuntimeSessionService {
             let source = record_browser.source.clone().ok_or_else(|| {
                 MezError::invalid_state("deletable record browser is missing its backend source")
             })?;
-            let active_index = overlay
-                .active_selection_index
-                .unwrap_or_else(|| record_browser.browser.active_index());
+            let active_index =
+                record_browser_active_index(overlay, record_browser.browser.active_index());
             let outcome = {
                 let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(Some(false));
@@ -272,16 +280,15 @@ impl RuntimeSessionService {
                 prose_width,
             )));
         }
-        let active_selection_index = overlay.active_selection_index;
+        let active_index =
+            record_browser_active_index(overlay, record_browser.browser.active_index());
         let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(Some(false));
         };
         let Some(record_browser) = overlay.record_browser.as_mut() else {
             return Ok(None);
         };
-        if let Some(active_index) = active_selection_index {
-            record_browser.browser.set_active_index(active_index);
-        }
+        record_browser.browser.set_active_index(active_index);
         let action = match input {
             b"k" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
                 mez_mux::record_browser::RecordBrowserFilterField::Kind,
@@ -305,10 +312,6 @@ impl RuntimeSessionService {
                     record_browser.source = frame.source;
                     record_browser.browser = frame.browser;
                     let scroll_offset = frame.scroll_offset;
-                    let active_selection_index = frame.active_selection_index;
-                    if let Some(active_index) = active_selection_index {
-                        record_browser.browser.set_active_index(active_index);
-                    }
                     let changed = render_record_browser_overlay(
                         overlay,
                         &self.presentation.settings.ui_theme,
@@ -319,9 +322,6 @@ impl RuntimeSessionService {
                         overlay.lines.len(),
                         self.session.authoritative_size,
                     ));
-                    overlay.active_selection_index = active_selection_index
-                        .filter(|index| *index < overlay.selections.len())
-                        .or_else(|| (!overlay.selections.is_empty()).then_some(0));
                     return Ok(Some(changed));
                 }
                 let outcome = record_browser

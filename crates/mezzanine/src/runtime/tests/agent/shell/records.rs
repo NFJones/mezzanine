@@ -995,6 +995,83 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
     assert!(overlay.selections.is_empty());
 }
 
+/// Verifies a wrapped approval ID keeps physical link fragments associated
+/// with one logical pager record.
+///
+/// The first link intentionally wraps at a narrow terminal width. Moving down
+/// must focus and decide the second approval rather than the second fragment of
+/// the first ID, which would otherwise leave the final approval link unfocused.
+#[test]
+fn runtime_agent_shell_show_approvals_maps_wrapped_links_to_logical_records() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(26, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let first_id = service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-first",
+            &pane_id,
+            "cargo check",
+        ))
+        .unwrap();
+    let second_id = service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-second",
+            &pane_id,
+            "cargo test",
+        ))
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-approvals")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    let overlay = service.primary_display_overlay().unwrap();
+    let first_fragment_count = overlay
+        .selections
+        .iter()
+        .filter(|selection| selection.logical_id == 0)
+        .count();
+    assert!(first_fragment_count > 1, "{overlay:?}");
+    let second_selection_index = overlay
+        .selections
+        .iter()
+        .position(|selection| selection.logical_id == 1)
+        .expect("second approval should retain an ID link");
+    assert_eq!(
+        overlay.selections[second_selection_index].command,
+        format!("/show-approvals {second_id}")
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.active_selection_index, Some(second_selection_index));
+    assert_eq!(
+        overlay.selections[second_selection_index].logical_id, 1,
+        "down should focus the second logical approval rather than a fragment of the first"
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"a");
+
+    assert_eq!(
+        service.blocked_approvals().get(&second_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Approved
+    );
+    assert_eq!(
+        service.blocked_approvals().get(&first_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Pending
+    );
+}
+
 /// Verifies approval decision keys remain ordinary search text while the
 /// retained browser search editor is active.
 ///

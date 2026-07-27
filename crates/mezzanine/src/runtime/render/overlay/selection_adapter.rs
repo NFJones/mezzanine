@@ -146,7 +146,12 @@ pub(super) fn render_record_browser_overlay(
                     .min(overlay.selections.len().saturating_sub(1))
             })
             .or_else(|| {
-                list_active_index.map(|index| index.min(overlay.selections.len().saturating_sub(1)))
+                list_active_index.and_then(|logical_id| {
+                    overlay
+                        .selections
+                        .iter()
+                        .position(|selection| selection.logical_id == logical_id)
+                })
             })
             .or(Some(0))
     };
