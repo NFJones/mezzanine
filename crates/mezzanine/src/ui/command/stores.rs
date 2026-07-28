@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{AuthStatus, KeyValueLine, credential_store_kind_name};
+use super::{AuthStatus, credential_store_kind_name};
 #[cfg(test)]
 use super::{
     ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue,
@@ -238,52 +238,6 @@ pub(super) fn config_unset(path: impl Into<String>) -> ConfigMutation {
     ConfigMutation {
         path: path.into(),
         operation: ConfigMutationOperation::Unset,
-    }
-}
-
-/// Runs the auth status store display operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn auth_status_store_display(status: AuthStatus) -> String {
-    let provider = status
-        .metadata
-        .as_ref()
-        .map(|metadata| metadata.provider.as_str())
-        .unwrap_or("none");
-    let profile = status
-        .metadata
-        .as_ref()
-        .map(|metadata| metadata.selected_model_profile.as_str())
-        .unwrap_or("none");
-    match status.credential_state {
-        crate::security::auth::AuthCredentialState::Available { store, .. } => {
-            KeyValueLine::spaced()
-                .push("authenticated", true)
-                .push("provider", provider)
-                .push("profile", profile)
-                .push("credential_store", credential_store_kind_name(store))
-                .push("source", "auth-store")
-                .finish()
-        }
-        crate::security::auth::AuthCredentialState::LoggedOut => KeyValueLine::spaced()
-            .push("authenticated", false)
-            .push("provider", "none")
-            .push("profile", "none")
-            .push("state", "logged-out")
-            .push("source", "auth-store")
-            .finish(),
-        crate::security::auth::AuthCredentialState::MissingSecret { reference } => {
-            KeyValueLine::spaced()
-                .push("authenticated", false)
-                .push("provider", provider)
-                .push("profile", profile)
-                .push("state", "missing-secret")
-                .push("reference_present", reference.is_some())
-                .push("source", "auth-store")
-                .finish()
-        }
     }
 }
 

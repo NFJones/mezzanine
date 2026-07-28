@@ -34,16 +34,17 @@ impl RuntimeSessionService {
             .providers()
             .keys()
             .map(|provider| match self.auth_store() {
-                Some(auth_store) => {
-                    auth_status_store_table_row(provider, auth_store.status_for_provider(provider)?)
-                }
-                None => vec![
+                Some(auth_store) => Ok(auth_status_store_table_row(
+                    provider,
+                    auth_store.status_for_provider(provider)?,
+                )),
+                None => Ok(vec![
                     provider.clone(),
                     "unknown".to_string(),
                     "none".to_string(),
                     "unavailable".to_string(),
                     "auth-store-unavailable".to_string(),
-                ],
+                ]),
             })
             .collect::<Result<Vec<_>>>()?;
         let body = runtime_markdown_table(
