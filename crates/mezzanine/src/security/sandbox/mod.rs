@@ -81,7 +81,7 @@ pub(crate) use workflow::{
 };
 
 /// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v2";
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v3";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -1055,9 +1055,14 @@ fn bubblewrap_arguments(
         "/lib64",
         "--dir",
         "/etc",
+        "--dir",
+        "/etc/ssl",
         "--ro-bind-try",
         "/etc/ld.so.cache",
         "/etc/ld.so.cache",
+        "--ro-bind-try",
+        "/etc/ssl/certs",
+        "/etc/ssl/certs",
         "--ro-bind-try",
         "/etc/resolv.conf",
         "/etc/resolv.conf",

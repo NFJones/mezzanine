@@ -2900,7 +2900,9 @@ When that policy is `allow`, Bubblewrap MUST use an explicit connected profile
 for every shell action without inferring network access from the command.
 With `prompt`, Bubblewrap MUST use the connected profile only after the
 action's network requirement is authorized. Destination-level filtering is
-outside this binary connected/isolated contract. Brokered
+outside this binary connected/isolated contract. Every Bubblewrap profile MUST
+project the host TLS trust store at `/etc/ssl/certs` read-only, regardless of
+network mode. Brokered
 `web_search`, `fetch_url`, and MCP actions execute through product-owned
 transports outside the pane-shell Bubblewrap child and MUST remain subject to
 their controller capability and approval gates. Raw Bubblewrap arguments,

@@ -237,10 +237,11 @@ fn unknown_effects_compile_to_bounded_maximum_authority() {
     );
 }
 
-/// Verifies every sandbox launch projects the host resolver and NSS inputs,
-/// independent of whether the workload receives a private network namespace.
+/// Verifies every sandbox launch projects the host resolver, NSS, and TLS
+/// certificate inputs, independent of whether the workload receives a private
+/// network namespace.
 #[test]
-fn resolver_files_are_projected_for_every_network_policy() {
+fn network_support_files_are_projected_for_every_network_policy() {
     let config = config();
     let authority = authority();
     let evaluation = evaluation(EffectCompleteness::Complete, effects());
@@ -254,12 +255,23 @@ fn resolver_files_are_projected_for_every_network_policy() {
         compile_request.network_policy = network_policy;
         let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
 
-        for path in ["/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/hosts"] {
+        assert!(
+            plan.arguments
+                .windows(2)
+                .any(|args| args == ["--dir", "/etc/ssl"]),
+            "missing TLS certificate parent directory with {network_policy:?} policy"
+        );
+        for path in [
+            "/etc/ssl/certs",
+            "/etc/resolv.conf",
+            "/etc/nsswitch.conf",
+            "/etc/hosts",
+        ] {
             assert!(
                 plan.arguments
                     .windows(3)
                     .any(|args| { args == ["--ro-bind-try", path, path] }),
-                "missing resolver projection for {path} with {network_policy:?} policy"
+                "missing network support projection for {path} with {network_policy:?} policy"
             );
         }
     }
