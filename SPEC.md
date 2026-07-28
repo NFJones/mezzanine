@@ -2925,9 +2925,12 @@ prune` MUST preview candidate count and bytes unless deletion is confirmed with
 scoped below the private managed-home root, reject symbolic links and unsupported
 filesystem entries instead of following them, and acquire an exclusive per-home
 lock before deletion. Bubblewrap workloads MUST retain a shared lock for the
-complete mounted-home transaction lifetime. Active homes MUST be reported and
-skipped. Trust revocation MUST use the same scoped maintenance boundary. This
-workflow MUST NOT add automatic cleanup or persisted quota policy.
+complete mounted-home transaction lifetime. Preparing another workload for the
+same home MUST NOT upgrade or exclusively acquire that activity lock, and
+concurrent directory or metadata preparation MUST be serialized independently.
+Active homes MUST be reported and skipped. Trust revocation MUST use the same
+scoped maintenance boundary. This workflow MUST NOT add automatic cleanup or
+persisted quota policy.
 
 Guided setup MUST provide code-owned `project-safe`, `project-auto`,
 `project-read-only`, and `off` presets through `mez sandbox plan`, `enable`,

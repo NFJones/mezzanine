@@ -99,6 +99,58 @@ fn sandbox_audit_action() -> mez_agent::AgentAction {
     }
 }
 
+/// Verifies runtime retention of one workload's activity lease does not block
+/// managed-home preparation for another same-project workload.
+///
+/// The server owns activity locks in transaction state until settlement. A
+/// second synchronous preparation must use the independent preparation mutex
+/// rather than trying to upgrade the retained shared activity lock.
+#[test]
+fn runtime_managed_home_preparation_allows_overlapping_workloads() {
+    let root = temp_root("managed-home-overlapping-workloads");
+    let config_root = root.join("config");
+    let project = root.join("project");
+    fs::create_dir_all(&project).unwrap();
+    let mut service = test_runtime_service();
+    let (first, first_activity) =
+        crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload(
+            &config_root,
+            &project,
+        )
+        .unwrap();
+    service.register_managed_home_activity_lock("first-workload", first_activity);
+
+    let second_config_root = config_root.clone();
+    let second_project = project.clone();
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload(
+            &second_config_root,
+            &second_project,
+        );
+        completed_tx.send(()).unwrap();
+        result
+    });
+
+    if let Err(error) = completed_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        service.clear_all_shell_transaction_state();
+        let _ = worker.join();
+        let _ = fs::remove_dir_all(&root);
+        panic!("overlapping runtime managed-home preparation timed out: {error}");
+    }
+    let (second, second_activity) = worker.join().unwrap().unwrap();
+    assert_eq!(second, first);
+    assert!(
+        crate::security::sandbox::inspect_bubblewrap_managed_home(&config_root, &project)
+            .unwrap()
+            .active
+    );
+
+    service.clear_all_shell_transaction_state();
+    drop(second_activity);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies policy-only shell audit records identify their backend without
 /// inventing Bubblewrap plan metadata or retaining command content.
 #[test]

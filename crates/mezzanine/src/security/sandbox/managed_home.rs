@@ -1,12 +1,15 @@
 //! Managed persistent home directories for trusted-project Bubblewrap runs.
 //!
 //! Homes live below the private Mezzanine configuration root and are keyed by
-//! canonical project identity plus the fixed sandbox profile. The helper never
-//! copies host-home content and rejects symlinked storage components.
+//! canonical project identity plus the fixed sandbox profile. A shared activity
+//! lock excludes maintenance for each mounted workload, while a separate
+//! exclusive preparation lock serializes directory and metadata updates without
+//! upgrading the activity lock. The helper never copies host-home content and
+//! rejects symlinked storage components.
 
 use std::fs;
 use std::io::ErrorKind;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,6 +21,7 @@ use super::{BUBBLEWRAP_RUNTIME_PROFILE_VERSION, SandboxCompileError, SandboxComp
 
 const MANAGED_HOME_METADATA_FILE: &str = "metadata.json";
 const MANAGED_HOME_LOCK_FILE: &str = ".active.lock";
+const MANAGED_HOME_PREPARATION_LOCK_FILE: &str = ".prepare.lock";
 
 /// Private lifecycle metadata retained beside one managed home.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,8 +111,9 @@ pub(crate) fn prepare_bubblewrap_managed_home_for_workload(
     ensure_managed_homes_root(config_root)?;
     let project_directory = managed_home_project_directory(config_root, &project_key);
     ensure_private_managed_directory(&project_directory)?;
-    let file = open_managed_home_lock(&project_directory)?;
-    flock(&file, FlockOperation::LockExclusive).map_err(|error| {
+    let activity = lock_bubblewrap_managed_home(config_root, &project_key)?;
+    let preparation = open_managed_home_preparation_lock(&project_directory)?;
+    flock(&preparation, FlockOperation::LockExclusive).map_err(|error| {
         managed_home_error(format!(
             "managed Bubblewrap home preparation lock failed: {error}"
         ))
@@ -125,17 +130,12 @@ pub(crate) fn prepare_bubblewrap_managed_home_for_workload(
         ensure_private_managed_directory(&directory)?;
     }
     write_managed_home_metadata(&project_directory, &project_key)?;
-    flock(&file, FlockOperation::LockShared).map_err(|error| {
-        managed_home_error(format!(
-            "managed Bubblewrap home activity lock failed: {error}"
-        ))
-    })?;
     Ok((
         BubblewrapManagedHome {
             host_path: home,
             project_key,
         },
-        BubblewrapManagedHomeActivityLock { _file: file },
+        activity,
     ))
 }
 
@@ -154,13 +154,17 @@ pub(crate) fn lock_bubblewrap_managed_home(
     project_key: &str,
 ) -> Result<BubblewrapManagedHomeActivityLock, SandboxCompileError> {
     let project_directory = managed_home_project_directory(config_root, project_key);
-    let file = open_managed_home_lock(&project_directory)?;
-    flock(&file, FlockOperation::LockShared).map_err(|error| {
-        managed_home_error(format!(
-            "managed Bubblewrap home activity lock failed: {error}"
-        ))
-    })?;
-    Ok(BubblewrapManagedHomeActivityLock { _file: file })
+    loop {
+        let file = open_managed_home_lock(&project_directory)?;
+        flock(&file, FlockOperation::LockShared).map_err(|error| {
+            managed_home_error(format!(
+                "managed Bubblewrap home activity lock failed: {error}"
+            ))
+        })?;
+        if managed_home_lock_is_current(&project_directory, &file)? {
+            return Ok(BubblewrapManagedHomeActivityLock { _file: file });
+        }
+    }
 }
 
 /// Inspects one project-scoped managed home without creating any state.
@@ -379,8 +383,23 @@ fn write_managed_home_metadata(
 }
 
 fn open_managed_home_lock(project_directory: &Path) -> Result<fs::File, SandboxCompileError> {
+    open_managed_home_lock_file(project_directory, MANAGED_HOME_LOCK_FILE)
+}
+
+/// Opens the mutex used only for short-lived directory and metadata updates.
+fn open_managed_home_preparation_lock(
+    project_directory: &Path,
+) -> Result<fs::File, SandboxCompileError> {
+    open_managed_home_lock_file(project_directory, MANAGED_HOME_PREPARATION_LOCK_FILE)
+}
+
+/// Opens or creates one private lock file beneath a validated project directory.
+fn open_managed_home_lock_file(
+    project_directory: &Path,
+    file_name: &str,
+) -> Result<fs::File, SandboxCompileError> {
     ensure_private_managed_directory(project_directory)?;
-    let lock_path = project_directory.join(MANAGED_HOME_LOCK_FILE);
+    let lock_path = project_directory.join(file_name);
     let file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -394,6 +413,32 @@ fn open_managed_home_lock(project_directory: &Path) -> Result<fs::File, SandboxC
         ))
     })?;
     Ok(file)
+}
+
+/// Confirms a locked descriptor still names the lock in the current directory.
+///
+/// Maintenance may unlink the project directory after a caller opens the lock
+/// but before its shared acquisition completes. Such a descriptor protects the
+/// removed inode rather than a recreated home, so callers must retry it.
+fn managed_home_lock_is_current(
+    project_directory: &Path,
+    file: &fs::File,
+) -> Result<bool, SandboxCompileError> {
+    let open_metadata = file.metadata().map_err(|error| {
+        managed_home_error(format!("managed home lock inspection failed: {error}"))
+    })?;
+    let lock_path = project_directory.join(MANAGED_HOME_LOCK_FILE);
+    let current_metadata = match fs::metadata(&lock_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(managed_home_error(format!(
+                "managed home lock inspection failed: {error}"
+            )));
+        }
+    };
+    Ok(open_metadata.dev() == current_metadata.dev()
+        && open_metadata.ino() == current_metadata.ino())
 }
 
 fn inspect_managed_home_key(
@@ -698,6 +743,44 @@ mod tests {
                 0o700
             );
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies preparing an overlapping workload for one project completes
+    /// while the first workload retains its shared activity lock. This guards
+    /// against upgrading a separately opened activity lock and self-deadlocking
+    /// the single-threaded server runtime.
+    #[test]
+    fn managed_home_preparation_allows_overlapping_workloads() {
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-bubblewrap-overlap-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let config_root = root.join("config");
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+
+        let (first, first_activity) =
+            prepare_bubblewrap_managed_home_for_workload(&config_root, &project).unwrap();
+        let second_config_root = config_root.clone();
+        let second_project = project.clone();
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result =
+                prepare_bubblewrap_managed_home_for_workload(&second_config_root, &second_project);
+            completed_tx.send(()).unwrap();
+            result
+        });
+
+        completed_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("overlapping managed-home preparation must not wait for the first workload");
+        let (second, second_activity) = worker.join().unwrap().unwrap();
+        assert_eq!(second, first);
+
+        drop(second_activity);
+        drop(first_activity);
         fs::remove_dir_all(root).unwrap();
     }
 
