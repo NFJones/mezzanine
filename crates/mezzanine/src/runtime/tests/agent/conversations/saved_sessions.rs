@@ -2,6 +2,124 @@
 
 use super::*;
 
+/// Verifies `/name-session` assigns durable metadata to the current
+/// zero-entry conversation and exposes the name beside, but outside, its UUID
+/// resume link after the same conversation is resumed.
+#[test]
+fn runtime_agent_shell_names_and_resumes_zero_entry_conversations() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-name-session"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+
+    let named = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"name","method":"agent/shell/command","params":{"idempotency_key":"name","input":"/name-session Release investigation"}}"#,
+        &primary,
+    );
+    assert!(named.contains("name-session"), "{named}");
+    assert!(named.contains("named=true"), "{named}");
+    assert_eq!(
+        transcript_store
+            .named_session(&conversation_id)
+            .unwrap()
+            .map(|session| session.name),
+        Some("Release investigation".to_string())
+    );
+
+    let picker = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"list","method":"agent/shell/command","params":{"idempotency_key":"list","input":"/resume"}}"#,
+        &primary,
+    );
+    let linked_uuid = format!(
+        "[**{conversation_id}**](mez-agent:/resume%20{conversation_id}) - Release investigation"
+    );
+    assert!(picker.contains(&linked_uuid), "{picker}");
+    assert!(!picker.contains("Release%20investigation"), "{picker}");
+
+    let resumed = service.dispatch_runtime_control_body(
+        &format!(
+            r#"{{"jsonrpc":"2.0","id":"resume","method":"agent/shell/command","params":{{"idempotency_key":"resume","input":"/resume {conversation_id}"}}}}"#
+        ),
+        &primary,
+    );
+    assert!(resumed.contains("entries=0"), "{resumed}");
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some(conversation_id.as_str())
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies named conversations sort ahead of newer unnamed conversations in
+/// the picker while `/resume --latest` remains based only on session activity.
+#[test]
+fn runtime_agent_shell_sorts_named_sessions_first_without_changing_latest() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-named-order"));
+    let mut named_old = TranscriptEntry {
+        conversation_id: "named-old".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 10,
+        role: TranscriptRole::User,
+        turn_id: "turn-named".to_string(),
+        agent_id: "agent-%9".to_string(),
+        pane_id: "%9".to_string(),
+        content: "old named prompt".to_string(),
+    };
+    transcript_store.append(&named_old).unwrap();
+    transcript_store
+        .name_session("named-old", "Pinned work", 10, None)
+        .unwrap();
+    named_old.conversation_id = "recent-unnamed".to_string();
+    named_old.created_at_unix_seconds = 20;
+    named_old.turn_id = "turn-recent".to_string();
+    named_old.content = "recent unnamed prompt".to_string();
+    transcript_store.append(&named_old).unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let picker = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"list-order","method":"agent/shell/command","params":{"idempotency_key":"list-order","input":"/resume"}}"#,
+        &primary,
+    );
+    let named_position = picker.find("mez-agent:/resume%20named-old").unwrap();
+    let unnamed_position = picker.find("mez-agent:/resume%20recent-unnamed").unwrap();
+    assert!(named_position < unnamed_position, "{picker}");
+
+    let latest = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"latest-order","method":"agent/shell/command","params":{"idempotency_key":"latest-order","input":"/resume --latest"}}"#,
+        &primary,
+    );
+    assert!(
+        latest.contains("conversation_id=recent-unnamed"),
+        "{latest}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that saved agent conversations can be listed, resumed into the
 /// current pane, exposed to prompt context, and forked while keeping readline
 /// prompt history shared across conversation bindings.

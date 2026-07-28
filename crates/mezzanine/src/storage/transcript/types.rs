@@ -6,6 +6,35 @@
 
 use std::path::PathBuf;
 
+use mez_agent::transcript::ConversationSummary;
+use serde::{Deserialize, Serialize};
+
+/// Durable user-assigned metadata for one agent conversation.
+///
+/// Names are independent of transcript-derived summaries so summary rebuilds
+/// cannot discard them and named conversations can exist before their first
+/// transcript entry is persisted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NamedAgentSession {
+    /// Durable conversation identity.
+    pub conversation_id: String,
+    /// User-assigned display name.
+    pub name: String,
+    /// Time at which the name was most recently assigned.
+    pub named_at_unix_seconds: u64,
+    /// Best known working directory when the name was assigned.
+    pub directory: Option<String>,
+}
+
+/// Saved-session record merged from transcript summary and name metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedAgentSession {
+    /// Bounded transcript metadata, synthesized for named zero-entry sessions.
+    pub summary: ConversationSummary,
+    /// User-assigned display name, when present.
+    pub name: Option<String>,
+}
+
 /// One durable user-visible agent transcript presentation entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentPresentationEntry {

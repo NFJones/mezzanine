@@ -840,6 +840,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         }
         "list-macros" => "list available macros and their #macro prompt names.",
         "list-sessions" => "list resumable saved agent conversations.",
+        "name-session" => "assign or replace the current conversation's durable display name.",
         "list-skills" => "list available skills and their $skill prompt names.",
         "sync-builtin-skills" => {
             "synchronize managed built-in skills into the user configuration root."

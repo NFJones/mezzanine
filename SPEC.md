@@ -6233,12 +6233,19 @@ The baseline command capabilities are:
   config reload. Toolchain commands MUST NOT become a general PATH,
   environment-variable, or arbitrary host-mount configuration surface.
 - `/list-sessions`: Show resumable saved agent sessions in the pane buffer as a
-  nested list keyed by conversation UUID, sorted by last activity with the most
-  recent session first. Prompt summaries MAY be truncated to the terminal width
-  and MUST NOT wrap. Conversation UUIDs SHOULD be rendered as bold actionable
-  command links that execute or otherwise provide `/resume <uuid>` for the
-  selected session. Internal command-link destinations MUST NOT be rendered as
-  visible parenthesized URI text.
+  nested list keyed by conversation UUID. Named sessions MUST appear before
+  UUID-only sessions; each partition MUST be sorted by last activity with the
+  most recent session first. Prompt summaries MAY be truncated to the terminal
+  width and MUST NOT wrap. Conversation UUIDs SHOULD be rendered as bold
+  actionable command links that execute or otherwise provide `/resume <uuid>`
+  for the selected session. A named session MUST display as `<uuid> - <name>`,
+  with only the UUID included in the command link. Internal command-link
+  destinations MUST NOT be rendered as visible parenthesized URI text.
+- `/name-session <name>`: Assign or replace the durable display name for the
+  current agent conversation without changing its UUID, transcript, provider
+  context, or lineage. The command MUST reject empty names, control characters,
+  names longer than 80 Unicode scalar values, ephemeral conversations, active
+  turns, and unavailable transcript persistence.
 - `/list-skills`: Show the effective skills available to the active pane,
   including each skill name, source scope, and description. The display MUST
   use the same catalog that backs `$<skill-name>` prompt expansion. It SHOULD
@@ -8737,12 +8744,29 @@ conversation-scoped transcripts and presentation logs.
 The user MUST be able to list, inspect, fork, resume, and delete saved agent
 conversations.
 
+Every saved agent conversation MUST retain its UUID as its sole identity. The
+`/name-session <name>` command MUST assign or replace optional user-visible
+metadata for the current durable conversation. Names need not be unique. A
+name MUST be trimmed at its outer boundary, MUST preserve case and internal
+whitespace, MUST NOT be empty, MUST NOT contain control characters, and MUST
+contain at most 80 Unicode scalar values. New, cleared, and forked
+conversations MUST start unnamed; forking MUST NOT copy the source name.
+
 The `/resume` command MUST provide an interactive picker for saved
 conversations or snapshots. Agent prompt completion for `/resume` MUST include
-saved conversation UUIDs from the active transcript store.
+saved conversation UUIDs from the active transcript store, including named
+conversations with no transcript entries. The picker MUST place named
+conversations before UUID-only conversations and MUST order each partition by
+most recent activity. Named rows MUST render as `<uuid> - <name>` while keeping
+the name outside the UUID command link. `/resume --latest` MUST select by most
+recent activity across all saved conversations without applying the
+named-first picker partition.
 The active transcript store MUST retain at most the configured most recent
-saved agent conversations for `/resume`; conversations older than that limit
-MUST be deleted when a new conversation is created.
+unnamed saved agent conversations for `/resume`; older unnamed conversations
+MUST be deleted when a new conversation is created. Named conversations MUST
+never expire and MUST be exempt from automatic pruning, so total retained
+conversations MAY exceed `history.saved_sessions_limit`. Explicit deletion MUST
+remain available and MUST remove both conversation data and name metadata.
 
 When `/resume <session-uuid>` is invoked, Mezzanine MUST load the saved
 conversation transcript into subsequent model context, MUST replay saved

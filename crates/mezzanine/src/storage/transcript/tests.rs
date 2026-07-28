@@ -459,6 +459,104 @@ fn transcript_store_prunes_oldest_saved_sessions_when_limit_exceeded() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies names are durable independent metadata, merge with transcript
+/// summaries, support zero-entry conversations, and disappear on deletion.
+#[test]
+fn transcript_store_persists_and_merges_named_sessions() {
+    let root = temp_root("named-sessions");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append(&entry("with-history", 1, TranscriptRole::User))
+        .unwrap();
+
+    store
+        .name_session(
+            "with-history",
+            "  Release investigation  ",
+            20,
+            Some("/repo".to_string()),
+        )
+        .unwrap();
+    store
+        .name_session("empty-session", "Empty but durable", 30, None)
+        .unwrap();
+
+    let reopened = AgentTranscriptStore::new(root.clone());
+    let sessions = reopened.saved_sessions().unwrap();
+    let with_history = sessions
+        .iter()
+        .find(|session| session.summary.conversation_id == "with-history")
+        .unwrap();
+    assert_eq!(with_history.name.as_deref(), Some("Release investigation"));
+    assert_eq!(with_history.summary.entries, 1);
+    let empty = sessions
+        .iter()
+        .find(|session| session.summary.conversation_id == "empty-session")
+        .unwrap();
+    assert_eq!(empty.name.as_deref(), Some("Empty but durable"));
+    assert_eq!(empty.summary.entries, 0);
+    assert_eq!(empty.summary.last_created_at_unix_seconds, 30);
+
+    assert!(reopened.delete("empty-session").unwrap());
+    assert!(reopened.named_session("empty-session").unwrap().is_none());
+    assert_eq!(reopened.saved_sessions().unwrap().len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies named conversations neither consume the unnamed retention limit
+/// nor get removed when a newer unnamed conversation triggers pruning.
+#[test]
+fn transcript_store_never_prunes_named_sessions_automatically() {
+    let root = temp_root("named-session-retention");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone())
+        .with_saved_sessions_limit(1)
+        .unwrap();
+    let mut named = entry("named-old", 1, TranscriptRole::User);
+    named.created_at_unix_seconds = 10;
+    let mut unnamed_old = entry("unnamed-old", 1, TranscriptRole::User);
+    unnamed_old.created_at_unix_seconds = 20;
+    let mut unnamed_new = entry("unnamed-new", 1, TranscriptRole::User);
+    unnamed_new.created_at_unix_seconds = 30;
+
+    store.append(&named).unwrap();
+    store
+        .name_session("named-old", "Keep forever", 10, None)
+        .unwrap();
+    store.append(&unnamed_old).unwrap();
+    store.append(&unnamed_new).unwrap();
+
+    let retained = store
+        .saved_sessions()
+        .unwrap()
+        .into_iter()
+        .map(|session| session.summary.conversation_id)
+        .collect::<Vec<_>>();
+    assert_eq!(retained, vec!["named-old", "unnamed-new"]);
+    assert!(store.inspect("named-old").is_ok());
+    assert!(store.inspect("unnamed-old").is_err());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies invalid names are rejected before the name index is mutated.
+#[test]
+fn transcript_store_rejects_invalid_session_names() {
+    let root = temp_root("invalid-session-names");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+
+    assert!(store.name_session("conv", "   ", 1, None).is_err());
+    assert!(store.name_session("conv", "line\nbreak", 1, None).is_err());
+    assert!(
+        store
+            .name_session("conv", &"x".repeat(81), 1, None)
+            .is_err()
+    );
+    assert!(store.named_sessions().unwrap().is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that async transcript and shared prompt-history writes use the same
 /// durable layout and decoding behavior as the synchronous store API.
 #[tokio::test]

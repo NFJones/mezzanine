@@ -275,6 +275,10 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "session listing must be written through the live pane runtime".to_string(),
         },
+        "name-session" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "session naming requires durable transcript metadata".to_string(),
+        },
         "list-macros" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "macro listing requires live runtime macro discovery".to_string(),

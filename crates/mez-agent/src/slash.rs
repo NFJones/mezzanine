@@ -148,6 +148,12 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("loop", &[], SlashCommandEffect::SessionMutation, false),
         slash("stop", &[], SlashCommandEffect::BackgroundJobMutation, true),
         slash("fork", &[], SlashCommandEffect::SessionMutation, false),
+        slash(
+            "name-session",
+            &[],
+            SlashCommandEffect::SessionMutation,
+            false,
+        ),
         slash("resume", &[], SlashCommandEffect::SessionMutation, false),
         slash("new", &[], SlashCommandEffect::SessionMutation, false),
         slash("status", &[], SlashCommandEffect::ReadOnly, true),
@@ -265,6 +271,20 @@ mod tests {
         assert!(invocation.queueable_while_running);
     }
 
+    /// Verifies naming preserves the complete user-assigned name and cannot
+    /// race an active turn because it mutates durable session metadata.
+    #[test]
+    fn slash_parser_registers_name_session_as_non_queueable_session_mutation() {
+        let invocation = parse_slash_command(" /name-session  Release investigation ")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(invocation.name, "name-session");
+        assert_eq!(invocation.args, "Release investigation");
+        assert_eq!(invocation.effect, SlashCommandEffect::SessionMutation);
+        assert!(!invocation.queueable_while_running);
+    }
+
     #[test]
     /// Verifies ordinary prompts bypass slash parsing and malformed or unknown
     /// slash commands fail through stable typed errors.
@@ -308,6 +328,7 @@ mod tests {
             "sandbox",
             "directive",
             "list-sessions",
+            "name-session",
             "list-skills",
             "list-personalities",
             "copy-context",

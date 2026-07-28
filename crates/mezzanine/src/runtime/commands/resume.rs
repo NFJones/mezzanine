@@ -15,6 +15,8 @@ use base64::Engine;
 use mez_agent::transcript::ConversationSummary;
 use mez_mux::readline::ReadlineEdit;
 
+use crate::storage::transcript::SavedAgentSession;
+
 /// Maximum saved transcript entries to render when `/resume` has no presentation log.
 const AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;
 /// Maximum transcript bytes to read for `/resume` fallback replay.
@@ -78,7 +80,64 @@ fn runtime_resume_system_display_content(content: &str) -> String {
         .unwrap_or_else(|| content.to_string())
 }
 
+/// Escapes user-assigned names without extending the UUID command link.
+fn escape_session_name_for_markdown(name: &str) -> String {
+    name.chars()
+        .flat_map(|character| {
+            if matches!(character, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>') {
+                vec!['\\', character]
+            } else {
+                vec![character]
+            }
+        })
+        .collect()
+}
+
 impl RuntimeSessionService {
+    /// Assigns or replaces the durable display name for the current conversation.
+    pub(super) fn execute_agent_shell_name_session_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?.ok_or_else(|| {
+            MezError::invalid_args("name-session command must be a slash command")
+        })?;
+        let name = invocation.args.trim();
+        if name.is_empty() {
+            return Err(MezError::invalid_args("usage: /name-session <name>"));
+        }
+        let session = self
+            .agent_shell_store()
+            .get(pane_id)
+            .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+        if session.ephemeral {
+            return Err(MezError::invalid_state(
+                "ephemeral agent sessions cannot be named",
+            ));
+        }
+        let conversation_id = session.session_id.clone();
+        let visibility = session.visibility;
+        let directory = self
+            .pane_current_working_directory(pane_id)
+            .map(|path| path.to_string_lossy().into_owned());
+        let store = self
+            .persistence
+            .cloned_transcript_store()
+            .ok_or_else(|| MezError::invalid_state("transcript persistence is unavailable"))?;
+        let named =
+            store.name_session(&conversation_id, name, current_unix_seconds(), directory)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "name-session".to_string(),
+            body: format!(
+                "conversation_id={} name={} named=true",
+                conversation_id,
+                json_escape(&named.name)
+            ),
+            visibility,
+        })
+    }
+
     /// Runs the execute agent shell resume command operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -103,8 +162,8 @@ impl RuntimeSessionService {
         };
         let conversation_id = match conversation_arg {
             Some("--latest" | "latest") => {
-                let summaries = store.list()?;
-                let Some(conversation_id) = Self::runtime_latest_agent_saved_session_id(&summaries)
+                let sessions = store.saved_sessions()?;
+                let Some(conversation_id) = Self::runtime_latest_agent_saved_session_id(&sessions)
                 else {
                     return Ok(AgentShellCommandOutcome::Display {
                         command: "resume".to_string(),
@@ -117,21 +176,34 @@ impl RuntimeSessionService {
             Some(conversation_id) => conversation_id.to_string(),
             None => unreachable!("bare resume returns through list-sessions before store lookup"),
         };
-        let summary = store.summary(&conversation_id)?.ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "conversation transcript not found",
-            )
-        })?;
-        let entries = store.inspect_recent(
-            &conversation_id,
-            AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES,
-            AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES,
-        )?;
-        let presentation_entries = store.inspect_presentation_replay_tail(
-            &conversation_id,
-            AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES,
-        )?;
+        let saved = store
+            .saved_sessions()?
+            .into_iter()
+            .find(|session| session.summary.conversation_id == conversation_id)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "conversation transcript not found",
+                )
+            })?;
+        let summary = saved.summary;
+        let entries = if summary.entries == 0 {
+            Vec::new()
+        } else {
+            store.inspect_recent(
+                &conversation_id,
+                AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES,
+                AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES,
+            )?
+        };
+        let presentation_entries = if summary.entries == 0 {
+            Vec::new()
+        } else {
+            store.inspect_presentation_replay_tail(
+                &conversation_id,
+                AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES,
+            )?
+        };
         let resume_directory = runtime_resume_directory_from_summary(&summary)
             .or_else(|| runtime_resume_directory_from_entries(&entries));
         let (session_id, transcript_entries, visibility) = {
@@ -183,24 +255,28 @@ impl RuntimeSessionService {
     ///
     /// # Parameters
     /// - `summaries`: The saved conversation summaries to sort.
-    fn runtime_latest_agent_saved_session_id(
-        summaries: &[mez_agent::transcript::ConversationSummary],
-    ) -> Option<String> {
-        let mut sorted_summaries = summaries.iter().collect::<Vec<_>>();
-        sorted_summaries.sort_by(|left, right| {
+    fn runtime_latest_agent_saved_session_id(sessions: &[SavedAgentSession]) -> Option<String> {
+        let mut sorted_sessions = sessions.iter().collect::<Vec<_>>();
+        sorted_sessions.sort_by(|left, right| {
             right
+                .summary
                 .last_created_at_unix_seconds
-                .cmp(&left.last_created_at_unix_seconds)
+                .cmp(&left.summary.last_created_at_unix_seconds)
                 .then_with(|| {
                     right
+                        .summary
                         .first_created_at_unix_seconds
-                        .cmp(&left.first_created_at_unix_seconds)
+                        .cmp(&left.summary.first_created_at_unix_seconds)
                 })
-                .then_with(|| left.conversation_id.cmp(&right.conversation_id))
+                .then_with(|| {
+                    left.summary
+                        .conversation_id
+                        .cmp(&right.summary.conversation_id)
+                })
         });
-        sorted_summaries
+        sorted_sessions
             .first()
-            .map(|summary| summary.conversation_id.clone())
+            .map(|session| session.summary.conversation_id.clone())
     }
 
     /// Restores the pane to a saved session directory when that directory is
@@ -269,7 +345,7 @@ impl RuntimeSessionService {
             .unwrap_or(120);
         if let Some(store) = self.persistence.transcript_store() {
             return Ok(Self::runtime_agent_saved_sessions_display(
-                &store.list()?,
+                &store.saved_sessions()?,
                 width,
             ));
         }
@@ -341,36 +417,54 @@ impl RuntimeSessionService {
 
     /// Formats saved agent conversations as a nested resume list.
     fn runtime_agent_saved_sessions_display(
-        summaries: &[mez_agent::transcript::ConversationSummary],
+        sessions: &[SavedAgentSession],
         width: usize,
     ) -> String {
         let mut lines = vec!["## Agent Sessions".to_string(), String::new()];
-        if summaries.is_empty() {
+        if sessions.is_empty() {
             lines.push("No saved agent sessions are available.".to_string());
             return lines.join("\n");
         }
-        let mut sorted_summaries = summaries.iter().collect::<Vec<_>>();
-        sorted_summaries.sort_by(|left, right| {
+        let mut sorted_sessions = sessions.iter().collect::<Vec<_>>();
+        sorted_sessions.sort_by(|left, right| {
             right
-                .last_created_at_unix_seconds
-                .cmp(&left.last_created_at_unix_seconds)
+                .name
+                .is_some()
+                .cmp(&left.name.is_some())
                 .then_with(|| {
                     right
-                        .first_created_at_unix_seconds
-                        .cmp(&left.first_created_at_unix_seconds)
+                        .summary
+                        .last_created_at_unix_seconds
+                        .cmp(&left.summary.last_created_at_unix_seconds)
+                        .then_with(|| {
+                            right
+                                .summary
+                                .first_created_at_unix_seconds
+                                .cmp(&left.summary.first_created_at_unix_seconds)
+                        })
+                        .then_with(|| {
+                            left.summary
+                                .conversation_id
+                                .cmp(&right.summary.conversation_id)
+                        })
                 })
-                .then_with(|| left.conversation_id.cmp(&right.conversation_id))
         });
-        for (index, summary) in sorted_summaries.iter().enumerate() {
+        for (index, session) in sorted_sessions.iter().enumerate() {
             if index > 0 {
                 lines.push(String::new());
             }
+            let summary = &session.summary;
             let resume_command = format!("/resume {}", summary.conversation_id);
-            lines.push(format!(
+            let mut heading = format!(
                 "- [**{}**]({})",
                 summary.conversation_id,
                 Self::markdown_link_destination(&resume_command)
-            ));
+            );
+            if let Some(name) = session.name.as_deref() {
+                heading.push_str(" - ");
+                heading.push_str(&escape_session_name_for_markdown(name));
+            }
+            lines.push(heading);
             lines.push(format!(
                 "  - Last Active: {}",
                 unix_seconds_to_rfc3339(summary.last_created_at_unix_seconds)

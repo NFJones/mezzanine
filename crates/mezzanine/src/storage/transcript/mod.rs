@@ -27,7 +27,7 @@ mod store;
 /// declaration makes the boundary available to the crate.
 mod types;
 
-pub use types::{AgentPresentationEntry, AgentTranscriptStore};
+pub use types::{AgentPresentationEntry, AgentTranscriptStore, SavedAgentSession};
 
 /// Exposes the tests module boundary.
 ///

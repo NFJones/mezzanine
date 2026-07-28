@@ -3,7 +3,7 @@
 //! Store methods validate conversation ids, enforce private storage
 //! permissions, and use append-only TSV records for inspectable persistence.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self as std_fs, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 #[cfg(test)]
@@ -25,7 +25,9 @@ use super::fs::{
     set_private_dir_permissions, set_private_dir_permissions_async, set_private_file_permissions,
     set_private_file_permissions_async,
 };
-use super::types::{AgentPresentationEntry, AgentTranscriptStore};
+use super::types::{
+    AgentPresentationEntry, AgentTranscriptStore, NamedAgentSession, SavedAgentSession,
+};
 use mez_agent::transcript::{
     AgentSessionMetadata, ConversationSummary, TranscriptEntry, TranscriptRole,
     bounded_summary_text, summarize_conversation, validate_conversation_id,
@@ -75,6 +77,14 @@ const SHARED_COMMAND_PROMPT_HISTORY_FILE_NAME: &str = "command-prompt-history.ts
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 const ACTIVE_AGENT_SESSION_METADATA_FILE_NAME: &str = "active-agent-sessions.tsv";
+/// Versioned root-level index containing durable user-assigned session names.
+const NAMED_AGENT_SESSIONS_FILE_NAME: &str = "named-sessions.json";
+/// Advisory lock serializing named-session index updates.
+const NAMED_AGENT_SESSIONS_LOCK_FILE_NAME: &str = ".named-sessions.json.lock";
+/// Current durable named-session index schema version.
+const NAMED_AGENT_SESSIONS_VERSION: u64 = 1;
+/// Maximum accepted session-name length in Unicode scalar values.
+const MAX_AGENT_SESSION_NAME_CHARS: usize = 80;
 /// Defines the SHARED PROMPT HISTORY CONVERSATION ID const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
@@ -631,6 +641,93 @@ impl AgentTranscriptStore {
         Ok(summaries)
     }
 
+    /// Lists transcript-backed and named zero-entry sessions as one durable view.
+    pub fn saved_sessions(&self) -> Result<Vec<SavedAgentSession>> {
+        let names = self
+            .named_sessions()?
+            .into_iter()
+            .map(|session| (session.conversation_id.clone(), session))
+            .collect::<BTreeMap<_, _>>();
+        let mut saved = self
+            .list()?
+            .into_iter()
+            .map(|summary| SavedAgentSession {
+                name: names
+                    .get(&summary.conversation_id)
+                    .map(|session| session.name.clone()),
+                summary,
+            })
+            .collect::<Vec<_>>();
+        let transcript_ids = saved
+            .iter()
+            .map(|session| session.summary.conversation_id.clone())
+            .collect::<BTreeSet<_>>();
+        for named in names.values() {
+            if transcript_ids.contains(&named.conversation_id) {
+                continue;
+            }
+            saved.push(SavedAgentSession {
+                summary: ConversationSummary {
+                    conversation_id: named.conversation_id.clone(),
+                    entries: 0,
+                    first_created_at_unix_seconds: named.named_at_unix_seconds,
+                    last_created_at_unix_seconds: named.named_at_unix_seconds,
+                    last_turn_id: String::new(),
+                    agent_id: String::new(),
+                    pane_id: String::new(),
+                    directory: named.directory.clone(),
+                    initial_prompt: None,
+                    latest_user_prompt: None,
+                },
+                name: Some(named.name.clone()),
+            });
+        }
+        saved.sort_by(|left, right| {
+            left.summary
+                .conversation_id
+                .cmp(&right.summary.conversation_id)
+        });
+        Ok(saved)
+    }
+
+    /// Assigns or replaces the durable display name for one conversation.
+    pub fn name_session(
+        &self,
+        conversation_id: &str,
+        name: &str,
+        named_at_unix_seconds: u64,
+        directory: Option<String>,
+    ) -> Result<NamedAgentSession> {
+        validate_conversation_id(conversation_id)?;
+        let name = validate_agent_session_name(name)?;
+        let directory = directory
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let session = NamedAgentSession {
+            conversation_id: conversation_id.to_string(),
+            name,
+            named_at_unix_seconds,
+            directory,
+        };
+        let _lock = self.acquire_named_sessions_lock()?;
+        let mut sessions = self.read_named_sessions_index()?;
+        sessions.insert(conversation_id.to_string(), session.clone());
+        self.write_named_sessions_index(&sessions)?;
+        Ok(session)
+    }
+
+    /// Loads one durable name record when the conversation has been named.
+    #[cfg(test)]
+    pub fn named_session(&self, conversation_id: &str) -> Result<Option<NamedAgentSession>> {
+        validate_conversation_id(conversation_id)?;
+        Ok(self.read_named_sessions_index()?.remove(conversation_id))
+    }
+
+    /// Lists durable name records in conversation-id order.
+    pub fn named_sessions(&self) -> Result<Vec<NamedAgentSession>> {
+        Ok(self.read_named_sessions_index()?.into_values().collect())
+    }
+
     /// Loads bounded summary metadata for one saved conversation.
     ///
     /// New transcript appends maintain a sidecar summary. Legacy sessions fall
@@ -735,6 +832,7 @@ impl AgentTranscriptStore {
     /// already absent.
     pub fn delete(&self, conversation_id: &str) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
+        let removed_name = self.remove_named_session(conversation_id)?;
         let session_dir = self.session_dir_for(conversation_id)?;
         if session_dir.exists() {
             std_fs::remove_dir_all(session_dir)?;
@@ -745,7 +843,7 @@ impl AgentTranscriptStore {
             std_fs::remove_file(legacy_path)?;
             return Ok(true);
         }
-        Ok(false)
+        Ok(removed_name)
     }
 
     /// Forks an existing conversation into a new conversation id.
@@ -1173,7 +1271,16 @@ impl AgentTranscriptStore {
 
     /// Deletes oldest saved conversations until the configured resume cap holds.
     fn prune_saved_sessions_over_limit(&self) -> Result<()> {
-        let mut summaries = self.list()?;
+        let named_ids = self
+            .named_sessions()?
+            .into_iter()
+            .map(|session| session.conversation_id)
+            .collect::<BTreeSet<_>>();
+        let mut summaries = self
+            .list()?
+            .into_iter()
+            .filter(|summary| !named_ids.contains(&summary.conversation_id))
+            .collect::<Vec<_>>();
         if summaries.len() <= self.saved_sessions_limit {
             return Ok(());
         }
@@ -1442,6 +1549,102 @@ impl AgentTranscriptStore {
         self.root.join(ACTIVE_AGENT_SESSION_METADATA_FILE_NAME)
     }
 
+    /// Acquires the exclusive advisory lock for named-session index mutation.
+    fn acquire_named_sessions_lock(&self) -> Result<std_fs::File> {
+        self.ensure_store_dir()?;
+        let path = self.root.join(NAMED_AGENT_SESSIONS_LOCK_FILE_NAME);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        set_private_file_permissions(&path)?;
+        flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        Ok(file)
+    }
+
+    /// Reads and validates the complete named-session index.
+    fn read_named_sessions_index(&self) -> Result<BTreeMap<String, NamedAgentSession>> {
+        let path = self.root.join(NAMED_AGENT_SESSIONS_FILE_NAME);
+        if !path.exists() {
+            return Ok(BTreeMap::new());
+        }
+        let mut data = String::new();
+        std_fs::File::open(path)?.read_to_string(&mut data)?;
+        let value: serde_json::Value = serde_json::from_str(&data).map_err(|error| {
+            MezError::invalid_args(format!("named-session index decode failed: {error}"))
+        })?;
+        if value.get("version").and_then(serde_json::Value::as_u64)
+            != Some(NAMED_AGENT_SESSIONS_VERSION)
+        {
+            return Err(MezError::invalid_args(
+                "named-session index version is unsupported",
+            ));
+        }
+        let sessions: Vec<NamedAgentSession> =
+            serde_json::from_value(value.get("sessions").cloned().ok_or_else(|| {
+                MezError::invalid_args("named-session index sessions are missing")
+            })?)
+            .map_err(|error| {
+                MezError::invalid_args(format!("named-session index records are invalid: {error}"))
+            })?;
+        let mut indexed = BTreeMap::new();
+        for mut session in sessions {
+            validate_conversation_id(&session.conversation_id)?;
+            session.name = validate_agent_session_name(&session.name)?;
+            if indexed
+                .insert(session.conversation_id.clone(), session)
+                .is_some()
+            {
+                return Err(MezError::invalid_args(
+                    "named-session index contains duplicate conversations",
+                ));
+            }
+        }
+        Ok(indexed)
+    }
+
+    /// Atomically replaces the durable named-session index.
+    fn write_named_sessions_index(
+        &self,
+        sessions: &BTreeMap<String, NamedAgentSession>,
+    ) -> Result<()> {
+        self.ensure_store_dir()?;
+        let path = self.root.join(NAMED_AGENT_SESSIONS_FILE_NAME);
+        let temp_path = self.root.join(".named-sessions.json.tmp");
+        let encoded = serde_json::to_vec(&serde_json::json!({
+            "version": NAMED_AGENT_SESSIONS_VERSION,
+            "sessions": sessions.values().collect::<Vec<_>>(),
+        }))
+        .map_err(|error| {
+            MezError::invalid_args(format!("named-session index encode failed: {error}"))
+        })?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&temp_path)?;
+        file.write_all(&encoded)?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        set_private_file_permissions(&temp_path)?;
+        std_fs::rename(&temp_path, &path)?;
+        set_private_file_permissions(&path)?;
+        Ok(())
+    }
+
+    /// Removes one durable name record while preserving all other names.
+    fn remove_named_session(&self, conversation_id: &str) -> Result<bool> {
+        let _lock = self.acquire_named_sessions_lock()?;
+        let mut sessions = self.read_named_sessions_index()?;
+        let removed = sessions.remove(conversation_id).is_some();
+        if removed {
+            self.write_named_sessions_index(&sessions)?;
+        }
+        Ok(removed)
+    }
+
     /// Runs the legacy transcript path for operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1472,6 +1675,27 @@ fn encode_conversation_summary(summary: &ConversationSummary) -> String {
         "latest_user_prompt": summary.latest_user_prompt,
     })
     .to_string()
+}
+
+/// Normalizes and validates one user-assigned agent-session name.
+fn validate_agent_session_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(MezError::invalid_args(
+            "agent session name must not be empty",
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(MezError::invalid_args(
+            "agent session name must not contain control characters",
+        ));
+    }
+    if name.chars().count() > MAX_AGENT_SESSION_NAME_CHARS {
+        return Err(MezError::invalid_args(format!(
+            "agent session name must not exceed {MAX_AGENT_SESSION_NAME_CHARS} characters"
+        )));
+    }
+    Ok(name.to_string())
 }
 
 /// Decodes one conversation summary sidecar and validates required fields.

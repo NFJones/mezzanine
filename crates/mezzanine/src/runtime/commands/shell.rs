@@ -478,6 +478,13 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&fork_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "name-session"
+                {
+                    let name_outcome =
+                        self.execute_agent_shell_name_session_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&name_outcome))
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "list-sessions"
                 {
                     let sessions_outcome =

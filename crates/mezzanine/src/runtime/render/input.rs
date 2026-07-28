@@ -621,21 +621,35 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.transcript_store() else {
             return candidates;
         };
-        candidates.extend(store.list().unwrap_or_default().into_iter().map(|summary| {
-            SelectorExtraCandidate::new(
-                SelectorSurface::AgentCommand,
-                "resume",
-                SelectorCandidate::new(
-                    summary.conversation_id.clone(),
-                    SelectorCandidateKind::Value,
-                    true,
-                )
-                .with_detail(format!(
-                    "{} entries, pane {}, agent {}",
-                    summary.entries, summary.pane_id, summary.agent_id
-                )),
-            )
-        }));
+        candidates.extend(
+            store
+                .saved_sessions()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|session| {
+                    let summary = session.summary;
+                    let detail = match session.name {
+                        Some(name) => format!(
+                            "{name} — {} entries, pane {}, agent {}",
+                            summary.entries, summary.pane_id, summary.agent_id
+                        ),
+                        None => format!(
+                            "{} entries, pane {}, agent {}",
+                            summary.entries, summary.pane_id, summary.agent_id
+                        ),
+                    };
+                    SelectorExtraCandidate::new(
+                        SelectorSurface::AgentCommand,
+                        "resume",
+                        SelectorCandidate::new(
+                            summary.conversation_id.clone(),
+                            SelectorCandidateKind::Value,
+                            true,
+                        )
+                        .with_detail(detail),
+                    )
+                }),
+        );
         candidates
     }
 
