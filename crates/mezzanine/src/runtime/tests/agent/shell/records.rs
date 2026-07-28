@@ -55,13 +55,14 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
     assert!(service.pending_record_browser_overlays_is_empty());
 }
 
-/// Verifies record-browser PageUp and PageDown move by the active modal page.
+/// Verifies record-browser Ctrl+Up and Ctrl+Down move by five lines, while
+/// PageUp and PageDown move by the active modal page.
 ///
-/// A fixed line increment leaves tall terminal views moving only a fraction of
-/// their visible content. The retained browser must instead use the modal's
-/// content-row capacity and return to the initial viewport on PageUp.
+/// Ctrl-arrow navigation provides bounded fine scrolling without changing the
+/// selected record. Page navigation still uses the modal's content-row capacity
+/// and returns to the initial viewport on PageUp.
 #[test]
-fn runtime_record_browser_paging_uses_the_modal_viewport_height() {
+fn runtime_record_browser_ctrl_arrows_scroll_five_lines_and_paging_uses_modal_height() {
     let mut service = test_runtime_service();
     let size = Size::new(80, 30).unwrap();
     let primary = service.attach_primary("primary", true, size, 120).unwrap();
@@ -90,6 +91,12 @@ fn runtime_record_browser_paging_uses_the_modal_viewport_height() {
     service
         .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
         .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[1;5B");
+    assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 5);
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[1;5A");
+    assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 0);
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[6~");
     assert_eq!(
