@@ -22,6 +22,46 @@ fn executes_window_commands_against_session_state() {
     assert_eq!(session.active_window().unwrap().name, "build");
 }
 
+/// Verifies `rename-pane` updates the active pane and pins the title as an
+/// explicit user choice so later automatic title discovery cannot replace it.
+#[test]
+fn rename_pane_updates_active_pane_with_explicit_provenance() {
+    let (mut session, primary) = test_session();
+    let pane_id = session
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+
+    execute_command_sequence(&mut session, &primary, "rename-pane build logs").unwrap();
+
+    assert_eq!(
+        session.pane_title_state(&pane_id).unwrap(),
+        ("build logs".to_string(), mez_mux::PaneTitleSource::Explicit)
+    );
+    assert!(
+        !session
+            .set_pane_title_from_terminal(&pane_id, "automatic")
+            .unwrap()
+    );
+    assert_eq!(session.pane_title_state(&pane_id).unwrap().0, "build logs");
+}
+
+/// Verifies pane renaming remains a primary-client mutation and cannot be
+/// performed by an unrelated client identity.
+#[test]
+fn rename_pane_rejects_non_primary_clients() {
+    let (mut session, _primary) = test_session();
+    let other = ClientId::new('c', 9_999);
+
+    let error =
+        execute_command_sequence(&mut session, &other, "rename-pane forbidden").unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(error.message().contains("primary client"), "{error}");
+}
+
 /// Verifies new window preserves explicit shell command plan.
 ///
 /// This regression scenario documents the behavior being protected so a

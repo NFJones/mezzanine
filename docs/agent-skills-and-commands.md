@@ -51,6 +51,7 @@ Open the Mezzanine command prompt with `Ctrl+A :`.
 | `list-windows` | Show window identities, names, active state, and sizes. |
 | `list-groups` | Show window group identities, names, and active state. |
 | `choose-group` | Open an interactive group picker. |
+| `rename-pane` | Rename the active pane, or a pane selected with `-t`. |
 | `list-panes` | Show pane identities, active state, size, pid, and agent data. |
 | `list-clients` | Show attached clients and pending observers. |
 | `detach-client` | Detach a client. |

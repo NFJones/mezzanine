@@ -151,6 +151,7 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "help",
     "new-window",
     "rename-window",
+    "rename-pane",
     "kill-window",
     "select-window",
     "next-window",

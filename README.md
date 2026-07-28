@@ -252,8 +252,8 @@ for the current capability coverage, known unsupported behavior, and full-screen
 TUI fixture backlog.
 
 The Mezzanine command prompt accepts commands such as `new-window`,
-`split-window`, `select-pane`, `synchronize-panes`, `set-theme`, `list-keys`,
-`show-options`, and `exit`. Commands entered there are parsed
+`split-window`, `select-pane`, `rename-pane`, `synchronize-panes`, `set-theme`,
+`list-keys`, `show-options`, and `exit`. Commands entered there are parsed
 by Mezzanine, not by the pane shell.
 
 Command output shown in the pager supports `/` text search. Submit a query to

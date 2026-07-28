@@ -246,6 +246,25 @@ impl Session {
         Ok(())
     }
 
+    /// Explicitly renames the active or targeted pane for the primary client.
+    ///
+    /// The assigned title is pinned as explicit so later terminal and process
+    /// title discovery cannot overwrite the user's choice.
+    pub fn rename_pane(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        name: impl Into<String>,
+    ) -> Result<()> {
+        self.require_primary(primary_client_id)?;
+        let (window_index, pane_index) = self.pane_location(target)?;
+        let pane_id = self.windows[window_index].panes()[pane_index]
+            .id
+            .to_string();
+        self.set_pane_title_explicit(&pane_id, name)?;
+        Ok(())
+    }
+
     /// Assigns a generated window name unless the target has an explicit name.
     pub fn rename_window_generated(
         &mut self,

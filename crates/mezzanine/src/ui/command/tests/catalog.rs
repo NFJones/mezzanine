@@ -104,6 +104,10 @@ fn help_command_describes_mezzanine_command_set() {
     assert!(help.contains("| `list-keys` |"), "{help}");
     assert!(help.contains("show-metrics"), "{help}");
     assert!(help.contains("rebalance-window"), "{help}");
+    assert!(
+        help.contains("|  | `rename-pane` | rename the active or target pane. |"),
+        "{help}"
+    );
     assert!(help.contains("synchronize-panes"), "{help}");
     assert!(help.contains("set-theme"), "{help}");
     assert!(help.contains("agent-shell"), "{help}");

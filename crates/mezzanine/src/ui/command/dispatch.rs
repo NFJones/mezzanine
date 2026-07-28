@@ -370,6 +370,12 @@ fn execute_command_plan(
                 command: plan.command,
             }
         }
+        CommandPlan::RenamePane(plan) => {
+            session.rename_pane(primary_client_id, plan.target.as_deref(), plan.name)?;
+            CommandOutcome::Mutated {
+                command: plan.command,
+            }
+        }
         CommandPlan::SelectWindow(plan) => {
             session.select_window(primary_client_id, &plan.target)?;
             CommandOutcome::Mutated {

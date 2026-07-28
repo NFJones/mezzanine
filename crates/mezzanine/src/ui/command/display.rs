@@ -164,6 +164,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "refresh-client" => "redraw the client.",
         "reject-observer" => "reject a pending observer.",
         "rename-group" => "rename a window group.",
+        "rename-pane" => "rename the active or target pane.",
         "rename-session" => "rename the current or target session.",
         "rename-window" => "rename a window.",
         "resize-pane" => "resize a pane.",

@@ -1490,6 +1490,7 @@ The command language MUST include commands equivalent to:
 
 - `new-window`
 - `rename-window`
+- `rename-pane`
 - `kill-window`
 - `select-window`
 - `next-window`
@@ -1571,6 +1572,7 @@ The baseline commands MUST have the following semantics:
 | --- | --- |
 | `new-window` | Create a window in the target session with one pane. It MUST accept an optional name, optional start directory, optional shell command, and a select flag. The new pane MUST follow pane creation shell semantics. |
 | `rename-window` | Rename the target window. Repeating the command with the same target and name MUST be idempotent. |
+| `rename-pane` | Rename the active pane or the pane selected by `-t`/`--target`. It MUST require a non-empty name, MUST require primary-client authority, and MUST pin the resulting title as explicit so automatic terminal or foreground-process title discovery cannot overwrite it. Repeating the command with the same target and name MUST be idempotent. |
 | `kill-window` | Close the target window. If the window contains live pane processes, the command MUST require confirmation or an explicit force flag unless policy permits destructive window closure without prompting. |
 | `select-window` | Make the target window active for the invoking primary client. Observers MUST NOT change active window state. |
 | `next-window` | Select the next window in the active group, wrapping at the end. |

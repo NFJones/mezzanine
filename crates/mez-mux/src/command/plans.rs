@@ -32,6 +32,8 @@ pub enum CommandPlan {
     KillGroup(ForceTargetPlan),
     /// Rename a window.
     RenameWindow(NamedTargetPlan),
+    /// Rename a pane.
+    RenamePane(NamedTargetPlan),
     /// Select a window.
     SelectWindow(TargetPlan),
     /// Select the next window.
@@ -368,6 +370,7 @@ pub fn command_plan_from_invocation(invocation: &CommandInvocation) -> Result<Co
             invocation,
             "rename-window requires a name",
         )?)),
+        "rename-pane" => Ok(CommandPlan::RenamePane(rename_pane_plan(invocation)?)),
         "select-window" | "selectw" => Ok(CommandPlan::SelectWindow(required_target_plan(
             invocation,
             "select-window requires a target",
@@ -703,6 +706,15 @@ fn named_target_plan(
     })
 }
 
+/// Parses a pane rename while rejecting names that contain only whitespace.
+fn rename_pane_plan(invocation: &CommandInvocation) -> Result<NamedTargetPlan> {
+    let plan = named_target_plan(invocation, "rename-pane requires a name")?;
+    if plan.name.trim().is_empty() {
+        return Err(MuxError::invalid_args("rename-pane requires a name"));
+    }
+    Ok(plan)
+}
+
 fn required_target_plan(
     invocation: &CommandInvocation,
     missing: &'static str,
@@ -1024,6 +1036,11 @@ mod tests {
                 if target == "2" && name == "work tree"
         ));
         assert!(matches!(
+            command_plan_from_invocation(&invocation("rename-pane -t %2 build logs")).unwrap(),
+            CommandPlan::RenamePane(NamedTargetPlan { target: Some(target), name, .. })
+                if target == "%2" && name == "build logs"
+        ));
+        assert!(matches!(
             command_plan_from_invocation(&invocation("select-pane -L")).unwrap(),
             CommandPlan::SelectPane(SelectPanePlan {
                 selection: PaneSelectionPlan::Direction(PaneNavigationDirection::Left),
@@ -1051,6 +1068,14 @@ mod tests {
 
         assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
         assert!(error.message().contains("window index"));
+
+        let error = command_plan_from_invocation(&invocation("rename-pane")).unwrap_err();
+        assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
+        assert!(error.message().contains("rename-pane requires a name"));
+
+        let error = command_plan_from_invocation(&invocation("rename-pane '   '")).unwrap_err();
+        assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
+        assert!(error.message().contains("rename-pane requires a name"));
     }
 
     /// Verifies directional resize shorthand defaults to one cell when no
