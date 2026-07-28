@@ -206,25 +206,6 @@ impl AuditRecord {
         record.sanitized()
     }
 
-    /// Runs the logout operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn logout(
-        session_id: impl Into<String>,
-        actor: AuditActor,
-        provider: impl Into<String>,
-        account_id: impl Into<String>,
-        outcome: impl Into<String>,
-    ) -> Self {
-        let mut record = Self::new(session_id, actor, "auth", "logout")
-            .with_metadata("provider", provider)
-            .with_metadata("account_id", account_id);
-        record.outcome = outcome.into();
-        record.sanitized()
-    }
-
     /// Runs the mcp call operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

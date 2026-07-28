@@ -48,7 +48,7 @@ impl RuntimeSessionService {
     }
 
     /// Builds the safe selectable personality table for one pane.
-    pub(super) fn personality_record_browser(&self, pane_id: &str) -> Result<RecordBrowser> {
+    pub(crate) fn personality_record_browser(&self, pane_id: &str) -> Result<RecordBrowser> {
         let pane_selection = self
             .integration
             .agent_personality_selections()

@@ -438,11 +438,6 @@ fn audit_helpers_include_required_metadata_and_redact_secrets() {
     assert_metadata(&auth, "account_id", "[REDACTED]");
     assert!(auth.redactions.contains(&"metadata".to_string()));
 
-    let logout = AuditRecord::logout("$1", actor(), "openai", "acct1", "succeeded");
-    assert_event(&logout, "auth", "logout", "succeeded");
-    assert_metadata(&logout, "provider", "openai");
-    assert_metadata(&logout, "account_id", "acct1");
-
     let mcp = AuditRecord::mcp_call(
         "$1",
         actor(),

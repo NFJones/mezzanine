@@ -245,14 +245,32 @@ enabled = true
         "{}",
         page.raw_markdown
     );
-    assert_eq!(overlay.selections.len(), 2);
-    assert_eq!(overlay.active_selection_index, Some(0));
     assert_eq!(
-        overlay.selections[0].command,
+        overlay
+            .selections
+            .iter()
+            .map(|selection| selection.logical_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2
+    );
+    let recent_selection_index = overlay
+        .selections
+        .iter()
+        .position(|selection| selection.logical_id == 0)
+        .unwrap();
+    let older_selection_index = overlay
+        .selections
+        .iter()
+        .position(|selection| selection.logical_id == 1)
+        .unwrap();
+    assert_eq!(overlay.active_selection_index, Some(recent_selection_index));
+    assert_eq!(
+        overlay.selections[recent_selection_index].command,
         format!("/show-issues {}", recent_issue.id)
     );
     assert_eq!(
-        overlay.selections[1].command,
+        overlay.selections[older_selection_index].command,
         format!("/show-issues {}", older_issue.id)
     );
     assert!(
@@ -287,9 +305,13 @@ enabled = true
     );
     assert!(
         overlay
-            .lines
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .records()
             .iter()
-            .any(|line| line.contains(&cross_project_issue.id))
+            .any(|record| record.id == cross_project_issue.id)
     );
 
     service
@@ -308,14 +330,23 @@ enabled = true
     let overlay = service.primary_display_overlay().unwrap();
     assert!(
         !overlay
-            .lines
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .records()
             .iter()
-            .any(|line| line.contains(&cross_project_issue.id))
+            .any(|record| record.id == cross_project_issue.id)
     );
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[B");
     let overlay = service.primary_display_overlay().unwrap();
-    assert_eq!(overlay.active_selection_index, Some(1));
+    let older_selection_index = overlay
+        .selections
+        .iter()
+        .position(|selection| selection.logical_id == 1)
+        .unwrap();
+    assert_eq!(overlay.active_selection_index, Some(older_selection_index));
     assert_eq!(
         overlay
             .record_browser
@@ -569,11 +600,27 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
         "{}",
         page.raw_markdown
     );
-    assert_eq!(overlay.selections.len(), 3);
-    assert_eq!(overlay.active_selection_index, Some(0));
-    assert_eq!(overlay.selections[0].command, "/show-context 1");
-    assert_eq!(overlay.selections[1].command, "/show-context 2");
-    assert_eq!(overlay.selections[2].command, "/show-context 3");
+    assert_eq!(
+        overlay
+            .selections
+            .iter()
+            .map(|selection| selection.logical_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
+    for (logical_id, command) in [
+        (0, "/show-context 1"),
+        (1, "/show-context 2"),
+        (2, "/show-context 3"),
+    ] {
+        assert!(
+            overlay.selections.iter().any(|selection| {
+                selection.logical_id == logical_id && selection.command == command
+            }),
+            "{overlay:?}"
+        );
+    }
     assert!(
         !overlay
             .lines
@@ -585,19 +632,43 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
 
     let overlay = service.primary_display_overlay().unwrap();
     let record_browser = overlay.record_browser.as_ref().unwrap();
-    assert_eq!(record_browser.browser.active_index(), 0);
-    assert_eq!(overlay.active_selection_index, Some(1));
-    assert_eq!(record_browser.browser.active_record_id(), Some("1"));
+    let second_selection_index = overlay
+        .selections
+        .iter()
+        .position(|selection| selection.logical_id == 1)
+        .unwrap();
+    assert_eq!(record_browser.browser.active_index(), 1);
+    assert_eq!(overlay.active_selection_index, Some(second_selection_index));
+    assert_eq!(record_browser.browser.active_record_id(), Some("2"));
 
     apply_record_browser_input(&mut service, &primary, b"d");
 
     let overlay = service.primary_display_overlay().unwrap();
     let record_browser = overlay.record_browser.as_ref().unwrap();
+    let successor_selection_index = overlay
+        .selections
+        .iter()
+        .position(|selection| selection.logical_id == 1)
+        .unwrap();
     assert_eq!(record_browser.browser.active_index(), 1);
-    assert_eq!(overlay.active_selection_index, Some(1));
+    assert_eq!(
+        overlay.active_selection_index,
+        Some(successor_selection_index)
+    );
     assert_eq!(record_browser.browser.active_record_id(), Some("2"));
-    assert_eq!(overlay.selections.len(), 2);
-    assert_eq!(overlay.selections[1].command, "/show-context 2");
+    assert_eq!(
+        overlay
+            .selections
+            .iter()
+            .map(|selection| selection.logical_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2
+    );
+    assert_eq!(
+        overlay.selections[successor_selection_index].command,
+        "/show-context 2"
+    );
 
     apply_record_browser_input(&mut service, &primary, b"d");
 
@@ -826,10 +897,9 @@ fn runtime_agent_shell_list_personalities_selects_the_focused_profile() {
         }])
         .unwrap();
 
-    let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"personalities","method":"agent/shell/command","params":{"idempotency_key":"personalities","input":"/list-personalities"}}"#,
-        &primary,
-    );
+    let response = service
+        .execute_agent_shell_command(&primary, "/list-personalities")
+        .unwrap();
     assert!(response.contains(r#""kind":"display""#), "{response}");
     assert!(
         response.contains(r#""command":"list-personalities""#),
@@ -914,10 +984,9 @@ fn runtime_agent_shell_list_personalities_validates_arguments_and_empty_state() 
         "{invalid}"
     );
 
-    let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"personalities-empty","method":"agent/shell/command","params":{"idempotency_key":"personalities-empty","input":"/list-personalities"}}"#,
-        &primary,
-    );
+    let response = service
+        .execute_agent_shell_command(&primary, "/list-personalities")
+        .unwrap();
     service
         .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
         .unwrap();
@@ -1628,18 +1697,33 @@ fn runtime_agent_shell_show_memories_opens_arrow_selected_table_record() {
         "{}",
         page.raw_markdown
     );
-    assert_eq!(overlay.selections.len(), 2);
+    assert_eq!(
+        overlay
+            .selections
+            .iter()
+            .map(|selection| selection.logical_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2
+    );
+    let second_selection_index = overlay
+        .selections
+        .iter()
+        .position(|selection| selection.logical_id == 1)
+        .unwrap();
     assert_eq!(overlay.active_selection_index, Some(0));
-    let second_id = overlay.selections[1]
-        .command
-        .strip_prefix("/show-memories ")
-        .unwrap()
-        .to_string();
+    let second_id = overlay.record_browser.as_ref().unwrap().browser.records()[1]
+        .id
+        .clone();
+    assert_eq!(
+        overlay.selections[second_selection_index].command,
+        format!("/show-memories {second_id}")
+    );
     let expected_detail = store.inspect(&second_id).unwrap().content;
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[B");
     let overlay = service.primary_display_overlay().unwrap();
-    assert_eq!(overlay.active_selection_index, Some(1));
+    assert_eq!(overlay.active_selection_index, Some(second_selection_index));
     assert_eq!(
         overlay
             .record_browser

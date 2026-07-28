@@ -38,7 +38,10 @@ fn rename_pane_updates_active_pane_with_explicit_provenance() {
 
     assert_eq!(
         session.pane_title_state(&pane_id).unwrap(),
-        ("build logs".to_string(), mez_mux::PaneTitleSource::Explicit)
+        (
+            "build logs".to_string(),
+            mez_mux::layout::PaneTitleSource::Explicit
+        )
     );
     assert!(
         !session

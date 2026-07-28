@@ -60,6 +60,22 @@ fn record_browser_active_index(overlay: &RuntimeDisplayOverlay, default: usize) 
         .unwrap_or(default)
 }
 
+/// Synchronizes the retained record-browser cursor with the overlay's focused
+/// physical link fragment.
+fn synchronize_record_browser_active_index(overlay: &mut RuntimeDisplayOverlay) {
+    let Some(default) = overlay
+        .record_browser
+        .as_ref()
+        .map(|record_browser| record_browser.browser.active_index())
+    else {
+        return;
+    };
+    let active_index = record_browser_active_index(overlay, default);
+    if let Some(record_browser) = overlay.record_browser.as_mut() {
+        record_browser.browser.set_active_index(active_index);
+    }
+}
+
 impl RuntimeSessionService {
     /// Reflows an active record browser after terminal geometry changes.
     ///
@@ -753,6 +769,11 @@ impl RuntimeSessionService {
                 self.session.authoritative_size,
             )
         };
+        if matches!(outcome, OverlayInputOutcome::Updated)
+            && let Some(overlay) = self.presentation.primary_display_overlay.as_mut()
+        {
+            synchronize_record_browser_active_index(overlay);
+        }
         match outcome {
             OverlayInputOutcome::Close => {
                 self.presentation.primary_display_overlay = None;

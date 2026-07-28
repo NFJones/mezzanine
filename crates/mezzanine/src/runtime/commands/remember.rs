@@ -1,8 +1,8 @@
-//! Agent memory and git-diff helper routines for runtime commands.
+//! Agent memory helper routines for runtime commands.
 //!
 //! The parent command module owns live command execution. This child module
 //! keeps `/remember` model-request shaping, model-output validation, memory
-//! record construction, and git snapshot helpers together so durable-memory
+//! record construction, and persistence helpers together so durable-memory
 //! command behavior is isolated from unrelated command families.
 
 use super::compaction;
@@ -24,7 +24,7 @@ use super::{
 use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
 use crate::runtime::{AgentRememberEvent, RenderInvalidationReason, RuntimeTransition};
 use mez_agent::memory::{MemoryKind, MemoryState};
-use std::{fs, path::PathBuf, process::Command};
+use std::{fs, path::PathBuf};
 
 /// Normalized memory candidate returned by the `/remember` model request.
 pub(super) struct RuntimeRememberCandidate {
@@ -323,130 +323,6 @@ pub(super) fn runtime_remember_scope_display(scope: &MemoryScope) -> String {
             agent_id,
         } => format!("agent:{session_id}:{agent_id}"),
     }
-}
-
-/// Runs the runtime git repository root operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_git_repository_root(working_directory: &PathBuf) -> Result<Option<PathBuf>> {
-    let output = match runtime_git_output(working_directory, &["rev-parse", "--show-toplevel"]) {
-        Ok(output) => output,
-        Err(error) if error.kind() == crate::error::MezErrorKind::Io => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if root.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(PathBuf::from(root)))
-}
-
-/// Runs the runtime git text operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_git_text(repository_root: &PathBuf, args: &[&str]) -> Result<String> {
-    let output = runtime_git_output(repository_root, args)?;
-    if !output.status.success() {
-        return Err(runtime_git_status_error(args, &output));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-/// Runs the runtime git untracked files operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_git_untracked_files(repository_root: &PathBuf) -> Result<Vec<String>> {
-    let output = runtime_git_output(
-        repository_root,
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-    )?;
-    if !output.status.success() {
-        return Err(runtime_git_status_error(
-            &["ls-files", "--others", "--exclude-standard", "-z"],
-            &output,
-        ));
-    }
-    Ok(output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter(|bytes| !bytes.is_empty())
-        .map(|bytes| String::from_utf8_lossy(bytes).to_string())
-        .collect())
-}
-
-/// Runs the runtime git untracked diff operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_git_untracked_diff(repository_root: &PathBuf, file: &str) -> Result<String> {
-    let file_path = repository_root.join(file);
-    let output = Command::new("git")
-        .args(["diff", "--no-index", "--no-ext-diff", "--no-color", "--"])
-        .arg("/dev/null")
-        .arg(&file_path)
-        .current_dir(repository_root)
-        .output()
-        .map_err(|error| {
-            MezError::new(
-                crate::error::MezErrorKind::Io,
-                format!("failed to run git diff for untracked file `{file}`: {error}"),
-            )
-        })?;
-    match output.status.code() {
-        Some(0 | 1) => Ok(String::from_utf8_lossy(&output.stdout).to_string()),
-        _ => Err(runtime_git_status_error(
-            &["diff", "--no-index", "--no-ext-diff", "--no-color"],
-            &output,
-        )),
-    }
-}
-
-/// Runs the runtime git output operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_git_output(repository_root: &PathBuf, args: &[&str]) -> Result<std::process::Output> {
-    Command::new("git")
-        .args(args)
-        .current_dir(repository_root)
-        .output()
-        .map_err(|error| {
-            MezError::new(
-                crate::error::MezErrorKind::Io,
-                format!("failed to run git {}: {error}", args.join(" ")),
-            )
-        })
-}
-
-/// Runs the runtime git status error operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_git_status_error(args: &[&str], output: &std::process::Output) -> MezError {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let detail = if stderr.is_empty() {
-        "no stderr".to_string()
-    } else {
-        stderr
-    };
-    MezError::invalid_state(format!(
-        "git {} exited with status {:?}: {}",
-        args.join(" "),
-        output.status.code(),
-        detail
-    ))
 }
 
 impl RuntimeSessionService {

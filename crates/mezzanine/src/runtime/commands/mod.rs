@@ -22,11 +22,10 @@ use super::{
     ScheduledWorkKind, SplitDirection, TranscriptEntry, TranscriptRole, TrustDecision,
     agent_shell_visibility_json_name, agent_subshell_enter_command, compose_effective_config,
     current_unix_seconds, discover_project_root, execute_agent_shell_command_with_context,
-    execute_command, execute_runtime_command_sequence, execute_runtime_command_sequence_async,
-    json_escape, parse_slash_command, runtime_add_command_rule,
-    runtime_agent_shell_command_response_json, runtime_agent_shell_prompt_turn_response_json,
-    runtime_agent_shell_stop_response_json, runtime_agent_turn_state_name,
-    runtime_apply_persisted_config_mutation_batch,
+    execute_runtime_command_sequence, execute_runtime_command_sequence_async, json_escape,
+    parse_slash_command, runtime_add_command_rule, runtime_agent_shell_command_response_json,
+    runtime_agent_shell_prompt_turn_response_json, runtime_agent_shell_stop_response_json,
+    runtime_agent_turn_state_name, runtime_apply_persisted_config_mutation_batch,
     runtime_apply_persisted_config_mutation_batch_atomically, runtime_approval_command,
     runtime_approval_policy_name, runtime_bypass_approvals_command, runtime_command_outcomes_json,
     runtime_cooperation_mode_name, runtime_effective_config_value,
@@ -96,10 +95,7 @@ pub(super) use model_catalog::RuntimeModelCatalog;
 use model_catalog::runtime_markdown_table;
 #[cfg(test)]
 use model_catalog::runtime_model_catalog_unavailable_reason;
-use remember::{
-    runtime_git_repository_root, runtime_git_text, runtime_git_untracked_diff,
-    runtime_git_untracked_files, runtime_remember_scope_display,
-};
+use remember::runtime_remember_scope_display;
 use slash::{
     runtime_agent_init_scaffold, runtime_single_approval_invocation, runtime_single_mode_arg,
     runtime_single_permissions_invocation, validate_agent_personality,

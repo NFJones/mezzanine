@@ -50,8 +50,8 @@ use crate::security::auth::{
     run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,
 };
 use crate::security::project::{
-    ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
-    discover_existing_overlays, discover_project_root,
+    ProjectTrustStore, TrustDecision, default_trust_database_path, discover_existing_overlays,
+    discover_project_root,
 };
 use crate::storage::memory::PersistentMemoryStore;
 use crate::storage::registry::{
