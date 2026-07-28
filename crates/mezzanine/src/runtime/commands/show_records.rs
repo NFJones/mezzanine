@@ -187,6 +187,11 @@ impl RuntimeSessionService {
                     "approval browser records cannot be deleted",
                 ));
             }
+            RuntimeRecordBrowserOverlaySource::Personalities { .. } => {
+                return Err(MezError::invalid_state(
+                    "personality browser records cannot be deleted",
+                ));
+            }
             RuntimeRecordBrowserOverlaySource::Context {
                 conversation_id,
                 pane_id,
@@ -510,6 +515,9 @@ impl RuntimeSessionService {
     ) -> Result<RecordBrowser> {
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => self.approval_record_browser(),
+            RuntimeRecordBrowserOverlaySource::Personalities { pane_id } => {
+                self.personality_record_browser(pane_id)
+            }
             RuntimeRecordBrowserOverlaySource::Context {
                 conversation_id,
                 pane_id,
@@ -605,6 +613,7 @@ impl RuntimeSessionService {
     ) -> RuntimeRecordBrowserOverlaySource {
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => source.clone(),
+            RuntimeRecordBrowserOverlaySource::Personalities { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Context { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
@@ -657,6 +666,7 @@ impl RuntimeSessionService {
         let value = value.trim();
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => Ok(source.clone()),
+            RuntimeRecordBrowserOverlaySource::Personalities { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Context { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
@@ -801,6 +811,9 @@ fn set_record_browser_scope_indicator(
 ) {
     let indicator = match source {
         RuntimeRecordBrowserOverlaySource::Approvals => "live session".to_string(),
+        RuntimeRecordBrowserOverlaySource::Personalities { pane_id } => {
+            format!("current pane {pane_id}")
+        }
         RuntimeRecordBrowserOverlaySource::Context { pane_id, .. } => {
             format!("current pane {pane_id}")
         }

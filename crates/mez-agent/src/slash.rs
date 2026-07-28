@@ -142,6 +142,12 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("latency", &[], SlashCommandEffect::PolicyMutation, true),
         slash("routing", &[], SlashCommandEffect::PolicyMutation, true),
         slash("personality", &[], SlashCommandEffect::PolicyMutation, true),
+        slash(
+            "list-personalities",
+            &[],
+            SlashCommandEffect::PolicyMutation,
+            true,
+        ),
         slash("loop", &[], SlashCommandEffect::SessionMutation, false),
         slash("stop", &[], SlashCommandEffect::BackgroundJobMutation, true),
         slash("fork", &[], SlashCommandEffect::SessionMutation, false),
@@ -242,6 +248,18 @@ mod tests {
     }
 
     #[test]
+    /// Verifies the selectable personality browser is registered as a
+    /// queueable policy mutation because activating a row changes pane state.
+    fn slash_parser_registers_list_personalities_as_policy_mutation() {
+        let invocation = parse_slash_command("/list-personalities").unwrap().unwrap();
+
+        assert_eq!(invocation.name, "list-personalities");
+        assert_eq!(invocation.args, "");
+        assert_eq!(invocation.effect, SlashCommandEffect::PolicyMutation);
+        assert!(invocation.queueable_while_running);
+    }
+
+    #[test]
     /// Verifies ordinary prompts bypass slash parsing and malformed or unknown
     /// slash commands fail through stable typed errors.
     fn slash_parser_rejects_invalid_commands() {
@@ -273,6 +291,7 @@ mod tests {
             "directive",
             "list-sessions",
             "list-skills",
+            "list-personalities",
             "copy-context",
             "copy-trace-log",
             "copy-patches",

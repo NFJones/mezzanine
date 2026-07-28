@@ -326,6 +326,51 @@ impl RuntimeSessionService {
         }
         let active_index =
             record_browser_active_index(overlay, record_browser.browser.active_index());
+        if matches!(selector_input_action(input), SelectorInputAction::Select)
+            && let Some(RuntimeRecordBrowserOverlaySource::Personalities { pane_id }) =
+                record_browser.source.clone()
+        {
+            let mut selected = record_browser.browser.clone();
+            selected.set_active_index(active_index);
+            let outcome = selected
+                .apply_action(mez_mux::record_browser::RecordBrowserAction::SubmitActive)?;
+            let mez_mux::record_browser::RecordBrowserOutcome::SelectionSubmitted { id } = outcome
+            else {
+                return Ok(None);
+            };
+            let command = format!("/personality {id}");
+            let selection_error =
+                match self.execute_agent_shell_command(primary_client_id, &command) {
+                    Ok(response) => serde_json::from_str::<serde_json::Value>(&response)
+                        .ok()
+                        .filter(|value| {
+                            value.get("kind").and_then(serde_json::Value::as_str) != Some("mutated")
+                        })
+                        .and_then(|value| {
+                            value
+                                .get("body")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string)
+                        }),
+                    Err(error) => Some(error.message().to_string()),
+                };
+            let mut browser = self.personality_record_browser(&pane_id)?;
+            browser.set_active_record_id(&id);
+            browser.set_error(selection_error);
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(None);
+            };
+            record_browser.browser = browser;
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
+        }
         let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(Some(false));
         };
@@ -393,11 +438,14 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         let outcome = record_browser.browser.apply_action(action)?;
-        if matches!(
-            outcome,
-            mez_mux::record_browser::RecordBrowserOutcome::Ignored
-        ) {
-            return Ok(None);
+        match outcome {
+            mez_mux::record_browser::RecordBrowserOutcome::Ignored => return Ok(None),
+            mez_mux::record_browser::RecordBrowserOutcome::SelectionSubmitted { .. } => {
+                return Err(MezError::invalid_state(
+                    "record selection submission requires a selectable browser source",
+                ));
+            }
+            _ => {}
         }
         Ok(Some(render_record_browser_overlay(
             overlay,

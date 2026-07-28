@@ -787,6 +787,187 @@ fn runtime_record_browser_editable_prompts_accept_pager_hotkey_characters() {
     ));
 }
 
+/// Verifies `/list-personalities` renders only safe configured profile metadata
+/// and applies the focused row through the pane-local personality command.
+///
+/// The record browser must preserve deterministic profile ordering, identify
+/// the inherited default, and refresh in place after Enter without exposing
+/// configured system instructions or opening a record detail page.
+#[test]
+fn runtime_agent_shell_list_personalities_selects_the_focused_profile() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 16).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_personality = \"alpha\"\n[personalities.alpha]\nname = \"Alpha\"\nsystem_prompt = \"alpha secret instructions\"\nresponse_style = \"terse\"\nplanning_enabled = true\n[personalities.bravo]\nname = \"Bravo\"\ninstructions = \"bravo secret instructions\"\nrouting_enabled = false\n"
+                .to_string(),
+        }])
+        .unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"personalities","method":"agent/shell/command","params":{"idempotency_key":"personalities","input":"/list-personalities"}}"#,
+        &primary,
+    );
+    assert!(response.contains(r#""kind":"display""#), "{response}");
+    assert!(
+        response.contains(r#""command":"list-personalities""#),
+        "{response}"
+    );
+    assert!(!response.contains("secret instructions"), "{response}");
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    let overlay = service.primary_display_overlay().unwrap();
+    let browser = &overlay.record_browser.as_ref().unwrap().browser;
+    let page = browser.render_page();
+    assert!(
+        page.raw_markdown.contains(
+            "| Personality | Name | Selected | Selection source | Response style | Model profile | Planning | Routing |"
+        ),
+        "{}",
+        page.raw_markdown
+    );
+    assert!(
+        page.raw_markdown
+            .contains("| [`alpha`](mez-agent:%2Fpersonality%20alpha) | Alpha | yes | default | terse | inherit | on | inherit |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert!(
+        page.raw_markdown
+            .contains("| [`bravo`](mez-agent:%2Fpersonality%20bravo) | Bravo | no | — | default | inherit | inherit | off |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert!(!page.raw_markdown.contains("secret instructions"));
+    assert_eq!(browser.active_record_id(), Some("alpha"));
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+    apply_record_browser_input(&mut service, &primary, b"\r");
+
+    assert_eq!(
+        service
+            .integration
+            .agent_personality_selections()
+            .get(&pane_id)
+            .map(String::as_str),
+        Some("bravo")
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    let browser = &overlay.record_browser.as_ref().unwrap().browser;
+    assert_eq!(browser.active_record_id(), Some("bravo"));
+    assert!(!browser.is_detail_view());
+    let refreshed = browser.render_page().raw_markdown;
+    assert!(
+        refreshed.contains("| [`alpha`](mez-agent:%2Fpersonality%20alpha) | Alpha | no | — | terse | inherit | on | inherit |"),
+        "{refreshed}"
+    );
+    assert!(
+        refreshed.contains("| [`bravo`](mez-agent:%2Fpersonality%20bravo) | Bravo | yes | pane | default | inherit | inherit | off |"),
+        "{refreshed}"
+    );
+}
+
+/// Verifies `/list-personalities` rejects arguments and renders a useful,
+/// non-actionable empty browser when no personality profiles are configured.
+#[test]
+fn runtime_agent_shell_list_personalities_validates_arguments_and_empty_state() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+
+    let invalid = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"personalities-invalid","method":"agent/shell/command","params":{"idempotency_key":"personalities-invalid","input":"/list-personalities extra"}}"#,
+        &primary,
+    );
+    assert!(
+        invalid.contains("list-personalities does not accept arguments"),
+        "{invalid}"
+    );
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"personalities-empty","method":"agent/shell/command","params":{"idempotency_key":"personalities-empty","input":"/list-personalities"}}"#,
+        &primary,
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
+    let browser = &overlay.record_browser.as_ref().unwrap().browser;
+    assert!(browser.records().is_empty());
+    assert!(
+        browser
+            .render_page()
+            .raw_markdown
+            .contains("No personalities are configured. Add profiles under `[personalities]`.")
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    assert!(
+        service
+            .integration
+            .agent_personality_selections()
+            .is_empty()
+    );
+}
+
+/// Verifies an obsolete pane-local personality selection does not suppress a
+/// still-valid configured default or mislabel the effective selection source.
+///
+/// Config reloads may remove a profile while retained pane metadata still
+/// names it. The browser must recover by marking the configured default rather
+/// than presenting every row as unselected.
+#[test]
+fn runtime_agent_shell_list_personalities_falls_back_from_stale_pane_selection() {
+    let mut service = test_runtime_service();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_personality = \"alpha\"\n[personalities.alpha]\nname = \"Alpha\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    service
+        .integration
+        .agent_personality_selections_mut()
+        .insert(pane_id.clone(), "removed-profile".to_string());
+
+    let browser = service.personality_record_browser(&pane_id).unwrap();
+    let markdown = browser.render_page().raw_markdown;
+
+    assert_eq!(browser.active_record_id(), Some("alpha"));
+    assert!(
+        markdown.contains(
+            "| [`alpha`](mez-agent:%2Fpersonality%20alpha) | Alpha | yes | default | default | inherit | inherit | inherit |"
+        ),
+        "{markdown}"
+    );
+}
+
 /// Sends one key sequence through the attached terminal into the active pager.
 fn apply_record_browser_input(
     service: &mut RuntimeSessionService,

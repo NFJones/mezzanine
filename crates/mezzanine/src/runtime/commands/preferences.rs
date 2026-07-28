@@ -12,8 +12,146 @@ use super::{
     runtime_single_mode_arg, validate_agent_personality,
 };
 use mez_agent::AutoSizingRoutingPolicy;
+use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 
 impl RuntimeSessionService {
+    /// Opens `/list-personalities` as a selectable pane-local personality table.
+    pub(super) fn execute_agent_shell_list_personalities_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?.ok_or_else(|| {
+            MezError::invalid_args("list-personalities command must be a slash command")
+        })?;
+        if !invocation.args.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "list-personalities does not accept arguments",
+            ));
+        }
+        let browser = self.personality_record_browser(pane_id)?;
+        let page = browser.render_page();
+        self.register_pending_record_browser_overlay(
+            pane_id,
+            "list-personalities",
+            browser,
+            Some(
+                crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::Personalities {
+                    pane_id: pane_id.to_string(),
+                },
+            ),
+        );
+        Ok(AgentShellCommandOutcome::Display {
+            command: "list-personalities".to_string(),
+            body: page.raw_markdown,
+        })
+    }
+
+    /// Builds the safe selectable personality table for one pane.
+    pub(super) fn personality_record_browser(&self, pane_id: &str) -> Result<RecordBrowser> {
+        let pane_selection = self
+            .integration
+            .agent_personality_selections()
+            .get(pane_id)
+            .map(String::as_str)
+            .filter(|profile_id| {
+                self.integration
+                    .agent_personality_profiles()
+                    .contains_key(*profile_id)
+            });
+        let selected = self.agent_selected_personality_profile_id(pane_id);
+        let selection_source = selected.map(|_| {
+            if pane_selection.is_some() {
+                "pane"
+            } else {
+                "default"
+            }
+        });
+        let records = self
+            .integration
+            .agent_personality_profiles()
+            .iter()
+            .map(|(id, profile)| {
+                let is_selected = selected == Some(id.as_str());
+                RecordBrowserRecord {
+                    id: id.clone(),
+                    open_command: Some(format!("/personality {id}")),
+                    title: profile.name.clone().unwrap_or_else(|| id.clone()),
+                    metadata: vec![
+                        (
+                            "name".to_string(),
+                            profile.name.clone().unwrap_or_else(|| "—".to_string()),
+                        ),
+                        (
+                            "selected".to_string(),
+                            if is_selected { "yes" } else { "no" }.to_string(),
+                        ),
+                        (
+                            "selection_source".to_string(),
+                            if is_selected {
+                                selection_source.unwrap_or("none")
+                            } else {
+                                "—"
+                            }
+                            .to_string(),
+                        ),
+                        (
+                            "response_style".to_string(),
+                            profile
+                                .response_style
+                                .clone()
+                                .unwrap_or_else(|| "default".to_string()),
+                        ),
+                        (
+                            "model_profile".to_string(),
+                            profile
+                                .model_profile
+                                .clone()
+                                .unwrap_or_else(|| "inherit".to_string()),
+                        ),
+                        (
+                            "planning".to_string(),
+                            personality_optional_bool(profile.planning_enabled),
+                        ),
+                        (
+                            "routing".to_string(),
+                            personality_optional_bool(profile.routing_enabled),
+                        ),
+                    ],
+                    markdown: String::new(),
+                }
+            })
+            .collect();
+        let mut browser = RecordBrowser::new("Personalities", records, Vec::new())?;
+        browser.set_table_id_column("Personality");
+        browser.set_table_columns_with_labels(vec![
+            ("Name".to_string(), "name".to_string()),
+            ("Selected".to_string(), "selected".to_string()),
+            (
+                "Selection source".to_string(),
+                "selection_source".to_string(),
+            ),
+            ("Response style".to_string(), "response_style".to_string()),
+            ("Model profile".to_string(), "model_profile".to_string()),
+            ("Planning".to_string(), "planning".to_string()),
+            ("Routing".to_string(), "routing".to_string()),
+        ]);
+        browser.set_help(
+            Some(
+                "**Keys:** `↑`/`↓` focus personality · `Enter` select · `/` search · `Esc` close"
+                    .to_string(),
+            ),
+            None,
+        );
+        browser.set_empty_message(Some(
+            "No personalities are configured. Add profiles under `[personalities]`.".to_string(),
+        ));
+        if let Some(selected) = selected {
+            browser.set_active_record_id(selected);
+        }
+        Ok(browser)
+    }
+
     /// Executes `/routing` against pane-scoped auto-sizing state.
     pub(crate) fn execute_agent_shell_routing_command(
         &mut self,
@@ -198,10 +336,10 @@ impl RuntimeSessionService {
             .get(requested)
             .cloned()
         {
+            self.apply_agent_personality_profile_overrides(pane_id, &profile)?;
             self.integration
                 .agent_personality_selections_mut()
                 .insert(pane_id.to_string(), requested.to_string());
-            self.apply_agent_personality_profile_overrides(pane_id, &profile)?;
             profile.response_style
         } else {
             self.integration
@@ -264,15 +402,16 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `pane_id`: The pane whose selected profile should be resolved.
     pub(super) fn agent_selected_personality_profile_id(&self, pane_id: &str) -> Option<&str> {
+        let profiles = self.integration.agent_personality_profiles();
         self.integration
             .agent_personality_selections()
             .get(pane_id)
             .map(String::as_str)
-            .or(self.integration.default_agent_personality())
-            .filter(|profile_id| {
+            .filter(|profile_id| profiles.contains_key(*profile_id))
+            .or_else(|| {
                 self.integration
-                    .agent_personality_profiles()
-                    .contains_key(*profile_id)
+                    .default_agent_personality()
+                    .filter(|profile_id| profiles.contains_key(*profile_id))
             })
     }
 
@@ -311,4 +450,11 @@ impl RuntimeSessionService {
                 )
             })
     }
+}
+
+/// Formats one optional personality toggle without implying an override.
+fn personality_optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| if value { "on" } else { "off" }.to_string())
+        .unwrap_or_else(|| "inherit".to_string())
 }

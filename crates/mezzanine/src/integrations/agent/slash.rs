@@ -428,6 +428,10 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "provider thinking mode changes require the live runtime".to_string(),
         },
+        "list-personalities" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "personality browsing requires live runtime configuration".to_string(),
+        },
         "clear" => {
             let session = store.start_new_conversation(pane_id)?;
             AgentShellCommandOutcome::Mutated {

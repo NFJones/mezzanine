@@ -115,13 +115,14 @@ Common slash commands:
 | `/sync-builtin-skills` | Resync Mez-managed built-in skill copies in the user config root and report created, replaced, preserved, and current entries. |
 | `/list-macros` | Show the effective agent macro catalog available to the pane. |
 | `/list-mcp` | Show configured MCP tools. |
+| `/list-personalities` | Browse configured personalities, show the active/default selection, and select one for the pane. |
 | `/compact` | Compact older conversation context while opportunistically pruning expired persistent records. |
 | `/issue` | Add, show, update, query, or delete local project issues for the active pane repository, including mutable progress notes. |
 | `/toolchain` | Inspect typed sandbox toolchains in the command pager; status, list, and detection are searchable/copyable, while mutations and failures use transient notices without entering pane history. |
 | `/show-issues` | Browse open project issues, apply filters, open record details, and save the Markdown view to a file. |
 | `/show-memories` | Browse project-scoped persistent memories, apply filters, open record details, and save the Markdown view to a file. |
 
-`/show-context`, `/show-issues`, and `/show-memories` use tables whose left-most stable record ID is the only selectable link in each row; arrow keys move between IDs and `Enter` opens the focused record. The issue and memory browsers use the shared command-output pager's normal `/` in-page text search, while record-browser keys provide database-backed actions: `k` opens the kind dropdown selector, `p` opens the project/scope filter, `x` opens the full-text filter, `s` opens the save prompt, and `Esc` closes prompts, returns from detail to list, or exits the list view. Lists use the available overlay body width; details use the smaller of that width and `terminal.agent_wrap_column_cap`. Copy and save retain raw Markdown.
+`/show-context`, `/show-issues`, `/show-memories`, and `/list-personalities` use tables whose left-most stable record ID is the selectable target in each row. Arrow keys move between IDs. `Enter` opens focused context, issue, and memory records; for `/list-personalities`, it selects the focused personality for the active pane and refreshes the selected marker in place. All retain the shared command-output pager's normal `/` in-page text search. Issue and memory record-browser keys provide database-backed actions: `k` opens the kind dropdown selector, `p` opens the project/scope filter, `x` opens the full-text filter, `s` opens the save prompt, and `Esc` closes prompts, returns from detail to list, or exits the list view. Lists use the available overlay body width; details use the smaller of that width and `terminal.agent_wrap_column_cap`. Copy and save retain raw Markdown. Personality rows expose only safe profile metadata and never configured prompt or instruction text.
 
 `/toolchain`, `/toolchain status`, `/toolchain list`, and `/toolchain detect KIND`
 also use the shared searchable and copyable command-output pager. Their Markdown

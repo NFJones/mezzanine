@@ -87,6 +87,8 @@ pub enum RecordBrowserAction {
     BackToList,
     /// Open the active list record as an in-browser detail view.
     OpenActive,
+    /// Submit the active list record id without opening its detail view.
+    SubmitActive,
     /// Begin editing one filter field.
     StartFilter(RecordBrowserFilterField),
     /// Begin editing a save destination path.
@@ -121,6 +123,11 @@ pub struct RecordBrowserPromptSelection {
 pub enum RecordBrowserOutcome {
     /// Browser state changed without requiring an external side effect.
     Updated,
+    /// The caller should apply the selected stable record id.
+    SelectionSubmitted {
+        /// Stable backend record id selected by the user.
+        id: String,
+    },
     /// A filter value was accepted and the caller should refresh records.
     FilterSubmitted {
         /// Filter field that changed.
@@ -357,6 +364,14 @@ impl RecordBrowser {
                 self.detail_index =
                     Some(self.active_index.min(self.records.len().saturating_sub(1)));
                 Ok(RecordBrowserOutcome::Updated)
+            }
+            RecordBrowserAction::SubmitActive => {
+                let Some(record) = self.records.get(self.active_index) else {
+                    return Ok(RecordBrowserOutcome::Ignored);
+                };
+                Ok(RecordBrowserOutcome::SelectionSubmitted {
+                    id: record.id.clone(),
+                })
             }
             RecordBrowserAction::BackToList => {
                 let changed = self.detail_index.take().is_some() || self.prompt.take().is_some();
@@ -839,6 +854,40 @@ mod tests {
         );
         assert!(!list_page.markdown.contains("> issue-"));
         assert!(!list_page.markdown.contains("  issue-"));
+    }
+
+    /// Verifies row submission returns the focused stable id without changing
+    /// the browser into detail mode, while an empty browser ignores submission.
+    #[test]
+    fn record_browser_submits_active_record_without_opening_detail() {
+        let mut browser = RecordBrowser::new(
+            "Issues",
+            vec![
+                browser_record("issue-1", "First"),
+                browser_record("issue-2", "Second"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        browser.set_active_index(1);
+
+        assert_eq!(
+            browser
+                .apply_action(RecordBrowserAction::SubmitActive)
+                .unwrap(),
+            RecordBrowserOutcome::SelectionSubmitted {
+                id: "issue-2".to_string(),
+            }
+        );
+        assert!(!browser.is_detail_view());
+
+        let mut empty = RecordBrowser::new("Issues", Vec::new(), Vec::new()).unwrap();
+        assert_eq!(
+            empty
+                .apply_action(RecordBrowserAction::SubmitActive)
+                .unwrap(),
+            RecordBrowserOutcome::Ignored
+        );
     }
 
     /// Verifies filter and save prompts produce typed outcomes while empty and

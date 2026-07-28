@@ -810,6 +810,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "model"
         | "permissions"
         | "personality"
+        | "list-personalities"
         | "refresh-provider-info"
         | "toolchain"
         | "trust" => "configuration",
@@ -877,6 +878,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "routing" => "toggle pane-local automatic model sizing.",
         "directive" => "inspect or set a session-scoped developer-instruction addendum.",
         "personality" => "inspect or change response personality.",
+        "list-personalities" => "browse and select configured response personalities.",
         "loop" => {
             "iterate on a prompt until an iteration completes without apply_patch actions or the loop limit is reached; pass --fork to use fresh parent-conversation forks, --new to use fresh empty conversations, or --limit <int> to override the loop limit for this command."
         }

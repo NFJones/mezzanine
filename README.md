@@ -260,10 +260,13 @@ Command output shown in the pager supports `/` text search. Submit a query to
 jump to the next match; submit `/` with an empty query to repeat the last search,
 wrapping to the top when no later match exists.
 
-The `/show-context`, `/show-issues`, and `/show-memories` record browsers render
+The `/show-context`, `/show-issues`, `/show-memories`, and
+`/list-personalities` record browsers render
 their list views as tables whose left-most stable ID is the only selectable link
-for each record. Arrow keys move between those ID links and `Enter` opens the
-focused record. The issue and memory browsers keep `/` in-page search behavior.
+for each record. Arrow keys move between those ID links. `Enter` opens the
+focused context, issue, or memory record; in `/list-personalities`, it selects
+the focused personality for the active pane and refreshes the table in place.
+The browsers keep `/` in-page search behavior.
 `/show-issues --project` and `--project-glob` suggest known
 project paths as Tab completions and shadow hints while retaining glob filters.
 They add browser-specific keys: `k` opens a kind dropdown selector,
@@ -306,6 +309,7 @@ Useful slash commands include:
 | `/sync-builtin-skills` | Resync managed built-in skill copies in the user config root. |
 | `/list-macros` | Show the agent macros available to the active pane.   |
 | `/list-mcp`    | List configured MCP tools.                            |
+| `/list-personalities` | Browse configured personalities and select one for the active pane. |
 | `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions; persistent memory is enabled by default. |
 | `/toolchain`   | Inspect, detect, enable, disable, or fully reload typed sandbox toolchains for the active pane. |
 | `/show-context` | Browse the current pane conversation in transcript order, open individual entries, and delete the selected entry with `d`. |

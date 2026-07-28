@@ -2797,6 +2797,17 @@ agent prompt completion, and MAY continue to accept ad hoc response-style text
 for pane-local style preferences. A selected profile's `system_prompt` or
 `instructions` MUST be treated as provider system context.
 
+The `/list-personalities` command MUST accept no arguments and MUST display
+configured personality profiles in deterministic profile-id order through the
+shared pager-backed record browser. Its table MUST identify the effective
+selection and whether it comes from a pane override or
+`agents.default_personality`. Arrow keys MUST move row focus, and `Enter` MUST
+apply the focused profile to the issuing pane through the authenticated
+`/personality <id>` command path, then refresh the table in place without
+opening a detail view. The table MUST NOT expose `system_prompt` or
+`instructions`. When no profiles are configured, it MUST render a
+non-actionable empty state.
+
 The `permissions` table MUST support `approval_policy`, `sandbox`,
 `read_scopes`, `write_scopes`, `trusted_directories`, `trusted_projects`,
 `command_rules`, `session_command_rules`, `global_command_rules`,
@@ -6386,6 +6397,12 @@ The baseline command capabilities are:
   The command MUST update the pane-local agent preference and MUST checkpoint
   that preference with other pane-scoped agent shell preferences.
 - `/personality`: Configure response style when supported.
+- `/list-personalities`: Browse configured personality profiles in a
+  pager-backed table. The command MUST accept no arguments, mark the effective
+  pane or default selection, preserve generic `/` pager search, and use `Enter`
+  to select the focused row for the issuing pane through the authenticated
+  `/personality` mutation path. Successful selection MUST refresh the table in
+  place, and configured prompt or instruction text MUST never be displayed.
 - `/stop`: Stop background jobs owned by the agent. User-initiated stops MUST
   settle the affected turn as interrupted/cancelled rather than failed.
 - `/fork`: Fork the current conversation into a new agent thread.

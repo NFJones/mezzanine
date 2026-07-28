@@ -268,7 +268,7 @@ pub(super) fn record_browser_command_name(command: &str) -> Option<String> {
     let name = body.split_whitespace().next()?;
     matches!(
         name,
-        "show-approvals" | "show-context" | "show-issues" | "show-memories"
+        "list-personalities" | "show-approvals" | "show-context" | "show-issues" | "show-memories"
     )
     .then(|| name.to_string())
 }
