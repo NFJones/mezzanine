@@ -112,6 +112,30 @@ fn clap_renders_config_help_for_help_flag_and_empty_command() {
     );
     assert!(sandbox_stderr.is_empty());
 
+    let mut trust_stdout = Vec::new();
+    let mut trust_stderr = Vec::new();
+    run_with_plain(
+        vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "trust".to_string(),
+            "--help".to_string(),
+        ],
+        env,
+        false,
+        &mut trust_stdout,
+        &mut trust_stderr,
+    )
+    .unwrap();
+    let trust_output = String::from_utf8(trust_stdout).unwrap();
+    assert!(
+        trust_output.contains("Usage: mez sandbox trust"),
+        "{trust_output}"
+    );
+    assert!(trust_output.contains("add"), "{trust_output}");
+    assert!(!trust_output.contains("  trust"), "{trust_output}");
+    assert!(trust_stderr.is_empty());
+
     let _ = fs::remove_dir_all(home);
 }
 

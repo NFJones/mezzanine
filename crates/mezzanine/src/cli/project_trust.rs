@@ -48,7 +48,7 @@ pub(super) fn run_project_trust<W: Write>(
             let output = project_record_json(record)?;
             write_json_or_plain(stdout, output_format, &output)?;
         }
-        ProjectTrustCliCommand::Trust { root } => {
+        ProjectTrustCliCommand::Add { root } => {
             persist_project_trust_decision(
                 &trust_path,
                 root,
@@ -113,8 +113,8 @@ enum ProjectTrustCliCommand {
         /// Project root path.
         root: PathBuf,
     },
-    /// Marks one project root as trusted.
-    Trust {
+    /// Adds one project root as trusted.
+    Add {
         /// Project root path.
         root: PathBuf,
     },
