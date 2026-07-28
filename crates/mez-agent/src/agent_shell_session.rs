@@ -802,7 +802,6 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "routing"
         | "init"
         | "latency"
-        | "list-mcp"
         | "log-level"
         | "memory"
         | "directive"
@@ -814,7 +813,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "refresh-provider-info"
         | "toolchain"
         | "trust" => "configuration",
-        "help" | "list-macros" | "list-sessions" | "list-skills" => "discovery",
+        "help" | "list-macros" | "list-mcp" | "list-sessions" | "list-skills" => "discovery",
         _ => "work control",
     }
 }
@@ -1060,6 +1059,22 @@ mod tests {
             help.contains("host execution outside the configured sandbox"),
             "{help}"
         );
+    }
+
+    /// Verifies MCP catalog inspection appears with the other discovery
+    /// commands instead of being presented as a configuration mutation.
+    #[test]
+    fn agent_shell_help_categorizes_list_mcp_as_discovery() {
+        assert_eq!(agent_shell_command_category("list-mcp"), "discovery");
+
+        let help = agent_shell_help_display();
+        let discovery = help
+            .split("| Discovery |  |  |")
+            .nth(1)
+            .and_then(|section| section.split("| Work control |  |  |").next())
+            .expect("generated help should contain the discovery section");
+
+        assert!(discovery.contains("`/list-mcp`"), "{help}");
     }
 
     /// Verifies typed sandbox toolchain management is discoverable in the
