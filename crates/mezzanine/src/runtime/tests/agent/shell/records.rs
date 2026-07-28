@@ -113,7 +113,96 @@ fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
         .unwrap();
 
     apply_record_browser_input(&mut service, &primary, b"k");
+    let selector_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 12).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let all_kinds_row = selector_view
+        .lines
+        .iter()
+        .position(|line| line.contains("all kinds"))
+        .expect("kind selector should render the all-kinds choice");
+    let defect_row = selector_view
+        .lines
+        .iter()
+        .position(|line| line.contains("defect"))
+        .expect("kind selector should render the defect choice");
+    let all_kinds_column =
+        display_column_for_fragment(&selector_view.lines[all_kinds_row], "all kinds");
+    let defect_column = display_column_for_fragment(&selector_view.lines[defect_row], "defect");
+    let active_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: selector_view.lines[all_kinds_row].clone(),
+            style_spans: selector_view.line_style_spans[all_kinds_row].clone(),
+            copy_text: None,
+        },
+        all_kinds_column,
+    );
+    let inactive_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: selector_view.lines[defect_row].clone(),
+            style_spans: selector_view.line_style_spans[defect_row].clone(),
+            copy_text: None,
+        },
+        defect_column,
+    );
+    assert_eq!(
+        active_rendition.foreground,
+        Some(service.ui_theme().colors.agent_model.foreground)
+    );
+    assert_eq!(
+        active_rendition.background,
+        Some(service.ui_theme().colors.agent_model.background)
+    );
+    assert_eq!(
+        inactive_rendition.foreground,
+        Some(service.ui_theme().colors.display_overlay.foreground)
+    );
+    assert_eq!(inactive_rendition.background, None);
+
     apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+
+    let moved_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(80, 12).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let moved_all_kinds_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: moved_view.lines[all_kinds_row].clone(),
+            style_spans: moved_view.line_style_spans[all_kinds_row].clone(),
+            copy_text: None,
+        },
+        all_kinds_column,
+    );
+    let moved_defect_rendition = styled_line_rendition_at(
+        &TerminalStyledLine {
+            text: moved_view.lines[defect_row].clone(),
+            style_spans: moved_view.line_style_spans[defect_row].clone(),
+            copy_text: None,
+        },
+        defect_column,
+    );
+    assert_eq!(
+        moved_all_kinds_rendition.foreground,
+        Some(service.ui_theme().colors.display_overlay.foreground)
+    );
+    assert_eq!(moved_all_kinds_rendition.background, None);
+    assert_eq!(
+        moved_defect_rendition.foreground,
+        Some(service.ui_theme().colors.agent_model.foreground)
+    );
+    assert_eq!(
+        moved_defect_rendition.background,
+        Some(service.ui_theme().colors.agent_model.background)
+    );
 
     let browser = &service
         .primary_display_overlay()

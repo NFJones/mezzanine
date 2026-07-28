@@ -156,7 +156,11 @@ pub fn overlay_selection_rendition(
         OverlaySelectionKind::Danger => ui_theme.colors.agent_status_failed,
     };
     let mut rendition = GraphicRendition {
-        foreground: Some(pair.foreground),
+        foreground: Some(if active {
+            pair.foreground
+        } else {
+            ui_theme.colors.display_overlay.foreground
+        }),
         ..GraphicRendition::default()
     };
     rendition.bold = true;
@@ -828,5 +832,67 @@ mod tests {
                 .any(|span| span.start == 0 && span.length == 2)
         );
         assert!(!other.iter().any(|span| span.start == 0 && span.length == 2));
+    }
+
+    /// Verifies inactive choices use overlay-surface text while active choices
+    /// retain the semantic selection pair and emphasis from the active theme.
+    #[test]
+    fn overlay_selection_rendition_uses_readable_inactive_theme_color() {
+        let mut theme = default_ui_theme();
+        theme.colors.display_overlay.foreground = mez_terminal::TerminalColor::Rgb(1, 2, 3);
+        assert_ne!(
+            theme.colors.display_overlay.foreground,
+            theme.colors.agent_model.foreground
+        );
+
+        let inactive = overlay_selection_rendition(&theme, OverlaySelectionKind::Primary, false);
+        assert_eq!(
+            inactive.foreground,
+            Some(theme.colors.display_overlay.foreground)
+        );
+        assert_eq!(inactive.background, None);
+        assert!(inactive.bold);
+        assert!(inactive.underline);
+
+        let active = overlay_selection_rendition(&theme, OverlaySelectionKind::Primary, true);
+        assert_eq!(active.foreground, Some(theme.colors.agent_model.foreground));
+        assert_eq!(active.background, Some(theme.colors.agent_model.background));
+        assert!(active.bold);
+        assert!(active.underline);
+    }
+
+    /// Verifies an active selection contributes its themed background to a
+    /// Markdown body span without replacing that span's explicit foreground.
+    #[test]
+    fn overlay_active_selection_preserves_explicit_body_foreground() {
+        let mut overlay = overlay(&["select"]);
+        let theme = default_ui_theme();
+        let body_rendition = overlay_link_rendition(&theme);
+        overlay.line_style_spans[0].push(TerminalStyleSpan {
+            start: 0,
+            length: 6,
+            rendition: body_rendition,
+        });
+        overlay.selections.push(OverlaySelection {
+            logical_id: 0,
+            line_index: 0,
+            start_column: 0,
+            width: 6,
+            command: "select".to_string(),
+            kind: OverlaySelectionKind::Primary,
+        });
+        overlay.active_selection_index = Some(0);
+
+        let spans = overlay_rendered_line_style_spans(&overlay, 0, 20, &theme);
+        let layered = spans
+            .iter()
+            .rev()
+            .find(|span| span.start == 2 && span.length == 6)
+            .expect("selected body should retain a layered style span");
+        assert_eq!(layered.rendition.foreground, body_rendition.foreground);
+        assert_eq!(
+            layered.rendition.background,
+            Some(theme.colors.agent_model.background)
+        );
     }
 }
