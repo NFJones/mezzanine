@@ -286,3 +286,31 @@ pub(crate) fn auth_status_store_display(status: AuthStatus) -> String {
         }
     }
 }
+
+/// Builds secret-safe Markdown table cells for one provider authentication status.
+///
+/// The caller supplies the configured provider identity so logged-out providers
+/// remain visible even when no persisted authentication metadata exists.
+pub(crate) fn auth_status_store_table_row(provider: &str, status: AuthStatus) -> Vec<String> {
+    let profile = status
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.selected_model_profile.clone())
+        .unwrap_or_else(|| "none".to_string());
+    let (credential_store, state) = match status.credential_state {
+        crate::security::auth::AuthCredentialState::Available { store, .. } => {
+            (credential_store_kind_name(store).to_string(), "available")
+        }
+        crate::security::auth::AuthCredentialState::LoggedOut => ("none".to_string(), "logged-out"),
+        crate::security::auth::AuthCredentialState::MissingSecret { .. } => {
+            ("none".to_string(), "missing-secret")
+        }
+    };
+    vec![
+        provider.to_string(),
+        status.authenticated.to_string(),
+        profile,
+        credential_store,
+        state.to_string(),
+    ]
+}

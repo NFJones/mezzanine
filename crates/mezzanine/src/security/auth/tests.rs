@@ -1469,6 +1469,60 @@ fn auth_status_uses_first_available_provider_secret() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies provider-specific status never borrows another provider's credential.
+///
+/// A multi-provider auth store may contain an available credential, no metadata,
+/// and a broken secret reference at the same time. Each lookup must retain that
+/// provider's own authentication state so callers can render every provider.
+#[test]
+fn auth_status_for_provider_classifies_independent_provider_states() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-auth-status-for-provider-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    store
+        .login_provider_api_key_with_selected_store(
+            "openai",
+            "work",
+            "sk-openai-secret",
+            Some("file"),
+        )
+        .unwrap();
+    let missing_path = store
+        .paths()
+        .secret_directory()
+        .join("deepseek")
+        .join("missing.secret");
+    let mut deepseek = AuthMetadata::new("deepseek", "deepseek-default");
+    deepseek.credential_store_ref = Some(format!("file:{}", missing_path.display()));
+    store.write_metadata(&deepseek).unwrap();
+
+    let available = store.status_for_provider("openai").unwrap();
+    let logged_out = store.status_for_provider("anthropic").unwrap();
+    let missing_secret = store.status_for_provider("deepseek").unwrap();
+
+    assert!(available.authenticated);
+    assert_eq!(
+        available
+            .metadata
+            .as_ref()
+            .map(|metadata| metadata.provider.as_str()),
+        Some("openai")
+    );
+    assert_eq!(logged_out.credential_state, AuthCredentialState::LoggedOut);
+    assert!(!missing_secret.authenticated);
+    assert_eq!(
+        missing_secret.credential_state,
+        AuthCredentialState::MissingSecret {
+            reference: deepseek.credential_store_ref,
+        }
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies global logout removes secrets for every provider in the metadata
 /// file before deleting the metadata document.
 ///

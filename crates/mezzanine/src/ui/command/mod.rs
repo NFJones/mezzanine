@@ -116,7 +116,7 @@ use permissions::{
     command_target_pane_id, credential_store_kind_name, mark_pane_ready_audit_record,
     mark_pane_ready_warning_display, pane_readiness_state_name,
 };
-pub(crate) use stores::auth_status_store_display;
+pub(crate) use stores::{auth_status_store_display, auth_status_store_table_row};
 #[cfg(test)]
 use stores::{
     config_set_string, config_unset, persist_command_config_mutation, persist_command_theme_config,

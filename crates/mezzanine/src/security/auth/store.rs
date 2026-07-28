@@ -403,6 +403,21 @@ impl AuthStore {
         }))
     }
 
+    /// Reports secret-safe authentication status for one provider.
+    ///
+    /// Missing metadata is reported as logged out. This provider-specific
+    /// lookup avoids selecting another provider's credential when callers
+    /// need to display every configured provider independently.
+    pub fn status_for_provider(&self, provider: &str) -> Result<AuthStatus> {
+        let metadata = self.read_metadata_for_provider(provider)?;
+        let credential_state = self.credential_state(metadata.as_ref())?;
+        Ok(AuthStatus {
+            authenticated: credential_state.authenticated(),
+            metadata,
+            credential_state,
+        })
+    }
+
     /// Reports secret-safe MCP auth status for one configured server.
     pub fn mcp_status(
         &self,

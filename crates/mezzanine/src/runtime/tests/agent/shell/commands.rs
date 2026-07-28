@@ -2051,9 +2051,112 @@ fn runtime_agent_shell_logout_uses_attached_auth_store() {
     let status = service
         .execute_agent_shell_command(&primary, "/auth-status")
         .unwrap();
-    assert!(status.contains("authenticated=false"), "{status}");
     assert!(status.contains("Authentication Status"), "{status}");
+    assert!(
+        status.contains("| openai | false | none | none | logged-out |"),
+        "{status}"
+    );
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies `/auth-status` renders one ordered, secret-safe row for every
+/// configured provider, including providers without stored credentials.
+#[test]
+fn runtime_agent_shell_auth_status_lists_configured_provider_rows() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.deepseek]\nkind = \"deepseek\"\nmodels = [\"deepseek-v4-pro\"]\ndefault_model = \"deepseek-v4-pro\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("runtime-agent-auth-status-table");
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
+    auth_store
+        .login_provider_api_key_with_selected_store(
+            "openai",
+            "work",
+            "sk-runtime-secret",
+            Some("file"),
+        )
+        .unwrap();
+    service.set_auth_store(auth_store);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let status = service
+        .execute_agent_shell_command(&primary, "/auth-status")
+        .unwrap();
+
+    assert!(status.contains("## Authentication Status"), "{status}");
+    assert!(
+        status.contains("| Provider | Authenticated | Profile | Credential store | State |"),
+        "{status}"
+    );
+    assert!(
+        status.contains("| deepseek | false | none | none | logged-out |"),
+        "{status}"
+    );
+    assert!(
+        status.contains("| openai | true | work | file | available |"),
+        "{status}"
+    );
+    assert!(
+        status.find("| deepseek |").unwrap() < status.find("| openai |").unwrap(),
+        "{status}"
+    );
+    assert!(!status.contains("sk-runtime-secret"), "{status}");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies `/auth-status` retains every configured provider row when no auth
+/// store is attached, making unavailable credential storage explicit instead
+/// of omitting configured providers or selecting an unrelated default status.
+#[test]
+fn runtime_agent_shell_auth_status_marks_unavailable_auth_store_per_provider() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.deepseek]\nkind = \"deepseek\"\nmodels = [\"deepseek-v4-pro\"]\ndefault_model = \"deepseek-v4-pro\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let status = service
+        .execute_agent_shell_command(&primary, "/auth-status")
+        .unwrap();
+
+    assert!(
+        status.contains("| deepseek | unknown | none | unavailable | auth-store-unavailable |"),
+        "{status}"
+    );
+    assert!(
+        status.contains("| openai | unknown | none | unavailable | auth-store-unavailable |"),
+        "{status}"
+    );
 }
 
 /// Verifies `/approval` changes only the issuing pane while preserving the

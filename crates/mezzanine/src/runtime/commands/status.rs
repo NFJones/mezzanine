@@ -14,7 +14,7 @@ use super::{
     runtime_approval_policy_name, runtime_cooperation_mode_name, runtime_markdown_table,
     runtime_permission_preset_name, runtime_single_rename_window_invocation,
 };
-use crate::ui::command::auth_status_store_display;
+use crate::ui::command::auth_status_store_table_row;
 
 impl RuntimeSessionService {
     /// Executes `/auth-status` against the live authentication store.
@@ -29,13 +29,34 @@ impl RuntimeSessionService {
                 "auth-status does not accept arguments",
             ));
         }
-        let body = match self.auth_store() {
-            Some(auth_store) => auth_status_store_display(auth_store.status()?),
-            None => {
-                "authenticated=unknown provider=none profile=none source=auth-store-unavailable"
-                    .to_string()
-            }
-        };
+        let rows = self
+            .provider_registry()
+            .providers()
+            .keys()
+            .map(|provider| match self.auth_store() {
+                Some(auth_store) => {
+                    auth_status_store_table_row(provider, auth_store.status_for_provider(provider)?)
+                }
+                None => vec![
+                    provider.clone(),
+                    "unknown".to_string(),
+                    "none".to_string(),
+                    "unavailable".to_string(),
+                    "auth-store-unavailable".to_string(),
+                ],
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let body = runtime_markdown_table(
+            &[
+                "Provider",
+                "Authenticated",
+                "Profile",
+                "Credential store",
+                "State",
+            ],
+            &rows,
+        )
+        .join("\n");
         Ok(AgentShellCommandOutcome::Display {
             command: "auth-status".to_string(),
             body: format!("## Authentication Status\n\n{body}"),
