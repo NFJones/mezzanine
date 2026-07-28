@@ -55,6 +55,83 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
     assert!(service.pending_record_browser_overlays_is_empty());
 }
 
+/// Verifies kind-selector navigation preserves the retained record cursor.
+///
+/// The selector and record links share an overlay presentation, but moving a
+/// selector row must not replace the selected record that the browser retains
+/// for later detail navigation.
+#[test]
+fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let mut browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![
+            mez_mux::record_browser::RecordBrowserRecord {
+                id: "issue-1".to_string(),
+                open_command: Some("/show-issues issue-1".to_string()),
+                title: "First issue".to_string(),
+                metadata: vec![("kind".to_string(), "task".to_string())],
+                markdown: "First body".to_string(),
+            },
+            mez_mux::record_browser::RecordBrowserRecord {
+                id: "issue-2".to_string(),
+                open_command: Some("/show-issues issue-2".to_string()),
+                title: "Second issue".to_string(),
+                metadata: vec![("kind".to_string(), "defect".to_string())],
+                markdown: "Second body".to_string(),
+            },
+        ],
+        vec![
+            mez_mux::record_browser::RecordBrowserFilterChoice {
+                label: "all kinds".to_string(),
+                value: String::new(),
+            },
+            mez_mux::record_browser::RecordBrowserFilterChoice {
+                label: "defect".to_string(),
+                value: "defect".to_string(),
+            },
+        ],
+    )
+    .unwrap();
+    browser.set_active_index(1);
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"k");
+    apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+
+    let browser = &service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser;
+    assert_eq!(browser.active_index(), 1);
+    assert_eq!(browser.active_record_id(), Some("issue-2"));
+    assert_eq!(
+        browser
+            .prompt_selection()
+            .map(|selection| selection.active_index),
+        Some(1)
+    );
+}
+
 /// Verifies retained record browsers reflow from raw Markdown when the primary
 /// terminal becomes narrower and paginate the resulting physical rows.
 ///
