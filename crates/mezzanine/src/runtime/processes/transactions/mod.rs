@@ -158,6 +158,12 @@ const RUNTIME_READINESS_PROBE_TIMEOUT_MS: u64 = 5_000;
 /// second. This larger runtime deadline owns recovery if its exact event is
 /// lost, stale, or discarded before application.
 pub(super) const RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS: u64 = 2_000;
+/// Maximum runtime wait for a recovery-owned foreground observation.
+///
+/// A blocked shell dispatch must not remain owned by a lost adapter query. On
+/// expiry the runtime degrades readiness and retries through normal probing;
+/// it does not count the missing observation as foreign-process confirmation.
+pub(super) const RUNTIME_SHELL_DISPATCH_RECOVERY_OBSERVATION_TIMEOUT_MS: u64 = 1_500;
 /// Runs the runtime running shell transaction kind name operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

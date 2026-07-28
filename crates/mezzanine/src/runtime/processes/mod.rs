@@ -228,6 +228,28 @@ struct RuntimePendingAgentSubshellCertification {
     timeout_ms: u64,
 }
 
+/// One recovery-owned foreground observation for a blocked shell dispatch.
+///
+/// This owner is deliberately distinct from bootstrap certification: it never
+/// releases bootstrap payloads or writes pane input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimePendingShellDispatchRecoveryObservation {
+    /// Exact adapter-owned pane process lifetime that must answer.
+    instance: PaneProcessInstance,
+    /// Correlation token required on the worker observation event.
+    observation_id: String,
+    /// Turn whose shell action remains undispatched.
+    turn_id: String,
+    /// Pending shell action guarded by this observation.
+    action_id: String,
+    /// Primary process identity fenced by the observation.
+    primary_process_id: u32,
+    /// Shell interaction generation fenced by the observation.
+    interaction_generation: u64,
+    /// Unix timestamp when this exact worker observation was requested.
+    started_at_unix_ms: u64,
+}
+
 /// Owns live process metadata that is private to the pane process subsystem.
 ///
 /// Detached process ids, observed foreground groups, and program-owned title
@@ -306,6 +328,11 @@ pub(crate) struct RuntimeProcessComponent {
     /// Parsed bootstrap context awaiting a correlated pane-worker observation.
     pending_agent_subshell_certifications:
         std::collections::BTreeMap<String, RuntimePendingAgentSubshellCertification>,
+    /// Recovery-owned fresh foreground observations for blocked shell actions.
+    pending_shell_dispatch_recovery_observations:
+        std::collections::BTreeMap<String, RuntimePendingShellDispatchRecoveryObservation>,
+    /// Next opaque identity for a recovery-owned foreground observation.
+    next_shell_dispatch_recovery_observation: u64,
     /// Latest actionable agent-subshell certification rejection per pane.
     pane_agent_subshell_certification_rejections:
         std::collections::BTreeMap<String, RuntimeAgentSubshellCertificationRejection>,
@@ -484,6 +511,25 @@ impl RuntimeSessionService {
         self.process
             .pending_agent_subshell_certifications
             .contains_key(pane_id)
+    }
+
+    /// Clears a recovery-owned foreground observation when its shell action no
+    /// longer awaits foreground stabilization.
+    pub(crate) fn clear_shell_dispatch_recovery_observations_for_action(
+        &mut self,
+        turn_id: &str,
+        action_id: &str,
+    ) {
+        self.process
+            .pending_shell_dispatch_recovery_observations
+            .retain(|_, pending| pending.turn_id != turn_id || pending.action_id != action_id);
+    }
+
+    /// Clears every recovery-owned foreground observation for a settled turn.
+    pub(crate) fn clear_shell_dispatch_recovery_observations_for_turn(&mut self, turn_id: &str) {
+        self.process
+            .pending_shell_dispatch_recovery_observations
+            .retain(|_, pending| pending.turn_id != turn_id);
     }
 
     /// Returns marker and pane pairs for every live transaction in one turn.

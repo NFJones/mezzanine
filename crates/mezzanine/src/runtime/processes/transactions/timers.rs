@@ -18,9 +18,12 @@ impl RuntimeSessionService {
     pub fn apply_shell_transaction_timer_event(&mut self, now_unix_ms: u64) -> Result<usize> {
         let expired = self.expire_timed_out_shell_transactions(now_unix_ms)?;
         let certifications = self.expire_timed_out_agent_subshell_certifications(now_unix_ms)?;
+        let recovery_observations =
+            self.expire_timed_out_shell_dispatch_recovery_observations(now_unix_ms)?;
         let focused = self.expire_timed_out_focused_shell_hooks(now_unix_ms)?;
         Ok(expired
             .saturating_add(certifications)
+            .saturating_add(recovery_observations)
             .saturating_add(focused))
     }
 
@@ -62,6 +65,17 @@ impl RuntimeSessionService {
                     kind: RuntimeShellTransactionTimerKind::Bootstrap,
                     started_at_unix_ms: pending.started_at_unix_ms,
                     timeout_ms: pending.timeout_ms,
+                }),
+        );
+        timers.extend(
+            self.process
+                .pending_shell_dispatch_recovery_observations
+                .values()
+                .map(|pending| RuntimeShellTransactionTimerRef {
+                    marker: pending.observation_id.clone(),
+                    kind: RuntimeShellTransactionTimerKind::Bootstrap,
+                    started_at_unix_ms: pending.started_at_unix_ms,
+                    timeout_ms: super::RUNTIME_SHELL_DISPATCH_RECOVERY_OBSERVATION_TIMEOUT_MS,
                 }),
         );
         timers.extend(

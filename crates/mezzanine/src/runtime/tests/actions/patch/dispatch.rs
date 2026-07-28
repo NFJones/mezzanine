@@ -1245,6 +1245,7 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
     service
         .pane_processes_mut()
         .set_foreground_process_group_id_for_test("%1", Some(primary_pid.saturating_add(1)));
+    let _adapter_process = service.take_running_pane_process_for_adapter("%1").unwrap();
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -1305,8 +1306,81 @@ fn runtime_shell_dispatch_fails_closed_after_persistent_foreground_block() {
     service.remove_pending_agent_provider_task(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::Busy);
 
-    for expected_attempts in 1..=3 {
+    service.recover_stranded_agent_shell_dispatches().unwrap();
+    let recovery_observation_timer = service
+        .running_shell_transaction_timers()
+        .into_iter()
+        .find(|timer| timer.kind == crate::runtime::RuntimeShellTransactionTimerKind::Bootstrap)
+        .expect("blocked recovery should own a bounded foreground observation timer");
+    assert_eq!(
+        service
+            .apply_shell_transaction_timer_event(
+                recovery_observation_timer
+                    .started_at_unix_ms
+                    .saturating_add(recovery_observation_timer.timeout_ms),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Degraded
+    );
+    assert_eq!(
+        service.pending_shell_dispatch_blocked_recovery_attempts(&turn.turn_id, &action.id),
+        0
+    );
+    let _stale_observation_effects = service.drain_pane_io_transition();
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    service.set_pane_readiness("%1", PaneReadinessState::Busy);
+
+    let foreign_process_groups = [
+        primary_pid.saturating_add(1),
+        primary_pid.saturating_add(2),
+        primary_pid.saturating_add(2),
+        primary_pid.saturating_add(2),
+    ];
+    let expected_confirmations = [1, 1, 2, 3];
+    for (foreign_process_group, expected_attempts) in foreign_process_groups
+        .into_iter()
+        .zip(expected_confirmations)
+    {
         service.recover_stranded_agent_shell_dispatches().unwrap();
+        service.recover_stranded_agent_shell_dispatches().unwrap();
+        let observations = service
+            .drain_pane_io_transition()
+            .side_effects
+            .into_iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect:
+                        crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess {
+                            observation_id,
+                            expected_process_group_id: None,
+                        },
+                } => Some((instance, observation_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observations.len(),
+            1,
+            "repeated recovery ticks must leave exactly one foreground observation outstanding"
+        );
+        let (instance, observation_id) = observations.into_iter().next().unwrap();
+        service
+            .apply_pane_foreground_process_observation_transition(
+                instance,
+                crate::runtime::PaneForegroundProcessObservation {
+                    observation_id,
+                    process_name: Some("foreground-program".to_string()),
+                    process_group_id: Some(foreign_process_group),
+                    current_working_directory: Some("/tmp".to_string()),
+                    error: None,
+                },
+            )
+            .unwrap();
         assert_eq!(
             service.pending_shell_dispatch_blocked_recovery_attempts(&turn.turn_id, &action.id,),
             expected_attempts

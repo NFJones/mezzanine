@@ -6,12 +6,14 @@ use super::super::{
     RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
     RuntimePaneCertifiedShellIdentity, RuntimePaneShellHandoff,
     RuntimePendingAgentSubshellCertification, RuntimePendingAgentSubshellStartObservation,
-    RuntimePendingBootstrapEnvironment, RuntimeSideEffect, RuntimeTransition,
+    RuntimePendingBootstrapEnvironment, RuntimePendingShellDispatchRecoveryObservation,
+    RuntimeSideEffect, RuntimeTransition,
 };
 use super::{
     AgentTurnState, EventKind, PaneReadinessState, RUNTIME_AGENT_SUBSHELL_CERTIFICATION_TIMEOUT_MS,
-    RenderInvalidationReason, Result, RuntimeSessionService, TerminalOscEvent, current_unix_millis,
-    json_escape, runtime_execution_ready_for_provider_continuation,
+    RUNTIME_SHELL_DISPATCH_RECOVERY_OBSERVATION_TIMEOUT_MS, RenderInvalidationReason, Result,
+    RuntimeSessionService, TerminalOscEvent, current_unix_millis, json_escape,
+    runtime_execution_ready_for_provider_continuation,
 };
 
 /// Best-effort foreground-process information attached to a readiness failure.
@@ -436,6 +438,100 @@ impl RuntimeSessionService {
     ) -> Result<RuntimeTransition> {
         if let Some(pending) = self
             .process
+            .pending_shell_dispatch_recovery_observations
+            .get(&instance.pane_id)
+            .cloned()
+            && pending.instance == instance
+            && pending.observation_id == observation.observation_id
+        {
+            self.process
+                .pending_shell_dispatch_recovery_observations
+                .remove(&instance.pane_id);
+            let current_primary_process_id =
+                self.primary_pid_for_live_pane_process(&instance.pane_id);
+            let current_interaction_generation = self
+                .process
+                .pane_shell_interaction_generations
+                .get(&instance.pane_id)
+                .copied();
+            if current_primary_process_id != Some(pending.primary_process_id)
+                || current_interaction_generation.unwrap_or_default()
+                    != pending.interaction_generation
+                || self
+                    .pending_shell_action_id_for_turn(&pending.turn_id)
+                    .as_deref()
+                    != Some(pending.action_id.as_str())
+            {
+                return Ok(RuntimeTransition::default());
+            }
+            if observation.error.is_some() || observation.process_group_id.is_none() {
+                self.set_pane_readiness(&instance.pane_id, PaneReadinessState::Degraded);
+                let _ = self.queue_agent_provider_task(pending.turn_id.clone());
+                self.append_agent_trace_turn_event(
+                    &instance.pane_id,
+                    &pending.turn_id,
+                    &format!(
+                        "action {} waiting reason=foreground_process_observation_unavailable",
+                        pending.action_id
+                    ),
+                )?;
+                return Ok(self.runtime_transition_with_render(
+                    true,
+                    Some(RenderInvalidationReason::PaneOutput),
+                ));
+            }
+            self.apply_correlated_pane_foreground_observation(&instance.pane_id, &observation)?;
+            let Some(process_group_id) = observation.process_group_id else {
+                return Ok(RuntimeTransition::default());
+            };
+            if self.pane_foreground_certified_shell_state(&instance.pane_id) == Some(true) {
+                self.clear_pending_shell_dispatch_blocked_recovery_attempt(
+                    &pending.turn_id,
+                    &pending.action_id,
+                );
+                self.set_pane_readiness(&instance.pane_id, PaneReadinessState::PromptCandidate);
+                let _ = self.queue_agent_provider_task(pending.turn_id.clone());
+                self.append_agent_trace_turn_event(
+                    &instance.pane_id,
+                    &pending.turn_id,
+                    &format!(
+                        "action {} recovered reason=fresh_certified_foreground_process",
+                        pending.action_id
+                    ),
+                )?;
+                return Ok(self.runtime_transition_with_render(
+                    true,
+                    Some(RenderInvalidationReason::PaneOutput),
+                ));
+            }
+            let confirmations = self.record_pending_shell_dispatch_blocked_recovery_observation(
+                &pending.turn_id,
+                &pending.action_id,
+                pending.primary_process_id,
+                pending.interaction_generation,
+                process_group_id,
+            );
+            let deadline_exhausted = self
+                .pending_shell_dispatch_blocked_recovery_deadline_exhausted(
+                    &pending.turn_id,
+                    &pending.action_id,
+                );
+            if confirmations >= 3 || deadline_exhausted {
+                let _ = self.queue_agent_provider_task(pending.turn_id.clone());
+            }
+            self.append_agent_trace_turn_event(
+                &instance.pane_id,
+                &pending.turn_id,
+                &format!(
+                    "action {} waiting reason=fresh_foreground_process_blocked confirmations={} deadline_exhausted={} foreground_process_group={}",
+                    pending.action_id, confirmations, deadline_exhausted, process_group_id
+                ),
+            )?;
+            return Ok(self
+                .runtime_transition_with_render(true, Some(RenderInvalidationReason::PaneOutput)));
+        }
+        if let Some(pending) = self
+            .process
             .pending_agent_subshell_start_observations
             .get(&instance.pane_id)
             .cloned()
@@ -552,6 +648,67 @@ impl RuntimeSessionService {
         Ok(self.runtime_transition_with_render(true, Some(RenderInvalidationReason::FullRedraw)))
     }
 
+    /// Requests one fresh, instance-correlated foreground observation for a
+    /// blocked shell action. Existing recovery ownership suppresses duplicate
+    /// requests until its exact worker result arrives.
+    pub(crate) fn request_shell_dispatch_recovery_observation(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+        action_id: &str,
+    ) -> bool {
+        if self
+            .process
+            .pending_shell_dispatch_recovery_observations
+            .contains_key(pane_id)
+        {
+            return false;
+        }
+        let (Some(instance), Some(primary_process_id)) = (
+            self.adapter_owned_pane_process_instance(pane_id),
+            self.primary_pid_for_live_pane_process(pane_id),
+        ) else {
+            return false;
+        };
+        let interaction_generation = self
+            .process
+            .pane_shell_interaction_generations
+            .get(pane_id)
+            .copied()
+            .unwrap_or_default();
+        self.process.next_shell_dispatch_recovery_observation = self
+            .process
+            .next_shell_dispatch_recovery_observation
+            .saturating_add(1);
+        let observation_id = format!(
+            "foreground-recovery:{}:{}:{}",
+            instance.generation, turn_id, self.process.next_shell_dispatch_recovery_observation
+        );
+        self.process
+            .pending_shell_dispatch_recovery_observations
+            .insert(
+                pane_id.to_string(),
+                RuntimePendingShellDispatchRecoveryObservation {
+                    instance: instance.clone(),
+                    observation_id: observation_id.clone(),
+                    turn_id: turn_id.to_string(),
+                    action_id: action_id.to_string(),
+                    primary_process_id,
+                    interaction_generation,
+                    started_at_unix_ms: current_unix_millis(),
+                },
+            );
+        self.persistence
+            .queue_pane_observation(RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: PaneProcessIoEffect::ObserveForegroundProcess {
+                    observation_id,
+                    expected_process_group_id: None,
+                },
+            });
+        true
+    }
+
     /// Expires adapter-owned completion certifications whose exact correlated
     /// worker event did not settle before the runtime-owned deadline.
     pub(super) fn expire_timed_out_agent_subshell_certifications(
@@ -610,6 +767,68 @@ impl RuntimeSessionService {
                 ),
             )?;
             self.resume_after_bootstrap_settlement(&pane_id)?;
+            expired_count = expired_count.saturating_add(1);
+        }
+        Ok(expired_count)
+    }
+
+    /// Releases a blocked dispatch when its exact recovery-owned foreground
+    /// observation was lost or stale. Missing metadata never contributes a
+    /// foreign-process confirmation, so the action returns to ordinary
+    /// degraded-readiness handling rather than being denied from a timer tick.
+    pub(super) fn expire_timed_out_shell_dispatch_recovery_observations(
+        &mut self,
+        now_unix_ms: u64,
+    ) -> Result<usize> {
+        let expired = self
+            .process
+            .pending_shell_dispatch_recovery_observations
+            .iter()
+            .filter_map(|(pane_id, pending)| {
+                let elapsed_ms = now_unix_ms.saturating_sub(pending.started_at_unix_ms);
+                (elapsed_ms >= RUNTIME_SHELL_DISPATCH_RECOVERY_OBSERVATION_TIMEOUT_MS).then(|| {
+                    (
+                        pane_id.clone(),
+                        pending.observation_id.clone(),
+                        pending.turn_id.clone(),
+                        pending.action_id.clone(),
+                        elapsed_ms,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut expired_count = 0usize;
+        for (pane_id, observation_id, turn_id, action_id, elapsed_ms) in expired {
+            let still_pending = self
+                .process
+                .pending_shell_dispatch_recovery_observations
+                .get(&pane_id)
+                .is_some_and(|pending| {
+                    pending.observation_id == observation_id
+                        && pending.turn_id == turn_id
+                        && pending.action_id == action_id
+                });
+            if !still_pending {
+                continue;
+            }
+            self.process
+                .pending_shell_dispatch_recovery_observations
+                .remove(&pane_id);
+            if self.pending_shell_action_id_for_turn(&turn_id).as_deref()
+                != Some(action_id.as_str())
+            {
+                continue;
+            }
+            self.set_pane_readiness(&pane_id, PaneReadinessState::Degraded);
+            let _ = self.queue_agent_provider_task(turn_id.clone());
+            self.append_agent_trace_turn_event(
+                &pane_id,
+                &turn_id,
+                &format!(
+                    "action {} waiting reason=foreground_process_observation_timed_out elapsed_ms={}",
+                    action_id, elapsed_ms
+                ),
+            )?;
             expired_count = expired_count.saturating_add(1);
         }
         Ok(expired_count)
@@ -732,6 +951,9 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.process
             .pending_agent_subshell_certifications
+            .remove(pane_id);
+        self.process
+            .pending_shell_dispatch_recovery_observations
             .remove(pane_id);
         self.process
             .bootstrap_shell_certification_evidence

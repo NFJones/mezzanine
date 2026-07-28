@@ -6,10 +6,6 @@ use super::{
     runtime_pane_readiness_state_name,
 };
 
-/// Idle-cleanup observations allowed before a foreground process blocks one
-/// undispatched shell action fail-closed.
-const PENDING_SHELL_DISPATCH_BLOCKED_RECOVERY_LIMIT: usize = 3;
-
 impl RuntimeSessionService {
     /// Requeues pending shell dispatches that have no live transaction and are
     /// waiting behind readiness state that can be safely retried.
@@ -123,34 +119,17 @@ impl RuntimeSessionService {
                                 );
                                 continue;
                             }
-                            let attempts = self
-                                .record_pending_shell_dispatch_blocked_recovery_attempt(
-                                    &turn.turn_id,
-                                    &action_id,
-                                );
-                            if attempts >= PENDING_SHELL_DISPATCH_BLOCKED_RECOVERY_LIMIT {
-                                if self.queue_agent_provider_task(turn.turn_id.clone()) {
-                                    recovered = recovered.saturating_add(1);
-                                    self.append_agent_status_text_to_terminal_buffer(
-                                        &turn.pane_id,
-                                        "agent: shell command could not start because a foreground process remained active",
-                                    )?;
-                                    self.append_agent_trace_turn_event(
-                                        &turn.pane_id,
-                                        &turn.turn_id,
-                                        &format!(
-                                            "provider_task queued reason=foreground_process_dispatch_block_exhausted action={} attempts={}",
-                                            action_id, attempts
-                                        ),
-                                    )?;
-                                }
-                            } else {
+                            if self.request_shell_dispatch_recovery_observation(
+                                &turn.pane_id,
+                                &turn.turn_id,
+                                &action_id,
+                            ) {
                                 self.append_agent_trace_turn_event(
                                     &turn.pane_id,
                                     &turn.turn_id,
                                     &format!(
-                                        "action {} waiting reason=foreground_process_dispatch_blocked attempts={}",
-                                        action_id, attempts
+                                        "action {} waiting reason=fresh_foreground_process_observation_requested",
+                                        action_id
                                     ),
                                 )?;
                             }

@@ -127,6 +127,22 @@ mod turn_state;
 #[cfg(test)]
 pub(crate) use shell_state::shell_transaction_output_max_raw_bytes;
 
+/// Fresh, stable foreign foreground-process observations retained while one
+/// shell action waits for fail-closed dispatch recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeShellDispatchBlockedRecoveryState {
+    /// Unix timestamp when the current stable foreign-observation run began.
+    pub(crate) started_at_unix_ms: u64,
+    /// Primary process identity that the observations are fenced to.
+    pub(crate) primary_process_id: u32,
+    /// Shell interaction generation that the observations are fenced to.
+    pub(crate) interaction_generation: u64,
+    /// Foreign foreground process group observed by the first confirmation.
+    pub(crate) foreign_process_group_id: u32,
+    /// Consecutive fresh observations of the same foreign process group.
+    pub(crate) confirmations: usize,
+}
+
 use mez_agent::ProviderRetryScheduler;
 use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
 use presentation::{
@@ -213,9 +229,10 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_issue_query_freshness: BTreeMap<String, BTreeMap<String, String>>,
     /// Per-turn successful shell dispatch history.
     agent_turn_shell_dispatch_history: BTreeMap<String, AgentShellDispatchHistory>,
-    /// Consecutive idle-recovery observations of shell actions blocked behind
-    /// an uncertified foreground process group, keyed by turn and action identity.
-    pending_shell_dispatch_blocked_recovery_attempts: BTreeMap<(String, String), usize>,
+    /// Fresh, stable foreign foreground observations of blocked shell actions,
+    /// keyed by turn and action identity.
+    pending_shell_dispatch_blocked_recovery_attempts:
+        BTreeMap<(String, String), RuntimeShellDispatchBlockedRecoveryState>,
     /// Per-turn network action history.
     agent_turn_network_action_history: BTreeMap<String, AgentNetworkActionHistory>,
     /// Successful semantic configuration mutations keyed by turn and signature.
@@ -1505,20 +1522,42 @@ impl RuntimeSessionService {
         self.agent.pending_apply_patch_phases.clear();
     }
 
-    /// Records one idle-recovery observation of an undispatched shell action
-    /// blocked behind a foreground process and returns its bounded count.
-    pub(crate) fn record_pending_shell_dispatch_blocked_recovery_attempt(
+    /// Records one fresh foreign foreground observation and returns its stable
+    /// confirmation count. A changed process, interaction epoch, or foreign
+    /// process group starts a new stabilization run.
+    pub(crate) fn record_pending_shell_dispatch_blocked_recovery_observation(
         &mut self,
         turn_id: &str,
         action_id: &str,
+        primary_process_id: u32,
+        interaction_generation: u64,
+        foreign_process_group_id: u32,
     ) -> usize {
-        let attempts = self
+        let state = self
             .agent
             .pending_shell_dispatch_blocked_recovery_attempts
             .entry((turn_id.to_string(), action_id.to_string()))
-            .or_default();
-        *attempts = attempts.saturating_add(1);
-        *attempts
+            .or_insert_with(|| RuntimeShellDispatchBlockedRecoveryState {
+                started_at_unix_ms: current_unix_millis(),
+                primary_process_id,
+                interaction_generation,
+                foreign_process_group_id,
+                confirmations: 0,
+            });
+        if state.primary_process_id != primary_process_id
+            || state.interaction_generation != interaction_generation
+            || state.foreign_process_group_id != foreign_process_group_id
+        {
+            *state = RuntimeShellDispatchBlockedRecoveryState {
+                started_at_unix_ms: current_unix_millis(),
+                primary_process_id,
+                interaction_generation,
+                foreign_process_group_id,
+                confirmations: 0,
+            };
+        }
+        state.confirmations = state.confirmations.saturating_add(1);
+        state.confirmations
     }
 
     /// Returns recorded foreground-process recovery observations for one action.
@@ -1530,8 +1569,25 @@ impl RuntimeSessionService {
         self.agent
             .pending_shell_dispatch_blocked_recovery_attempts
             .get(&(turn_id.to_string(), action_id.to_string()))
-            .copied()
+            .map(|state| state.confirmations)
             .unwrap_or_default()
+    }
+
+    /// Reports whether fresh foreign foreground observations have exceeded the
+    /// bounded fail-closed recovery deadline for one pending shell action.
+    pub(crate) fn pending_shell_dispatch_blocked_recovery_deadline_exhausted(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> bool {
+        const RECOVERY_DEADLINE_MS: u64 = 1_500;
+        self.agent
+            .pending_shell_dispatch_blocked_recovery_attempts
+            .get(&(turn_id.to_string(), action_id.to_string()))
+            .is_some_and(|state| {
+                current_unix_millis().saturating_sub(state.started_at_unix_ms)
+                    >= RECOVERY_DEADLINE_MS
+            })
     }
 
     /// Clears foreground-process recovery observations for one action.
@@ -1543,6 +1599,7 @@ impl RuntimeSessionService {
         self.agent
             .pending_shell_dispatch_blocked_recovery_attempts
             .remove(&(turn_id.to_string(), action_id.to_string()));
+        self.clear_shell_dispatch_recovery_observations_for_action(turn_id, action_id);
     }
 
     /// Clears foreground-process recovery observations for one completed turn.
@@ -1553,6 +1610,7 @@ impl RuntimeSessionService {
         self.agent
             .pending_shell_dispatch_blocked_recovery_attempts
             .retain(|(owner_turn_id, _), _| owner_turn_id != turn_id);
+        self.clear_shell_dispatch_recovery_observations_for_turn(turn_id);
     }
 
     /// Clears provider-execution identities and action ownership for one turn.

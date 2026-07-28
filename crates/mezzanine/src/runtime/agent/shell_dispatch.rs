@@ -813,7 +813,12 @@ impl RuntimeSessionService {
                                 &turn.turn_id,
                                 &action.id,
                             );
-                            if attempts >= 3 {
+                            let deadline_exhausted = self
+                                .pending_shell_dispatch_blocked_recovery_deadline_exhausted(
+                                    &turn.turn_id,
+                                    &action.id,
+                                );
+                            if attempts >= 3 || deadline_exhausted {
                                 let foreground_diagnostic =
                                     self.pane_foreground_process_diagnostic(&turn.pane_id);
                                 let message = format!(
@@ -832,7 +837,8 @@ impl RuntimeSessionService {
                                     serde_json::json!({
                                         "state": "dispatch_blocked",
                                         "reason": "uncertified_foreground_process",
-                                        "attempts": attempts,
+                                        "confirmations": attempts,
+                                        "deadline_exhausted": deadline_exhausted,
                                         "command": runtime_agent_context_command(action, command),
                                         "foreground_process": foreground_diagnostic.json(),
                                     })
@@ -851,9 +857,8 @@ impl RuntimeSessionService {
                                     &turn.pane_id,
                                     &turn.turn_id,
                                     &format!(
-                                        "action {} failed reason=foreground_process_blocked_dispatch attempts={} {}",
-                                        action.id,
-                                        attempts,
+                                        "action {} failed reason=foreground_process_blocked_dispatch confirmations={} deadline_exhausted={} {}",
+                                        action.id, attempts, deadline_exhausted,
                                         foreground_diagnostic.summary(),
                                     ),
                                 )?;
