@@ -23,7 +23,7 @@ use super::{
 };
 use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
 use crate::runtime::{AgentRememberEvent, RenderInvalidationReason, RuntimeTransition};
-use mez_agent::memory::{MemoryKind, MemoryState};
+use mez_agent::memory::{MemoryKind, MemoryState, new_memory_uuid};
 use std::{fs, path::PathBuf};
 
 /// Normalized memory candidate returned by the `/remember` model request.
@@ -280,30 +280,6 @@ fn runtime_remember_memory_content(candidate: &RuntimeRememberCandidate) -> Stri
     lines.join("\n")
 }
 
-/// Builds a stable local id slug from a model-authored memory summary.
-pub(super) fn runtime_remember_slug(summary: &str, index: usize) -> String {
-    let mut slug = summary
-        .chars()
-        .filter_map(|character| {
-            if character.is_ascii_alphanumeric() {
-                Some(character.to_ascii_lowercase())
-            } else if character.is_whitespace() || matches!(character, '-' | '_' | ':' | '/') {
-                Some('-')
-            } else {
-                None
-            }
-        })
-        .collect::<String>();
-    while slug.contains("--") {
-        slug = slug.replace("--", "-");
-    }
-    let slug = slug.trim_matches('-');
-    if slug.is_empty() {
-        return format!("memory-{index}");
-    }
-    slug.chars().take(48).collect()
-}
-
 /// Formats a memory scope for command output.
 pub(super) fn runtime_remember_scope_display(scope: &MemoryScope) -> String {
     match scope {
@@ -513,12 +489,8 @@ impl RuntimeSessionService {
         let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
         let now = current_unix_seconds().max(1);
         let mut stored = Vec::new();
-        for (index, candidate) in candidates.into_iter().take(6).enumerate() {
-            let id = format!(
-                "remember-{}-{}",
-                now,
-                runtime_remember_slug(&candidate.summary, index + 1)
-            );
+        for candidate in candidates.into_iter().take(6) {
+            let id = new_memory_uuid();
             let record = candidate.into_record(
                 id,
                 task.scope.clone(),

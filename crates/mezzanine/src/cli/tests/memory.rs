@@ -31,7 +31,10 @@ fn memory_cli_adds_inspects_edits_exports_and_deletes_records() {
     )
     .unwrap();
     let add_output = String::from_utf8(add_stdout).unwrap();
-    assert!(add_output.contains(r#""id":"m1""#));
+    assert!(add_output.contains(&format!(
+        r#""id":"{}""#,
+        mez_agent::memory::canonical_memory_uuid("m1")
+    )));
     assert!(add_output.contains(r#""scope":"project:/work/repo""#));
 
     let mut edit_stdout = Vec::new();
@@ -65,11 +68,10 @@ fn memory_cli_adds_inspects_edits_exports_and_deletes_records() {
         &mut stderr,
     )
     .unwrap();
-    assert!(
-        String::from_utf8(list_stdout)
-            .unwrap()
-            .contains(r#""id":"m1""#)
-    );
+    assert!(String::from_utf8(list_stdout).unwrap().contains(&format!(
+        r#""id":"{}""#,
+        mez_agent::memory::canonical_memory_uuid("m1")
+    )));
 
     let mut search_stdout = Vec::new();
     run_with(
@@ -246,11 +248,10 @@ fn memory_cli_manages_lifecycle_metadata_and_retention() {
         &mut stderr,
     )
     .unwrap();
-    assert!(
-        String::from_utf8(prune_stdout)
-            .unwrap()
-            .contains(r#""id":"old""#)
-    );
+    assert!(String::from_utf8(prune_stdout).unwrap().contains(&format!(
+        r#""id":"{}""#,
+        mez_agent::memory::canonical_memory_uuid("old")
+    )));
     assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);

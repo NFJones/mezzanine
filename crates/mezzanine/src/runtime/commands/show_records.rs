@@ -791,7 +791,7 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser) {
 
 /// Applies the table presentation shared by memory browser construction paths.
 fn configure_memory_record_browser(browser: &mut RecordBrowser) {
-    browser.set_table_id_column("ID");
+    browser.set_table_id_column("UUID");
     browser.set_table_columns_with_labels(vec![
         ("Summary".to_string(), "summary".to_string()),
         ("Scope".to_string(), "scope".to_string()),
@@ -801,7 +801,7 @@ fn configure_memory_record_browser(browser: &mut RecordBrowser) {
         ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
     ]);
     browser.set_help(
-        Some("**Keys:** `↑`/`↓` focus memory ID · `Enter` open · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `↑`/`↓` focus memory UUID · `Enter` open · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
         Some("**Keys:** `Esc` back · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
     );
     browser.set_empty_message(Some("No memories found.".to_string()));
@@ -1148,7 +1148,7 @@ fn memory_browser_record(record: mez_agent::memory::MemoryRecord) -> RecordBrows
         title: summary.clone(),
         metadata: vec![
             ("summary".to_string(), summary),
-            ("id".to_string(), record.id),
+            ("uuid".to_string(), record.id),
             (
                 "scope".to_string(),
                 runtime_remember_scope_display(&record.scope),

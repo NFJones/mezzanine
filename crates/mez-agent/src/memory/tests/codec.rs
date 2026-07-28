@@ -2,8 +2,9 @@
 
 use super::record;
 use crate::memory::{
-    MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState, decode_scope, encode_scope,
-    kind_name, parse_kind, parse_model_writable_kind, parse_state, source_name, state_name,
+    MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState, canonical_memory_uuid,
+    decode_scope, encode_scope, kind_name, parse_kind, parse_model_writable_kind, parse_state,
+    source_name, state_name,
 };
 
 /// Verifies TSV export preserves every extended memory metadata field.
@@ -25,7 +26,7 @@ fn memory_record_tsv_round_trip_preserves_extended_metadata() {
     original.use_count = 3;
     original.confirmed_count = 2;
     original.last_confirmed_at_unix_seconds = Some(21);
-    original.supersedes_id = Some("older".to_string());
+    original.supersedes_id = Some(canonical_memory_uuid("older"));
     original.expires_at_unix_seconds = Some(1_000);
     original.expiration_duration_seconds = Some(600);
 

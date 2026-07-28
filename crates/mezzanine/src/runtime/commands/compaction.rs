@@ -575,7 +575,10 @@ impl RuntimeSessionService {
                 return Ok(());
             }
             let now = current_unix_seconds().max(1);
-            let memory_id = format!("compact-{}", task.conversation_id);
+            let memory_id = mez_agent::memory::canonical_memory_uuid(&format!(
+                "compact-{}",
+                task.conversation_id
+            ));
             let content = runtime_model_compact_memory_content(
                 pane_id,
                 &task.conversation_id,

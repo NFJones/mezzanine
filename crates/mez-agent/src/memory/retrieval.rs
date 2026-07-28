@@ -133,6 +133,7 @@ pub fn complete_memory_retrieval(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::canonical_memory_uuid;
 
     /// Builds one stable record for retrieval-order tests.
     fn record(id: &str, updated_at_unix_seconds: u64) -> MemoryRecord {
@@ -186,7 +187,7 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.record.id.as_str())
                 .collect::<Vec<_>>(),
-            ["c", "a"]
+            [canonical_memory_uuid("c"), canonical_memory_uuid("a"),]
         );
         assert!(result.reason.contains("sqlite fts"));
     }

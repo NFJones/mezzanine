@@ -6361,7 +6361,7 @@ The baseline command capabilities are:
   pager-backed record browser. It MUST default to active records in the active
   pane project scope when that scope is known, support optional scope, kind,
   state, full-text, and limit filters. Its list MUST be a table with one
-  selectable stable memory-id link in the left-most column for each record;
+  selectable stable memory-UUID link in the left-most column for each record;
   those links MUST open memory details. It MUST allow deleting the selected
   memory with `d`, and allow
   saving the rendered raw Markdown view to a user-supplied file path,
@@ -8876,7 +8876,8 @@ configured user-private location. The default persistent store MUST be a
 user-private SQLite database named `memory.sqlite`; implementations MUST import
 legacy sibling `memory.tsv` data into SQLite without deleting the TSV backup.
 
-Persistent memory MUST be structured. Each memory record MUST include identity,
+Persistent memory MUST be structured. Each memory record identity MUST be a
+UUID. Each memory record MUST also include
 scope, creation time, update time, source, confidence or priority, kind,
 lifecycle state, and content. Retrieval metadata SHOULD include last-used time,
 use count, confirmation counts, supersession, expiry when available, and an

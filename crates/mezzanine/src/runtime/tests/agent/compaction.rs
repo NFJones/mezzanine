@@ -1726,7 +1726,11 @@ context_window_tokens = 5000
     let compact_memory = context
         .blocks()
         .iter()
-        .find(|block| block.label.contains("compact-as-tail"))
+        .find(|block| {
+            block
+                .label
+                .contains(&mez_agent::memory::canonical_memory_uuid("compact-as-tail"))
+        })
         .expect("compact memory should be model-visible after /compact");
     assert!(
         compact_memory
@@ -1834,7 +1838,7 @@ context_window_tokens = 128000
     let compacted = service
         .memory_records()
         .into_iter()
-        .find(|record| record.id == "compact-as-forced")
+        .find(|record| record.id == mez_agent::memory::canonical_memory_uuid("compact-as-forced"))
         .expect("compacted memory record");
     assert!(
         compacted.content.contains("forced compact marker 1"),

@@ -2,7 +2,7 @@
 
 use mez_agent::memory::{
     MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryRetrievalRequest, MemoryScope,
-    MemorySearchRequest, MemorySource, MemoryState,
+    MemorySearchRequest, MemorySource, MemoryState, canonical_memory_uuid, is_memory_uuid,
 };
 
 use super::{PersistentMemoryStore, fs, retrieve_persistent_memory};
@@ -84,7 +84,7 @@ fn persistent_memory_imports_legacy_tsv_and_searches_fts() {
             ..MemorySearchRequest::default()
         })
         .unwrap();
-    assert_eq!(matches[0].record.id, "legacy");
+    assert_eq!(matches[0].record.id, canonical_memory_uuid("legacy"));
 
     let _ = fs::remove_dir_all(root);
 }
@@ -130,7 +130,7 @@ fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
     assert_eq!(superseded.supersedes_id, None);
     assert_eq!(
         store.inspect("new").unwrap().supersedes_id.as_deref(),
-        Some("old")
+        Some(canonical_memory_uuid("old").as_str())
     );
 
     let dry_run = store
@@ -149,7 +149,7 @@ fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
             .iter()
             .map(|record| record.id.as_str())
             .collect::<Vec<_>>(),
-        ["old"]
+        [canonical_memory_uuid("old")]
     );
     assert_eq!(store.inspect("old").unwrap().state, MemoryState::Superseded);
 
@@ -164,7 +164,7 @@ fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
             false,
         )
         .unwrap();
-    assert_eq!(archived[0].id, "old");
+    assert_eq!(archived[0].id, canonical_memory_uuid("old"));
     assert_eq!(store.inspect("old").unwrap().state, MemoryState::Archived);
 
     let _ = fs::remove_dir_all(root);
@@ -213,7 +213,10 @@ fn persistent_memory_search_filters_before_limiting_results() {
         .unwrap();
 
     assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].record.id, "target-project");
+    assert_eq!(
+        matches[0].record.id,
+        canonical_memory_uuid("target-project")
+    );
 
     let _ = fs::remove_dir_all(root);
 }
@@ -243,7 +246,7 @@ fn persistent_memory_search_accepts_punctuation_only_queries() {
         })
         .unwrap();
 
-    assert_eq!(matches[0].record.id, "punctuation");
+    assert_eq!(matches[0].record.id, canonical_memory_uuid("punctuation"));
 
     let _ = fs::remove_dir_all(root);
 }
@@ -276,12 +279,12 @@ fn archive_before_prune_deletes_already_archived_records_on_later_passes() {
         archive_before_prune: true,
     };
     let first_pass = store.enforce_retention(policy, false).unwrap();
-    assert_eq!(first_pass[0].id, "older");
+    assert_eq!(first_pass[0].id, canonical_memory_uuid("older"));
     assert_eq!(store.inspect("older").unwrap().state, MemoryState::Archived);
 
     let second_pass = store.enforce_retention(policy, false).unwrap();
 
-    assert_eq!(second_pass[0].id, "older");
+    assert_eq!(second_pass[0].id, canonical_memory_uuid("older"));
     assert!(store.inspect("older").is_err());
     assert_eq!(store.list().unwrap().len(), 1);
 
@@ -368,7 +371,7 @@ fn persistent_memory_search_uses_fallback_when_fts_is_disabled() {
         })
         .unwrap();
 
-    assert_eq!(matches[0].record.id, "candidate");
+    assert_eq!(matches[0].record.id, canonical_memory_uuid("candidate"));
     assert_eq!(matches[0].fts_rank, None);
     let connection = rusqlite::Connection::open(store.path()).unwrap();
     let fts_table_count = connection
@@ -379,6 +382,85 @@ fn persistent_memory_search_uses_fallback_when_fts_is_disabled() {
         )
         .unwrap();
     assert_eq!(fts_table_count, 0);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies schema v5 rewrites legacy ids and supersession references as UUIDs.
+///
+/// Existing databases can contain action-derived or operator-authored string
+/// identifiers. Opening such a store must migrate every primary identifier and
+/// linked `supersedes_id` atomically while preserving legacy aliases for CLI
+/// and slash-command lookups.
+#[test]
+fn persistent_memory_migrates_legacy_ids_and_supersession_references_to_uuids() {
+    let root =
+        std::env::temp_dir().join(format!("mez-memory-uuid-migration-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let database = root.join("memory.sqlite");
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE memory_schema_migrations (
+                 version INTEGER PRIMARY KEY NOT NULL,
+                 applied_at INTEGER NOT NULL,
+                 description TEXT NOT NULL
+             );
+             INSERT INTO memory_schema_migrations VALUES (4, 1, 'legacy schema');
+             CREATE TABLE memory_records (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 scope TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 source TEXT NOT NULL,
+                 priority INTEGER NOT NULL,
+                 kind TEXT NOT NULL DEFAULT 'fact',
+                 state TEXT NOT NULL DEFAULT 'active',
+                 last_used_at INTEGER,
+                 use_count INTEGER NOT NULL DEFAULT 0,
+                 confirmed_count INTEGER NOT NULL DEFAULT 0,
+                 last_confirmed_at INTEGER,
+                 supersedes_id TEXT,
+                 expires_at INTEGER,
+                 expiration_duration_seconds INTEGER,
+                 content TEXT NOT NULL,
+                 scope_text TEXT NOT NULL
+             );
+             INSERT INTO memory_records (
+                 id, scope, created_at, updated_at, source, priority, kind,
+                 state, use_count, confirmed_count, content, scope_text
+             ) VALUES ('legacy-old', 'global', 10, 10, 'agent', 10, 'fact',
+                       'superseded', 0, 0, 'old content', 'global');
+             INSERT INTO memory_records (
+                 id, scope, created_at, updated_at, source, priority, kind,
+                 state, use_count, confirmed_count, supersedes_id, content,
+                 scope_text
+             ) VALUES ('legacy-new', 'global', 10, 11, 'agent', 10, 'fact',
+                       'active', 0, 0, 'legacy-old', 'new content', 'global');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = PersistentMemoryStore::under_config_root(&root).with_fts_enabled(false);
+    let records = store.list().unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|record| is_memory_uuid(&record.id)));
+    let newer = store.inspect("legacy-new").unwrap();
+    assert_eq!(newer.id, canonical_memory_uuid("legacy-new"));
+    assert_eq!(
+        newer.supersedes_id.as_deref(),
+        Some(canonical_memory_uuid("legacy-old").as_str())
+    );
+    let connection = rusqlite::Connection::open(store.path()).unwrap();
+    let migration_count = connection
+        .query_row(
+            "SELECT COUNT(*) FROM memory_schema_migrations WHERE version = 5",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert_eq!(migration_count, 1);
 
     let _ = fs::remove_dir_all(root);
 }

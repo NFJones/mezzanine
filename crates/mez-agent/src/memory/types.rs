@@ -337,7 +337,7 @@ impl MemoryRecord {
         content: impl Into<String>,
     ) -> Self {
         Self {
-            id: id.into(),
+            id: super::canonical_memory_uuid(&id.into()),
             scope,
             created_at_unix_seconds,
             updated_at_unix_seconds,
@@ -362,7 +362,9 @@ impl MemoryRecord {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn validate(&self, persistent: bool) -> Result<()> {
-        validate_non_empty("memory id", &self.id)?;
+        if !super::is_memory_uuid(&self.id) {
+            return Err(MezError::invalid_args("memory id must be a UUID"));
+        }
         if self.created_at_unix_seconds == 0 || self.updated_at_unix_seconds == 0 {
             return Err(MezError::invalid_args(
                 "memory timestamps must be non-zero unix seconds",
@@ -402,8 +404,12 @@ impl MemoryRecord {
                 "memory expiration duration must be non-zero seconds",
             ));
         }
-        if let Some(supersedes_id) = &self.supersedes_id {
-            validate_non_empty("superseded memory id", supersedes_id)?;
+        if let Some(supersedes_id) = &self.supersedes_id
+            && !super::is_memory_uuid(supersedes_id)
+        {
+            return Err(MezError::invalid_args(
+                "superseded memory id must be a UUID",
+            ));
         }
         validate_non_empty("memory content", &self.content)?;
         let _ = persistent;
@@ -480,6 +486,9 @@ impl MemoryRecord {
                 record.expiration_duration_seconds =
                     parse_optional_u64(&fields[14], "expiration_duration_seconds")?;
             }
+        }
+        if let Some(supersedes_id) = record.supersedes_id.as_mut() {
+            *supersedes_id = super::canonical_memory_uuid(supersedes_id);
         }
         record.validate_for_persistence()?;
         Ok(record)

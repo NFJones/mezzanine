@@ -3,7 +3,9 @@
 //! Session memory enforces session ownership and delegates record validation to
 //! shared type and validation helpers.
 
-use super::{MemoryRecord, Result, SessionMemoryStore, scope_belongs_to_session};
+use super::{
+    MemoryRecord, Result, SessionMemoryStore, canonical_memory_uuid, scope_belongs_to_session,
+};
 
 impl SessionMemoryStore {
     /// Runs the upsert operation for this subsystem.
@@ -23,7 +25,7 @@ impl SessionMemoryStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn inspect(&self, id: &str) -> Option<&MemoryRecord> {
-        self.records.get(id)
+        self.records.get(&canonical_memory_uuid(id))
     }
 
     /// Runs the delete operation for this subsystem.
@@ -32,7 +34,7 @@ impl SessionMemoryStore {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn delete(&mut self, id: &str) -> bool {
-        self.records.remove(id).is_some()
+        self.records.remove(&canonical_memory_uuid(id)).is_some()
     }
 
     /// Runs the clear session operation for this subsystem.

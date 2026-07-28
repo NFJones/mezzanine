@@ -157,13 +157,15 @@ context_window_tokens = 4500
         .map(|record| record.id)
         .collect::<Vec<_>>();
     assert!(
-        !persisted_ids
-            .iter()
-            .any(|id| id == "expired-compact-memory"),
+        !persisted_ids.iter().any(|id| {
+            id == &mez_agent::memory::canonical_memory_uuid("expired-compact-memory")
+        }),
         "{persisted_ids:?}"
     );
     assert!(
-        persisted_ids.iter().any(|id| id == "live-compact-memory"),
+        persisted_ids
+            .iter()
+            .any(|id| id == &mez_agent::memory::canonical_memory_uuid("live-compact-memory")),
         "{persisted_ids:?}"
     );
     let session_ids = service
@@ -172,11 +174,15 @@ context_window_tokens = 4500
         .map(|record| record.id)
         .collect::<Vec<_>>();
     assert!(
-        !session_ids.iter().any(|id| id == "expired-compact-memory"),
+        !session_ids.iter().any(|id| {
+            id == &mez_agent::memory::canonical_memory_uuid("expired-compact-memory")
+        }),
         "{session_ids:?}"
     );
     assert!(
-        session_ids.iter().any(|id| id == "live-compact-memory"),
+        session_ids
+            .iter()
+            .any(|id| id == &mez_agent::memory::canonical_memory_uuid("live-compact-memory")),
         "{session_ids:?}"
     );
 }
@@ -262,13 +268,15 @@ context_window_tokens = 4500
         .map(|record| record.id)
         .collect::<Vec<_>>();
     assert!(
-        !persisted_ids
-            .iter()
-            .any(|id| id == "expired-remember-memory"),
+        !persisted_ids.iter().any(|id| {
+            id == &mez_agent::memory::canonical_memory_uuid("expired-remember-memory")
+        }),
         "{persisted_ids:?}"
     );
     assert!(
-        persisted_ids.iter().any(|id| id == "live-remember-memory"),
+        persisted_ids
+            .iter()
+            .any(|id| id == &mez_agent::memory::canonical_memory_uuid("live-remember-memory")),
         "{persisted_ids:?}"
     );
     let session_ids = service
@@ -277,11 +285,15 @@ context_window_tokens = 4500
         .map(|record| record.id)
         .collect::<Vec<_>>();
     assert!(
-        !session_ids.iter().any(|id| id == "expired-remember-memory"),
+        !session_ids.iter().any(|id| {
+            id == &mez_agent::memory::canonical_memory_uuid("expired-remember-memory")
+        }),
         "{session_ids:?}"
     );
     assert!(
-        session_ids.iter().any(|id| id == "live-remember-memory"),
+        session_ids
+            .iter()
+            .any(|id| id == &mez_agent::memory::canonical_memory_uuid("live-remember-memory")),
         "{session_ids:?}"
     );
     assert!(service.agent_is_remembering("%1"));
@@ -449,7 +461,7 @@ context_window_tokens = 4500
     let compacted = service
         .memory_records()
         .into_iter()
-        .find(|record| record.id == "compact-as1")
+        .find(|record| record.id == mez_agent::memory::canonical_memory_uuid("compact-as1"))
         .expect("compacted memory record");
     assert!(
         compacted.content.contains("summarize release plan"),
@@ -475,7 +487,9 @@ context_window_tokens = 4500
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::Memory
-            && block.label.contains("compact-as1")
+            && block
+                .label
+                .contains(&mez_agent::memory::canonical_memory_uuid("compact-as1"))
             && block.content.contains("summarize release plan")
     }));
     assert!(context.blocks().iter().all(|block| {
@@ -580,10 +594,10 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
 
     assert_eq!(memory_blocks.len(), 1, "{memory_blocks:?}");
     assert!(
-        memory_blocks
-            .iter()
-            .any(|block| block.label.contains("compact-as1")
-                && block.content.contains("active compact summary")),
+        memory_blocks.iter().any(|block| block
+            .label
+            .contains(&mez_agent::memory::canonical_memory_uuid("compact-as1"))
+            && block.content.contains("active compact summary")),
         "{memory_blocks:?}"
     );
     assert!(

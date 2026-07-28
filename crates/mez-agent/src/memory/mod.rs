@@ -10,6 +10,7 @@ mod action_results;
 mod context;
 mod encoding;
 mod error;
+mod id;
 mod retrieval;
 mod session_store;
 mod types;
@@ -17,6 +18,7 @@ mod validation;
 
 pub use context::{MemoryContextRecord, MemoryContextScope};
 pub use error::{MemoryRecordError, MemoryRecordResult};
+pub use id::{canonical_memory_uuid, deterministic_memory_uuid, is_memory_uuid, new_memory_uuid};
 pub use retrieval::{
     MemoryRetentionPolicy, MemoryRetrievalRequest, MemoryRetrievalResult, MemorySearchRequest,
     MemorySearchResult, compare_memory_search_results, complete_memory_retrieval,

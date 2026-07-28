@@ -353,7 +353,8 @@ impl RuntimeSessionService {
         let Some(session) = self.agent_shell_store().get(pane_id) else {
             return Vec::new();
         };
-        let compact_memory_id = format!("compact-{}", session.session_id);
+        let compact_memory_id =
+            mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", session.session_id));
         self.memory_records()
             .into_iter()
             .filter(|record| record.id == compact_memory_id)

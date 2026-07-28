@@ -6,7 +6,8 @@
 //! in the product adapter.
 
 use super::{
-    MemoryRecord, MemoryRecordResult, MemoryScope, MemorySource, parse_model_writable_kind,
+    MemoryRecord, MemoryRecordResult, MemoryScope, MemorySource, canonical_memory_uuid,
+    parse_model_writable_kind,
 };
 use crate::{ActionResult, AgentAction, AgentTurnResultIdentity};
 
@@ -78,7 +79,7 @@ pub fn memory_action_record_id(
     turn: &(impl AgentTurnResultIdentity + ?Sized),
     action: &AgentAction,
 ) -> String {
-    format!("agent:{}:{}", turn.turn_id(), action.id)
+    let legacy_id = format!("agent:{}:{}", turn.turn_id(), action.id)
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':') {
@@ -87,7 +88,8 @@ pub fn memory_action_record_id(
                 '-'
             }
         })
-        .collect()
+        .collect::<String>();
+    canonical_memory_uuid(&legacy_id)
 }
 
 /// Builds one canonical persistent record from a model-authored store action.
@@ -266,7 +268,7 @@ mod tests {
     /// Builds one canonical memory record fixture.
     fn record() -> MemoryRecord {
         MemoryRecord {
-            id: "memory-1".to_string(),
+            id: canonical_memory_uuid("memory-1"),
             scope: MemoryScope::Project {
                 root: "/repo".to_string(),
             },
@@ -303,7 +305,7 @@ mod tests {
         );
         assert_eq!(
             memory_action_record_id(&turn(), &action()),
-            "agent:turn-1:search-1"
+            canonical_memory_uuid("agent:turn-1:search-1")
         );
     }
 
@@ -330,7 +332,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(record.id, "agent:turn-1:search-1");
+        assert_eq!(record.id, canonical_memory_uuid("agent:turn-1:search-1"));
         assert_eq!(record.kind, MemoryKind::Procedure);
         assert_eq!(record.priority, 100);
         assert_eq!(
@@ -397,7 +399,10 @@ mod tests {
         let structured: serde_json::Value =
             serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
 
-        assert!(result.content_text().contains("memory-1 score=0.750"));
+        assert!(result.content_text().contains(&format!(
+            "{} score=0.750",
+            canonical_memory_uuid("memory-1")
+        )));
         assert_eq!(structured["count"], 1);
         assert_eq!(structured["results"][0]["reason"], "semantic match");
     }

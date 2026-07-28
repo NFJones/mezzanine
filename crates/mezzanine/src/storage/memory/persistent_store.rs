@@ -7,8 +7,8 @@ use std::cmp::Ordering;
 
 use mez_agent::memory::{
     MemoryRecord, MemoryRetentionPolicy, MemoryScope, MemorySearchRequest, MemorySearchResult,
-    MemoryState, compare_memory_search_results, decode_scope, encode_scope, kind_name, parse_kind,
-    parse_source, parse_state, source_name, state_name,
+    MemoryState, canonical_memory_uuid, compare_memory_search_results, decode_scope, encode_scope,
+    kind_name, parse_kind, parse_source, parse_state, source_name, state_name,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -19,7 +19,7 @@ use super::{
     set_private_file_permissions,
 };
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const LEGACY_TSV_FILE_NAME: &str = "memory.tsv";
 
 impl PersistentMemoryStore {
@@ -94,6 +94,7 @@ impl PersistentMemoryStore {
     /// on duplicated control-flow logic.
     pub fn inspect(&self, id: &str) -> Result<MemoryRecord> {
         let connection = self.open()?;
+        let id = canonical_memory_uuid(id);
         let mut statement = connection.prepare(
             "SELECT id, scope, created_at, updated_at, source, priority, kind, state,
                     last_used_at, use_count, confirmed_count, last_confirmed_at,
@@ -144,6 +145,7 @@ impl PersistentMemoryStore {
     /// on duplicated control-flow logic.
     pub fn delete(&self, id: &str) -> Result<bool> {
         let connection = self.open()?;
+        let id = canonical_memory_uuid(id);
         let changed =
             connection.execute("DELETE FROM memory_records WHERE id = ?1", params![id])?;
         Ok(changed > 0)
@@ -196,17 +198,19 @@ impl PersistentMemoryStore {
         new_id: &str,
         updated_at_unix_seconds: u64,
     ) -> Result<MemoryRecord> {
+        let old_id = canonical_memory_uuid(old_id);
+        let new_id = canonical_memory_uuid(new_id);
         if old_id == new_id {
             return Err(MezError::invalid_args(
                 "a memory record cannot supersede itself",
             ));
         }
-        let mut new_record = self.inspect(new_id)?;
-        let mut record = self.inspect(old_id)?;
+        let mut new_record = self.inspect(&new_id)?;
+        let mut record = self.inspect(&old_id)?;
         record.state = MemoryState::Superseded;
         record.updated_at_unix_seconds = updated_at_unix_seconds;
         self.upsert(record.clone())?;
-        new_record.supersedes_id = Some(old_id.to_string());
+        new_record.supersedes_id = Some(old_id);
         new_record.updated_at_unix_seconds = updated_at_unix_seconds;
         self.upsert(new_record)?;
         Ok(record)
@@ -379,13 +383,13 @@ fn initialize_schema(connection: &mut Connection, fts_enabled: bool) -> Result<(
     connection.execute(
         "INSERT OR IGNORE INTO memory_schema_migrations (version, applied_at, description)
          VALUES (?1, strftime('%s', 'now'), ?2)",
-        params![SCHEMA_VERSION, "create sqlite memory store with fts"],
+        params![SCHEMA_VERSION, "use UUID memory record identities"],
     )?;
     Ok(())
 }
 
 /// Applies additive SQLite migrations for persistent memory records.
-fn ensure_memory_schema_migrations(connection: &Connection) -> Result<()> {
+fn ensure_memory_schema_migrations(connection: &mut Connection) -> Result<()> {
     let has_duration_column = connection
         .prepare("PRAGMA table_info(memory_records)")?
         .query_map([], |row| row.get::<_, String>(1))?
@@ -400,6 +404,7 @@ fn ensure_memory_schema_migrations(connection: &Connection) -> Result<()> {
     }
     migrate_memory_schema_v3_documentation_kind(connection)?;
     migrate_memory_schema_v4_research_kind(connection)?;
+    migrate_memory_schema_v5_uuid_ids(connection)?;
     Ok(())
 }
 
@@ -500,6 +505,63 @@ fn migrate_memory_schema_v4_research_kind(connection: &Connection) -> Result<()>
         "INSERT OR IGNORE INTO memory_schema_migrations (version, applied_at, description) VALUES (4, strftime(\"%s\", \"now\"), \"allow research memory kind\")",
         [],
     )?;
+    Ok(())
+}
+
+/// Rewrites legacy record ids and their supersession references as UUIDs.
+fn migrate_memory_schema_v5_uuid_ids(connection: &mut Connection) -> Result<()> {
+    let version_exists = connection
+        .query_row(
+            "SELECT 1 FROM memory_schema_migrations WHERE version = 5",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if version_exists {
+        return Ok(());
+    }
+
+    let transaction = connection.transaction()?;
+    let legacy_ids = {
+        let mut statement = transaction.prepare("SELECT id FROM memory_records ORDER BY id")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|id| canonical_memory_uuid(id) != *id)
+            .collect::<Vec<_>>()
+    };
+    for legacy_id in legacy_ids {
+        let uuid = canonical_memory_uuid(&legacy_id);
+        let collision = transaction
+            .query_row(
+                "SELECT 1 FROM memory_records WHERE id = ?1",
+                params![uuid],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if collision {
+            return Err(MezError::invalid_state(
+                "memory UUID migration encountered an identity collision",
+            ));
+        }
+        transaction.execute(
+            "UPDATE memory_records SET supersedes_id = ?1 WHERE supersedes_id = ?2",
+            params![uuid, legacy_id],
+        )?;
+        transaction.execute(
+            "UPDATE memory_records SET id = ?1 WHERE id = ?2",
+            params![uuid, legacy_id],
+        )?;
+    }
+    transaction.execute(
+        "INSERT INTO memory_schema_migrations (version, applied_at, description)
+         VALUES (5, strftime('%s', 'now'), 'rewrite memory record identities as UUIDs')",
+        [],
+    )?;
+    transaction.commit()?;
     Ok(())
 }
 
