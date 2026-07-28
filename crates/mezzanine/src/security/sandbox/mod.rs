@@ -736,11 +736,10 @@ fn effective_sandbox_policy(
         mounts,
         protected_masks,
         authority_source,
-        network: if evaluation.effects.network
-            && matches!(
-                request.network_policy,
-                NetworkPolicy::Prompt | NetworkPolicy::Allow
-            ) {
+        network: if matches!(request.network_policy, NetworkPolicy::Allow)
+            || (evaluation.effects.network
+                && matches!(request.network_policy, NetworkPolicy::Prompt))
+        {
             BubblewrapNetworkMode::Connected
         } else {
             request.config.network

@@ -2895,9 +2895,12 @@ effects may already exist. Command-failure, uncertain, malformed, timed-out, or
 failed assessments MUST settle the original command normally. Approval grants
 only the retained turn/action one unsandboxed retry and MUST never execute it
 automatically. For shell actions, Bubblewrap MUST enforce network denial with
-an isolated network namespace and MUST use an explicit connected profile only
-after the action's network requirement is authorized. Destination-level
-filtering is outside this binary connected/isolated contract. Brokered
+an isolated network namespace when `permissions.network_policy` is `deny`.
+When that policy is `allow`, Bubblewrap MUST use an explicit connected profile
+for every shell action without inferring network access from the command.
+With `prompt`, Bubblewrap MUST use the connected profile only after the
+action's network requirement is authorized. Destination-level filtering is
+outside this binary connected/isolated contract. Brokered
 `web_search`, `fetch_url`, and MCP actions execute through product-owned
 transports outside the pane-shell Bubblewrap child and MUST remain subject to
 their controller capability and approval gates. Raw Bubblewrap arguments,

@@ -487,8 +487,9 @@ command_rules = []
 session_command_rules = []
 global_command_rules = []
 # Under policy-only this affects approval classification only. Under Bubblewrap,
-# deny keeps shell actions network-isolated; approved prompt/allow actions use
-# an explicit connected profile. Brokered web and MCP actions are controller-gated.
+# deny keeps shell actions network-isolated; allow connects every shell action;
+# prompt connects only authorized network actions. Brokered web and MCP actions
+# are controller-gated.
 network_policy = "prompt"
 destructive_action_policy = "prompt"
 bypass_mode = false

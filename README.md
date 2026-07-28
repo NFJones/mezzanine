@@ -397,9 +397,11 @@ Current support reflects behavior implemented in the repository today.
   scope arrays remain empty. Outside Bubblewrap, subagent scopes are retained
   as coordination and approval metadata rather than hard path restrictions.
 - Bubblewrap is the shell confinement boundary: mounts enforce maximum read and
-  write authority, while network policy selects an isolated or explicitly
-  connected launch profile after approval. Brokered `web_search`, `fetch_url`,
-  and MCP actions use product-owned transports and remain controller-gated.
+  write authority. A `network_policy` of `allow` selects an explicitly
+  connected launch profile for every shell action; `deny` selects an isolated
+  profile, while `prompt` connects only authorized network actions. Brokered
+  `web_search`, `fetch_url`, and MCP actions use product-owned transports and
+  remain controller-gated.
 - `/permissions` reports whether the active pane's effective Bubblewrap scopes
   came from explicit configuration, a trusted project, or no authority. It also
   reports stable restriction identifiers for the synthetic home, minimal PATH,

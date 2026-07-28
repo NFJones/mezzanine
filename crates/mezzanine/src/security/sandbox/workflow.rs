@@ -303,8 +303,8 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             id: "sandbox.network-policy-enforced",
             severity: SandboxDiagnosticSeverity::Info,
             summary: "Bubblewrap enforces shell network policy".to_string(),
-            details: "Shell actions without approved network authority use an isolated namespace; authorized network actions use an explicit connected profile.".to_string(),
-            remedy: "Review permissions.network_policy and the active approval policy before running network-requiring shell actions.".to_string(),
+            details: "A deny policy uses an isolated namespace, an allow policy uses an explicit connected profile for every shell action, and prompt connects authorized network actions.".to_string(),
+            remedy: "Review permissions.network_policy and the active approval policy before running shell actions.".to_string(),
             affected_path: None,
             source: "bubblewrap",
         });

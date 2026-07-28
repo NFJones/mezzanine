@@ -597,12 +597,20 @@ fn create_targets_mount_nearest_existing_parent() {
     );
 }
 
-/// Authorized network requirements use the connected profile while credential,
-/// process-control, stateful, and interactive requirements still fail closed.
+/// Verifies an allow network policy selects the connected profile even when a
+/// command has no inferred network effect, while unsupported requirements still
+/// fail closed before launch.
 #[test]
 fn unsupported_requirements_fail_before_launch() {
     let config = config();
     let authority = authority();
+    let no_network = evaluation(EffectCompleteness::Complete, effects());
+    let mut allowed_no_network = request(&config, &authority, &no_network);
+    allowed_no_network.network_policy = NetworkPolicy::Allow;
+    let plan = compile_bubblewrap_launch_plan(allowed_no_network).unwrap();
+    assert_eq!(plan.audit_summary.network, BubblewrapNetworkMode::Connected);
+    assert!(!plan.arguments.contains(&"--unshare-net".to_string()));
+
     let mut network = effects();
     network.network = true;
     let network = evaluation(EffectCompleteness::Complete, network);

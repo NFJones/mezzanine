@@ -712,7 +712,7 @@ Provider options under a model profile:
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
 | `permissions.session_command_rules` | array | `[]` | Session-scoped command rule entries. |
 | `permissions.global_command_rules` | array | `[]` | Global command rule entries. |
-| `permissions.network_policy` | string | `"prompt"` | Network action policy. |
+| `permissions.network_policy` | string | `"prompt"` | Shell-network policy: `deny` isolates every Bubblewrap shell action, `allow` connects every action, and `prompt` connects authorized network actions. |
 | `permissions.destructive_action_policy` | string | `"prompt"` | Destructive action policy. |
 | `permissions.bypass_mode` | boolean | `false` | Explicit bypass state; cannot be enabled from config. |
 
