@@ -854,6 +854,16 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
         .find(|turn| turn.turn_id == second_worker_turn_id)
         .cloned()
         .expect("continued worker turn should exist");
+    assert!(service.agent_turn_routing_applied(&second_worker_turn_id));
+    let second_worker_profile = service
+        .agent_turn_model_profile(&second_worker_turn_id)
+        .expect("continued worker should retain its selected profile");
+    assert!(
+        service
+            .runtime_auto_sizing_dispatch_for_turn(&second_worker_turn, second_worker_profile)
+            .unwrap()
+            .is_none()
+    );
     let completion_batch = runtime_complete_batch_for(
         second_worker_turn_id.clone(),
         second_worker_turn.agent_id.clone(),

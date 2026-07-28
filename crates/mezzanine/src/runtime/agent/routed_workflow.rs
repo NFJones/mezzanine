@@ -497,6 +497,7 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_configured_model_profiles
             .insert(turn.turn_id.clone(), configured_model_profile_name);
+        self.mark_agent_turn_routing_applied(turn.turn_id.clone());
         self.agent
             .routed_workflow_by_child_turn
             .insert(turn.turn_id.clone(), parent_turn_id.to_string());
