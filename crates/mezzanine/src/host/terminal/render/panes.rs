@@ -23,6 +23,7 @@ use super::{
 use super::{group_frame_text, render_pane_lines, write_merged_pane_frames_on_dividers};
 use mez_mux::layout::{PaneGeometry, Size, Window};
 use mez_mux::theme::UiTheme;
+use mez_terminal::PaneRenditionCompatibility;
 /// Runs the draw window from screens operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -83,6 +84,11 @@ pub fn draw_styled_window_from_screens(
         .iter()
         .map(|pane| StyledPaneRenderInput {
             pane_id: pane.id.to_string(),
+            compatibility: config
+                .pane_rendition_compatibility
+                .get(&pane.id.to_string())
+                .copied()
+                .unwrap_or_default(),
             lines: screens
                 .get(&pane.id.to_string())
                 .map(TerminalScreen::visible_styled_lines)
@@ -238,6 +244,8 @@ pub(super) struct StyledPaneRenderInput {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pane_id: String,
+    /// Launch-time TERM compatibility applied only to pane-authored content.
+    compatibility: PaneRenditionCompatibility,
     /// Stores the lines value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -285,18 +293,19 @@ pub(super) fn render_styled_window_with_pane_frame_template(
                 .ok_or_else(|| {
                     MezError::invalid_state("presentation plan references a missing pane")
                 })?;
-            let lines = pane_inputs
+            let input = pane_inputs
                 .iter()
-                .find(|input| input.pane_id == pane.id.to_string())
-                .map(|input| input.lines.as_slice())
-                .unwrap_or(&[]);
+                .find(|input| input.pane_id == pane.id.to_string());
+            let presented_lines = input
+                .map(|input| present_pane_lines(&input.lines, input.compatibility))
+                .unwrap_or_default();
             let mut display_pane = pane.clone();
             display_pane.size = render_plan.render_region_size;
             Ok(render_styled_pane_lines(
                 window,
                 &display_pane,
                 frame_context,
-                lines,
+                &presented_lines,
                 pane_frame,
                 render_plan.frame_merges_into_divider,
                 ui_theme,
@@ -325,6 +334,23 @@ pub(super) fn render_styled_window_with_pane_frame_template(
         place_window_frame(&mut lines, frame, window_frame.position, window.size.rows);
     }
     Ok(lines)
+}
+
+/// Applies pane-profile compatibility before Mezzanine frames and overlays are composed.
+fn present_pane_lines(
+    lines: &[TerminalStyledLine],
+    compatibility: PaneRenditionCompatibility,
+) -> Vec<TerminalStyledLine> {
+    lines
+        .iter()
+        .cloned()
+        .map(|mut line| {
+            for span in &mut line.style_spans {
+                span.rendition = compatibility.present_rendition(span.rendition);
+            }
+            line
+        })
+        .collect()
 }
 
 /// Runs the render panes by geometry operation for this subsystem.

@@ -1225,6 +1225,19 @@ The default pane `TERM` value MUST be `screen-256color`. Mezzanine MAY also
 provide `mez-256color` and `mezzanine-256color` as custom terminfo names for
 users who explicitly select them.
 
+For panes launched with `TERM=screen` or a `screen-*` value, attached-client
+presentation MUST translate parsed italic rendition to inverse-video rendition.
+Screen-family terminfo uses SGR italic for its standout capability, including
+the search-match style emitted by pagers such as `less`; this translation makes
+standout visually highlighted in the same way as tmux. The canonical pane
+screen MUST retain the parsed italic rendition, and the translation MUST occur
+before Mezzanine-owned frames, status text, prompts, selections, and overlays
+are composed. Consequently, intentional SGR italic emitted by an application
+under a Screen-family TERM is also presented as inverse video. Panes launched
+with any other TERM MUST preserve italic presentation. The policy MUST be
+captured from each pane's launch-time TERM so a configuration reload does not
+reinterpret an already-running process.
+
 The `mez-256color` and `mezzanine-256color` terminal descriptions MUST map to
 the xterm-compatible Mezzanine terminal profile. They MUST advertise only the
 xterm-compatible capabilities implemented by Mezzanine, including 256-color

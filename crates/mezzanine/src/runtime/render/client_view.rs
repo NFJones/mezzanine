@@ -737,6 +737,7 @@ impl RuntimeSessionService {
         config.render_rate_limit_fps = self.presentation.settings.terminal_render_rate_limit_fps;
         config.ui_theme = self.presentation.settings.ui_theme.clone();
         config.primary_display_overlay_active = self.presentation.primary_display_overlay.is_some();
+        config.pane_rendition_compatibility = self.pane_rendition_compatibility().clone();
         let frame_context = self.terminal_frame_context();
         config.mouse_border_cells = self.active_window_mouse_border_cells();
         config.mouse_window_frame_cells = self.active_window_mouse_frame_cells(&frame_context);

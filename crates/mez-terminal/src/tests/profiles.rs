@@ -1,9 +1,60 @@
 //! Regression tests for terminal profiles behavior.
 
 use crate::{
-    CapabilitySupport, DEFAULT_TERMINAL_PROFILE_NAME, TerminalDiagnosticSeverity, TerminalProfile,
-    TerminfoSource, select_installed_terminfo, select_terminfo, terminal_profile_named,
+    CapabilitySupport, DEFAULT_TERMINAL_PROFILE_NAME, GraphicRendition, PaneRenditionCompatibility,
+    TerminalDiagnosticSeverity, TerminalProfile, TerminfoSource, select_installed_terminfo,
+    select_terminfo, terminal_profile_named,
 };
+
+/// Verifies only Screen-family TERM values select standout compatibility.
+///
+/// The boundary must match the TERM grammar rather than arbitrary substrings,
+/// so profiles such as tmux and custom terminals retain real italic text.
+#[test]
+fn pane_rendition_compatibility_classifies_screen_terms() {
+    assert_eq!(
+        PaneRenditionCompatibility::for_term("screen"),
+        PaneRenditionCompatibility::ScreenStandout
+    );
+    assert_eq!(
+        PaneRenditionCompatibility::for_term("screen-256color"),
+        PaneRenditionCompatibility::ScreenStandout
+    );
+    assert_eq!(
+        PaneRenditionCompatibility::for_term("screen-direct"),
+        PaneRenditionCompatibility::ScreenStandout
+    );
+    for term in ["tmux-256color", "mez-256color", "xterm-screen"] {
+        assert_eq!(
+            PaneRenditionCompatibility::for_term(term),
+            PaneRenditionCompatibility::Normal
+        );
+    }
+}
+
+/// Verifies Screen standout translation changes only italic presentation.
+///
+/// Canonical parser state remains italic while attached-client presentation
+/// receives reverse video and preserves all unrelated style attributes.
+#[test]
+fn screen_standout_compatibility_translates_only_italic() {
+    let source = GraphicRendition {
+        bold: true,
+        italic: true,
+        underline: true,
+        ..GraphicRendition::default()
+    };
+    let presented = PaneRenditionCompatibility::ScreenStandout.present_rendition(source);
+
+    assert!(presented.bold);
+    assert!(presented.underline);
+    assert!(!presented.italic);
+    assert!(presented.inverse);
+    assert_eq!(
+        PaneRenditionCompatibility::Normal.present_rendition(source),
+        source
+    );
+}
 
 /// Verifies xterm compatible profile declares required capabilities.
 ///
