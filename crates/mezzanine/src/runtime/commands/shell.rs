@@ -565,12 +565,6 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&debug_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
-                    && command == "diff"
-                {
-                    let diff_outcome = self.execute_agent_shell_diff_command(&pane_id)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&diff_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
                     && command == "init"
                 {
                     let init_outcome = self.execute_agent_shell_init_command(

@@ -112,7 +112,6 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("clear", &[], SlashCommandEffect::SessionMutation, false),
         slash("compact", &[], SlashCommandEffect::SessionMutation, false),
         slash("copy", &[], SlashCommandEffect::SessionMutation, true),
-        slash("diff", &[], SlashCommandEffect::ReadOnly, true),
         slash("directive", &[], SlashCommandEffect::SessionMutation, true),
         slash("exit", &["quit"], SlashCommandEffect::SessionMutation, true),
         slash("init", &[], SlashCommandEffect::FileMutation, true),
@@ -272,6 +271,10 @@ mod tests {
             parse_slash_command("/does-not-exist").unwrap_err(),
             SlashCommandParseError::UnknownCommand
         );
+        assert_eq!(
+            parse_slash_command("/diff").unwrap_err(),
+            SlashCommandParseError::UnknownCommand
+        );
         assert!(
             baseline_slash_commands()
                 .iter()
@@ -298,7 +301,6 @@ mod tests {
             "clear",
             "compact",
             "copy",
-            "diff",
             "exit",
             "init",
             "thinking",

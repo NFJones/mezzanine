@@ -1,16 +1,15 @@
 //! Agent artifact, export, and project scaffold command helpers.
 //!
 //! This module owns slash commands that read or materialize agent-adjacent
-//! artifacts: context exports, retained traces and patches, git diffs, project
-//! instruction scaffolds, latest say-output copies, and auth logout side
-//! effects. Keeping them separate from the command facade leaves live dispatch
-//! and policy commands easier to navigate.
+//! artifacts: context exports, retained traces and patches, project instruction
+//! scaffolds, latest say-output copies, and auth logout side effects. Keeping
+//! them separate from the command facade leaves live dispatch and policy
+//! commands easier to navigate.
 
 use super::{
     AgentShellCommandOutcome, MezError, PathBuf, Result, RuntimeSessionService, RuntimeSideEffect,
     json_escape, parse_slash_command, runtime_agent_init_scaffold,
-    runtime_append_auth_logout_audit, runtime_git_repository_root, runtime_git_text,
-    runtime_git_untracked_diff, runtime_git_untracked_files, runtime_write_agent_context_for_pane,
+    runtime_append_auth_logout_audit, runtime_write_agent_context_for_pane,
     runtime_write_agent_copy_output_for_pane, runtime_write_agent_patches_for_pane,
     runtime_write_agent_trace_log_for_pane,
 };
@@ -89,73 +88,6 @@ impl RuntimeSessionService {
                 body,
             })
         }
-    }
-
-    /// Executes `/diff` against the pane's current version-control context.
-    pub(super) fn execute_agent_shell_diff_command(
-        &self,
-        pane_id: &str,
-    ) -> Result<AgentShellCommandOutcome> {
-        Ok(AgentShellCommandOutcome::Display {
-            command: "diff".to_string(),
-            body: self.runtime_agent_diff_display(pane_id)?,
-        })
-    }
-
-    /// Builds the live `/diff` display from the pane's current Git repository.
-    pub(super) fn runtime_agent_diff_display(&self, pane_id: &str) -> Result<String> {
-        let working_directory = self
-            .pane_current_working_directory(pane_id)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
-        let Some(repository_root) = runtime_git_repository_root(&working_directory)? else {
-            return Ok(format!(
-                "vcs=git status=unavailable cwd={} reason=not-a-git-repository source=runtime-vcs-diff",
-                json_escape(&working_directory.to_string_lossy())
-            ));
-        };
-        let staged_diff = runtime_git_text(
-            &repository_root,
-            &["diff", "--cached", "--no-ext-diff", "--no-color", "--"],
-        )?;
-        let worktree_diff = runtime_git_text(
-            &repository_root,
-            &["diff", "--no-ext-diff", "--no-color", "--"],
-        )?;
-        let untracked_files = runtime_git_untracked_files(&repository_root)?;
-        let mut untracked_diffs = Vec::new();
-        for file in &untracked_files {
-            untracked_diffs.push(runtime_git_untracked_diff(&repository_root, file)?);
-        }
-        let mut lines = vec![format!(
-            "vcs=git repository={} staged_diff_bytes={} worktree_diff_bytes={} untracked_files={} source=runtime-vcs-diff",
-            json_escape(&repository_root.to_string_lossy()),
-            staged_diff.len(),
-            worktree_diff.len(),
-            untracked_files.len()
-        )];
-        lines.push("[staged]".to_string());
-        lines.push(if staged_diff.is_empty() {
-            "(no staged changes)".to_string()
-        } else {
-            staged_diff
-        });
-        lines.push("[worktree]".to_string());
-        lines.push(if worktree_diff.is_empty() {
-            "(no unstaged changes)".to_string()
-        } else {
-            worktree_diff
-        });
-        lines.push("[untracked]".to_string());
-        if untracked_files.is_empty() {
-            lines.push("(no untracked files)".to_string());
-        } else {
-            for (file, diff) in untracked_files.iter().zip(untracked_diffs) {
-                lines.push(format!("file={}", json_escape(file)));
-                lines.push(diff);
-            }
-        }
-        Ok(lines.join("\n"))
     }
 
     /// Executes `/init` by creating a project instruction scaffold.

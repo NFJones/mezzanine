@@ -794,7 +794,6 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "copy-patches"
         | "copy-trace-log"
         | "debug-config"
-        | "diff"
         | "list-modified-files" => "copy and diagnostics",
         "approval"
         | "approve"
@@ -854,7 +853,6 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "clear" => "clear the visible conversation and terminal view.",
         "compact" => "summarize older transcript context and keep a raw tail.",
         "copy" => "copy the latest model say text.",
-        "diff" => "show the current working tree diff.",
         "exit" => "hide the agent shell after stopping active work.",
         "init" => "generate a project instruction scaffold.",
         "logout" => "log out of a provider account.",

@@ -6291,8 +6291,6 @@ The baseline command capabilities are:
   `clipboard` targets using the same target semantics as `/copy-trace-log` and
   `/copy-patches`; the default target MUST be `pane`, and the default paste
   buffer name for `buffer` MUST be `agent-output`.
-- `/diff`: Show the working tree diff, including untracked files when a
-  version-control system exposes them.
 - `/exit`: Exit or hide the agent shell, stopping active pane-local agent work
   before the shell is hidden.
 - `/quit`: Alias for `/exit`.
@@ -8540,10 +8538,6 @@ sandbox or executor.
 
 Before applying agent-suggested file mutations, Mezzanine SHOULD expose the
 planned command, patch, or diff to the user when policy requires approval.
-
-The `/diff` command MUST show the current working tree changes using
-version-control tooling when available and shell-based fallback inspection when
-not available.
 
 Mezzanine MUST provide a rollback mechanism for session state snapshots.
 

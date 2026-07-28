@@ -1905,63 +1905,6 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     );
 }
 
-/// Verifies that `/diff` reads the active pane's Git repository and includes
-/// both modified tracked content and untracked files. This covers the spec
-/// requirement that the agent shell diff view expose the working tree rather
-/// than returning a generic runtime-required placeholder.
-#[test]
-fn runtime_agent_shell_diff_reports_git_worktree_and_untracked_files() {
-    let root = temp_root("runtime-agent-diff");
-    let git = |args: &[&str]| {
-        let output = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&root)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    git(&["init"]);
-    fs::write(root.join("tracked.txt"), "before\n").unwrap();
-    git(&["add", "tracked.txt"]);
-    fs::write(root.join("tracked.txt"), "before\nafter\n").unwrap();
-    fs::write(root.join("new.txt"), "untracked\n").unwrap();
-
-    let mut service = test_runtime_service();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    let descriptor = service.initial_pane_descriptor().unwrap();
-    service
-        .start_pane_process_with_start_directory(descriptor, Some("sleep 30"), Some(&root))
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-
-    let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-diff","method":"agent/shell/command","params":{"idempotency_key":"agent-diff","input":"/diff"}}"#,
-        &primary,
-    );
-
-    assert!(response.contains(r#""kind":"display""#), "{response}");
-    assert!(response.contains(r#""command":"diff""#), "{response}");
-    assert!(response.contains("source=runtime-vcs-diff"), "{response}");
-    assert!(response.contains("untracked_files=1"), "{response}");
-    assert!(response.contains("tracked.txt"), "{response}");
-    assert!(response.contains("+after"), "{response}");
-    assert!(response.contains("file=new.txt"), "{response}");
-    assert!(response.contains("+untracked"), "{response}");
-    assert!(!response.contains("requires_runtime"), "{response}");
-    service.kill_session(&primary, true).unwrap();
-    let _ = fs::remove_dir_all(root);
-}
-
 /// Verifies that `/init` creates a project instruction scaffold in the active
 /// pane's working directory and leaves an existing scaffold intact. This covers
 /// the baseline file-mutation slash command without writing to the repository
