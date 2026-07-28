@@ -240,9 +240,6 @@ pub(crate) struct RuntimeProcessComponent {
     settings: RuntimeProcessSettings,
     /// Live pane process handles and their PTY lifecycle manager.
     pane_processes: PaneProcessManager,
-    /// Launch-time TERM presentation compatibility keyed by pane id.
-    pane_rendition_compatibility:
-        std::collections::BTreeMap<String, mez_terminal::PaneRenditionCompatibility>,
     /// Best-known current working directory for each pane process.
     pane_current_working_directories: std::collections::BTreeMap<String, PathBuf>,
     /// Latest readiness state observed for each pane shell.
@@ -542,13 +539,6 @@ impl RuntimeSessionService {
     /// Returns the TERM value exported to pane processes and clients.
     pub(crate) fn terminal_term(&self) -> &str {
         &self.process.settings.terminal_term
-    }
-
-    /// Returns launch-time rendition compatibility for all live pane processes.
-    pub(crate) fn pane_rendition_compatibility(
-        &self,
-    ) -> &std::collections::BTreeMap<String, mez_terminal::PaneRenditionCompatibility> {
-        &self.process.pane_rendition_compatibility
     }
 
     /// Applies one parsed generation of terminal process settings.
@@ -1072,12 +1062,6 @@ impl RuntimeSessionService {
         self.process
             .pane_bootstrap_pending
             .insert(descriptor.pane_id.to_string());
-        self.process.pane_rendition_compatibility.insert(
-            descriptor.pane_id.to_string(),
-            mez_terminal::PaneRenditionCompatibility::for_term(
-                &self.process.settings.terminal_term,
-            ),
-        );
 
         let update = PaneProcessStart {
             session_id: self.session.id.to_string(),
@@ -1551,12 +1535,6 @@ impl RuntimeSessionService {
         self.process
             .pane_bootstrap_pending
             .insert(descriptor.pane_id.to_string());
-        self.process.pane_rendition_compatibility.insert(
-            descriptor.pane_id.to_string(),
-            mez_terminal::PaneRenditionCompatibility::for_term(
-                &self.process.settings.terminal_term,
-            ),
-        );
         if let Some(start_directory) = start_directory {
             self.process.pane_current_working_directories.insert(
                 descriptor.pane_id.to_string(),
@@ -1932,7 +1910,6 @@ impl RuntimeSessionService {
         self.process.program_owned_pane_titles.remove(pane_id);
         self.persistence.cleanup_pane_io(pane_id);
         self.process.pane_screens.remove(pane_id);
-        self.process.pane_rendition_compatibility.remove(pane_id);
         self.process.pane_transaction_osc_screens.remove(pane_id);
         self.process.pane_transaction_osc_pending.remove(pane_id);
         self.process

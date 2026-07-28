@@ -525,59 +525,11 @@ fn runtime_config_applies_safe_terminal_term_to_new_panes() {
     let started = service
         .create_window_with_pane_process(&primary, "term", true, Some(&command))
         .unwrap();
-    let screen_config = service
-        .terminal_client_loop_config(TerminalClientLoopConfig::default())
-        .unwrap();
-    assert_eq!(
-        screen_config
-            .pane_rendition_compatibility
-            .get(&started.pane_id),
-        Some(&mez_terminal::PaneRenditionCompatibility::ScreenStandout)
-    );
-
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "primary".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: "[terminal]\nterm = \"tmux-256color\"\n".to_string(),
-        }])
-        .unwrap();
-    let second = service
-        .create_window_with_pane_process(&primary, "term-normal", true, Some("true"))
-        .unwrap();
-    let reloaded_config = service
-        .terminal_client_loop_config(TerminalClientLoopConfig::default())
-        .unwrap();
-
-    assert_eq!(
-        reloaded_config
-            .pane_rendition_compatibility
-            .get(&started.pane_id),
-        Some(&mez_terminal::PaneRenditionCompatibility::ScreenStandout)
-    );
-    assert_eq!(
-        reloaded_config
-            .pane_rendition_compatibility
-            .get(&second.pane_id),
-        Some(&mez_terminal::PaneRenditionCompatibility::Normal)
-    );
     let updates = poll_until_exit(&mut service);
     let observed = fs::read_to_string(&output).unwrap();
 
-    assert_eq!(service.terminal_term(), "tmux-256color");
-    assert!(
-        updates
-            .iter()
-            .any(|update| update.pane_id == started.pane_id)
-    );
-    assert!(
-        updates
-            .iter()
-            .any(|update| update.pane_id == second.pane_id)
-    );
+    assert_eq!(service.terminal_term(), "screen-256color");
+    assert_eq!(started.pane_id, updates[0].pane_id);
     assert_eq!(observed, "screen-256color");
     let _ = fs::remove_file(output);
 }

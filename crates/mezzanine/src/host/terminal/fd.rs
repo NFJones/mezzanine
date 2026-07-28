@@ -17,7 +17,6 @@ use mez_mux::input::{
 };
 use mez_mux::layout::Size;
 use mez_mux::theme::UiTheme;
-use mez_terminal::PaneRenditionCompatibility;
 #[cfg(test)]
 use rustix::event::{PollFd as RustixPollFd, PollFlags, Timespec, poll as rustix_poll};
 #[cfg(test)]
@@ -169,11 +168,6 @@ pub struct TerminalClientLoopConfig {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub frame_context: TerminalFrameContext,
-    /// Presentation compatibility captured from each pane's launch-time TERM.
-    ///
-    /// Keeping this map per pane prevents a live config reload from
-    /// reinterpreting terminal content produced by an already-running process.
-    pub pane_rendition_compatibility: BTreeMap<String, PaneRenditionCompatibility>,
     /// Stores the window frames enabled value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -315,7 +309,6 @@ impl Default for TerminalClientLoopConfig {
             mouse_pane_agent_selector_cells: Vec::new(),
             mouse_pane_regions: Vec::new(),
             frame_context: TerminalFrameContext::default(),
-            pane_rendition_compatibility: BTreeMap::new(),
             window_frames_enabled: true,
             window_frame_template: super::render::DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
             window_frame_position: TerminalFramePosition::Bottom,

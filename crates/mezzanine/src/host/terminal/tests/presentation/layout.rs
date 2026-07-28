@@ -15,9 +15,7 @@ use mez_mux::presentation::{
     TerminalWindowStatusContext, apply_client_view_offset, compose_client_presentation,
 };
 use mez_mux::theme::UiTheme;
-use mez_terminal::{
-    GraphicRendition, PaneRenditionCompatibility, TerminalColor, TerminalScreen, TerminalStyleSpan,
-};
+use mez_terminal::{GraphicRendition, TerminalColor, TerminalScreen, TerminalStyleSpan};
 use unicode_width::UnicodeWidthStr;
 
 pub(super) fn window_from_test_geometries(size: Size, geometries: Vec<PaneGeometry>) -> Window {
@@ -229,66 +227,6 @@ fn client_view_offsets_style_spans_across_side_by_side_panes() {
             && span.rendition.foreground == Some(TerminalColor::Rgb(0x7e, 0x9c, 0xd8))
             && span.rendition.background.is_none()
     }));
-}
-
-/// Verifies Screen-family standout compatibility is scoped to its source pane.
-///
-/// `less` emits SGR italic for standout under `screen-256color`. Presentation
-/// converts that pane's match to inverse video without changing an adjacent
-/// non-Screen pane's intentional italic text or either canonical screen.
-#[test]
-fn client_view_translates_screen_standout_per_pane() {
-    let mut ids = mez_core::ids::IdFactory::default();
-    let mut window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap());
-    window
-        .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
-        .unwrap();
-    let left_id = window.panes()[0].id.to_string();
-    let right_id = window.panes()[1].id.to_string();
-    let mut left = TerminalScreen::new(window.panes()[0].size, 10).unwrap();
-    left.feed(b"\x1b[3mL\x1b[23m");
-    let mut right = TerminalScreen::new(window.panes()[1].size, 10).unwrap();
-    right.feed(b"\x1b[3mR\x1b[23m");
-    let mut screens = BTreeMap::new();
-    screens.insert(left_id.clone(), left);
-    screens.insert(right_id.clone(), right);
-    let mut compatibility = BTreeMap::new();
-    compatibility.insert(left_id.clone(), PaneRenditionCompatibility::ScreenStandout);
-    compatibility.insert(right_id, PaneRenditionCompatibility::Normal);
-    let config = TerminalClientLoopConfig {
-        window_frames_enabled: false,
-        pane_frames_enabled: false,
-        pane_rendition_compatibility: compatibility,
-        ..TerminalClientLoopConfig::default()
-    };
-
-    let view = render_attached_client_view(
-        ClientViewRole::Primary,
-        &window,
-        &screens,
-        &config,
-        Size::new(8, 2).unwrap(),
-    )
-    .unwrap()
-    .unwrap();
-
-    let left_span = view.line_style_spans[0]
-        .iter()
-        .find(|span| span.start == 0 && span.length == 1)
-        .unwrap();
-    assert!(left_span.rendition.inverse);
-    assert!(!left_span.rendition.italic);
-    let right_span = view.line_style_spans[0]
-        .iter()
-        .find(|span| span.start == 4 && span.length == 1)
-        .unwrap();
-    assert!(right_span.rendition.italic);
-    assert!(!right_span.rendition.inverse);
-    assert!(
-        screens[&left_id].visible_styled_lines()[0].style_spans[0]
-            .rendition
-            .italic
-    );
 }
 
 /// Verifies client view hides pending observers and keeps primary dimensions.

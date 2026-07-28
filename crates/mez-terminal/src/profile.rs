@@ -22,47 +22,6 @@ pub const MEZZANINE_TERMINFO_NAMES: &[&str] = &["mez-256color", "mezzanine-256co
 /// Capability-safe installed terminfo fallbacks in preference order.
 pub const TERMINFO_FALLBACK_ORDER: &[&str] = &["screen-256color", "screen", "vt100", "dumb"];
 
-/// Presentation compatibility required by the TERM advertised to one pane.
-///
-/// This policy is derived when a pane process starts and is applied only when
-/// its canonical terminal content is presented to an attached client. Parsing
-/// remains faithful to the SGR stream produced by the pane application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PaneRenditionCompatibility {
-    /// Preserve parsed graphic renditions without compatibility translation.
-    #[default]
-    Normal,
-    /// Present italics as reverse video for Screen-family standout semantics.
-    ScreenStandout,
-}
-
-impl PaneRenditionCompatibility {
-    /// Classifies presentation compatibility from the exact pane-facing TERM.
-    pub fn for_term(term: &str) -> Self {
-        if term == "screen" || term.starts_with("screen-") {
-            Self::ScreenStandout
-        } else {
-            Self::Normal
-        }
-    }
-
-    /// Translates one parsed rendition for attached-client presentation.
-    ///
-    /// Screen terminfo encodes standout using SGR italic. Matching tmux's
-    /// compatibility behavior therefore clears italic and enables inverse
-    /// video while preserving every unrelated rendition attribute.
-    pub fn present_rendition(
-        self,
-        mut rendition: crate::GraphicRendition,
-    ) -> crate::GraphicRendition {
-        if self == Self::ScreenStandout && rendition.italic {
-            rendition.italic = false;
-            rendition.inverse = true;
-        }
-        rendition
-    }
-}
-
 /// Reports an invalid terminal compatibility profile name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalProfileError {
