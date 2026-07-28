@@ -5,9 +5,10 @@ use super::{
     AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeSessionHandle,
     AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientId, ClientViewRole,
     ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection, MezError,
-    PaneResizeUpdate, Result, RuntimeAgentProviderDispatch, RuntimeEventBatch,
-    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
-    RuntimeLifecycleState, RuntimeSideEffect, Size, TerminalClientLoopConfig, oneshot, watch,
+    PaneResizeUpdate, Result, RuntimeAgentProviderDispatch, RuntimeApprovedExternalActionDispatch,
+    RuntimeApprovedExternalActionOutcome, RuntimeEventBatch, RuntimeEventConnectionTable,
+    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSideEffect, Size,
+    TerminalClientLoopConfig, oneshot, watch,
 };
 #[cfg(test)]
 use super::{
@@ -422,6 +423,29 @@ impl AsyncRuntimeSessionHandle {
             },
         )
         .await?
+    }
+
+    /// Claims one approved network or MCP action for worker execution.
+    pub async fn claim_approved_external_action(
+        &self,
+        turn_id: String,
+        action_id: String,
+    ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
+        self.request(|reply| AsyncRuntimeRequest::ClaimApprovedExternalAction {
+            turn_id,
+            action_id,
+            reply,
+        })
+        .await?
+    }
+
+    /// Returns one approved external-action result to actor-owned state.
+    pub async fn complete_approved_external_action(
+        &self,
+        outcome: RuntimeApprovedExternalActionOutcome,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::CompleteApprovedExternalAction { outcome, reply })
+            .await?
     }
 
     /// Claims one queued model-backed compaction task for async execution.

@@ -207,6 +207,16 @@ impl RuntimeMcpTransportSet {
         self.transports.remove(server_id);
     }
 
+    /// Transfers one server transport to an external worker.
+    pub(crate) fn take(&mut self, server_id: &str) -> Option<RuntimeMcpTransport> {
+        self.transports.remove(server_id)
+    }
+
+    /// Restores one server transport after external worker completion.
+    pub(crate) fn insert(&mut self, server_id: String, transport: RuntimeMcpTransport) {
+        self.transports.insert(server_id, transport);
+    }
+
     /// Runs the call tool operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

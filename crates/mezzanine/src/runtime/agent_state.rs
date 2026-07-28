@@ -44,6 +44,44 @@ pub struct RuntimeAgentProviderTask {
     pub model_profile: ModelProfile,
 }
 
+/// One approved external action transferred from the runtime actor to a worker.
+///
+/// The actor retains turn and execution ownership. The worker receives only
+/// the immutable action inputs and, for MCP, the concrete server transport
+/// needed to perform the call without borrowing serialized runtime state.
+pub(crate) struct RuntimeApprovedExternalActionDispatch {
+    /// Turn that owns the approved action.
+    pub turn: AgentTurnRecord,
+    /// Approved action to execute.
+    pub action: mez_agent::AgentAction,
+    /// MCP-specific transport state when the action is an MCP call.
+    pub mcp: Option<RuntimeApprovedMcpActionDispatch>,
+}
+
+/// MCP transport inputs moved into one approved-action worker.
+pub(crate) struct RuntimeApprovedMcpActionDispatch {
+    /// Validated tool-call plan retained from the actor-owned registry.
+    pub plan: mez_agent::mcp::McpToolCallPlan,
+    /// Exact live server transport moved out of actor state for the call.
+    pub transport: super::RuntimeMcpTransport,
+    /// Environment exposed to the configured MCP transport.
+    pub environment: std::collections::BTreeMap<String, String>,
+    /// Optional credential store used by authenticated HTTP MCP transports.
+    pub auth_store: Option<crate::security::auth::AuthStore>,
+}
+
+/// Result returned by an approved external-action worker.
+pub(crate) struct RuntimeApprovedExternalActionOutcome {
+    /// Turn that owns the completed action.
+    pub turn_id: String,
+    /// Stable action identity within the turn.
+    pub action_id: String,
+    /// Settled result or typed execution failure.
+    pub result: crate::error::Result<mez_agent::ActionResult>,
+    /// MCP transport returned to actor ownership after the call.
+    pub mcp_transport: Option<(String, super::RuntimeMcpTransport)>,
+}
+
 /// Tracks a provider task after the async actor has claimed it from the queue.
 ///
 /// Provider workers run outside the serialized runtime actor. This record gives

@@ -77,6 +77,7 @@ impl AsyncRuntimeSessionActor {
                 && matches!(
                     effect,
                     RuntimeSideEffect::DispatchAgentProvider { .. }
+                        | RuntimeSideEffect::DispatchApprovedExternalAction { .. }
                         | RuntimeSideEffect::DispatchAgentCompaction { .. }
                         | RuntimeSideEffect::DispatchAgentRemember { .. }
                 )

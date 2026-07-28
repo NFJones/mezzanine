@@ -5,6 +5,7 @@
 //! execute returned command or selection intents; the reducer only mutates
 //! overlay/selector state and reports typed outcomes.
 
+use crate::input::{KeyCode, parse_key_chord_bytes};
 use crate::layout::Size;
 
 use super::{
@@ -102,7 +103,16 @@ pub fn selector_input_action(input: &[u8]) -> SelectorInputAction {
         b"\x1b[B" | b"\x1bOB" | b"\x1b[C" | b"\x1bOC" => SelectorInputAction::Next,
         b"\x1b[H" | b"\x1b[1~" => SelectorInputAction::First,
         b"\x1b[F" | b"\x1b[4~" => SelectorInputAction::Last,
-        _ => SelectorInputAction::Ignore,
+        _ => match parse_key_chord_bytes(input) {
+            Some((chord, consumed)) if consumed == input.len() => match chord.code {
+                KeyCode::Up | KeyCode::Left => SelectorInputAction::Previous,
+                KeyCode::Down | KeyCode::Right => SelectorInputAction::Next,
+                KeyCode::Home => SelectorInputAction::First,
+                KeyCode::End => SelectorInputAction::Last,
+                _ => SelectorInputAction::Ignore,
+            },
+            _ => SelectorInputAction::Ignore,
+        },
     }
 }
 
@@ -500,6 +510,10 @@ mod tests {
         assert_eq!(
             selector_input_action(b"\x1b[A"),
             SelectorInputAction::Previous
+        );
+        assert_eq!(
+            selector_input_action(b"\x1b[1;2B"),
+            SelectorInputAction::Next
         );
         assert_eq!(
             selector_input_action(b"\x1b[6~"),

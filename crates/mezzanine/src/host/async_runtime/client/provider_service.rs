@@ -8,7 +8,8 @@ use super::{
     MezErrorKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
     ProviderErrorRetryClass, ReqwestProviderHttpTransport, Result, RuntimeAgentCompactionDispatch,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
-    RuntimeAgentRememberDispatch, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
+    RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
+    RuntimeApprovedExternalActionOutcome, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
     RuntimeSideEffect, execute_network_action_with_transport_async,
     is_terminal_runtime_lifecycle_state, provider_error_retry_class,
     runtime_execute_auto_sizing_with_async_provider, sleep, watch,
@@ -199,6 +200,15 @@ async fn dispatch_agent_provider_side_effects(
                     dispatch,
                 ));
             }
+            RuntimeSideEffect::DispatchApprovedExternalAction { turn_id, action_id } => {
+                let Some(dispatch) = handle
+                    .claim_approved_external_action(turn_id, action_id)
+                    .await?
+                else {
+                    continue;
+                };
+                workers.spawn(execute_approved_external_action(handle.clone(), dispatch));
+            }
             RuntimeSideEffect::DispatchAgentCompaction { pane_id } => {
                 let dispatch = match handle.claim_agent_compaction_task(pane_id.clone()).await {
                     Ok(Some(dispatch)) => dispatch,
@@ -255,6 +265,52 @@ async fn dispatch_agent_provider_side_effects(
         }
     }
     Ok(())
+}
+
+/// Executes one approved network or MCP action without holding the runtime actor.
+async fn execute_approved_external_action(
+    handle: AsyncRuntimeSessionHandle,
+    dispatch: RuntimeApprovedExternalActionDispatch,
+) -> Result<AsyncAgentProviderWorkerResult> {
+    let RuntimeApprovedExternalActionDispatch { turn, action, mcp } = dispatch;
+    let turn_id = turn.turn_id.clone();
+    let action_id = action.id.clone();
+    let (result, mcp_transport) = if let Some(mcp) = mcp {
+        let server_id = mcp.plan.server_id.clone();
+        let execution_request = mez_agent::McpExecutionRequest::from(&mcp.plan);
+        let mut transports = crate::runtime::RuntimeMcpTransportSet::default();
+        transports.insert(server_id.clone(), mcp.transport);
+        let response = transports
+            .call_tool_async(&mcp.plan, &mcp.environment, mcp.auth_store.as_ref())
+            .await;
+        let result = response.and_then(|response| {
+            Ok(mez_agent::mcp_response_to_action_result(
+                &turn,
+                &action,
+                &execution_request,
+                response.into(),
+            )?)
+        });
+        let transport = transports.take(&server_id).ok_or_else(|| {
+            MezError::invalid_state("approved MCP worker lost its owned transport")
+        })?;
+        (result, Some((server_id, transport)))
+    } else {
+        let transport = ReqwestProviderHttpTransport;
+        (
+            execute_network_action_with_transport_async(&turn, &action, &transport).await,
+            None,
+        )
+    };
+    handle
+        .complete_approved_external_action(RuntimeApprovedExternalActionOutcome {
+            turn_id,
+            action_id,
+            result,
+            mcp_transport,
+        })
+        .await?;
+    Ok(None)
 }
 
 /// Runs one provider request while honoring turn cancellation.

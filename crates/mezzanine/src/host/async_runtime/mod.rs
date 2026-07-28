@@ -40,6 +40,7 @@ use crate::protocol::message::encode_mmp_body;
 use crate::runtime::{
     AttachedClientStepApplication, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
+    RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
     RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
     RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, authorize_unix_peer_raw_fd, current_effective_uid,

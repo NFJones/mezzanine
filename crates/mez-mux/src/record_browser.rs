@@ -266,6 +266,11 @@ impl RecordBrowser {
             .map(|record| record.id.as_str())
     }
 
+    /// Returns the records retained in list order.
+    pub fn records(&self) -> &[RecordBrowserRecord] {
+        &self.records
+    }
+
     /// Selects one bounded list record by index.
     pub fn set_active_index(&mut self, active_index: usize) {
         self.active_index = active_index.min(self.records.len().saturating_sub(1));

@@ -1072,6 +1072,143 @@ fn runtime_agent_shell_show_approvals_maps_wrapped_links_to_logical_records() {
     );
 }
 
+/// Verifies one attached-terminal read containing multiple arrow keys advances
+/// a retained approval browser once per logical key.
+///
+/// Terminal reads are byte batches rather than key events. The overlay input
+/// boundary must frame every CSI sequence before reduction or the whole batch
+/// is ignored and the selector appears immovable in a live terminal.
+#[test]
+fn runtime_agent_shell_show_approvals_frames_batched_arrow_input() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    for agent_id in ["agent-first", "agent-second", "agent-third"] {
+        service
+            .queue_blocked_approval(pending_approval_request(agent_id, &pane_id, "cargo check"))
+            .unwrap();
+    }
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-approvals")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[B\x1b[1;2B");
+
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(
+        overlay
+            .active_selection_index
+            .and_then(|index| overlay.selections.get(index))
+            .map(|selection| selection.logical_id),
+        Some(2)
+    );
+}
+
+/// Verifies approving the final external action returns control to the pager
+/// before the action's network transport begins.
+///
+/// Approval input runs inside the serialized runtime actor. It must only mark
+/// the action running and queue worker-owned transport work; otherwise a slow
+/// request prevents the empty approval pager from processing Escape and makes
+/// the attached client appear frozen.
+#[test]
+fn runtime_agent_shell_show_approvals_closes_while_external_action_is_queued() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 14).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"approval-pager-external-action","input":"fetch the release notes"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let provider = RuntimeBatchProvider {
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "fetching release notes".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "fetch the requested release notes".to_string(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "fetch-approval".to_string(),
+                    rationale: "read the release notes".to_string(),
+                    payload: mez_agent::AgentActionPayload::FetchUrl {
+                        url: "https://example.test/releases".to_string(),
+                        format: None,
+                        max_bytes: None,
+                    },
+                }],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+    };
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Blocked);
+    let approval_id = service.blocked_approvals().pending()[0].id.clone();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-approvals")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests("%1", &response)
+        .unwrap();
+    apply_record_browser_input(&mut service, &primary, b"a");
+
+    assert_eq!(
+        service.blocked_approvals().get(&approval_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Approved
+    );
+    assert_eq!(
+        service.pending_approved_external_actions(),
+        vec![("turn-1".to_string(), "fetch-approval".to_string())]
+    );
+    assert!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .lines
+            .iter()
+            .any(|line| line.contains("No pending approvals."))
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b");
+
+    assert!(service.primary_display_overlay().is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies approval decision keys remain ordinary search text while the
 /// retained browser search editor is active.
 ///

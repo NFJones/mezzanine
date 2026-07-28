@@ -775,32 +775,64 @@ impl RuntimeSessionService {
                         ));
                     }
                 }
+                let mut resumed_result = ActionResult::running(
+                    &turn,
+                    &action,
+                    vec!["approved network action queued for external dispatch".to_string()],
+                    Some(
+                        serde_json::json!({
+                            "state": "approved",
+                            "kind": action.action_type(),
+                            "action_id": action.id.as_str(),
+                            "dispatch": "external_worker"
+                        })
+                        .to_string(),
+                    ),
+                );
+                resumed_result.permission_evaluation = retained_permission_evaluation.clone();
+                execution.action_results[result_index] = resumed_result;
+                execution.terminal_state = AgentTurnState::Running;
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     &turn.turn_id,
                     &format!(
-                        "action {} blocked -> running reason=approval_approved_network",
+                        "action {} blocked -> running reason=approval_approved_network_queued",
                         action.id
                     ),
                 )?;
-                execution.action_results[result_index] =
-                    self.execute_network_action_for_turn_blocking(&turn, &action)?;
+                self.agent
+                    .pending_approved_external_actions
+                    .insert((turn.turn_id.clone(), action.id.clone()));
             }
             AgentActionPayload::McpCall { .. } => {
-                if !self
-                    .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
-                {
-                    self.append_agent_status_text_to_terminal_buffer(
-                        &turn.pane_id,
-                        &format!(
-                            "agent: {}",
-                            runtime_agent_action_summary(&action)
-                                .unwrap_or_else(|| "MCP call".to_string())
-                        ),
-                    )?;
-                }
-                execution.action_results[result_index] =
-                    self.execute_mcp_action_for_turn(&turn, &action, true)?;
+                let mut resumed_result = ActionResult::running(
+                    &turn,
+                    &action,
+                    vec!["approved MCP action queued for external dispatch".to_string()],
+                    Some(
+                        serde_json::json!({
+                            "state": "approved",
+                            "kind": action.action_type(),
+                            "action_id": action.id.as_str(),
+                            "dispatch": "external_worker"
+                        })
+                        .to_string(),
+                    ),
+                );
+                resumed_result.permission_evaluation = retained_permission_evaluation.clone();
+                execution.action_results[result_index] = resumed_result;
+                execution.terminal_state = AgentTurnState::Running;
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    &format!(
+                        "action {} blocked -> running reason=approval_approved_mcp_queued",
+                        action.id
+                    ),
+                )?;
+                self.agent
+                    .pending_approved_external_actions
+                    .insert((turn.turn_id.clone(), action.id.clone()));
             }
             AgentActionPayload::ConfigChange { .. } => {
                 if !self

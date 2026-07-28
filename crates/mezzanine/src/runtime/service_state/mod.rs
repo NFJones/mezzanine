@@ -50,7 +50,7 @@ pub(crate) use lifecycle::{
 };
 pub(crate) use mcp_transport::{
     RuntimeHookPipelineBlock, RuntimeHttpMcpTransportState, RuntimeMcpRetryReport,
-    RuntimeMcpTransportSet,
+    RuntimeMcpTransport, RuntimeMcpTransportSet,
 };
 pub use metrics::{
     DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,

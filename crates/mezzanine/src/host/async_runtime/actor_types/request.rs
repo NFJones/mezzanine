@@ -7,7 +7,8 @@ use super::{
     ClientViewRole, ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection,
     PaneProcess, PaneResizeUpdate, RenderedClientView, Result, RuntimeAgentCompactionDispatch,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
-    RuntimeEventBatch, RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
+    RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome, RuntimeEventBatch,
+    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
     RuntimeLifecycleState, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
     RuntimeSnapshotControlAsyncWork, Size, SnapshotRepository, TerminalClientLoopConfig, oneshot,
 };
@@ -563,6 +564,22 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Option<RuntimeAgentProviderDispatch>>>,
+    },
+    /// Claims one approved network or MCP action for execution outside the actor.
+    ClaimApprovedExternalAction {
+        /// Turn that owns the approved action.
+        turn_id: String,
+        /// Stable action identity within the turn.
+        action_id: String,
+        /// Returns immutable worker inputs when the queued action is claimable.
+        reply: oneshot::Sender<Result<Option<RuntimeApprovedExternalActionDispatch>>>,
+    },
+    /// Applies one approved external-action worker result inside the actor.
+    CompleteApprovedExternalAction {
+        /// Worker result, including any MCP transport returning to actor ownership.
+        outcome: RuntimeApprovedExternalActionOutcome,
+        /// Reports whether the active turn accepted the result.
+        reply: oneshot::Sender<Result<bool>>,
     },
     /// Claims a queued model-backed conversation compaction task.
     ClaimAgentCompactionTask {

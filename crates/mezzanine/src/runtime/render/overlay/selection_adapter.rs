@@ -1,5 +1,6 @@
 //! Pane-agent selector and record-browser layout projection.
 
+use super::display_content::RuntimeCommandDisplayOverlayContent;
 use super::product_content::*;
 use crate::runtime::render::*;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -131,6 +132,7 @@ pub(super) fn render_record_browser_overlay(
             })
             .collect();
     }
+    restore_record_browser_table_link_selections(&mut content, &record_browser.browser);
     let content = content;
     overlay.lines = content.lines;
     overlay.line_style_spans = content.line_style_spans;
@@ -158,6 +160,82 @@ pub(super) fn render_record_browser_overlay(
     overlay.search_input = None;
     overlay.search_match = None;
     true
+}
+
+/// Restores logical record links when a narrow Markdown table splits an ID
+/// across physical continuation rows that no longer retain a complete link
+/// label on any one rendered line.
+fn restore_record_browser_table_link_selections(
+    content: &mut RuntimeCommandDisplayOverlayContent,
+    browser: &mez_mux::record_browser::RecordBrowser,
+) {
+    for (logical_id, record) in browser.records().iter().enumerate() {
+        let Some(command) = record.open_command.as_deref() else {
+            continue;
+        };
+        let mut existing = false;
+        for selection in content
+            .selections
+            .iter_mut()
+            .filter(|selection| selection.command == command)
+        {
+            selection.logical_id = logical_id;
+            existing = true;
+        }
+        if existing {
+            continue;
+        }
+        let mut matched_id = String::new();
+        let mut fragments = Vec::new();
+        for (line_index, line) in content.lines.iter().enumerate() {
+            let Some((start_column, visible)) = markdown_table_first_cell_visible_text(line) else {
+                continue;
+            };
+            let candidate = format!("{matched_id}{visible}");
+            if record.id.starts_with(&candidate) {
+                matched_id = candidate;
+                fragments.push((line_index, start_column, UnicodeWidthStr::width(visible)));
+            } else if record.id.starts_with(visible) {
+                matched_id = visible.to_string();
+                fragments.clear();
+                fragments.push((line_index, start_column, UnicodeWidthStr::width(visible)));
+            } else {
+                matched_id.clear();
+                fragments.clear();
+            }
+            if matched_id == record.id {
+                content.selections.extend(fragments.drain(..).map(
+                    |(line_index, start_column, width)| OverlaySelection {
+                        logical_id,
+                        line_index,
+                        start_column,
+                        width,
+                        command: command.to_string(),
+                        kind: OverlaySelectionKind::Primary,
+                    },
+                ));
+                break;
+            }
+        }
+    }
+}
+
+/// Returns the start column and trimmed text of the first rendered table cell.
+fn markdown_table_first_cell_visible_text(line: &str) -> Option<(usize, &str)> {
+    let mut dividers = line.match_indices('│').map(|(index, _)| index);
+    let first = dividers.next()?;
+    let second = dividers.next()?;
+    let cell_start = first.saturating_add('│'.len_utf8());
+    let cell = line.get(cell_start..second)?;
+    let trimmed_start = cell.trim_start();
+    let leading_bytes = cell.len().saturating_sub(trimmed_start.len());
+    let visible = trimmed_start.trim_end();
+    (!visible.is_empty()).then(|| {
+        (
+            UnicodeWidthStr::width(&line[..cell_start.saturating_add(leading_bytes)]),
+            visible,
+        )
+    })
 }
 
 /// Appends a muted Save-path completion suffix without changing editable input.

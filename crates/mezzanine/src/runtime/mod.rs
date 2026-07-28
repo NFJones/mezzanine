@@ -58,9 +58,10 @@ use crate::host::terminal::{
     render_attached_client_view, route_client_input_actions, window_frame_action_pillbox_cells,
     window_frame_pillbox_cells,
 };
+#[cfg(test)]
+use crate::integrations::agent::actions::execute_mcp_action_through_runtime;
 use crate::integrations::agent::actions::{
-    execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
-    next_transcript_sequence,
+    execute_mcp_action_through_runtime_async, next_transcript_sequence,
 };
 use crate::integrations::agent::context::assemble_model_request;
 use crate::integrations::agent::network::execute_network_action_with_transport_async;
@@ -358,6 +359,10 @@ pub use agent_state::{
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
     RuntimeAgentProviderWorkerOutcome, RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
 };
+pub(crate) use agent_state::{
+    RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
+    RuntimeApprovedMcpActionDispatch,
+};
 pub use deferred::AttachedClientStepApplication;
 pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, SocketDirectory,
@@ -507,11 +512,11 @@ use service_state::{
     PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
     RuntimeAgentPreShellHookCompletion, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
-    RuntimeHttpMcpTransportState, RuntimeMcpRetryReport, RuntimeMcpTransportSet,
-    RuntimeModelProfileOverrideScope, RuntimePathResolutionCacheKey,
-    RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
+    RuntimeHttpMcpTransportState, RuntimeMcpRetryReport, RuntimeModelProfileOverrideScope,
+    RuntimePathResolutionCacheKey, RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
     RuntimeShellTransactionActionFailure,
 };
+pub(crate) use service_state::{RuntimeMcpTransport, RuntimeMcpTransportSet};
 #[cfg(test)]
 use sockets::effective_uid;
 use sockets::{ensure_absolute, ensure_no_mez_separator};

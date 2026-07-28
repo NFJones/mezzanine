@@ -10,9 +10,12 @@ mod recovery;
 mod runner;
 mod transcript;
 
+pub use execution::execute_mcp_action_through_runtime_async;
 #[cfg(test)]
-pub use execution::{discover_tools_through_pane_shell, execute_shell_action_through_pane};
-pub use execution::{execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async};
+pub use execution::{
+    discover_tools_through_pane_shell, execute_mcp_action_through_runtime,
+    execute_shell_action_through_pane,
+};
 pub use runner::AgentTurnRunner;
 pub use transcript::next_transcript_sequence;
 #[cfg(test)]

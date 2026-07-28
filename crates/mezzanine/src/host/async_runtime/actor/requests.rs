@@ -110,6 +110,7 @@ impl AsyncRuntimeSessionActor {
                     .and_then(|(output, consumed, transition)| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_runtime_side_effects(transition.side_effects)?;
+                        self.queue_pending_provider_dispatch_side_effects()?;
                         Ok(AsyncControlInputResult {
                             output,
                             consumed,
@@ -182,6 +183,7 @@ impl AsyncRuntimeSessionActor {
                     .and_then(|(output, consumed, transition)| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_runtime_side_effects(transition.side_effects)?;
+                        self.queue_pending_provider_dispatch_side_effects()?;
                         Ok(AsyncControlInputResult {
                             output,
                             consumed,
@@ -474,6 +476,39 @@ impl AsyncRuntimeSessionActor {
                 if should_notify {
                     self.notify_event_delivery();
                 }
+                false
+            }
+            AsyncRuntimeRequest::ClaimApprovedExternalAction {
+                turn_id,
+                action_id,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .claim_approved_external_action(&turn_id, &action_id);
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                false
+            }
+            AsyncRuntimeRequest::CompleteApprovedExternalAction { outcome, reply } => {
+                let previous_lifecycle_state = self.service.lifecycle_state();
+                let result = self
+                    .service
+                    .complete_approved_external_action(outcome)
+                    .and_then(|applied| {
+                        self.queue_deferred_pane_io_side_effects_from_service()?;
+                        self.queue_pending_provider_dispatch_side_effects()?;
+                        Ok(applied)
+                    });
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 false
             }
             AsyncRuntimeRequest::ClaimAgentCompactionTask { pane_id, reply } => {

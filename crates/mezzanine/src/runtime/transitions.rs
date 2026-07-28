@@ -608,6 +608,13 @@ pub enum RuntimeSideEffect {
         /// boundary and should remain aligned with the owning type invariant.
         turn_id: String,
     },
+    /// Execute one approved network or MCP action outside the runtime actor.
+    DispatchApprovedExternalAction {
+        /// Turn that owns the action.
+        turn_id: String,
+        /// Approved action identity within the turn.
+        action_id: String,
+    },
     /// Start a model-backed conversation compaction outside the actor.
     DispatchAgentCompaction {
         /// Pane whose active conversation should be compacted.

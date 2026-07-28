@@ -149,6 +149,12 @@ impl RuntimeSessionService {
         self.remove_agent_turn_model_profile(turn_id);
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
+        self.agent
+            .pending_approved_external_actions
+            .retain(|(pending_turn_id, _)| pending_turn_id != turn_id);
+        self.agent
+            .claimed_approved_external_actions
+            .retain(|(claimed_turn_id, _)| claimed_turn_id != turn_id);
         self.clear_agent_provider_retry_attempt(turn_id);
         self.clear_blocked_agent_approvals_for_turn(turn_id);
         let finished = self
@@ -243,6 +249,12 @@ impl RuntimeSessionService {
         self.agent
             .claimed_agent_provider_tasks
             .remove(&turn.turn_id);
+        self.agent
+            .pending_approved_external_actions
+            .retain(|(pending_turn_id, _)| pending_turn_id != &turn.turn_id);
+        self.agent
+            .claimed_approved_external_actions
+            .retain(|(claimed_turn_id, _)| claimed_turn_id != &turn.turn_id);
         self.clear_agent_provider_retry_attempt(&turn.turn_id);
         self.clear_blocked_agent_approvals_for_turn(&turn.turn_id);
         let session = self

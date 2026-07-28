@@ -15,7 +15,9 @@ use super::super::{
 };
 #[cfg(test)]
 use super::super::{Path, ShellTransaction, ShellTransactionOutputTransport};
-use mez_agent::{AsyncMcpActionExecutor, McpActionExecutor, mcp_response_to_action_result};
+#[cfg(test)]
+use mez_agent::McpActionExecutor;
+use mez_agent::{AsyncMcpActionExecutor, mcp_response_to_action_result};
 #[cfg(test)]
 use mez_agent::{
     LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest, LocalExecutionTransport,
@@ -149,6 +151,7 @@ pub fn execute_local_action(
 ///
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
+#[cfg(test)]
 pub fn execute_mcp_action_through_runtime(
     turn: &AgentTurnRecord,
     action: &AgentAction,

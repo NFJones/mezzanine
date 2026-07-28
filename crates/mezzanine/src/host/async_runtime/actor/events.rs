@@ -533,6 +533,13 @@ impl AsyncRuntimeSessionActor {
                 turn_id: task.turn_id,
             });
         }
+        for (turn_id, action_id) in self.service.pending_approved_external_actions() {
+            if self.approved_external_dispatch_is_already_queued(&turn_id, &action_id) {
+                continue;
+            }
+            side_effects
+                .push(RuntimeSideEffect::DispatchApprovedExternalAction { turn_id, action_id });
+        }
         for pane_id in self.service.pending_agent_compaction_tasks() {
             if self.compaction_dispatch_is_already_queued(&pane_id) {
                 continue;
@@ -583,6 +590,7 @@ impl AsyncRuntimeSessionActor {
             .chain(self.timers.provider_retry.keys())
             .cloned()
             .collect();
+        turn_ids.extend(self.service.approved_external_action_progress_turn_ids());
         turn_ids.extend(self.service.agent_compaction_resume_turn_ids());
         turn_ids
     }
@@ -659,6 +667,19 @@ impl AsyncRuntimeSessionActor {
                     turn_id: queued_turn_id,
                     ..
                 } if queued_turn_id == turn_id
+            )
+        })
+    }
+
+    /// Returns whether one approved external action already has a queued dispatch.
+    fn approved_external_dispatch_is_already_queued(&self, turn_id: &str, action_id: &str) -> bool {
+        self.side_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::DispatchApprovedExternalAction {
+                    turn_id: queued_turn_id,
+                    action_id: queued_action_id,
+                } if queued_turn_id == turn_id && queued_action_id == action_id
             )
         })
     }

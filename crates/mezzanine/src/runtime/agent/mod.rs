@@ -9,6 +9,8 @@ use super::agent_state::{
 };
 use super::commands::RuntimeModelCatalog;
 #[cfg(test)]
+use super::execute_mcp_action_through_runtime;
+#[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
 use super::service_state::{
     RuntimeAgentPatchRecord, RuntimeApplyPatchBatchState, RuntimePendingApplyPatchPhase,
@@ -28,21 +30,22 @@ use super::{
     RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentModifiedFileSummary,
     RuntimeAgentPreShellHookCompletion, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberTask,
-    RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
-    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
-    RuntimeProviderConfig, RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
-    RuntimeSessionService, RuntimeShellTransactionActionFailure, RuntimeSideEffect,
-    RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
+    RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
+    RuntimeApprovedMcpActionDispatch, RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch,
+    RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
+    RuntimeMcpActionExecutor, RuntimeProviderConfig, RuntimeSandboxFailureAssessment,
+    RuntimeSandboxFallbackAudit, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    RuntimeSideEffect, RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
     ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
     SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
     TranscriptRole, assemble_model_request, current_unix_millis, current_unix_seconds,
     decode_shell_output_transport_with_diagnostics, discover_project_root, exact_command_sha256,
-    execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
-    execute_network_action_with_transport_async, json_escape, local_action_plan,
-    network_action_plan, next_transcript_sequence, runtime_agent_turn_duration_display,
-    runtime_agent_turn_start_hook_payload, runtime_agent_turn_state_from_action_results,
-    runtime_agent_turn_state_name, runtime_apply_persisted_config_mutation_batch,
-    runtime_blocked_approval_request, runtime_cooperation_mode, runtime_cooperation_mode_name,
+    execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
+    json_escape, local_action_plan, network_action_plan, next_transcript_sequence,
+    runtime_agent_turn_duration_display, runtime_agent_turn_start_hook_payload,
+    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
+    runtime_apply_persisted_config_mutation_batch, runtime_blocked_approval_request,
+    runtime_cooperation_mode, runtime_cooperation_mode_name,
     runtime_execution_ready_for_provider_continuation, runtime_hook_event_name,
     runtime_marker_for_action, runtime_mcp_error_code, runtime_message_recipient,
     runtime_mezzanine_error_code, runtime_pane_by_id, runtime_pane_readiness_state_name,
@@ -232,6 +235,10 @@ pub(crate) struct RuntimeAgentComponent {
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Provider turns claimed by workers but not yet settled.
     claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
+    /// Approved network and MCP actions waiting for external worker dispatch.
+    pending_approved_external_actions: BTreeSet<(String, String)>,
+    /// Approved external actions currently owned by async workers.
+    claimed_approved_external_actions: BTreeSet<(String, String)>,
     /// Ambiguous Bubblewrap failures awaiting one bounded internal model
     /// assessment, keyed by the owning turn.
     sandbox_failure_assessments: BTreeMap<String, RuntimeSandboxFailureAssessment>,

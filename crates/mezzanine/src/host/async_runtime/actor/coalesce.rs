@@ -393,6 +393,9 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::ScheduleTimer { .. } => "schedule-timer",
         RuntimeSideEffect::CancelTimer { .. } => "cancel-timer",
         RuntimeSideEffect::DispatchAgentProvider { .. } => "dispatch-agent-provider",
+        RuntimeSideEffect::DispatchApprovedExternalAction { .. } => {
+            "dispatch-approved-external-action"
+        }
         RuntimeSideEffect::DispatchAgentCompaction { .. } => "dispatch-agent-compaction",
         RuntimeSideEffect::DispatchAgentRemember { .. } => "dispatch-agent-remember",
         RuntimeSideEffect::RunProgramHook { .. } => "run-program-hook",

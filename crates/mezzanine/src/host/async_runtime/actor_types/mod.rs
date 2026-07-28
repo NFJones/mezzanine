@@ -15,11 +15,12 @@ use super::{
     ClientStatusLine, ClientViewRole, ControlConnectionState, DeliveryCursor, FanoutBatch, Framed,
     JoinSet, MessageConnection, MezError, PaneProcess, ProtocolFrameCodec, RenderedClientView,
     Result, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch, RuntimeAgentProviderTask,
-    RuntimeAgentRememberDispatch, RuntimeEvent, RuntimeEventBatch, RuntimeEventConnectionTable,
-    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSideEffect,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork, Size, StreamExt,
-    TerminalClientLoopConfig, TerminalStyleSpan, UnixListener, UnixStream,
-    authorize_unix_peer_raw_fd, encode_frame, oneshot,
+    RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
+    RuntimeApprovedExternalActionOutcome, RuntimeEvent, RuntimeEventBatch,
+    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
+    RuntimeLifecycleState, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, Size, StreamExt, TerminalClientLoopConfig, TerminalStyleSpan,
+    UnixListener, UnixStream, authorize_unix_peer_raw_fd, encode_frame, oneshot,
 };
 use crate::runtime::PaneResizeUpdate;
 use crate::storage::snapshot::SnapshotRepository;

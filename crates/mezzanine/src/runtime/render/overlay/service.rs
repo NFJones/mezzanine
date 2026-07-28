@@ -6,6 +6,50 @@ use super::selection_adapter::*;
 use crate::runtime::render::*;
 use crate::ui::selector::record_browser_save_path_candidates;
 
+/// Returns the byte length of one logical key in an overlay input buffer.
+///
+/// Attached terminals may batch several key sequences in one read. Overlay
+/// reducers consume one key at a time, while bracketed paste remains one opaque
+/// unit so pasted escape-shaped bytes cannot trigger modal navigation.
+fn overlay_input_frame_len(input: &[u8]) -> usize {
+    const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
+    if input.starts_with(BRACKETED_PASTE_START) {
+        return input.len();
+    }
+    if input == b"\x1b" {
+        return 1;
+    }
+    if input.starts_with(b"\x1b[")
+        && let Some(final_index) = input
+            .iter()
+            .enumerate()
+            .skip(2)
+            .find_map(|(index, byte)| (b'@'..=b'~').contains(byte).then_some(index))
+    {
+        return final_index.saturating_add(1);
+    }
+    if input.starts_with(b"\x1bO") && input.len() >= 3 {
+        return 3;
+    }
+    if let Some((_, consumed)) = mez_mux::input::parse_key_chord_bytes(input) {
+        return consumed;
+    }
+    std::str::from_utf8(input)
+        .ok()
+        .and_then(|text| text.chars().next())
+        .map(char::len_utf8)
+        .unwrap_or(1)
+}
+
+/// Visits each logical overlay key in terminal delivery order.
+fn overlay_input_frames(mut input: &[u8], mut visit: impl FnMut(&[u8])) {
+    while !input.is_empty() {
+        let consumed = overlay_input_frame_len(input).min(input.len()).max(1);
+        visit(&input[..consumed]);
+        input = &input[consumed..];
+    }
+}
+
 /// Resolves record-browser focus from a physical selection fragment to its
 /// logical record index.
 fn record_browser_active_index(overlay: &RuntimeDisplayOverlay, default: usize) -> usize {
@@ -68,9 +112,9 @@ impl RuntimeSessionService {
                             crate::runtime::service_state::RuntimeRecordBrowserOverlayFrame {
                                 command: record_browser.command.clone(),
                                 source: record_browser.source.clone(),
+                                active_selection_index: Some(browser.active_index()),
                                 browser,
                                 scroll_offset: overlay.scroll_offset,
-                                active_selection_index: overlay.active_selection_index,
                             },
                         );
                         Some((target_command, stack))
@@ -307,7 +351,10 @@ impl RuntimeSessionService {
                 Some(mez_mux::record_browser::RecordBrowserAction::OpenActive)
             }
             _ if matches!(selector_input_action(input), SelectorInputAction::Exit) => {
-                if let Some(frame) = record_browser.stack.pop() {
+                if let Some(mut frame) = record_browser.stack.pop() {
+                    if let Some(active_index) = frame.active_selection_index {
+                        frame.browser.set_active_index(active_index);
+                    }
                     record_browser.command = frame.command;
                     record_browser.source = frame.source;
                     record_browser.browser = frame.browser;
@@ -870,8 +917,21 @@ impl RuntimeSessionService {
         action: &TerminalClientLoopAction,
     ) -> Result<bool> {
         match action {
-            TerminalClientLoopAction::ForwardToPane(input)
-            | TerminalClientLoopAction::ForwardMouseToPane { input, .. } => {
+            TerminalClientLoopAction::ForwardToPane(input) => {
+                let mut changed = false;
+                let mut result = Ok(());
+                overlay_input_frames(input, |frame| {
+                    if result.is_err() {
+                        return;
+                    }
+                    match self.apply_primary_display_overlay_input(primary_client_id, frame) {
+                        Ok(frame_changed) => changed |= frame_changed,
+                        Err(error) => result = Err(error),
+                    }
+                });
+                result.map(|()| changed)
+            }
+            TerminalClientLoopAction::ForwardMouseToPane { input, .. } => {
                 self.apply_primary_display_overlay_input(primary_client_id, input)
             }
             TerminalClientLoopAction::HandleMouse(MouseAction::SelectDisplayOverlay {
@@ -911,8 +971,7 @@ impl RuntimeSessionService {
         action: &TerminalClientLoopAction,
     ) -> bool {
         match action {
-            TerminalClientLoopAction::ForwardToPane(input)
-            | TerminalClientLoopAction::ForwardMouseToPane { input, .. } => {
+            TerminalClientLoopAction::ForwardToPane(input) => {
                 if self
                     .presentation
                     .primary_display_overlay
@@ -921,6 +980,21 @@ impl RuntimeSessionService {
                 {
                     return true;
                 }
+                let search_inactive = self
+                    .presentation
+                    .primary_display_overlay
+                    .as_ref()
+                    .is_none_or(|overlay| overlay.search_input.is_none());
+                let mut requires_full_redraw = false;
+                overlay_input_frames(input, |frame| {
+                    requires_full_redraw |= matches!(
+                        overlay_input_action(frame),
+                        OverlayInputAction::Exit | OverlayInputAction::SelectActive
+                    );
+                });
+                requires_full_redraw && search_inactive
+            }
+            TerminalClientLoopAction::ForwardMouseToPane { input, .. } => {
                 matches!(
                     overlay_input_action(input),
                     OverlayInputAction::Exit | OverlayInputAction::SelectActive

@@ -774,6 +774,7 @@ impl RuntimeSessionService {
                     ) {
                         overlay.record_browser = Some(record_browser);
                     }
+                    self.reflow_primary_record_browser_overlay();
                 } else {
                     self.set_agent_prompt_display_lines(pane_id, content.lines)?;
                 }
