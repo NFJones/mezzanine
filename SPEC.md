@@ -2828,6 +2828,9 @@ within an explicitly trusted project MUST receive that project root as its
 default read-write authority. When multiple trusted roots contain the pane
 working directory, Mezzanine MUST select the deepest matching root; no other
 working directory MAY infer authority. Aside from that trusted-project default,
+semantic `apply_patch` actions and other sandboxed writes MUST use every
+configured write scope, rather than constraining writes to a trusted-project
+root.
 scopes MUST NOT be inferred from command patterns, approvals, presets, or
 trusted directories. Independently classified filesystem operands are advisory
 observations for authorization context, approval, audit, and display. They MUST

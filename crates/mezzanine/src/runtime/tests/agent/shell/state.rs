@@ -463,6 +463,75 @@ fn trusted_project_defaults_primary_authority_to_project_root() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies configured write scopes remain the complete Bubblewrap write
+/// authority even when the pane is inside a trusted project.
+///
+/// Project trust provides a read-write fallback only when neither configured
+/// scope list is present. Semantic patch transactions must therefore retain
+/// every configured writable root instead of silently narrowing to the trusted
+/// project containing the pane.
+#[test]
+fn configured_write_scopes_override_trusted_project_fallback() {
+    let root = temp_root("runtime-configured-write-scopes-override-trust");
+    let project_root = root.join("project");
+    let nested_directory = project_root.join("src");
+    let first_write_scope = root.join("generated");
+    let second_write_scope = root.join("artifacts");
+    fs::create_dir_all(project_root.join(".git")).unwrap();
+    fs::create_dir_all(&nested_directory).unwrap();
+    fs::create_dir_all(&first_write_scope).unwrap();
+    fs::create_dir_all(&second_write_scope).unwrap();
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "read_scopes": [project_root],
+                "write_scopes": [first_write_scope, second_write_scope]
+            }
+        }))
+        .unwrap();
+    let mut service = test_runtime_service();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+    let mut trust_store = ProjectTrustStore::default();
+    trust_store
+        .decide_at(
+            project_root.clone(),
+            TrustDecision::Trusted,
+            Some(project_root.join(".git")),
+            1,
+        )
+        .unwrap();
+    service.set_project_trust_store(trust_store, None);
+    service.set_pane_current_working_directory("%1".to_string(), nested_directory);
+
+    let status = service.primary_path_scope_status("%1");
+
+    assert_eq!(status.provenance, "explicit");
+    assert_eq!(status.read_scopes, vec![project_root.to_string_lossy()]);
+    assert_eq!(
+        status.write_scopes,
+        vec![
+            first_write_scope.to_string_lossy(),
+            second_write_scope.to_string_lossy(),
+        ]
+    );
+    let request = service
+        .primary_path_resolution_request("%1")
+        .unwrap()
+        .expect("configured authority should require pane-shell resolution");
+    assert_eq!(request.read_scopes, vec![project_root.to_string_lossy()]);
+    assert_eq!(
+        request.write_scopes,
+        vec![
+            first_write_scope.to_string_lossy(),
+            second_write_scope.to_string_lossy(),
+        ]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies a pane without configured or trusted-project authority exposes no
 /// `PathScopes` instead of manufacturing unresolved empty scopes. Bubblewrap
 /// callers must resolve a real maximum authority or fail with the targeted
