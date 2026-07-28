@@ -449,15 +449,44 @@ fn auto_sizing_policy(auto_sizing: &AutoSizingDispatch, turn: &AgentTurnRecord) 
     format!(
         "Classify this {turn_kind} turn into one configured size bucket and reasoning effort. \
          Model size reflects task scope; reasoning effort reflects the depth and complexity \
-         of the work inside that scope. Small models are only for chat, acknowledgements, \
-         and trivial non-code answers. Use medium models for small or medium scoped coding \
-         work. Use large models for large scope, cross-module, ambiguous, architectural, \
-         security-sensitive, or long-running work. \
+         of the work inside that scope. Choose these two axes independently, then verify that \
+         the resulting size/reasoning pair is globally allowed and supported by the target. \
+         Classify the executable workload the agent must complete, including required \
+         investigation, edits, validation, documentation, coordination, and recovery risk; \
+         do not classify only the requested final artifact.\n\n\
+         Size rubric:\n\
+         - small: Small models are only for chat, acknowledgements, and trivial non-code \
+           answers that need no \
+           repository inspection, tools, or multi-step execution.\n\
+         - medium: bounded small or medium scoped coding work with a clear owner or contract, \
+           localized changes, and focused validation.\n\
+         - large: broad or uncertain ownership, cross-module or cross-package changes, public \
+           contract or migration work, architecture, security, concurrency, persistence, \
+           external-integration, multi-phase, high-blast-radius, or long-running work.\n\
+         A tiny final diff can still require large scope when diagnosis, validation, or blast \
+         radius is broad. Do not choose large merely because a prompt is long or medium merely \
+         because a prompt mentions code; choose the lowest size whose scope safely contains \
+         the whole inferred workload.\n\n\
+         Reasoning rubric:\n\
+         - low: only obvious conversational or trivial non-code work with no coding or \
+           investigation.\n\
+         - medium: straightforward, well-specified, localized implementation, refactoring, \
+           test-writing, or codebase exploration with a clear validation path.\n\
+         - high: planning, investigation, complex implementation, debugging, architecture, \
+           security review, ambiguous requirements, competing constraints, or non-obvious \
+           failure analysis.\n\
+         - xhigh: the high-reasoning cases with exceptional ambiguity or consequence, such as \
+           multiple plausible architectures, subtle security or concurrency invariants, broad \
+           migrations, unclear root cause across subsystems, or synthesis of extensive context.\n\
          Planning, investigation, complex implementation, debugging, architecture, and \
          security review tasks must use high or xhigh reasoning. Implementation, refactoring, \
          test-writing, and codebase exploration tasks must use medium reasoning or higher. \
          Never choose low reasoning for coding, implementation, debugging, refactoring, \
          test-writing, planning, investigation, or codebase exploration tasks. \
+         When evidence falls between adjacent levels and under-routing would materially risk \
+         correctness or completion, choose the higher level. Confidence measures how clearly \
+         the evidence supports the classification, not how easy the task is. The rationale \
+         must name the decisive scope signal and depth signal without answering the task. \
          Do not size the task from the latest prompt length alone: terse referential prompts \
          such as `implement this`, `do item 3`, or `fix that` must be resolved against prior \
          conversation context and sized by the inferred work. If the antecedent is unclear but \
@@ -470,7 +499,10 @@ fn auto_sizing_policy(auto_sizing: &AutoSizingDispatch, turn: &AgentTurnRecord) 
          Current default profile: {default_profile} provider={default_provider} model={default_model} reasoning={default_reasoning}.\n\
          Allowed reasoning efforts: {allowed_reasoning}.\n\
          Target profiles:\n{targets}\n\n\
-         Return JSON with version=1, size, reasoning_effort, confidence, and rationale.",
+         Return JSON with version=1, size, reasoning_effort, confidence, and rationale. Select \
+         only a reasoning effort listed globally and for the chosen target when its supported \
+         reasoning list is known; never emit an intentionally invalid pair to express a \
+         preference.",
         turn_kind = if turn.parent_turn_id.is_some() {
             "subagent"
         } else {
@@ -933,6 +965,36 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// Verifies the router receives an operational two-axis rubric rather than
+    /// only broad task labels. These boundaries keep a short but risky task
+    /// from being undersized, distinguish high from exceptional xhigh depth,
+    /// and require a pair the selected target can actually execute.
+    #[test]
+    fn auto_sizing_policy_defines_scope_depth_and_valid_pair_boundaries() {
+        let turn = AgentTurnRecord {
+            turn_id: "turn-auto-rubric".to_string(),
+            agent_id: "agent-auto-rubric".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: crate::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            state: crate::AgentTurnState::Running,
+            initial_capability: None,
+        };
+
+        let policy = auto_sizing_policy(&dispatch(), &turn);
+
+        assert!(policy.contains("Choose these two axes independently"));
+        assert!(policy.contains("including required investigation, edits, validation"));
+        assert!(policy.contains("A tiny final diff can still require large scope"));
+        assert!(policy.contains("multiple plausible architectures"));
+        assert!(policy.contains("Confidence measures how clearly the evidence supports"));
+        assert!(policy.contains("never emit an intentionally invalid pair"));
     }
 
     /// Verifies context-pressure policy selects the smallest possible target

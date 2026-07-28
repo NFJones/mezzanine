@@ -9148,17 +9148,37 @@ The auto-sizing router prompt MUST include:
 - the allowed reasoning efforts from `agents.auto_sizing`;
 - concise policy guidance that model size reflects task scope and reasoning
   effort reflects task depth and complexity;
+- an explicit decision order that first infers the whole executable workload,
+  including investigation, edits, validation, documentation, coordination, and
+  recovery risk; then independently chooses size and reasoning effort; then
+  verifies that the resulting pair is allowed and supported by the target;
 - explicit guidance that `small` target profiles are only for chat,
   acknowledgements, and trivial non-code answers; `medium` target profiles are
-  appropriate for small or medium scoped coding work; and `large` target
-  profiles are appropriate for large-scope, cross-module, ambiguous,
-  architectural, security-sensitive, or long-running work;
+  appropriate for bounded small or medium scoped coding work with localized
+  changes and focused validation; and `large` target profiles are appropriate
+  for broad or uncertain ownership, cross-module or cross-package, public
+  contract, migration, architectural, security-sensitive, concurrency,
+  persistence, external-integration, multi-phase, high-blast-radius, or
+  long-running work;
+- explicit guidance that a small final diff can still require a `large` target
+  when diagnosis, validation, or blast radius is broad, and that prompt length
+  or the mere presence of code does not by itself determine the size bucket;
 - explicit guidance that planning, investigation, complex implementation,
   debugging, architecture, and security review tasks MUST use `high` or `xhigh`
   reasoning;
 - explicit guidance that implementation, refactoring, test-writing, and
   codebase exploration tasks MUST use `medium` reasoning or higher and MUST NOT
   use `low` reasoning;
+- explicit boundaries between `high` and `xhigh`: `xhigh` is for exceptional
+  ambiguity or consequence such as multiple plausible architectures, subtle
+  security or concurrency invariants, broad migrations, unclear root cause
+  across subsystems, or synthesis of extensive context;
+- explicit guidance to choose the higher adjacent level when the evidence is
+  borderline and under-routing would materially risk correctness or completion;
+- explicit guidance that confidence measures classification evidence clarity,
+  not task ease, and that rationale names the decisive scope and depth signals;
+- explicit guidance to emit only a size/reasoning pair allowed globally and,
+  when known, supported by the selected target profile;
 - explicit guidance that terse referential prompts such as `implement this`,
   `do item 3`, or `fix that` MUST be resolved against prior conversation
   context and sized by the inferred work rather than the latest prompt length;
