@@ -368,6 +368,27 @@ impl RuntimeSessionService {
         let active_index =
             record_browser_active_index(overlay, record_browser.browser.active_index());
         if matches!(selector_input_action(input), SelectorInputAction::Select)
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions)
+            )
+        {
+            let mut selected = record_browser.browser.clone();
+            selected.set_active_index(active_index);
+            let outcome = selected
+                .apply_action(mez_mux::record_browser::RecordBrowserAction::SubmitActive)?;
+            let mez_mux::record_browser::RecordBrowserOutcome::SelectionSubmitted { id } = outcome
+            else {
+                return Ok(None);
+            };
+            return self
+                .execute_primary_display_overlay_selection_command(
+                    primary_client_id,
+                    &format!("/resume {id}"),
+                )
+                .map(Some);
+        }
+        if matches!(selector_input_action(input), SelectorInputAction::Select)
             && let Some(RuntimeRecordBrowserOverlaySource::Personalities { pane_id }) =
                 record_browser.source.clone()
         {
@@ -420,6 +441,13 @@ impl RuntimeSessionService {
         };
         record_browser.browser.set_active_index(active_index);
         let action = match input {
+            b"i" if matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions)
+            ) =>
+            {
+                Some(mez_mux::record_browser::RecordBrowserAction::OpenActive)
+            }
             b"k" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
                 mez_mux::record_browser::RecordBrowserFilterField::Kind,
             )),

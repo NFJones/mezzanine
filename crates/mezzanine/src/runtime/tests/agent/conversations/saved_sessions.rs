@@ -158,6 +158,69 @@ fn runtime_resume_browser_deletes_named_zero_entry_sessions() {
     );
 }
 
+/// Verifies the saved-session browser resumes the focused conversation on
+/// Enter while retaining record details behind its `i` shortcut.
+///
+/// Other record browsers open details on Enter, but `/resume` must submit the
+/// selected conversation to the resume command so users can restore it without
+/// leaving the picker. The detail shortcut preserves access to session metadata.
+#[test]
+fn runtime_resume_browser_enter_resumes_and_i_opens_details() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-browser-keys"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "saved-session".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-saved".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "saved session prompt".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"i")
+        .unwrap();
+    assert!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .is_some_and(|browser| browser.browser.is_detail_view())
+    );
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"\x1b")
+        .unwrap();
+    service
+        .apply_primary_display_overlay_input(&primary, b"\r")
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some("saved-session")
+    );
+}
+
 /// Verifies saved conversations bound to a live durable agent pane cannot be
 /// deleted from `/resume`, preventing a later transcript append from silently
 /// recreating a conversation the picker claimed to remove.
