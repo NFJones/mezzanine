@@ -42,7 +42,14 @@ impl RuntimeSessionService {
             .actions
             .iter()
             .find(|action| action.id == action_id)
-            .ok_or_else(|| MezError::invalid_state("sandbox assessment action is unavailable"))?;
+            // A later provider continuation can supersede this execution while
+            // its pane transaction is still completing. Let ordinary shell
+            // settlement discard that stale marker rather than failing the
+            // pane-process supervisor.
+            .cloned();
+        let Some(action) = action else {
+            return Ok(false);
+        };
         let evaluation = execution
             .action_results
             .iter()

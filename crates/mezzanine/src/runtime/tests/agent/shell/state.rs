@@ -1327,6 +1327,48 @@ fn runtime_sandbox_failure_assessment_offers_warned_fallback_approval() {
     );
 }
 
+/// Verifies a delayed Bubblewrap completion for an action superseded by a
+/// provider continuation does not make sandbox assessment fail the pane
+/// supervisor before ordinary shell settlement can discard the stale marker.
+#[test]
+fn runtime_stale_sandbox_failure_action_skips_assessment() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    service
+        .agent_turn_executions_mut()
+        .get_mut(&turn_id)
+        .unwrap()
+        .response
+        .action_batch
+        .as_mut()
+        .unwrap()
+        .actions
+        .clear();
+
+    assert!(
+        !service
+            .queue_sandbox_failure_assessment(
+                &turn,
+                &action_id,
+                "stale-sandbox-assessment-marker",
+                sandbox_failure_transaction(&turn_id, &action_id),
+                1,
+            )
+            .unwrap()
+    );
+    assert!(
+        service
+            .sandbox_failure_assessment_request_for_tests(&turn_id)
+            .is_none()
+    );
+}
+
 /// Verifies command-failure or uncertain assessments never create authority
 /// and instead settle the original non-zero shell result normally.
 #[test]
