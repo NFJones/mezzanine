@@ -55,6 +55,52 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
     assert!(service.pending_record_browser_overlays_is_empty());
 }
 
+/// Verifies record-browser PageUp and PageDown move by the active modal page.
+///
+/// A fixed line increment leaves tall terminal views moving only a fraction of
+/// their visible content. The retained browser must instead use the modal's
+/// content-row capacity and return to the initial viewport on PageUp.
+#[test]
+fn runtime_record_browser_paging_uses_the_modal_viewport_height() {
+    let mut service = test_runtime_service();
+    let size = Size::new(80, 30).unwrap();
+    let primary = service.attach_primary("primary", true, size, 120).unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let records = (0..100)
+        .map(|index| mez_mux::record_browser::RecordBrowserRecord {
+            id: format!("issue-{index}"),
+            open_command: Some(format!("/show-issues issue-{index}")),
+            title: format!("Issue {index}"),
+            metadata: Vec::new(),
+            markdown: String::new(),
+        })
+        .collect();
+    let browser =
+        mez_mux::record_browser::RecordBrowser::new("Issues", records, Vec::new()).unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[6~");
+    assert_eq!(
+        service.primary_display_overlay().unwrap().scroll_offset,
+        mez_mux::render::modal_overlay_page_rows(size)
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[5~");
+    assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 0);
+}
+
 /// Verifies kind-selector navigation preserves the retained record cursor.
 ///
 /// The selector and record links share an overlay presentation, but moving a

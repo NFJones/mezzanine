@@ -340,6 +340,22 @@ impl RuntimeSessionService {
                 prose_width,
             )));
         }
+        if let OverlayInputAction::ScrollBy(delta) = overlay_input_action(input) {
+            let page_rows = modal_overlay_page_rows(self.session.authoritative_size).max(1);
+            let page_delta = if delta.is_negative() {
+                -(page_rows as isize)
+            } else {
+                page_rows as isize
+            };
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            return Ok(Some(apply_overlay_scroll_delta(
+                overlay,
+                page_delta,
+                self.session.authoritative_size,
+            )));
+        }
         let active_index =
             record_browser_active_index(overlay, record_browser.browser.active_index());
         if matches!(selector_input_action(input), SelectorInputAction::Select)
