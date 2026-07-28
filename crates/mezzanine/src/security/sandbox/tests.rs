@@ -237,6 +237,34 @@ fn unknown_effects_compile_to_bounded_maximum_authority() {
     );
 }
 
+/// Verifies every sandbox launch projects the host resolver and NSS inputs,
+/// independent of whether the workload receives a private network namespace.
+#[test]
+fn resolver_files_are_projected_for_every_network_policy() {
+    let config = config();
+    let authority = authority();
+    let evaluation = evaluation(EffectCompleteness::Complete, effects());
+
+    for network_policy in [
+        NetworkPolicy::Deny,
+        NetworkPolicy::Prompt,
+        NetworkPolicy::Allow,
+    ] {
+        let mut compile_request = request(&config, &authority, &evaluation);
+        compile_request.network_policy = network_policy;
+        let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+
+        for path in ["/etc/resolv.conf", "/etc/nsswitch.conf", "/etc/hosts"] {
+            assert!(
+                plan.arguments
+                    .windows(3)
+                    .any(|args| { args == ["--ro-bind-try", path, path] }),
+                "missing resolver projection for {path} with {network_policy:?} policy"
+            );
+        }
+    }
+}
+
 /// Verifies classifier-observed filesystem operands remain advisory even when
 /// they are lexically concrete. Outside, missing, expanded, and heuristic
 /// operands must not require path evidence or narrow the maximum mount graph.
