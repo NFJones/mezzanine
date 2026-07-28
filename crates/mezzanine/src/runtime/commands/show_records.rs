@@ -791,7 +791,7 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser) {
 
 /// Applies the table presentation shared by memory browser construction paths.
 fn configure_memory_record_browser(browser: &mut RecordBrowser) {
-    browser.set_table_id_column("UUID");
+    browser.set_table_id_column("ID");
     browser.set_table_columns_with_labels(vec![
         ("Summary".to_string(), "summary".to_string()),
         ("Scope".to_string(), "scope".to_string()),

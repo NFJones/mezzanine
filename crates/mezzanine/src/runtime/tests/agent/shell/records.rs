@@ -1688,7 +1688,7 @@ fn runtime_agent_shell_show_memories_opens_arrow_selected_table_record() {
         .render_page();
     assert!(
         page.raw_markdown
-            .contains("| UUID | Summary | Scope | Kind | State | Priority | Updated |"),
+            .contains("| ID | Summary | Scope | Kind | State | Priority | Updated |"),
         "{}",
         page.raw_markdown
     );
