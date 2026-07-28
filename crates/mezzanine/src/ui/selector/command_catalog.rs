@@ -108,6 +108,10 @@ pub(super) fn selector_candidates(
                     })
                     && extra.subcommand_slot.as_ref().is_none_or(|slot| {
                         context.tokens_before.get(1) == Some(&slot.subcommand)
+                            && slot
+                                .nested_subcommand
+                                .as_ref()
+                                .is_none_or(|nested| context.tokens_before.get(2) == Some(nested))
                             && context.tokens_before.len() >= slot.minimum_tokens_before
                             && slot
                                 .maximum_tokens_before
@@ -327,8 +331,8 @@ pub(super) fn agent_argument_candidates(
     command: &str,
     context: &SelectorTokenContext,
 ) -> Vec<SelectorCandidate> {
-    if command == "toolchain" {
-        let candidates = toolchain_argument_candidates(context);
+    if command == "sandbox" {
+        let candidates = sandbox_argument_candidates(context);
         return dedupe_selector_candidates(candidates);
     }
     if command == "routing"
@@ -375,7 +379,6 @@ pub(super) fn agent_argument_candidates(
             candidates
         }
         "approve" => value_candidates(&["latest", "once", "session", "project", "global"]),
-        "trust" => value_candidates(&["latest", "list", "pending"]),
         "model" => {
             let mut candidates = value_candidates(&[
                 "list",
@@ -423,22 +426,51 @@ pub(super) fn agent_argument_candidates(
     dedupe_selector_candidates(candidates)
 }
 
-/// Builds parser-aligned candidates for one `/toolchain` argument position.
-fn toolchain_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
+/// Builds parser-aligned candidates for one `/sandbox` argument position.
+fn sandbox_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
+    let Some(operation) = context.tokens_before.get(1).map(String::as_str) else {
+        return value_candidates(&["status", "enable", "disable", "trust", "toolchains"]);
+    };
+    match operation {
+        "status" if context.tokens_before.len() == 2 => flag_candidates(&["--global"]),
+        "enable" | "disable" => ["--yes", "--global"]
+            .into_iter()
+            .filter(|flag| !context.tokens_before.iter().any(|token| token == flag))
+            .flat_map(|flag| flag_candidates(&[flag]))
+            .collect(),
+        "trust" if context.tokens_before.len() == 2 => {
+            value_candidates(&["latest", "list", "pending"])
+        }
+        "toolchains" => toolchain_argument_candidates(context, 2),
+        _ => Vec::new(),
+    }
+}
+
+/// Builds parser-aligned candidates for nested sandbox toolchain arguments.
+fn toolchain_argument_candidates(
+    context: &SelectorTokenContext,
+    operation_index: usize,
+) -> Vec<SelectorCandidate> {
     const BUILT_INS: &[&str] = &[
         "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "maven", "gradle", "dotnet",
         "dart", "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack",
         "ocaml", "llvm", "gcc", "cmake", "ninja", "meson", "swift",
     ];
-    let Some(operation) = context.tokens_before.get(1).map(String::as_str) else {
+    let Some(operation) = context
+        .tokens_before
+        .get(operation_index)
+        .map(String::as_str)
+    else {
         return value_candidates(&[
             "status", "list", "detect", "define", "enable", "disable", "remove", "reload",
         ]);
     };
     match operation {
-        "status" | "detect" if context.tokens_before.len() == 2 => value_candidates(BUILT_INS),
+        "status" | "detect" if context.tokens_before.len() == operation_index + 1 => {
+            value_candidates(BUILT_INS)
+        }
         "enable" | "disable"
-            if context.tokens_before.len() >= 2
+            if context.tokens_before.len() > operation_index
                 && !context.tokens_before.iter().any(|token| token == "--yes") =>
         {
             let mut candidates = BUILT_INS
@@ -451,12 +483,12 @@ fn toolchain_argument_candidates(context: &SelectorTokenContext) -> Vec<Selector
                 })
                 .flat_map(|selector| value_candidates(&[*selector]))
                 .collect::<Vec<_>>();
-            if context.tokens_before.len() > 2 {
+            if context.tokens_before.len() > operation_index + 1 {
                 candidates.extend(flag_candidates(&["--yes"]));
             }
             candidates
         }
-        "define" if context.tokens_before.len() >= 3 => {
+        "define" if context.tokens_before.len() >= operation_index + 2 => {
             if context.tokens_before.last().is_some_and(|token| {
                 matches!(
                     token.as_str(),
@@ -482,7 +514,7 @@ fn toolchain_argument_candidates(context: &SelectorTokenContext) -> Vec<Selector
             .flat_map(|flag| flag_candidates(&[flag]))
             .collect()
         }
-        "remove" if context.tokens_before.len() >= 3 => ["--disable", "--yes"]
+        "remove" if context.tokens_before.len() >= operation_index + 2 => ["--disable", "--yes"]
             .into_iter()
             .filter(|flag| !context.tokens_before.iter().any(|token| token == flag))
             .flat_map(|flag| flag_candidates(&[flag]))

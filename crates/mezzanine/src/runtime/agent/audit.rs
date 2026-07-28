@@ -34,7 +34,10 @@ impl RuntimeSessionService {
             .sandbox_fallback_audits
             .get(&(turn.turn_id.clone(), action.id.clone()))
             .cloned();
-        let configured_sandbox = self.configured_permissions().sandbox.as_str().to_string();
+        let configured_sandbox = self
+            .sandbox_config_for_pane(&turn.pane_id)
+            .as_str()
+            .to_string();
         let permission_policy = self.permission_policy_for_turn(turn);
         let host_policy_bypass = permission_policy.approval_policy.bypasses_sandbox();
         let fallback_bypass = !host_policy_bypass

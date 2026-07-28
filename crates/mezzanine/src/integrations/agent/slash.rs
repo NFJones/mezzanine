@@ -395,10 +395,9 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "persistent memory enablement changes require the live runtime".to_string(),
         },
-        "toolchain" => AgentShellCommandOutcome::RequiresRuntime {
+        "sandbox" => AgentShellCommandOutcome::RequiresRuntime {
             command,
-            reason: "typed sandbox toolchain inspection and mutation require the live runtime"
-                .to_string(),
+            reason: "pane sandbox inspection and mutation require the live runtime".to_string(),
         },
         "issue" => AgentShellCommandOutcome::RequiresRuntime {
             command,

@@ -207,7 +207,7 @@ fn synchronize_panes_controls_active_window_state() {
 /// Verifies that agent-scoped commands with slash-command equivalents are no
 /// longer part of the Mezzanine terminal command language. The terminal command
 /// prompt should stay focused on multiplexer and terminal/session operations,
-/// while these behaviors are reachable through `/list-mcp`, `/trust`,
+/// while these behaviors are reachable through `/list-mcp`, `/sandbox trust`,
 /// `/permissions`, and `/approval` inside the pane-local agent shell. Provider
 /// logout remains available through `mez auth logout`.
 #[test]

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::control::{decode_control_frame, encode_control_body};
+use crate::runtime::SandboxConfig;
 
 /// Builds active-pane bootstrap evidence with optional Rust toolchain roots.
 fn toolchain_environment(environment_managers: Vec<String>) -> mez_agent::EnvironmentSignature {
@@ -54,7 +55,7 @@ fn toolchain_command_service(
     (service, primary, path)
 }
 
-/// Verifies `/toolchain` status and detection consume only active-pane
+/// Verifies `/sandbox toolchains` status and detection consume only active-pane
 /// bootstrap evidence and do not mutate config text or generation state.
 #[test]
 fn runtime_agent_shell_toolchain_status_and_detect_are_read_only() {
@@ -73,15 +74,15 @@ fn runtime_agent_shell_toolchain_status_and_detect_are_read_only() {
     let before = fs::read_to_string(&path).unwrap();
 
     let status = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-status","method":"agent/shell/command","params":{"idempotency_key":"toolchain-status","input":"/toolchain"}}"#,
+        r#"{"jsonrpc":"2.0","id":"toolchain-status","method":"agent/shell/command","params":{"idempotency_key":"toolchain-status","input":"/sandbox toolchains"}}"#,
         &primary,
     );
     let list = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-list","method":"agent/shell/command","params":{"idempotency_key":"toolchain-list","input":"/toolchain list"}}"#,
+        r#"{"jsonrpc":"2.0","id":"toolchain-list","method":"agent/shell/command","params":{"idempotency_key":"toolchain-list","input":"/sandbox toolchains list"}}"#,
         &primary,
     );
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-detect","method":"agent/shell/command","params":{"idempotency_key":"toolchain-detect","input":"/toolchain detect rust"}}"#,
+        r#"{"jsonrpc":"2.0","id":"toolchain-detect","method":"agent/shell/command","params":{"idempotency_key":"toolchain-detect","input":"/sandbox toolchains detect rust"}}"#,
         &primary,
     );
 
@@ -112,7 +113,7 @@ fn runtime_agent_shell_toolchain_detection_without_evidence_is_transient_error()
         toolchain_command_service("runtime-toolchain-missing-evidence", config);
 
     let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-missing-evidence","method":"agent/shell/command","params":{"idempotency_key":"toolchain-missing-evidence","input":"/toolchain detect rust"}}"#,
+        r#"{"jsonrpc":"2.0","id":"toolchain-missing-evidence","method":"agent/shell/command","params":{"idempotency_key":"toolchain-missing-evidence","input":"/sandbox toolchains detect rust"}}"#,
         &primary,
     );
 
@@ -145,7 +146,7 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
     let initial_generation = service.session.config_generation;
 
     let missing_confirmation = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-unconfirmed","method":"agent/shell/command","params":{"idempotency_key":"toolchain-unconfirmed","input":"/toolchain enable rust"}}"#,
+        r#"{"jsonrpc":"2.0","id":"toolchain-unconfirmed","method":"agent/shell/command","params":{"idempotency_key":"toolchain-unconfirmed","input":"/sandbox toolchains enable rust"}}"#,
         &primary,
     );
     assert!(
@@ -159,7 +160,7 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
     assert_eq!(service.session.config_generation, initial_generation);
 
     let control_attempt = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-control-enable","method":"agent/shell/command","params":{"idempotency_key":"toolchain-control-enable","input":"/toolchain enable rust --yes"}}"#,
+        r#"{"jsonrpc":"2.0","id":"toolchain-control-enable","method":"agent/shell/command","params":{"idempotency_key":"toolchain-control-enable","input":"/sandbox toolchains enable rust --yes"}}"#,
         &primary,
     );
     assert!(
@@ -169,7 +170,7 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
     assert_eq!(service.session.config_generation, initial_generation);
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable rust --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable rust --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled rust; updated"), "{enabled}");
@@ -180,7 +181,7 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
     assert!(!persisted.contains("/home/test-user"), "{persisted}");
 
     let enabled_again = service
-        .execute_agent_shell_command(&primary, "/toolchain enable rust --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable rust --yes")
         .unwrap();
     assert!(
         enabled_again.contains("Enabled rust; no-op"),
@@ -190,7 +191,7 @@ fn runtime_agent_shell_toolchain_enable_disable_and_no_op_are_generation_exact()
     assert_eq!(service.session.config_generation, initial_generation + 1);
 
     let disabled = service
-        .execute_agent_shell_command(&primary, "/toolchain disable rust --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains disable rust --yes")
         .unwrap();
     assert!(disabled.contains("Disabled rust; updated"), "{disabled}");
     assert!(disabled.contains("changed=true"), "{disabled}");
@@ -222,7 +223,7 @@ fn runtime_agent_shell_zig_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"zig-detect","method":"agent/shell/command","params":{"idempotency_key":"zig-detect","input":"/toolchain detect zig"}}"#,
+        r#"{"jsonrpc":"2.0","id":"zig-detect","method":"agent/shell/command","params":{"idempotency_key":"zig-detect","input":"/sandbox toolchains detect zig"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -230,7 +231,7 @@ fn runtime_agent_shell_zig_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable zig --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable zig --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled zig; updated"), "{enabled}");
@@ -265,7 +266,7 @@ fn runtime_agent_shell_go_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"go-detect","method":"agent/shell/command","params":{"idempotency_key":"go-detect","input":"/toolchain detect go"}}"#,
+        r#"{"jsonrpc":"2.0","id":"go-detect","method":"agent/shell/command","params":{"idempotency_key":"go-detect","input":"/sandbox toolchains detect go"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -273,7 +274,7 @@ fn runtime_agent_shell_go_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable go --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable go --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled go; updated"), "{enabled}");
@@ -307,7 +308,7 @@ fn runtime_agent_shell_deno_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"deno-detect","method":"agent/shell/command","params":{"idempotency_key":"deno-detect","input":"/toolchain detect deno"}}"#,
+        r#"{"jsonrpc":"2.0","id":"deno-detect","method":"agent/shell/command","params":{"idempotency_key":"deno-detect","input":"/sandbox toolchains detect deno"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -315,7 +316,7 @@ fn runtime_agent_shell_deno_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable deno --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable deno --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled deno; updated"), "{enabled}");
@@ -349,7 +350,7 @@ fn runtime_agent_shell_bun_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"bun-detect","method":"agent/shell/command","params":{"idempotency_key":"bun-detect","input":"/toolchain detect bun"}}"#,
+        r#"{"jsonrpc":"2.0","id":"bun-detect","method":"agent/shell/command","params":{"idempotency_key":"bun-detect","input":"/sandbox toolchains detect bun"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -357,7 +358,7 @@ fn runtime_agent_shell_bun_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable bun --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable bun --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled bun; updated"), "{enabled}");
@@ -396,7 +397,7 @@ fn runtime_agent_shell_node_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"node-detect","method":"agent/shell/command","params":{"idempotency_key":"node-detect","input":"/toolchain detect node"}}"#,
+        r#"{"jsonrpc":"2.0","id":"node-detect","method":"agent/shell/command","params":{"idempotency_key":"node-detect","input":"/sandbox toolchains detect node"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -404,7 +405,7 @@ fn runtime_agent_shell_node_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable node --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable node --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled node; updated"), "{enabled}");
@@ -443,7 +444,7 @@ fn runtime_agent_shell_python_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"python-detect","method":"agent/shell/command","params":{"idempotency_key":"python-detect","input":"/toolchain detect python"}}"#,
+        r#"{"jsonrpc":"2.0","id":"python-detect","method":"agent/shell/command","params":{"idempotency_key":"python-detect","input":"/sandbox toolchains detect python"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -451,7 +452,7 @@ fn runtime_agent_shell_python_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable python --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable python --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled python; updated"), "{enabled}");
@@ -492,7 +493,7 @@ fn runtime_agent_shell_jdk_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"jdk-detect","method":"agent/shell/command","params":{"idempotency_key":"jdk-detect","input":"/toolchain detect jdk"}}"#,
+        r#"{"jsonrpc":"2.0","id":"jdk-detect","method":"agent/shell/command","params":{"idempotency_key":"jdk-detect","input":"/sandbox toolchains detect jdk"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -500,7 +501,7 @@ fn runtime_agent_shell_jdk_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable jdk --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable jdk --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled jdk; updated"), "{enabled}");
@@ -540,7 +541,7 @@ fn runtime_agent_shell_dotnet_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"dotnet-detect","method":"agent/shell/command","params":{"idempotency_key":"dotnet-detect","input":"/toolchain detect dotnet"}}"#,
+        r#"{"jsonrpc":"2.0","id":"dotnet-detect","method":"agent/shell/command","params":{"idempotency_key":"dotnet-detect","input":"/sandbox toolchains detect dotnet"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -548,7 +549,7 @@ fn runtime_agent_shell_dotnet_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable dotnet --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable dotnet --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled dotnet; updated"), "{enabled}");
@@ -590,7 +591,7 @@ fn runtime_agent_shell_dart_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"dart-detect","method":"agent/shell/command","params":{"idempotency_key":"dart-detect","input":"/toolchain detect dart"}}"#,
+        r#"{"jsonrpc":"2.0","id":"dart-detect","method":"agent/shell/command","params":{"idempotency_key":"dart-detect","input":"/sandbox toolchains detect dart"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -598,7 +599,7 @@ fn runtime_agent_shell_dart_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable dart --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable dart --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled dart; updated"), "{enabled}");
@@ -647,7 +648,7 @@ fn runtime_agent_shell_kotlin_toolchain_requires_jdk_and_persists_only_kinds() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"kotlin-detect","method":"agent/shell/command","params":{"idempotency_key":"kotlin-detect","input":"/toolchain detect kotlin"}}"#,
+        r#"{"jsonrpc":"2.0","id":"kotlin-detect","method":"agent/shell/command","params":{"idempotency_key":"kotlin-detect","input":"/sandbox toolchains detect kotlin"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -655,7 +656,7 @@ fn runtime_agent_shell_kotlin_toolchain_requires_jdk_and_persists_only_kinds() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable kotlin --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable kotlin --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled kotlin; updated"), "{enabled}");
@@ -700,7 +701,7 @@ fn runtime_agent_shell_ruby_toolchain_detects_and_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"ruby-detect","method":"agent/shell/command","params":{"idempotency_key":"ruby-detect","input":"/toolchain detect ruby"}}"#,
+        r#"{"jsonrpc":"2.0","id":"ruby-detect","method":"agent/shell/command","params":{"idempotency_key":"ruby-detect","input":"/sandbox toolchains detect ruby"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -708,7 +709,7 @@ fn runtime_agent_shell_ruby_toolchain_detects_and_persists_only_kind() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable ruby --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable ruby --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled ruby; updated"), "{enabled}");
@@ -754,7 +755,7 @@ fn runtime_agent_shell_composer_requires_php_and_persists_only_kinds() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"composer-detect","method":"agent/shell/command","params":{"idempotency_key":"composer-detect","input":"/toolchain detect composer"}}"#,
+        r#"{"jsonrpc":"2.0","id":"composer-detect","method":"agent/shell/command","params":{"idempotency_key":"composer-detect","input":"/sandbox toolchains detect composer"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -762,7 +763,7 @@ fn runtime_agent_shell_composer_requires_php_and_persists_only_kinds() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable composer --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable composer --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled composer; updated"), "{enabled}");
@@ -818,7 +819,7 @@ fn runtime_agent_shell_elixir_requires_erlang_and_persists_only_kinds() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"elixir-detect","method":"agent/shell/command","params":{"idempotency_key":"elixir-detect","input":"/toolchain detect elixir"}}"#,
+        r#"{"jsonrpc":"2.0","id":"elixir-detect","method":"agent/shell/command","params":{"idempotency_key":"elixir-detect","input":"/sandbox toolchains detect elixir"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -826,7 +827,7 @@ fn runtime_agent_shell_elixir_requires_erlang_and_persists_only_kinds() {
     assert!(detect.contains("| Available | yes |"), "{detect}");
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable elixir --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable elixir --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("Enabled elixir; updated"), "{enabled}");
@@ -894,7 +895,7 @@ fn runtime_agent_shell_haskell_companions_require_ghc_and_persist_only_kinds() {
     for kind in ["cabal", "stack"] {
         let detect = service.dispatch_runtime_control_body(
             &format!(
-                r#"{{"jsonrpc":"2.0","id":"{kind}-detect","method":"agent/shell/command","params":{{"idempotency_key":"{kind}-detect","input":"/toolchain detect {kind}"}}}}"#
+                r#"{{"jsonrpc":"2.0","id":"{kind}-detect","method":"agent/shell/command","params":{{"idempotency_key":"{kind}-detect","input":"/sandbox toolchains detect {kind}"}}}}"#
             ),
             &primary,
         );
@@ -904,7 +905,7 @@ fn runtime_agent_shell_haskell_companions_require_ghc_and_persist_only_kinds() {
     }
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable cabal stack --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable cabal stack --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -958,7 +959,7 @@ fn runtime_agent_shell_ocaml_uses_trusted_project_local_switch() {
     service.set_pane_environment_signature_for_tests("%1", toolchain_environment(Vec::new()));
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"ocaml-detect","method":"agent/shell/command","params":{"idempotency_key":"ocaml-detect","input":"/toolchain detect ocaml"}}"#,
+        r#"{"jsonrpc":"2.0","id":"ocaml-detect","method":"agent/shell/command","params":{"idempotency_key":"ocaml-detect","input":"/sandbox toolchains detect ocaml"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -970,7 +971,7 @@ fn runtime_agent_shell_ocaml_uses_trusted_project_local_switch() {
     );
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable ocaml --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable ocaml --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -1050,7 +1051,7 @@ fn runtime_agent_shell_native_toolchains_persist_only_kinds() {
     for (kind, root) in &roots {
         let detect = service.dispatch_runtime_control_body(
             &format!(
-                r#"{{"jsonrpc":"2.0","id":"{kind}-detect","method":"agent/shell/command","params":{{"idempotency_key":"{kind}-detect","input":"/toolchain detect {kind}"}}}}"#
+                r#"{{"jsonrpc":"2.0","id":"{kind}-detect","method":"agent/shell/command","params":{{"idempotency_key":"{kind}-detect","input":"/sandbox toolchains detect {kind}"}}}}"#
             ),
             &primary,
         );
@@ -1066,7 +1067,7 @@ fn runtime_agent_shell_native_toolchains_persist_only_kinds() {
     let enabled = service
         .execute_agent_shell_command(
             &primary,
-            "/toolchain enable llvm gcc cmake ninja meson --yes",
+            "/sandbox toolchains enable llvm gcc cmake ninja meson --yes",
         )
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
@@ -1109,7 +1110,7 @@ fn runtime_agent_shell_swift_toolchain_persists_only_kind() {
     );
 
     let detect = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"swift-detect","method":"agent/shell/command","params":{"idempotency_key":"swift-detect","input":"/toolchain detect swift"}}"#,
+        r#"{"jsonrpc":"2.0","id":"swift-detect","method":"agent/shell/command","params":{"idempotency_key":"swift-detect","input":"/sandbox toolchains detect swift"}}"#,
         &primary,
     );
     assert!(detect.contains(r#""presentation":"pager""#), "{detect}");
@@ -1125,7 +1126,7 @@ fn runtime_agent_shell_swift_toolchain_persists_only_kind() {
     );
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable swift --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable swift --yes")
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -1198,7 +1199,7 @@ fn runtime_agent_shell_jvm_wrappers_persist_only_kinds() {
     for kind in ["maven", "gradle"] {
         let detect = service.dispatch_runtime_control_body(
             &format!(
-                r#"{{"jsonrpc":"2.0","id":"{kind}-detect","method":"agent/shell/command","params":{{"idempotency_key":"{kind}-detect","input":"/toolchain detect {kind}"}}}}"#
+                r#"{{"jsonrpc":"2.0","id":"{kind}-detect","method":"agent/shell/command","params":{{"idempotency_key":"{kind}-detect","input":"/sandbox toolchains detect {kind}"}}}}"#
             ),
             &primary,
         );
@@ -1212,7 +1213,10 @@ fn runtime_agent_shell_jvm_wrappers_persist_only_kinds() {
     }
 
     let enabled = service
-        .execute_agent_shell_command(&primary, "/toolchain enable jdk maven gradle --yes")
+        .execute_agent_shell_command(
+            &primary,
+            "/sandbox toolchains enable jdk maven gradle --yes",
+        )
         .unwrap();
     assert!(enabled.contains(r#""presentation":"notice""#), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
@@ -1231,7 +1235,7 @@ fn runtime_agent_shell_jvm_wrappers_persist_only_kinds() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
-/// Verifies `/toolchain reload` invokes the full disk-backed config reload and
+/// Verifies `/sandbox toolchains reload` invokes the full disk-backed config reload and
 /// reports before/after typed state rather than applying only one field.
 #[test]
 fn runtime_agent_shell_toolchain_reload_reapplies_full_disk_config() {
@@ -1245,7 +1249,7 @@ fn runtime_agent_shell_toolchain_reload_reapplies_full_disk_config() {
     .unwrap();
 
     let reload = service
-        .execute_agent_shell_command(&primary, "/toolchain reload")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains reload")
         .unwrap();
 
     assert!(reload.contains(r#""presentation":"notice""#), "{reload}");
@@ -1272,7 +1276,7 @@ fn runtime_agent_shell_toolchain_rejects_non_primary_client() {
     let non_primary = mez_core::ids::ClientId::opaque("c-observer").unwrap();
 
     let error = service
-        .execute_agent_shell_command(&non_primary, "/toolchain status")
+        .execute_agent_shell_command(&non_primary, "/sandbox toolchains status")
         .unwrap_err();
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
@@ -1328,7 +1332,10 @@ fn runtime_toolchain_mutation_submission_requires_exact_primary_settlement() {
     let tampered = service
         .execute_agent_shell_command(
             &primary,
-            &format!("/toolchain confirm {request_id} {} --yes", "0".repeat(64)),
+            &format!(
+                "/sandbox toolchains confirm {request_id} {} --yes",
+                "0".repeat(64)
+            ),
         )
         .unwrap();
     assert!(tampered.contains("digest does not match"), "{tampered}");
@@ -1337,7 +1344,7 @@ fn runtime_toolchain_mutation_submission_requires_exact_primary_settlement() {
     let confirmed = service
         .execute_agent_shell_command(
             &primary,
-            &format!("/toolchain confirm {request_id} {digest} --yes"),
+            &format!("/sandbox toolchains confirm {request_id} {digest} --yes"),
         )
         .unwrap();
     assert!(confirmed.contains("Enabled rust; updated"), "{confirmed}");
@@ -1350,7 +1357,7 @@ fn runtime_toolchain_mutation_submission_requires_exact_primary_settlement() {
     let replay = service
         .execute_agent_shell_command(
             &primary,
-            &format!("/toolchain confirm {request_id} {digest} --yes"),
+            &format!("/sandbox toolchains confirm {request_id} {digest} --yes"),
         )
         .unwrap();
     assert!(replay.contains("missing or already settled"), "{replay}");
@@ -1466,7 +1473,7 @@ fn runtime_custom_toolchain_definition_requires_exact_primary_settlement() {
     let confirmed = service
         .execute_agent_shell_command(
             &primary,
-            &format!("/toolchain confirm {request_id} {digest} --yes"),
+            &format!("/sandbox toolchains confirm {request_id} {digest} --yes"),
         )
         .unwrap();
     assert!(confirmed.contains("Defined custom:acme"), "{confirmed}");
@@ -1511,13 +1518,13 @@ fn runtime_toolchain_mutation_submission_rejects_stale_and_absent_primary() {
         .to_string();
 
     let changed = service
-        .execute_agent_shell_command(&primary, "/toolchain enable rust --yes")
+        .execute_agent_shell_command(&primary, "/sandbox toolchains enable rust --yes")
         .unwrap();
     assert!(changed.contains("Enabled rust; updated"), "{changed}");
     let stale = service
         .execute_agent_shell_command(
             &primary,
-            &format!("/toolchain confirm {request_id} {digest} --yes"),
+            &format!("/sandbox toolchains confirm {request_id} {digest} --yes"),
         )
         .unwrap();
     assert!(stale.contains("configuration changed"), "{stale}");
@@ -1573,7 +1580,7 @@ fn runtime_agent_shell_toolchain_audit_redacts_discovered_roots() {
     );
 
     let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"toolchain-audit","method":"agent/shell/command","params":{"idempotency_key":"toolchain-audit","input":"/toolchain detect rust"}}"#,
+        r#"{"jsonrpc":"2.0","id":"toolchain-audit","method":"agent/shell/command","params":{"idempotency_key":"toolchain-audit","input":"/sandbox toolchains detect rust"}}"#,
         &primary,
     );
 
@@ -2089,6 +2096,111 @@ fn runtime_agent_shell_approval_command_mutates_live_policy() {
         service.permission_policy_for_pane("%1").approval_policy,
         ApprovalPolicy::FullAccess
     );
+}
+
+/// Verifies sandbox enable and disable default to one exact pane, leave the
+/// persisted global backend and generation unchanged, report provenance, and
+/// discard the override when the pane's runtime state is removed.
+#[test]
+fn runtime_agent_shell_sandbox_mutations_are_pane_local_by_default() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let second_pane = service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .unwrap()
+        .pane_id;
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(second_pane.as_str())
+        .unwrap();
+    service.session.select_pane(&primary, "%1").unwrap();
+    let generation = service.session.config_generation;
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/sandbox enable --yes")
+        .unwrap();
+    assert!(enabled.contains(r#""command":"sandbox""#), "{enabled}");
+    assert!(enabled.contains("scope=pane"), "{enabled}");
+    assert!(matches!(
+        service.sandbox_config_for_pane("%1"),
+        SandboxConfig::Bubblewrap(_)
+    ));
+    assert!(matches!(
+        service.sandbox_config_for_pane(second_pane.as_str()),
+        SandboxConfig::PolicyOnly
+    ));
+    assert!(matches!(
+        service.configured_permissions().sandbox,
+        SandboxConfig::PolicyOnly
+    ));
+    assert_eq!(service.session.config_generation, generation);
+
+    let status = service
+        .execute_agent_shell_command(&primary, "/sandbox status")
+        .unwrap();
+    assert!(
+        status.contains("Effective backend | `bubblewrap`"),
+        "{status}"
+    );
+    assert!(status.contains("Source | pane override"), "{status}");
+    assert_eq!(service.session.config_generation, generation);
+
+    service.cleanup_removed_pane_runtime_state("%1");
+    assert!(matches!(
+        service.sandbox_config_for_pane("%1"),
+        SandboxConfig::PolicyOnly
+    ));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies `--global` persists and hot-applies the default backend while an
+/// exact pane override continues to win over later global changes.
+#[test]
+fn runtime_agent_shell_sandbox_global_mutation_preserves_pane_override() {
+    let config = "[permissions]\nsandbox = \"policy-only\"\n";
+    let (mut service, primary, path) = toolchain_command_service("runtime-sandbox-global", config);
+    let initial_generation = service.session.config_generation;
+
+    let enabled = service
+        .execute_agent_shell_command(&primary, "/sandbox enable --global --yes")
+        .unwrap();
+    assert!(enabled.contains("scope=global"), "{enabled}");
+    assert!(matches!(
+        service.configured_permissions().sandbox,
+        SandboxConfig::Bubblewrap(_)
+    ));
+    assert_eq!(service.session.config_generation, initial_generation + 1);
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("sandbox = \"bubblewrap\"")
+    );
+
+    service
+        .execute_agent_shell_command(&primary, "/sandbox disable --yes")
+        .unwrap();
+    let global_status = service
+        .execute_agent_shell_command(&primary, "/sandbox status --global")
+        .unwrap();
+    assert!(
+        global_status.contains("Backend | `bubblewrap`"),
+        "{global_status}"
+    );
+    assert!(matches!(
+        service.sandbox_config_for_pane("%1"),
+        SandboxConfig::PolicyOnly
+    ));
+    assert!(service.pane_has_sandbox_override("%1"));
+    let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
 /// Verifies pane-local permission commands do not leak preset or approval

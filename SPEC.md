@@ -3269,13 +3269,13 @@ composed projection and require every enabled host root to be present in the
 effective read authority. Toolchain configuration MUST NOT become
 an arbitrary PATH, environment-variable, mount, version-manager-hook, or
 credential-import surface.
-The agent shell `/toolchain` command and `/toolchain status [SELECTOR]` MUST
+The agent shell `/sandbox toolchains` command and `/sandbox toolchains status [SELECTOR]` MUST
 report supported, configured, discoverable, and effective state for the active
-pane. `/toolchain list` MUST include configured custom identities.
-`/toolchain detect [SELECTOR]` MUST be read-only and MUST use active-pane
+pane. `/sandbox toolchains list` MUST include configured custom identities.
+`/sandbox toolchains detect [SELECTOR]` MUST be read-only and MUST use active-pane
 bootstrap evidence rather than ambient service environment state. Ordered
-`/toolchain enable SELECTOR... --yes`, `/toolchain disable SELECTOR... --yes`,
-`/toolchain define NAME ... --yes`, and `/toolchain remove custom:NAME
+`/sandbox toolchains enable SELECTOR... --yes`, `/sandbox toolchains disable SELECTOR... --yes`,
+`/sandbox toolchains define NAME ... --yes`, and `/sandbox toolchains remove custom:NAME
 [--disable] --yes` MUST require authenticated primary-client input and apply
 real changes to subsequent sandboxed actions without rewriting existing
 interactive shells or actions that are already running. Built-in selections
@@ -3283,14 +3283,14 @@ MUST persist only typed kinds; custom definitions MUST remain constrained to
 the schema-v32 representation. Text supplied through control, automation,
 agent, hook, macro, MCP, or assistant output MUST NOT acquire this provenance.
 Repeating an already-satisfied mutation MUST be a no-op and MUST NOT advance
-configuration generation. `/toolchain reload` MUST
+configuration generation. `/sandbox toolchains reload` MUST
 perform the existing full disk-backed configuration reload, not a field-only
 toolchain reload, and MUST disclose that all changed configuration was
 reapplied. Status, list, and detection results MUST use the searchable and
 copyable command pager with structured descriptor-derived Markdown, regardless
 of rendered line count. Successful mutations and reloads MUST use one concise
 transient notice, and usage, discovery, persistence, and reload failures MUST
-use one transient error notice. No `/toolchain` result may append visible
+use one transient error notice. No `/sandbox toolchains` result may append visible
 output to pane history. Standalone `mez sandbox toolchains enable SELECTOR...
 --yes`, `disable SELECTOR... --yes`, `custom define NAME ... --yes`, and
 `custom remove NAME [--disable] --yes` invocations MUST submit normalized,
@@ -6191,12 +6191,32 @@ The baseline command capabilities are:
 - `/approve`: Approve a pending pane-local agent action. It MUST accept an
   approval id, `latest`, or the only pending approval for the active pane, and
   it MUST support `once`, `session`, `project`, and `global` approval scopes.
-- `/trust`: Trust an explicit project root or a pending project overlay root. It
-  MUST resolve explicit relative paths from the active pane working directory,
-  accept `latest` or the only pending project trust request for the live session,
-  and provide a list view for pending project trust requests.
-- `/toolchain`: Inspect and manage typed sandbox toolchain projections for the
-  active pane. It MUST accept no argument or `status`, `list`,
+- `/sandbox`: Inspect and manage sandbox state through exactly `status`,
+  `enable`, `disable`, `trust`, and `toolchains` subcommands. No argument MUST
+  behave as `status`. `status` MUST report the effective backend for the active
+  pane, whether a pane override exists, and whether the effective value came
+  from that override or the persisted global default. `status --global` MUST
+  report only the persisted default. Both status forms MUST be read-only.
+  `enable --yes` and `disable --yes` MUST set an exact-pane runtime override
+  and MUST NOT persist configuration, affect sibling panes, advance global
+  configuration generation, survive pane removal, or survive daemon restart.
+  `enable --global --yes` and `disable --global --yes` MUST use the atomic
+  persisted configuration and live-reload path. A global change MUST affect
+  panes without overrides and MUST NOT clear an existing pane override.
+  Mutations MUST require authenticated primary-client input, while unsupported
+  subcommands, duplicate or unknown flags, missing `--yes`, and extra
+  positional arguments MUST fail without changing state. Advanced setup,
+  profile, and managed-home cache workflows MUST remain CLI-only under
+  `mez sandbox`.
+
+  `/sandbox trust` MUST trust an explicit project root or a pending project
+  overlay root. It MUST resolve explicit relative paths from the active pane
+  working directory, accept `latest` or the only pending project trust request
+  for the live session, and provide a list view for pending project trust
+  requests.
+
+  `/sandbox toolchains` MUST inspect and manage typed sandbox toolchain
+  projections for the active pane. It MUST accept no argument or `status`, `list`,
   `detect [rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]`, `enable KIND --yes`, `disable KIND
   --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
   `node`, `python`, `jdk`, `maven`, `gradle`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
@@ -6489,14 +6509,14 @@ pane-local `/approve` command before the action waits for the user. Auto-allow
 messages produced from ask fallthrough MUST also mention `/show-approvals` for
 pending-request discoverability without implying observer decision authority.
 
-The `/trust` command MUST route decisions through the same project trust,
-configuration reload, lifecycle event, and audit machinery as the
-`project/trust/decide` control method. Trust decisions made with `/trust` MUST
-persist to the configured project trust database under the user's configuration
-root when persistence is available, so trusted project overlays remain trusted
-across sessions. Pending project trust requests MUST clearly log the project
-root, overlay count, and corresponding `/trust` command before agent work is
-blocked on that trust decision.
+The `/sandbox trust` command MUST route decisions through the same project
+trust, configuration reload, lifecycle event, and audit machinery as the
+`project/trust/decide` control method. Trust decisions made with
+`/sandbox trust` MUST persist to the configured project trust database under
+the user's configuration root when persistence is available, so trusted
+project overlays remain trusted across sessions. Pending project trust
+requests MUST clearly log the project root, overlay count, and corresponding
+`/sandbox trust` command before agent work is blocked on that trust decision.
 
 The `/list-mcp` command MUST show enabled, disabled, unavailable, and
 session-blacklisted MCP servers and tools in a human-readable display format

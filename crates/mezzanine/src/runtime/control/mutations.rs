@@ -1036,7 +1036,7 @@ impl RuntimeSessionService {
             |name| vec![name.selector()],
         );
         Ok(format!(
-            r#"{{"request_id":"{}","state":"pending","operation":"{}","selectors":{},"request_digest":"{}","pane_id":"{}","config_generation":{},"expires_at_unix_seconds":{},"confirmation":"Enter /toolchain confirm {} {} --yes in the attached primary client."}}"#,
+            r#"{{"request_id":"{}","state":"pending","operation":"{}","selectors":{},"request_digest":"{}","pane_id":"{}","config_generation":{},"expires_at_unix_seconds":{},"confirmation":"Enter /sandbox toolchains confirm {} {} --yes in the attached primary client."}}"#,
             json_escape(&request_id),
             json_escape(&operation),
             serde_json::to_string(&response_selectors)

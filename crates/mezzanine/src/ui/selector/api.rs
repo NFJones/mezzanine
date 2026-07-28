@@ -36,6 +36,8 @@ pub struct SelectorExtraCandidate {
 pub struct SelectorExtraCandidateSubcommandSlot {
     /// Required first argument after the canonical command.
     pub subcommand: String,
+    /// Optional required nested argument immediately after the subcommand.
+    pub nested_subcommand: Option<String>,
     /// Minimum number of completed tokens, including the command token.
     pub minimum_tokens_before: usize,
     /// Optional maximum number of completed tokens, including the command.
@@ -76,13 +78,13 @@ impl SelectorExtraCandidate {
         }
     }
 
-    /// Builds a candidate restricted to a positional subcommand argument.
-    pub fn after_subcommand(
+    /// Builds a candidate restricted to a nested subcommand argument.
+    pub fn after_nested_subcommand(
         surface: SelectorSurface,
         command: impl Into<String>,
         subcommand: impl Into<String>,
-        minimum_tokens_before: usize,
-        maximum_tokens_before: Option<usize>,
+        nested_subcommand: impl Into<String>,
+        token_bounds: (usize, Option<usize>),
         terminal_token: Option<&str>,
         candidate: SelectorCandidate,
     ) -> Self {
@@ -92,8 +94,9 @@ impl SelectorExtraCandidate {
             preceding_option: None,
             subcommand_slot: Some(SelectorExtraCandidateSubcommandSlot {
                 subcommand: subcommand.into(),
-                minimum_tokens_before,
-                maximum_tokens_before,
+                nested_subcommand: Some(nested_subcommand.into()),
+                minimum_tokens_before: token_bounds.0,
+                maximum_tokens_before: token_bounds.1,
                 terminal_token: terminal_token.map(str::to_string),
             }),
             candidate,
@@ -255,8 +258,8 @@ fn parameter_shadow_hint(
         && context
             .tokens_before
             .first()
-            .is_some_and(|command| command.trim_start_matches('/') == "toolchain")
-        && let Some(text) = toolchain_parameter_shadow_text(context)
+            .is_some_and(|command| command.trim_start_matches('/') == "sandbox")
+        && let Some(text) = sandbox_parameter_shadow_text(context)
     {
         return Some(SelectorShadowHint {
             insert_at: cursor,
@@ -293,9 +296,35 @@ fn parameter_shadow_hint(
     })
 }
 
-/// Returns a position-sensitive hint for the strict `/toolchain` grammar.
-fn toolchain_parameter_shadow_text(context: &SelectorTokenContext) -> Option<String> {
+/// Returns a position-sensitive hint for the strict `/sandbox` hierarchy.
+fn sandbox_parameter_shadow_text(context: &SelectorTokenContext) -> Option<String> {
     let arguments = context.tokens_before.get(1..)?;
+    match arguments {
+        [] => Some(" <status|enable|disable|trust|toolchains>".to_string()),
+        [operation] if operation == "status" => Some(" [--global]".to_string()),
+        [operation] if operation == "enable" || operation == "disable" => {
+            Some(" --yes [--global]".to_string())
+        }
+        [operation, rest @ ..]
+            if (operation == "enable" || operation == "disable")
+                && !rest.iter().any(|token| token == "--yes") =>
+        {
+            Some(" --yes".to_string())
+        }
+        [operation] if operation == "trust" => {
+            Some(" [project-root|latest|list|pending]".to_string())
+        }
+        [operation, ..] if operation == "toolchains" => toolchain_parameter_shadow_text(context, 2),
+        _ => None,
+    }
+}
+
+/// Returns a position-sensitive hint for nested sandbox toolchain grammar.
+fn toolchain_parameter_shadow_text(
+    context: &SelectorTokenContext,
+    operation_index: usize,
+) -> Option<String> {
+    let arguments = context.tokens_before.get(operation_index..)?;
     match arguments {
         [] => Some(
             " <status|list|detect|define|enable|disable|remove|reload>".to_string(),

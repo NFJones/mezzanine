@@ -1,6 +1,6 @@
 //! Live typed sandbox toolchain command handling.
 //!
-//! This module owns the `/toolchain` grammar and its runtime effects. It reads
+//! This module owns the `/sandbox toolchains` grammar and its runtime effects. It reads
 //! discovery only from active-pane bootstrap evidence, persists only allowlisted
 //! kind names, delegates live config changes to the transactional mutation
 //! helper, and delegates reload to the existing full control-plane operation.
@@ -40,7 +40,7 @@ use crate::security::sandbox::{
     resolve_toolchain_projection_for_project, toolchain_descriptor,
 };
 
-/// Strict operation accepted by `/toolchain`.
+/// Strict operation accepted by `/sandbox toolchains`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ToolchainCommand {
     /// Reports configured, discoverable, and effective state.
@@ -135,7 +135,7 @@ struct ToolchainStatus {
 }
 
 impl RuntimeSessionService {
-    /// Executes `/toolchain` through the primary-client runtime boundary.
+    /// Executes `/sandbox toolchains` through the primary-client runtime boundary.
     ///
     /// # Errors
     /// Returns an argument error for invalid grammar, a forbidden error for a
@@ -155,12 +155,23 @@ impl RuntimeSessionService {
         }
         let invocation = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("toolchain command must be a slash command"))?;
-        if invocation.name != "toolchain" {
-            return Err(MezError::invalid_args(
-                "toolchain executor received another slash command",
-            ));
-        }
-        if let Some(settlement) = parse_toolchain_settlement(&invocation.args)? {
+        let args = match invocation.name.as_str() {
+            "sandbox" => invocation
+                .args
+                .strip_prefix("toolchains")
+                .filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace))
+                .map(str::trim_start)
+                .ok_or_else(|| {
+                    MezError::invalid_args("toolchain executor received another sandbox command")
+                })?,
+            "toolchain" => invocation.args.as_str(),
+            _ => {
+                return Err(MezError::invalid_args(
+                    "toolchain executor received another slash command",
+                ));
+            }
+        };
+        if let Some(settlement) = parse_toolchain_settlement(args)? {
             if !origin.is_authenticated_primary_input() {
                 return Err(MezError::forbidden(
                     "toolchain mutation settlement requires authenticated primary-client input",
@@ -168,7 +179,7 @@ impl RuntimeSessionService {
             }
             return self.settle_pending_toolchain_mutation(primary_client_id, pane_id, settlement);
         }
-        let operation = parse_toolchain_command(&invocation.args)?;
+        let operation = parse_toolchain_command(args)?;
         if matches!(
             operation,
             ToolchainCommand::Enable(_)

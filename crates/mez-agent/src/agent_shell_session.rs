@@ -809,8 +809,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "personality"
         | "list-personalities"
         | "refresh-provider-info"
-        | "toolchain"
-        | "trust" => "configuration",
+        | "sandbox" => "configuration",
         "help" | "list-macros" | "list-mcp" | "list-sessions" | "list-skills" => "discovery",
         _ => "work control",
     }
@@ -836,8 +835,8 @@ fn agent_shell_command_description(name: &str) -> &'static str {
             "inspect or change pane-subtree approval mode; inherit clears the pane override; host-access means no prompts and host execution outside the configured sandbox."
         }
         "approve" => "approve a pending pane-local agent action.",
-        "trust" => {
-            "trust an explicit project root or inspect and decide pending project trust requests."
+        "sandbox" => {
+            "inspect or change pane-local sandbox state; use --global for persisted enable/disable changes, and manage trust or typed toolchains through nested subcommands."
         }
         "list-macros" => "list available macros and their #macro prompt names.",
         "list-sessions" => "list resumable saved agent conversations.",
@@ -864,9 +863,6 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "memory" => "inspect or change persistent memory enablement.",
         "show-memories" => "browse durable memory records and open memory details.",
         "remember" => "generate durable memories from the current context or a statement.",
-        "toolchain" => {
-            "inspect typed or custom sandbox toolchains; status/list/detect are read-only, while define, ordered enable/disable, remove, and reload require authenticated primary input and affect subsequent actions only."
-        }
         "model" => "inspect or change model and reasoning settings.",
         "thinking" => "inspect or toggle pane-local model reasoning visibility.",
         "latency" => "inspect or change latency/cost preference.",
@@ -1072,19 +1068,17 @@ mod tests {
         assert!(discovery.contains("`/list-mcp`"), "{help}");
     }
 
-    /// Verifies typed sandbox toolchain management is discoverable in the
-    /// configuration section of generated agent-shell help.
+    /// Verifies the sandbox hierarchy is the sole configuration entry for
+    /// pane sandbox, trust, and toolchain management.
     #[test]
-    fn agent_shell_help_lists_toolchain_command() {
+    fn agent_shell_help_lists_sandbox_command_only() {
         let help = agent_shell_help_display();
 
-        assert!(help.contains("`/toolchain`"), "{help}");
-        assert!(help.contains("status/list/detect are read-only"), "{help}");
-        assert!(
-            help.contains("define, ordered enable/disable, remove, and reload require authenticated primary input"),
-            "{help}"
-        );
-        assert!(help.contains("affect subsequent actions only"), "{help}");
+        assert!(help.contains("`/sandbox`"), "{help}");
+        assert!(help.contains("pane-local sandbox state"), "{help}");
+        assert!(help.contains("nested subcommands"), "{help}");
+        assert!(!help.contains("`/trust`"), "{help}");
+        assert!(!help.contains("`/toolchain`"), "{help}");
     }
 
     /// Verifies agent shell rejects mismatched turn completion.

@@ -1,7 +1,7 @@
 //! Agent approval and project-trust command helpers.
 //!
 //! This child module owns the parsing and display helpers for `/approve` and
-//! `/trust` command flows. It deliberately keeps command execution in the
+//! `/sandbox trust` command flows. It deliberately keeps command execution in the
 //! parent runtime command module while isolating the approval-selection and
 //! project-trust formatting rules shared by those execution paths.
 
@@ -273,7 +273,7 @@ pub(super) fn agent_approve_pending_display(
 /// on duplicated control-flow logic.
 pub(super) fn agent_project_trust_log_line(request: &AgentProjectTrustRequest) -> String {
     format!(
-        "project trust pending: {} overlays={} (trust with /trust {})",
+        "project trust pending: {} overlays={} (trust with /sandbox trust {})",
         agent_path_preview(&request.project_root),
         request.overlay_files.len(),
         agent_path_preview(&request.project_root)
@@ -290,7 +290,7 @@ pub(super) fn agent_project_trust_pending_display(pending: &[AgentProjectTrustRe
         "no pending project trust requests".to_string()
     } else {
         format!(
-            "pending project trust requests:\n{}\nUse /trust <project-root>.",
+            "pending project trust requests:\n{}\nUse /sandbox trust <project-root>.",
             pending
                 .iter()
                 .map(agent_project_trust_log_line)
@@ -312,7 +312,7 @@ pub(super) enum AgentProjectTrustTarget {
     Explicit(PathBuf),
 }
 
-/// Resolves one `/trust` argument to either pending work or an explicit project root.
+/// Resolves one `/sandbox trust` argument to pending work or an explicit project root.
 ///
 /// Empty input and `latest` intentionally remain pending-only shortcuts. Explicit
 /// paths are resolved relative to the active pane directory before strict project
@@ -328,7 +328,7 @@ pub(super) fn agent_resolve_project_trust_target(
             [] => Err(MezError::invalid_args("no pending project trust requests")),
             [request] => Ok(AgentProjectTrustTarget::Pending(request.clone())),
             _ => Err(MezError::invalid_args(format!(
-                "multiple pending project trust requests; use /trust <project-root>\n{}",
+                "multiple pending project trust requests; use /sandbox trust <project-root>\n{}",
                 agent_project_trust_pending_display(pending)
             ))),
         },

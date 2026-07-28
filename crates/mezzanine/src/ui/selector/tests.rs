@@ -679,141 +679,365 @@ fn selector_shadow_hint_completes_agent_slash_prefix() {
     assert_eq!(hint.kind, SelectorCandidateKind::Command);
 }
 
-/// Verifies `/tool` completes the canonical typed-toolchain command before
+/// Verifies `/sand` completes the canonical sandbox hierarchy before
 /// argument-specific completion takes over.
 #[test]
-fn selector_shadow_hint_completes_toolchain_command_name() {
-    let hint = shadow_hint(SelectorSurface::AgentCommand, "/tool", 5).unwrap();
+fn selector_shadow_hint_completes_sandbox_command_name() {
+    let hint = shadow_hint(SelectorSurface::AgentCommand, "/sand", 5).unwrap();
 
-    assert_eq!(hint.text, "chain");
+    assert_eq!(hint.text, "box");
     assert_eq!(hint.kind, SelectorCandidateKind::Command);
 }
 
-/// Verifies `/toolchain` completion follows its strict grammar from operation
+/// Verifies `/sandbox toolchains` completion follows its strict grammar from operation
 /// through typed Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, Dart,
 /// Maven, Gradle, Kotlin, Ruby, PHP, Composer, Erlang, Elixir, GHC, Cabal,
 /// Stack, OCaml, LLVM, GCC, CMake, Ninja, Meson, or Swift selection and confirmation.
 #[test]
 fn selector_shadow_hint_completes_toolchain_grammar() {
     let cases = [
-        ("/toolchain sta", "tus", SelectorCandidateKind::Value),
-        ("/toolchain detect rus", "t", SelectorCandidateKind::Value),
-        ("/toolchain detect z", "ig", SelectorCandidateKind::Value),
-        ("/toolchain detect g", "o", SelectorCandidateKind::Value),
-        ("/toolchain detect de", "no", SelectorCandidateKind::Value),
-        ("/toolchain detect b", "un", SelectorCandidateKind::Value),
-        ("/toolchain detect n", "ode", SelectorCandidateKind::Value),
-        ("/toolchain detect py", "thon", SelectorCandidateKind::Value),
-        ("/toolchain detect j", "dk", SelectorCandidateKind::Value),
-        ("/toolchain detect mav", "en", SelectorCandidateKind::Value),
-        ("/toolchain detect gra", "dle", SelectorCandidateKind::Value),
-        ("/toolchain detect dot", "net", SelectorCandidateKind::Value),
-        ("/toolchain detect dar", "t", SelectorCandidateKind::Value),
-        ("/toolchain detect k", "otlin", SelectorCandidateKind::Value),
-        ("/toolchain detect rub", "y", SelectorCandidateKind::Value),
-        ("/toolchain detect ph", "p", SelectorCandidateKind::Value),
         (
-            "/toolchain detect co",
+            "/sandbox toolchains sta",
+            "tus",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect rus",
+            "t",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect z",
+            "ig",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect g",
+            "o",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect de",
+            "no",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect b",
+            "un",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect n",
+            "ode",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect py",
+            "thon",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect j",
+            "dk",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect mav",
+            "en",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect gra",
+            "dle",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect dot",
+            "net",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect dar",
+            "t",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect k",
+            "otlin",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect rub",
+            "y",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect ph",
+            "p",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect co",
             "mposer",
             SelectorCandidateKind::Value,
         ),
-        ("/toolchain detect er", "lang", SelectorCandidateKind::Value),
-        ("/toolchain detect el", "ixir", SelectorCandidateKind::Value),
-        ("/toolchain detect gh", "c", SelectorCandidateKind::Value),
-        ("/toolchain detect ca", "bal", SelectorCandidateKind::Value),
-        ("/toolchain detect st", "ack", SelectorCandidateKind::Value),
-        ("/toolchain detect oc", "aml", SelectorCandidateKind::Value),
-        ("/toolchain detect ll", "vm", SelectorCandidateKind::Value),
-        ("/toolchain detect gc", "c", SelectorCandidateKind::Value),
-        ("/toolchain detect cm", "ake", SelectorCandidateKind::Value),
-        ("/toolchain detect ni", "nja", SelectorCandidateKind::Value),
-        ("/toolchain detect me", "son", SelectorCandidateKind::Value),
-        ("/toolchain detect sw", "ift", SelectorCandidateKind::Value),
-        ("/toolchain enable rus", "t", SelectorCandidateKind::Value),
-        ("/toolchain enable z", "ig", SelectorCandidateKind::Value),
-        ("/toolchain enable g", "o", SelectorCandidateKind::Value),
-        ("/toolchain enable de", "no", SelectorCandidateKind::Value),
-        ("/toolchain enable b", "un", SelectorCandidateKind::Value),
-        ("/toolchain enable n", "ode", SelectorCandidateKind::Value),
-        ("/toolchain enable py", "thon", SelectorCandidateKind::Value),
-        ("/toolchain enable j", "dk", SelectorCandidateKind::Value),
-        ("/toolchain enable mav", "en", SelectorCandidateKind::Value),
-        ("/toolchain enable gra", "dle", SelectorCandidateKind::Value),
-        ("/toolchain enable dot", "net", SelectorCandidateKind::Value),
-        ("/toolchain enable dar", "t", SelectorCandidateKind::Value),
-        ("/toolchain enable k", "otlin", SelectorCandidateKind::Value),
-        ("/toolchain enable rub", "y", SelectorCandidateKind::Value),
-        ("/toolchain enable ph", "p", SelectorCandidateKind::Value),
         (
-            "/toolchain enable co",
+            "/sandbox toolchains detect er",
+            "lang",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect el",
+            "ixir",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect gh",
+            "c",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect ca",
+            "bal",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect st",
+            "ack",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect oc",
+            "aml",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect ll",
+            "vm",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect gc",
+            "c",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect cm",
+            "ake",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect ni",
+            "nja",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect me",
+            "son",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains detect sw",
+            "ift",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable rus",
+            "t",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable z",
+            "ig",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable g",
+            "o",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable de",
+            "no",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable b",
+            "un",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable n",
+            "ode",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable py",
+            "thon",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable j",
+            "dk",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable mav",
+            "en",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable gra",
+            "dle",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable dot",
+            "net",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable dar",
+            "t",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable k",
+            "otlin",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable rub",
+            "y",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable ph",
+            "p",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable co",
             "mposer",
             SelectorCandidateKind::Value,
         ),
-        ("/toolchain enable er", "lang", SelectorCandidateKind::Value),
-        ("/toolchain enable el", "ixir", SelectorCandidateKind::Value),
-        ("/toolchain enable gh", "c", SelectorCandidateKind::Value),
-        ("/toolchain enable ca", "bal", SelectorCandidateKind::Value),
-        ("/toolchain enable st", "ack", SelectorCandidateKind::Value),
-        ("/toolchain enable oc", "aml", SelectorCandidateKind::Value),
-        ("/toolchain enable ll", "vm", SelectorCandidateKind::Value),
-        ("/toolchain enable gc", "c", SelectorCandidateKind::Value),
-        ("/toolchain enable cm", "ake", SelectorCandidateKind::Value),
-        ("/toolchain enable ni", "nja", SelectorCandidateKind::Value),
-        ("/toolchain enable me", "son", SelectorCandidateKind::Value),
-        ("/toolchain enable sw", "ift", SelectorCandidateKind::Value),
-        ("/toolchain disable rus", "t", SelectorCandidateKind::Value),
         (
-            "/toolchain enable rust --y",
+            "/sandbox toolchains enable er",
+            "lang",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable el",
+            "ixir",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable gh",
+            "c",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable ca",
+            "bal",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable st",
+            "ack",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable oc",
+            "aml",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable ll",
+            "vm",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable gc",
+            "c",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable cm",
+            "ake",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable ni",
+            "nja",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable me",
+            "son",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable sw",
+            "ift",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains disable rus",
+            "t",
+            SelectorCandidateKind::Value,
+        ),
+        (
+            "/sandbox toolchains enable rust --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain disable rust --y",
+            "/sandbox toolchains disable rust --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain enable zig --y",
+            "/sandbox toolchains enable zig --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain enable go --y",
+            "/sandbox toolchains enable go --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain enable deno --y",
+            "/sandbox toolchains enable deno --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain enable bun --y",
+            "/sandbox toolchains enable bun --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain enable node --y",
+            "/sandbox toolchains enable node --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain enable python --y",
+            "/sandbox toolchains enable python --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain enable jdk --y",
+            "/sandbox toolchains enable jdk --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain enable dotnet --y",
+            "/sandbox toolchains enable dotnet --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
         (
-            "/toolchain enable dart --y",
+            "/sandbox toolchains enable dart --y",
             "es",
             SelectorCandidateKind::Flag,
         ),
@@ -833,12 +1057,15 @@ fn selector_completes_dynamic_custom_toolchains_in_valid_positions() {
     let extra = ["status", "detect", "enable", "disable", "remove"]
         .into_iter()
         .map(|subcommand| {
-            SelectorExtraCandidate::after_subcommand(
+            SelectorExtraCandidate::after_nested_subcommand(
                 SelectorSurface::AgentCommand,
-                "toolchain",
+                "sandbox",
+                "toolchains",
                 subcommand,
-                2,
-                matches!(subcommand, "status" | "detect" | "remove").then_some(2),
+                (
+                    3,
+                    matches!(subcommand, "status" | "detect" | "remove").then_some(3),
+                ),
                 matches!(subcommand, "enable" | "disable").then_some("--yes"),
                 SelectorCandidate::new("custom:acme", SelectorCandidateKind::Value, true),
             )
@@ -846,11 +1073,11 @@ fn selector_completes_dynamic_custom_toolchains_in_valid_positions() {
         .collect::<Vec<_>>();
 
     for line in [
-        "/toolchain status custom:a",
-        "/toolchain detect custom:a",
-        "/toolchain enable custom:a",
-        "/toolchain disable custom:a",
-        "/toolchain remove custom:a",
+        "/sandbox toolchains status custom:a",
+        "/sandbox toolchains detect custom:a",
+        "/sandbox toolchains enable custom:a",
+        "/sandbox toolchains disable custom:a",
+        "/sandbox toolchains remove custom:a",
     ] {
         let plan =
             plan_selector_with_extra(SelectorSurface::AgentCommand, line, line.len(), &extra)
@@ -868,8 +1095,8 @@ fn selector_completes_dynamic_custom_toolchains_in_valid_positions() {
     assert!(
         plan_selector_with_extra(
             SelectorSurface::AgentCommand,
-            "/toolchain list custom:a",
-            "/toolchain list custom:a".len(),
+            "/sandbox toolchains list custom:a",
+            "/sandbox toolchains list custom:a".len(),
             &extra,
         )
         .is_none()
@@ -877,8 +1104,8 @@ fn selector_completes_dynamic_custom_toolchains_in_valid_positions() {
     assert!(
         plan_selector_with_extra(
             SelectorSurface::AgentCommand,
-            "/toolchain enable custom:acme custom:a",
-            "/toolchain enable custom:acme custom:a".len(),
+            "/sandbox toolchains enable custom:acme custom:a",
+            "/sandbox toolchains enable custom:acme custom:a".len(),
             &extra,
         )
         .is_none()
@@ -886,8 +1113,8 @@ fn selector_completes_dynamic_custom_toolchains_in_valid_positions() {
     assert!(
         plan_selector_with_extra(
             SelectorSurface::AgentCommand,
-            "/toolchain enable custom:acme --yes custom:a",
-            "/toolchain enable custom:acme --yes custom:a".len(),
+            "/sandbox toolchains enable custom:acme --yes custom:a",
+            "/sandbox toolchains enable custom:acme --yes custom:a".len(),
             &extra,
         )
         .is_none()
@@ -904,7 +1131,10 @@ fn selector_does_not_probe_filesystem_for_toolchain_arguments() {
     ));
     fs::create_dir_all(&directory).unwrap();
     fs::write(directory.join("private-sdk"), b"secret").unwrap();
-    let query = format!("/toolchain define acme --root {}/pri", directory.display());
+    let query = format!(
+        "/sandbox toolchains define acme --root {}/pri",
+        directory.display()
+    );
 
     let plan = plan_selector_with_extra_in_working_directory(
         SelectorSurface::AgentCommand,
@@ -924,8 +1154,8 @@ fn selector_does_not_probe_filesystem_for_toolchain_arguments() {
 fn selector_completes_custom_toolchain_flags_by_position() {
     let define = plan_selector(
         SelectorSurface::AgentCommand,
-        "/toolchain define acme --",
-        "/toolchain define acme --".len(),
+        "/sandbox toolchains define acme --",
+        "/sandbox toolchains define acme --".len(),
     )
     .unwrap();
     for flag in [
@@ -947,8 +1177,8 @@ fn selector_completes_custom_toolchain_flags_by_position() {
 
     let after_singletons = plan_selector(
         SelectorSurface::AgentCommand,
-        "/toolchain define acme --description SDK --yes --",
-        "/toolchain define acme --description SDK --yes --".len(),
+        "/sandbox toolchains define acme --description SDK --yes --",
+        "/sandbox toolchains define acme --description SDK --yes --".len(),
     )
     .unwrap();
     assert!(
@@ -960,16 +1190,16 @@ fn selector_completes_custom_toolchain_flags_by_position() {
     assert!(
         plan_selector(
             SelectorSurface::AgentCommand,
-            "/toolchain define acme --root /",
-            "/toolchain define acme --root /".len(),
+            "/sandbox toolchains define acme --root /",
+            "/sandbox toolchains define acme --root /".len(),
         )
         .is_none()
     );
 
     let remove = plan_selector(
         SelectorSurface::AgentCommand,
-        "/toolchain remove custom:acme --",
-        "/toolchain remove custom:acme --".len(),
+        "/sandbox toolchains remove custom:acme --",
+        "/sandbox toolchains remove custom:acme --".len(),
     )
     .unwrap();
     let remove_flags = remove
@@ -988,34 +1218,43 @@ fn selector_completes_custom_toolchain_flags_by_position() {
 #[test]
 fn selector_hints_custom_toolchain_value_positions() {
     for (line, expected) in [
-        ("/toolchain status ", " [SELECTOR]"),
-        ("/toolchain enable ", " <SELECTOR...> --yes"),
+        ("/sandbox toolchains status ", " [SELECTOR]"),
+        ("/sandbox toolchains enable ", " <SELECTOR...> --yes"),
         (
-            "/toolchain define ",
+            "/sandbox toolchains define ",
             " <NAME> --root <PATH> --path <REF> [--require <REF>] [--env-root <NAME=REF>] [--description <TEXT>] --yes",
         ),
-        ("/toolchain define acme --root ", " <absolute-path>"),
         (
-            "/toolchain define acme --path ",
+            "/sandbox toolchains define acme --root ",
+            " <absolute-path>",
+        ),
+        (
+            "/sandbox toolchains define acme --path ",
             " <root-index:relative-path>",
         ),
         (
-            "/toolchain define acme --env-root ",
+            "/sandbox toolchains define acme --env-root ",
             " <NAME=root-index:relative-path>",
         ),
-        ("/toolchain define acme --description ", " <text>"),
-        ("/toolchain remove ", " <custom:NAME> [--disable] --yes"),
-        ("/toolchain remove custom:acme --disable ", " --yes"),
+        ("/sandbox toolchains define acme --description ", " <text>"),
+        (
+            "/sandbox toolchains remove ",
+            " <custom:NAME> [--disable] --yes",
+        ),
+        (
+            "/sandbox toolchains remove custom:acme --disable ",
+            " --yes",
+        ),
     ] {
         let hint = shadow_hint(SelectorSurface::AgentCommand, line, line.len()).unwrap();
         assert_eq!(hint.text, expected, "{line}");
     }
 
     for line in [
-        "/toolchain list ",
-        "/toolchain reload ",
-        "/toolchain remove custom:acme --disable --yes ",
-        "/toolchain define acme --root /opt/acme --path 0:bin --yes ",
+        "/sandbox toolchains list ",
+        "/sandbox toolchains reload ",
+        "/sandbox toolchains remove custom:acme --disable --yes ",
+        "/sandbox toolchains define acme --root /opt/acme --path 0:bin --yes ",
     ] {
         assert!(
             shadow_hint(SelectorSurface::AgentCommand, line, line.len()).is_none(),
@@ -1064,8 +1303,12 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
         "/latency ".len(),
     )
     .unwrap();
-    let trust_hint =
-        shadow_hint(SelectorSurface::AgentCommand, "/trust ", "/trust ".len()).unwrap();
+    let trust_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/sandbox trust ",
+        "/sandbox trust ".len(),
+    )
+    .unwrap();
     let personality_hint = shadow_hint(
         SelectorSurface::AgentCommand,
         "/personality ",
@@ -1080,14 +1323,14 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
     .unwrap();
     let toolchain_hint = shadow_hint(
         SelectorSurface::AgentCommand,
-        "/toolchain ",
-        "/toolchain ".len(),
+        "/sandbox toolchains ",
+        "/sandbox toolchains ".len(),
     )
     .unwrap();
 
     assert_eq!(loop_hint.text, " [--fork|--new] [--limit <int>] <prompt>");
     assert_eq!(latency_hint.text, " <slow|default|fast>");
-    assert_eq!(trust_hint.text, " <project-root|latest|list|pending>");
+    assert_eq!(trust_hint.text, " [project-root|latest|list|pending]");
     assert_eq!(routing_hint.text, " <on|off|toggle|status|policy>");
     assert_eq!(
         toolchain_hint.text,

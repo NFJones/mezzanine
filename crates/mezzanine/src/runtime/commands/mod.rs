@@ -71,6 +71,7 @@ mod model_catalog;
 mod preferences;
 mod remember;
 mod resume;
+mod sandbox;
 mod shell;
 mod show_records;
 mod slash;
@@ -431,7 +432,7 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Executes `/trust` by trusting a pending request or explicit project root.
+    /// Executes `/sandbox trust` for a pending request or explicit project root.
     ///
     /// Trust decisions reuse the runtime `project/trust/decide` path so the
     /// trust database, config-layer reload, lifecycle events, and audit records
@@ -454,7 +455,22 @@ impl RuntimeSessionService {
             })?;
         let slash = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("trust command must be a slash command"))?;
-        let args = slash.args.trim();
+        let args = match slash.name.as_str() {
+            "sandbox" => slash
+                .args
+                .strip_prefix("trust")
+                .filter(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace))
+                .map(str::trim_start)
+                .ok_or_else(|| {
+                    MezError::invalid_args("trust executor received another sandbox command")
+                })?,
+            "trust" => slash.args.trim(),
+            _ => {
+                return Err(MezError::invalid_args(
+                    "trust executor received another slash command",
+                ));
+            }
+        };
         let pending = self.pending_project_trust_requests_for_agent_work();
         if matches!(args, "list" | "pending") {
             return Ok(AgentShellCommandOutcome::Display {

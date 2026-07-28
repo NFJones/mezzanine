@@ -6,21 +6,23 @@ use mez_agent::memory::SessionMemoryStore;
 use mez_agent::permissions::{BlockedApprovalQueue, PermissionPolicy, SessionApprovalStore};
 use mez_agent::{ApprovalPolicy, PermissionPreset};
 
-use crate::runtime::config::ConfiguredPermissions;
+use crate::runtime::config::{ConfiguredPermissions, SandboxConfig};
 
 /// Sparse live permission fields explicitly owned by one pane.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PanePermissionOverride {
     /// Optional pane-subtree permission preset override.
     pub(crate) preset: Option<PermissionPreset>,
     /// Optional pane-subtree approval-policy override.
     pub(crate) approval_policy: Option<ApprovalPolicy>,
+    /// Optional sandbox backend owned only by this exact pane.
+    pub(crate) sandbox: Option<SandboxConfig>,
 }
 
 impl PanePermissionOverride {
     /// Returns whether neither pane-subtree field is overridden.
-    fn is_empty(self) -> bool {
-        self.preset.is_none() && self.approval_policy.is_none()
+    fn is_empty(&self) -> bool {
+        self.preset.is_none() && self.approval_policy.is_none() && self.sandbox.is_none()
     }
 }
 
@@ -53,7 +55,7 @@ impl RuntimeSecurityState {
     }
 
     pub(super) fn pane_permission_override(&self, pane_id: &str) -> Option<PanePermissionOverride> {
-        self.pane_permission_overrides.get(pane_id).copied()
+        self.pane_permission_overrides.get(pane_id).cloned()
     }
 
     pub(super) fn set_pane_permission_preset_override(
@@ -81,6 +83,21 @@ impl RuntimeSecurityState {
             .entry(pane_id.to_string())
             .or_default();
         entry.approval_policy = value;
+        if entry.is_empty() {
+            self.pane_permission_overrides.remove(pane_id);
+        }
+    }
+
+    pub(super) fn set_pane_sandbox_override(
+        &mut self,
+        pane_id: &str,
+        value: Option<SandboxConfig>,
+    ) {
+        let entry = self
+            .pane_permission_overrides
+            .entry(pane_id.to_string())
+            .or_default();
+        entry.sandbox = value;
         if entry.is_empty() {
             self.pane_permission_overrides.remove(pane_id);
         }

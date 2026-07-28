@@ -613,7 +613,7 @@ impl RuntimeSessionService {
             self.append_primary_lifecycle_event(
                 EventKind::ConfigChanged,
                 format!(
-                    r#"{{"project_root":"{}","state":"pending","blocks_until_primary_decision":true,"overlay_files":[{}],"prompt":"project trust decision required","approve_method":"project/trust/decide","reject_method":"project/trust/decide","trust_command":"/trust {}"}}"#,
+                    r#"{{"project_root":"{}","state":"pending","blocks_until_primary_decision":true,"overlay_files":[{}],"prompt":"project trust decision required","approve_method":"project/trust/decide","reject_method":"project/trust/decide","trust_command":"/sandbox trust {}"}}"#,
                     json_escape(&root.to_string_lossy()),
                     overlay_json,
                     json_escape(&root.to_string_lossy())

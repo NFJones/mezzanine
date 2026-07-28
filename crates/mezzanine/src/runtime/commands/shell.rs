@@ -617,11 +617,25 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
-                    && command == "trust"
+                    && command == "sandbox"
                 {
-                    let trust_outcome =
-                        self.execute_agent_shell_trust_command(primary_client_id, &pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&trust_outcome))
+                    let sandbox_outcome = self
+                        .execute_agent_shell_sandbox_command(
+                            primary_client_id,
+                            &pane_id,
+                            input,
+                            origin,
+                        )
+                        .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
+                            command: "sandbox".to_string(),
+                            body: format!("Sandbox error: {}", error.message()),
+                            presentation: AgentShellPresentation::ErrorNotice,
+                        });
+                    runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        Some(&sandbox_outcome),
+                    )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
                     && command == "memory"
@@ -632,27 +646,6 @@ impl RuntimeSessionService {
                         &pane_id,
                         input,
                         Some(&memory_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "toolchain"
-                {
-                    let toolchain_outcome = self
-                        .execute_agent_shell_toolchain_command(
-                            primary_client_id,
-                            &pane_id,
-                            input,
-                            origin,
-                        )
-                        .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
-                            command: "toolchain".to_string(),
-                            body: format!("Toolchain error: {}", error.message()),
-                            presentation: AgentShellPresentation::ErrorNotice,
-                        });
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&toolchain_outcome),
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()

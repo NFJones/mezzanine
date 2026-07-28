@@ -204,13 +204,14 @@ impl RuntimeSessionService {
         )?;
         let mut sandbox_audit_summary = None;
         let mut managed_home_activity_lock = None;
+        let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
-            &self.configured_permissions().sandbox,
+            &sandbox_config,
             &permission_policy,
         );
         let sandbox_bypassed = bubblewrap_applies
             && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
-        if let SandboxConfig::Bubblewrap(config) = self.configured_permissions().sandbox.clone()
+        if let SandboxConfig::Bubblewrap(config) = sandbox_config
             && bubblewrap_applies
             && !sandbox_bypassed
         {
@@ -522,8 +523,9 @@ impl RuntimeSessionService {
         evaluation: Option<&PermissionEvaluation>,
     ) -> Result<bool> {
         let permission_policy = self.permission_policy_for_turn(turn);
+        let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         if !crate::runtime::config::bubblewrap_applies_to_policy(
-            &self.configured_permissions().sandbox,
+            &sandbox_config,
             &permission_policy,
         ) {
             return Ok(true);
@@ -559,7 +561,7 @@ impl RuntimeSessionService {
             },
             None => self.path_scopes_for_pane(&turn.pane_id).ok_or_else(|| {
                 MezError::invalid_state(
-                    "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or review the project and run /trust <project-root>",
+                    "Bubblewrap filesystem authority is unavailable: configure permissions.read_scopes/write_scopes or review the project and run /sandbox trust <project-root>",
                 )
             })?,
         };
@@ -810,6 +812,23 @@ impl RuntimeSessionService {
     /// Resolves the effective policy for one pane through active delegation lineage.
     pub(crate) fn permission_policy_for_pane(&self, pane_id: &str) -> PermissionPolicy {
         self.permission_policy_status_for_pane(pane_id).policy
+    }
+
+    /// Resolves the exact pane's sandbox override over the persisted global
+    /// backend. Sandbox overrides deliberately do not inherit through agent
+    /// lineage, so one pane cannot change confinement for a sibling or child.
+    pub(crate) fn sandbox_config_for_pane(&self, pane_id: &str) -> SandboxConfig {
+        self.integration
+            .pane_permission_override(pane_id)
+            .and_then(|override_fields| override_fields.sandbox)
+            .unwrap_or_else(|| self.configured_permissions().sandbox.clone())
+    }
+
+    /// Returns whether the exact pane owns an explicit sandbox override.
+    pub(crate) fn pane_has_sandbox_override(&self, pane_id: &str) -> bool {
+        self.integration
+            .pane_permission_override(pane_id)
+            .is_some_and(|override_fields| override_fields.sandbox.is_some())
     }
 
     /// Resolves sparse overrides from the target agent toward its root.

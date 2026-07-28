@@ -476,8 +476,8 @@ sandbox = "policy-only"
 # detect with `--kind rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift`, then enable ordered
 # built-in or `custom:<name>` selectors with
 # `mez sandbox toolchains enable SELECTOR... --yes`.
-# Existing services then require `/toolchain reload`, `config/reload`, or a
-# restart; `/toolchain enable KIND --yes` hot-applies subsequent actions.
+# Existing services then require `/sandbox toolchains reload`, `config/reload`,
+# or a restart; `/sandbox toolchains enable KIND --yes` hot-applies subsequent actions.
 # toolchains = ["rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "maven", "gradle", "dotnet", "dart", "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack", "ocaml", "llvm", "gcc", "cmake", "ninja", "meson", "swift"]
 # Custom toolchains are primary-user constrained definitions. They may be
 # managed with `mez sandbox toolchains custom define/remove`, but every CLI

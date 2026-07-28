@@ -108,6 +108,22 @@ impl SandboxConfig {
             Self::Bubblewrap(_) => "bubblewrap",
         }
     }
+
+    /// Builds the code-owned fail-closed Bubblewrap defaults used when a pane
+    /// enables confinement without an existing global Bubblewrap profile.
+    pub(crate) fn default_bubblewrap() -> Self {
+        Self::Bubblewrap(BubblewrapConfig {
+            executable: "/usr/bin/bwrap".to_string(),
+            unavailable: SandboxUnavailablePolicy::Fail,
+            network: BubblewrapNetworkMode::Isolated,
+            environment: SandboxEnvironmentPolicy::Minimal,
+            git_user_name: None,
+            git_user_email: None,
+            toolchains: Vec::new(),
+            toolchain_selections: Vec::new(),
+            custom_toolchains: BTreeMap::new(),
+        })
+    }
 }
 
 /// Reports whether configured Bubblewrap confinement applies to one effective

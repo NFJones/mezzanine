@@ -160,6 +160,15 @@ impl RuntimeIntegrationComponent {
             .set_pane_approval_policy_override(pane_id, value);
     }
 
+    /// Sets or clears the sandbox backend owned only by one exact pane.
+    pub(crate) fn set_pane_sandbox_override(
+        &mut self,
+        pane_id: &str,
+        value: Option<crate::runtime::SandboxConfig>,
+    ) {
+        self.security.set_pane_sandbox_override(pane_id, value);
+    }
+
     /// Removes every explicit permission field owned by one pane.
     pub(crate) fn remove_pane_permission_override(&mut self, pane_id: &str) {
         self.security.remove_pane_permission_override(pane_id);

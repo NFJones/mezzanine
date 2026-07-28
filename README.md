@@ -311,7 +311,7 @@ Useful slash commands include:
 | `/list-mcp`    | List configured MCP tools.                            |
 | `/list-personalities` | Browse configured personalities and select one for the active pane. |
 | `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions; persistent memory is enabled by default. |
-| `/toolchain`   | Inspect, detect, enable, disable, or fully reload typed sandbox toolchains for the active pane. |
+| `/sandbox`     | Inspect or change sandbox state for the current pane; use `--global` for persisted enable/disable changes, or the nested `trust` and `toolchains` commands. |
 | `/show-context` | Browse the current pane conversation in transcript order, open individual entries, and delete the selected entry with `d`. |
 | `/show-issues` | Browse open project issues, filter issue records, open details, delete with `d` when no open issue depends on the selection, and save the rendered Markdown view. |
 | `/show-memories` | Browse project-scoped persistent memories, filter records, open details, delete the selection with `d`, and save the rendered Markdown view. |
@@ -501,28 +501,38 @@ Current support reflects behavior implemented in the repository today.
   packages, Python package credentials and host caches, `GOBIN`, and
   `GOPATH/bin` remain hidden. Node.js does not
   implicitly add repository `node_modules/.bin` to PATH.
-  After submission, enter the displayed `/toolchain confirm REQUEST DIGEST
-  --yes` command directly in the attached primary client, or reject it with
-  `/toolchain reject REQUEST DIGEST`. Requests fail closed when the primary is
-  absent, the digest or pane differs, configuration changed, the request
-  expired, or it was already settled.
-- In the agent shell, `/toolchain` and `/toolchain status` report supported,
-  configured, discoverable, and effective state for the active pane.
-  `/toolchain detect [rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]` is read-only and uses
+  After submission, enter the displayed
+  `/sandbox toolchains confirm REQUEST DIGEST --yes` command directly in the
+  attached primary client, or reject it with
+  `/sandbox toolchains reject REQUEST DIGEST`. Requests fail closed when the
+  primary is absent, the digest or pane differs, configuration changed, the
+  request expired, or it was already settled.
+- In the agent shell, `/sandbox` and `/sandbox status` report the effective
+  backend and its pane-override or global-default provenance. `/sandbox enable
+  --yes` and `/sandbox disable --yes` affect only the current pane and do not
+  persist configuration; adding `--global` changes the persisted default for
+  panes without local overrides. `/sandbox status --global` inspects only that
+  persisted default. Advanced setup, profile, and cache workflows remain
+  available only through the `mez sandbox` CLI.
+- `/sandbox toolchains` and `/sandbox toolchains status` report supported,
+  configured, discoverable, and effective toolchain state for the active pane.
+  `/sandbox toolchains detect [rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]`
+  is read-only and uses
   active-pane bootstrap evidence or the pane's trusted project root for OCaml
   and Maven/Gradle wrappers.
-  `/toolchain define NAME ... --yes`, ordered
-  `/toolchain enable SELECTOR... --yes`, `/toolchain disable SELECTOR... --yes`,
-  and `/toolchain remove custom:NAME [--disable] --yes` require direct
+  `/sandbox toolchains define NAME ... --yes`, ordered
+  `/sandbox toolchains enable SELECTOR... --yes`,
+  `/sandbox toolchains disable SELECTOR... --yes`,
+  and `/sandbox toolchains remove custom:NAME [--disable] --yes` require direct
   authenticated primary input. They atomically persist and hot-apply real
   changes to subsequent sandboxed actions. Existing interactive shells
-  and already-running actions are unchanged. `/toolchain reload` performs a
-  full disk-backed configuration reload rather than reloading only the
-  toolchain field. Status, list, and detection open structured Markdown in the
-  searchable, copyable command pager. Mutations and reloads use concise
-  transient notices, failures use transient error notices, and `/toolchain`
-  output is never appended to pane history. Toolchains remain a typed
-  allowlist, not arbitrary PATH or host-mount configuration.
+  and already-running actions are unchanged. `/sandbox toolchains reload`
+  performs a full disk-backed configuration reload rather than reloading only
+  the toolchain field. Status, list, and detection open structured Markdown in
+  the searchable, copyable command pager. Mutations and reloads use concise
+  transient notices, failures use transient error notices, and
+  `/sandbox toolchains` output is never appended to pane history. Toolchains
+  remain a typed allowlist, not arbitrary PATH or host-mount configuration.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks
@@ -747,9 +757,9 @@ it in provider requests. The discovery filenames are configurable under
 Project overlays are discovered from the project root and remain pending until
 the primary client trusts or rejects them. Use `mez sandbox trust list` to see
 records and `mez sandbox trust add PATH` to trust a root. In the pane-local
-agent shell, `/trust PATH` trusts an explicit project root (with relative paths
-resolved from the active pane), while `/trust`, `/trust latest`, and `/trust
-list` manage pending requests.
+agent shell, `/sandbox trust PATH` trusts an explicit project root (with
+relative paths resolved from the active pane), while `/sandbox trust`,
+`/sandbox trust latest`, and `/sandbox trust list` manage pending requests.
 
 ### What happens when a command needs approval?
 

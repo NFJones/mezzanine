@@ -795,13 +795,14 @@ impl RuntimeSessionService {
         if let Some(scope) = self.subagent_scope_declaration(parent_agent_id) {
             return Some(scope);
         }
+        let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
+        let sandbox_config = self.sandbox_config_for_pane(parent_pane_id.as_str());
         if !crate::runtime::config::bubblewrap_applies_to_policy(
-            &self.configured_permissions().sandbox,
+            &sandbox_config,
             &self.permission_policy_for_agent(parent_agent_id),
         ) {
             return None;
         }
-        let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
         let current_directory = self
             .pane_current_working_directory(parent_pane_id.as_str())
             .map(|path| path.to_string_lossy().into_owned())

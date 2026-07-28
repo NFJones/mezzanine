@@ -602,12 +602,12 @@ impl RuntimeSessionService {
                 ]
                 .into_iter()
                 .map(move |(subcommand, minimum, maximum, terminal)| {
-                    SelectorExtraCandidate::after_subcommand(
+                    SelectorExtraCandidate::after_nested_subcommand(
                         SelectorSurface::AgentCommand,
-                        "toolchain",
+                        "sandbox",
+                        "toolchains",
                         subcommand,
-                        minimum,
-                        maximum,
+                        (minimum + 1, maximum.map(|maximum| maximum + 1)),
                         terminal,
                         SelectorCandidate::new(
                             selector.clone(),

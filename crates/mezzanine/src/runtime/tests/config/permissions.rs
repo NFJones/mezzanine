@@ -1155,7 +1155,9 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     assert!(
         primary_events.iter().any(|event| {
             event.kind == EventKind::ConfigChanged
-                && event.payload.contains(r#""trust_command":"/trust "#)
+                && event
+                    .payload
+                    .contains(r#""trust_command":"/sandbox trust "#)
                 && event
                     .payload
                     .contains(&json_escape(&root.to_string_lossy()))
@@ -1182,10 +1184,13 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
         .join("\n");
     assert!(pane_text.contains("project trust pending:"), "{pane_text}");
     let collapsed_agent_wraps = pane_text.replace("\n▐ ", "");
-    assert!(collapsed_agent_wraps.contains("/trust"), "{pane_text}");
+    assert!(
+        collapsed_agent_wraps.contains("/sandbox trust"),
+        "{pane_text}"
+    );
 
     let trust = service
-        .execute_agent_shell_command(&primary, "/trust")
+        .execute_agent_shell_command(&primary, "/sandbox trust")
         .unwrap();
 
     assert!(trust.contains(r#""kind":"mutated""#), "{trust}");
@@ -1200,7 +1205,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies `/trust` accepts a relative nested file path for a project without
+/// Verifies `/sandbox trust` accepts a relative nested file path for a project without
 /// a pending overlay and persists trust for the canonical Git root.
 ///
 /// This regression protects explicit project trust from regressing to the
@@ -1226,7 +1231,7 @@ fn runtime_agent_trust_command_trusts_explicit_relative_project_path() {
         .unwrap();
 
     let trust = service
-        .execute_agent_shell_command(&primary, "/trust main.rs")
+        .execute_agent_shell_command(&primary, "/sandbox trust main.rs")
         .unwrap();
 
     assert!(trust.contains(r#""kind":"mutated""#), "{trust}");

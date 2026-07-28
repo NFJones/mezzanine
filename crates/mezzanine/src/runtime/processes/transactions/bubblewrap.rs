@@ -77,14 +77,14 @@ impl RuntimeSessionService {
         action_id: &str,
     ) -> Result<bool> {
         let permission_policy = self.permission_policy_for_turn(turn);
+        let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         if !crate::runtime::config::bubblewrap_applies_to_policy(
-            &self.configured_permissions().sandbox,
+            &sandbox_config,
             &permission_policy,
         ) {
             return Ok(true);
         }
-        let SandboxConfig::Bubblewrap(config) = self.configured_permissions().sandbox.clone()
-        else {
+        let SandboxConfig::Bubblewrap(config) = sandbox_config else {
             return Ok(true);
         };
         let signature = self

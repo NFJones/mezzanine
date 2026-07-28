@@ -998,8 +998,9 @@ impl RuntimeSessionService {
                 .permission_evaluation
                 .clone();
             let permission_policy = self.permission_policy_for_turn(turn);
+            let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
             let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
-                &self.configured_permissions().sandbox,
+                &sandbox_config,
                 &permission_policy,
             );
             let sandbox_bypassed = bubblewrap_applies
@@ -1345,7 +1346,7 @@ impl RuntimeSessionService {
         let failure_message = if stage.starts_with("bubblewrap_")
             || (stage == "shell_dispatch"
                 && matches!(
-                    self.configured_permissions().sandbox,
+                    self.sandbox_config_for_pane(&turn.pane_id),
                     SandboxConfig::Bubblewrap(_)
                 )) {
             crate::security::sandbox::bubblewrap_failure_remediation(error.message())
