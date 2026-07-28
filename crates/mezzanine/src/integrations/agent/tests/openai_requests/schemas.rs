@@ -423,7 +423,15 @@ fn openai_responses_request_body_describes_apply_patch_format() {
     );
     assert!(description.contains("relative safe paths"), "{description}");
     assert!(
-        description.contains("paths must not be absolute"),
+        description.contains("absolute paths are allowed only inside"),
+        "{description}"
+    );
+    assert!(
+        description.contains("effective configured sandbox write scopes"),
+        "{description}"
+    );
+    assert!(
+        description.contains("otherwise paths must be relative"),
         "{description}"
     );
     assert!(description.contains(".. traversal"), "{description}");

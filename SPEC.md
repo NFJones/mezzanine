@@ -2828,9 +2828,10 @@ within an explicitly trusted project MUST receive that project root as its
 default read-write authority. When multiple trusted roots contain the pane
 working directory, Mezzanine MUST select the deepest matching root; no other
 working directory MAY infer authority. Aside from that trusted-project default,
-semantic `apply_patch` actions and other sandboxed writes MUST use every
-configured write scope, rather than constraining writes to a trusted-project
-root.
+semantic `apply_patch` actions MUST retain every effective write scope in their
+Bubblewrap launch rather than narrowing mounts to classified patch effects or a
+trusted-project root. Other sandboxed writes MAY retain or narrow configured
+authority according to their complete classified effects.
 scopes MUST NOT be inferred from command patterns, approvals, presets, or
 trusted directories. Independently classified filesystem operands are advisory
 observations for authorization context, approval, audit, and display. They MUST
@@ -4840,12 +4841,15 @@ The baseline action types are:
    Agents that need entirely non-Mezzanine diff application (such as applying
    patches through a different internal grammar) MUST use `shell_command`
    with an explicit tool such as `git apply`.
-  Canonical paths in Mezzanine patch headers MUST be relative to the pane
-  current working directory and MUST NOT be empty, absolute, contain empty path
-  segments, or contain `..` traversal segments. Models SHOULD omit `./`,
-  git-diff `a/`/`b/` prefixes, and `.` path segments in canonical output, but
-  implementations MAY normalize those safe compatibility forms before applying
-  the same safety checks. This action is the only model-facing semantic action
+  Canonical paths in Mezzanine patch headers SHOULD be relative to the pane
+  current working directory. With active non-bypassed Bubblewrap, absolute
+  headers MAY address targets inside the turn's effective canonical write
+  scopes. Policy-only and sandbox-bypassed execution MUST reject absolute
+  headers. Paths MUST NOT be empty, root-only, contain empty path segments, or
+  contain `..` traversal segments. Models SHOULD omit `./`, git-diff `a/`/`b/`
+  prefixes, and `.` path segments in canonical output, but implementations MAY
+  normalize those safe compatibility forms before applying the same safety and
+  runtime-authorization checks. This action is the only model-facing semantic action
   for file-content mutations, including file creation, update, deletion, moves
   with content changes, append-like additions, and intentional whole-file
   replacement.
@@ -5079,12 +5083,14 @@ blocked patch application fails quickly enough for the model to repair the
 turn. Generated `apply_patch` commands MUST NOT use shell heredoc or here-string
 redirections internally. Mezzanine patch blocks MUST be the only accepted
 semantic patch format. The patch helper MUST resolve symlinks fully before
-making filesystem safety decisions. It MUST reject targets whose resolved path
-escapes the pane current working directory or resolves to a non-regular
-filesystem node, and it MUST do so before reading from or writing to that node
-so special filesystem nodes cannot stall the patch helper. When a symlink
-resolves to a regular file inside the pane current working directory, the
-helper MAY patch the resolved target, but it MUST re-resolve the path and verify
+making filesystem safety decisions. Under active non-bypassed Bubblewrap, it
+MUST reject targets whose resolved path escapes every effective canonical write
+scope. Under policy-only or sandbox-bypassed execution, it MUST reject absolute
+headers and targets whose resolved path escapes the pane current working
+directory. It MUST reject non-regular filesystem nodes before reading from or
+writing to them so special nodes cannot stall the patch helper. When a symlink
+resolves to a regular file inside the active path boundary, the helper MAY
+patch the resolved target, but it MUST re-resolve the path and verify
 the preimage bytes immediately before writing final bytes so races or symlink
 retargeting fail safely.
 Shell-backed semantic local actions MUST use the pane shell only as the
@@ -7855,9 +7861,11 @@ behavior or the intended replacement is already present. It MUST state that raw
 unified diffs are accepted by `apply_patch` and will be auto-converted to
 Mezzanine patch format; agents that need entirely non-Mezzanine diff
 application MUST use an explicit shell command such as `git apply`.
-It MUST state that `apply_patch` path headers are relative to the pane current
-working directory and cannot use absolute paths or `..`, while other semantic
-file actions MAY still use valid absolute paths when policy permits. For other
+It MUST state that `apply_patch` path headers should be relative to the pane
+current working directory and cannot use `..`. It MUST state that active
+non-bypassed Bubblewrap additionally permits absolute targets inside effective
+configured sandbox write scopes, while policy-only and sandbox-bypassed
+execution reject absolute patch headers. For other
 local path fields, the prompt SHOULD recommend relative paths for targets under
 the repository root, or under the pane current working directory when no
 repository is active, and absolute paths for targets above or outside that root.

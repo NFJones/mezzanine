@@ -771,18 +771,29 @@ fn consume_ascii_number(text: &str) -> Option<(usize, &str)> {
 
 fn clean_mez_patch_path(raw: &str) -> SemanticPatchResult<String> {
     let mut raw = raw.trim();
-    raw = raw
-        .strip_prefix("a/")
-        .or_else(|| raw.strip_prefix("b/"))
-        .unwrap_or(raw);
-    while let Some(stripped) = raw.strip_prefix("./") {
-        raw = stripped;
+    if raw.contains('\0') {
+        return apply_patch_parse_error(&format!("unsafe patch path: {raw}"));
     }
-    if raw.is_empty() || raw.starts_with('/') {
+    let absolute = raw.starts_with('/');
+    if !absolute {
+        raw = raw
+            .strip_prefix("a/")
+            .or_else(|| raw.strip_prefix("b/"))
+            .unwrap_or(raw);
+        while let Some(stripped) = raw.strip_prefix("./") {
+            raw = stripped;
+        }
+    }
+    if raw.is_empty() || raw == "/" {
         return apply_patch_parse_error(&format!("unsafe patch path: {raw}"));
     }
     let mut parts = Vec::new();
-    for part in raw.split('/') {
+    let path_body = if absolute {
+        raw.strip_prefix('/').unwrap_or(raw)
+    } else {
+        raw
+    };
+    for part in path_body.split('/') {
         match part {
             "" | ".." => return apply_patch_parse_error(&format!("unsafe patch path: {raw}")),
             "." => {}
@@ -792,7 +803,12 @@ fn clean_mez_patch_path(raw: &str) -> SemanticPatchResult<String> {
     if parts.is_empty() {
         return apply_patch_parse_error(&format!("unsafe patch path: {raw}"));
     }
-    Ok(parts.join("/"))
+    let normalized = parts.join("/");
+    Ok(if absolute {
+        format!("/{normalized}")
+    } else {
+        normalized
+    })
 }
 
 #[cfg(test)]

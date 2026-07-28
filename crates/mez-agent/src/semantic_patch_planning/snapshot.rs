@@ -39,6 +39,8 @@ enum ApplyPatchSnapshotState {
     NonRegular,
     /// The resolved path escapes the current working directory.
     OutsideCwd,
+    /// The resolved path escapes all configured sandbox write scopes.
+    OutsideWriteScopes,
     /// The shell could not resolve the target path.
     Error,
 }
@@ -184,6 +186,7 @@ pub(super) fn parse_apply_patch_snapshot_output(
             "missing" => ApplyPatchSnapshotState::Missing,
             "non_regular" => ApplyPatchSnapshotState::NonRegular,
             "outside_cwd" => ApplyPatchSnapshotState::OutsideCwd,
+            "outside_write_scopes" => ApplyPatchSnapshotState::OutsideWriteScopes,
             _ => ApplyPatchSnapshotState::Error,
         };
         if lines.get(index) != Some(&APPLY_PATCH_FILE_END_MARKER) {
@@ -256,6 +259,10 @@ pub(super) fn snapshot_text_state(
         ))),
         ApplyPatchSnapshotState::OutsideCwd => Err(MezError::invalid_args(format!(
             "apply_patch: resolved path is outside current working directory: {}",
+            snapshot.path
+        ))),
+        ApplyPatchSnapshotState::OutsideWriteScopes => Err(MezError::invalid_args(format!(
+            "apply_patch: resolved path is outside configured sandbox write scopes: {}",
             snapshot.path
         ))),
         ApplyPatchSnapshotState::Error => Err(MezError::invalid_args(format!(

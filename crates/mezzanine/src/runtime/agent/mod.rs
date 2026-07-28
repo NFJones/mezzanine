@@ -69,9 +69,9 @@ use mez_agent::CooperationMode;
 use mez_agent::resolve_provider_api;
 use mez_agent::routed_workflow::RoutedWorkflowState;
 use mez_agent::semantic_patch_planning::{
-    ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
-    apply_patch_touched_paths, apply_patch_transaction_phase,
-    apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
+    ApplyPatchPathBoundary, ApplyPatchTransactionPhase, apply_patch_error_plan,
+    apply_patch_read_plan_for_paths_with_boundary, apply_patch_touched_paths,
+    apply_patch_transaction_phase, apply_patch_write_plan_from_read_outputs_with_boundary,
 };
 use mez_agent::{
     ActiveWriteScope, AgentContext, AgentNetworkActionHistory, AgentShellDispatchHistory,

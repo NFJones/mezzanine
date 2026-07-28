@@ -287,6 +287,10 @@ impl RuntimeSessionService {
                     network_policy: self.configured_permissions().resources.network_policy,
                     maximum_authority: &maximum_authority,
                     permission_evaluation: evaluation,
+                    preserve_maximum_authority: matches!(
+                        action.payload,
+                        AgentActionPayload::ApplyPatch { .. }
+                    ),
                     child_shell_path: &signature.shell_path,
                     command_file_host_path:
                         crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
@@ -664,6 +668,28 @@ impl RuntimeSessionService {
         primary
             .intersection(&child)
             .map_err(|error| MezError::invalid_state(error.message()))
+    }
+
+    /// Returns the filesystem boundary semantic patch planning must enforce
+    /// for the action's live sandbox mode.
+    pub(crate) fn apply_patch_path_boundary_for_action(
+        &self,
+        turn: &AgentTurnRecord,
+        action_id: &str,
+    ) -> Result<super::ApplyPatchPathBoundary> {
+        let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
+        let permission_policy = self.permission_policy_for_turn(turn);
+        let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
+            &sandbox_config,
+            &permission_policy,
+        );
+        if !bubblewrap_applies || self.sandbox_bypass_active_for_action(&turn.turn_id, action_id) {
+            return Ok(super::ApplyPatchPathBoundary::CurrentDirectoryOnly);
+        }
+        let scopes = self.bubblewrap_maximum_path_scopes_for_turn(turn)?;
+        Ok(super::ApplyPatchPathBoundary::SandboxWriteScopes(
+            scopes.write_scopes,
+        ))
     }
 
     /// Runs the require pane ready for agent command operation for this subsystem.

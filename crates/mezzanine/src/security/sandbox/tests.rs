@@ -133,6 +133,7 @@ fn request<'a>(
         network_policy: NetworkPolicy::Prompt,
         maximum_authority: authority,
         permission_evaluation: evaluation,
+        preserve_maximum_authority: false,
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
         managed_home_host_path: None,
@@ -464,6 +465,42 @@ fn complete_effects_narrow_and_hash_deterministically() {
             .windows(3)
             .any(|args| args == ["--ro-bind", "/workspace", "/workspace"])
     );
+}
+
+/// Complete semantic-patch effects retain every configured writable mount.
+///
+/// Patch target authorization happens in the generated read and write phases,
+/// so Bubblewrap must expose the complete effective write authority rather than
+/// narrowing the namespace to classifier evidence for the synthetic command.
+#[test]
+fn semantic_patch_preserves_maximum_write_authority() {
+    let config = config();
+    let mut authority = authority();
+    authority.write_scopes = vec![
+        "/workspace/target".to_string(),
+        "/workspace/generated".to_string(),
+    ];
+    let mut complete = effects();
+    complete.writes.push("target/one.txt".to_string());
+    let evaluation = evaluation(EffectCompleteness::Complete, complete);
+    let mut request = request(&config, &authority, &evaluation);
+    request.preserve_maximum_authority = true;
+
+    let plan = compile_bubblewrap_launch_plan(request).unwrap();
+
+    assert_eq!(
+        plan.audit_summary.authority_source,
+        SandboxAuthoritySource::Maximum
+    );
+    for path in ["/workspace/target", "/workspace/generated"] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--bind", path, path]),
+            "missing writable mount for {path}: {:?}",
+            plan.arguments
+        );
+    }
 }
 
 /// A nested read-only effect remains mounted after a writable parent so the

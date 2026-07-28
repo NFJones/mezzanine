@@ -270,6 +270,8 @@ pub(crate) struct RuntimePathResolutionCacheKey {
 /// phase from the accumulated snapshot outputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeApplyPatchBatchState {
+    /// Filesystem boundary selected from the action's live sandbox mode.
+    pub(crate) path_boundary: mez_agent::semantic_patch_planning::ApplyPatchPathBoundary,
     /// Paths that still need read-phase snapshots.
     pub(crate) remaining_paths: Vec<String>,
     /// Path owned by the currently running one-file read transaction.
@@ -296,6 +298,8 @@ pub(crate) struct RuntimeApplyPatchBatchState {
 pub(crate) struct RuntimePendingApplyPatchPhase {
     /// Exact generated plan awaiting the pre-shell hook or final dispatch.
     pub(crate) plan: LocalActionPlan,
+    /// Filesystem boundary embedded in the generated plan.
+    pub(crate) path_boundary: mez_agent::semantic_patch_planning::ApplyPatchPathBoundary,
 }
 
 /// Carries Running Shell Transaction Kind state for this subsystem.

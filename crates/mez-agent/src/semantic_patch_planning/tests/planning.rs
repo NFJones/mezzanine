@@ -481,3 +481,114 @@ fn semantic_apply_patch_write_plan_accepts_accumulated_read_snapshots() {
     );
     std::fs::remove_dir_all(&temp).unwrap();
 }
+
+#[test]
+/// Verifies an active sandbox boundary can patch an absolute target outside CWD.
+///
+/// The semantic planner must authorize the target against every effective
+/// write scope in both phases rather than implicitly constraining it to the
+/// pane working directory.
+fn semantic_apply_patch_uses_sandbox_write_scopes_for_absolute_targets() {
+    let root = test_temp_dir("semantic-patch-sandbox-write-scopes");
+    let cwd = root.join("cwd");
+    let writable = root.join("external");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&writable).unwrap();
+    let target = writable.join("note.txt");
+    let patch = add_file_patch(target.to_str().unwrap(), "scoped\n");
+    let boundary =
+        ApplyPatchPathBoundary::SandboxWriteScopes(vec![writable.to_string_lossy().into_owned()]);
+    let paths = apply_patch_touched_paths(&patch)
+        .unwrap()
+        .into_iter()
+        .collect();
+    let read_plan = apply_patch_read_plan_for_paths_with_boundary(&paths, &boundary);
+    let read_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&read_plan.command)
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert!(read_output.status.success());
+    let write_plan = apply_patch_write_plan_from_read_outputs_with_boundary(
+        &patch,
+        &[String::from_utf8_lossy(&read_output.stdout).into_owned()],
+        &boundary,
+    )
+    .unwrap();
+    let write_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&write_plan.command)
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+
+    assert!(
+        write_output.status.success(),
+        "write failed: {}",
+        String::from_utf8_lossy(&write_output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "scoped\n");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+/// Verifies absolute headers remain forbidden without an active sandbox boundary.
+///
+/// Policy-only and sandbox-bypassed execution must not turn approval into
+/// unsandboxed host-path authority, even when the absolute target is below CWD.
+fn semantic_apply_patch_rejects_absolute_targets_in_cwd_only_mode() {
+    let cwd = test_temp_dir("semantic-patch-cwd-only-absolute");
+    let target = cwd.join("note.txt");
+    let patch = add_file_patch(target.to_str().unwrap(), "blocked\n");
+
+    let error = apply_patch_write_error(&cwd, &patch);
+
+    assert!(
+        error.contains("outside current working directory"),
+        "{error}"
+    );
+    assert!(!target.exists());
+    std::fs::remove_dir_all(&cwd).unwrap();
+}
+
+#[test]
+/// Verifies sandboxed patches reject absolute targets outside every write scope.
+fn semantic_apply_patch_rejects_targets_outside_sandbox_write_scopes() {
+    let root = test_temp_dir("semantic-patch-outside-write-scopes");
+    let cwd = root.join("cwd");
+    let writable = root.join("allowed");
+    let denied = root.join("denied.txt");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&writable).unwrap();
+    let patch = add_file_patch(denied.to_str().unwrap(), "blocked\n");
+    let boundary =
+        ApplyPatchPathBoundary::SandboxWriteScopes(vec![writable.to_string_lossy().into_owned()]);
+    let paths = apply_patch_touched_paths(&patch)
+        .unwrap()
+        .into_iter()
+        .collect();
+    let read_plan = apply_patch_read_plan_for_paths_with_boundary(&paths, &boundary);
+    let read_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&read_plan.command)
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    let error = apply_patch_write_plan_from_read_outputs_with_boundary(
+        &patch,
+        &[String::from_utf8_lossy(&read_output.stdout).into_owned()],
+        &boundary,
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("outside configured sandbox write scopes"),
+        "{}",
+        error.message()
+    );
+    assert!(!denied.exists());
+    std::fs::remove_dir_all(&root).unwrap();
+}

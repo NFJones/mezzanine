@@ -31,6 +31,16 @@ use transaction::{
     mez_apply_patch_read_command,
 };
 
+/// Filesystem boundary enforced by both phases of one semantic patch action.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ApplyPatchPathBoundary {
+    /// Restrict every target to the pane's canonical current directory.
+    #[default]
+    CurrentDirectoryOnly,
+    /// Restrict every target to the supplied canonical sandbox write scopes.
+    SandboxWriteScopes(Vec<String>),
+}
+
 /// Timeout for patch application actions.
 ///
 /// Patch actions should either apply quickly or fail with a diagnostic that the
@@ -144,7 +154,11 @@ pub fn apply_patch_write_plan_from_read_output(
     patch: &str,
     read_output: &str,
 ) -> Result<LocalActionPlan> {
-    apply_patch_write_plan_from_read_outputs(patch, std::slice::from_ref(&read_output.to_string()))
+    apply_patch_write_plan_from_read_outputs_with_boundary(
+        patch,
+        std::slice::from_ref(&read_output.to_string()),
+        &ApplyPatchPathBoundary::CurrentDirectoryOnly,
+    )
 }
 
 /// Builds the write phase for an `apply_patch` action from multiple remote
@@ -157,13 +171,27 @@ pub fn apply_patch_write_plan_from_read_outputs(
     patch: &str,
     read_outputs: &[String],
 ) -> Result<LocalActionPlan> {
+    apply_patch_write_plan_from_read_outputs_with_boundary(
+        patch,
+        read_outputs,
+        &ApplyPatchPathBoundary::CurrentDirectoryOnly,
+    )
+}
+
+/// Builds a write phase that rechecks the same filesystem boundary used by
+/// the corresponding read phases.
+pub fn apply_patch_write_plan_from_read_outputs_with_boundary(
+    patch: &str,
+    read_outputs: &[String],
+    boundary: &ApplyPatchPathBoundary,
+) -> Result<LocalActionPlan> {
     let patch = parse_mez_patch(patch)?;
     let mut snapshots = BTreeMap::new();
     for read_output in read_outputs {
         snapshots.extend(parse_apply_patch_snapshot_output(read_output)?);
     }
     let plan = apply_mez_patch_to_snapshots(&patch, &snapshots)?;
-    mez_apply_patch_write_plan(plan)
+    mez_apply_patch_write_plan(plan, boundary)
 }
 
 fn apply_patch_planned_failure(plan: &ApplyPatchPlan) -> SemanticPatchPlanningError {
@@ -220,10 +248,21 @@ pub fn apply_patch_touched_paths(patch: &str) -> Result<Vec<String>> {
 /// - `paths`: Relative paths from the parsed patch to snapshot in one shell
 ///   transaction.
 pub fn apply_patch_read_plan_for_paths(paths: &BTreeSet<String>) -> LocalActionPlan {
+    apply_patch_read_plan_for_paths_with_boundary(
+        paths,
+        &ApplyPatchPathBoundary::CurrentDirectoryOnly,
+    )
+}
+
+/// Builds a read phase that authorizes targets against an explicit boundary.
+pub fn apply_patch_read_plan_for_paths_with_boundary(
+    paths: &BTreeSet<String>,
+    boundary: &ApplyPatchPathBoundary,
+) -> LocalActionPlan {
     LocalActionPlan {
         kind: LocalActionKind::ApplyPatch,
         summary: "I’ll apply a patch.".to_string(),
-        command: mez_apply_patch_read_command(paths),
+        command: mez_apply_patch_read_command(paths, boundary),
         policy_command: "apply_patch".to_string(),
         interactive: false,
         stateful: false,
@@ -273,14 +312,17 @@ fn mez_apply_patch_read_plan(patch: &str, strip: Option<u64>) -> Result<LocalAct
     Ok(apply_patch_read_plan_for_paths(&patch.touched_paths()))
 }
 
-fn mez_apply_patch_write_plan(plan: ApplyPatchPlan) -> Result<LocalActionPlan> {
+fn mez_apply_patch_write_plan(
+    plan: ApplyPatchPlan,
+    boundary: &ApplyPatchPathBoundary,
+) -> Result<LocalActionPlan> {
     if plan.changes.is_empty() && !plan.errors.is_empty() {
         return Err(apply_patch_planned_failure(&plan));
     }
     let mut command = String::from("# ");
     command.push_str(APPLY_PATCH_WRITE_PHASE_MARKER);
     command.push('\n');
-    command.push_str(&apply_patch_write_command_prelude());
+    command.push_str(&apply_patch_write_command_prelude(boundary));
     for (index, change) in plan.changes.iter().enumerate() {
         command.push_str(&apply_patch_write_change_command(index, change));
     }

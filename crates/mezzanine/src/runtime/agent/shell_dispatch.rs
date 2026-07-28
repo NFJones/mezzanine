@@ -8,16 +8,16 @@
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, ApplyPatchTransactionPhase, BTreeSet,
+    AgentTurnRecord, AgentTurnState, ApplyPatchPathBoundary, ApplyPatchTransactionPhase, BTreeSet,
     DEFAULT_COMMAND_SHELL_CLASSIFICATION, EventKind, HookEvent, MezError, PaneReadinessState,
     PendingFocusedShellHookContinuation, Result, RunningShellTransactionKind,
     RunningShellTransactionRef, RuntimeApplyPatchBatchState, RuntimeHookPipelineBlock,
     RuntimeHookPipelineDecision, RuntimePendingApplyPatchPhase, RuntimeSessionService,
-    apply_patch_error_plan, apply_patch_read_plan_for_paths, apply_patch_touched_paths,
-    apply_patch_transaction_phase, apply_patch_write_plan_from_read_output,
-    apply_patch_write_plan_from_read_outputs, decode_shell_output_transport_with_diagnostics,
-    exact_command_sha256, json_escape, local_action_plan,
-    runtime_action_result_is_suppressed_duplicate_file_mutation,
+    apply_patch_error_plan, apply_patch_read_plan_for_paths_with_boundary,
+    apply_patch_touched_paths, apply_patch_transaction_phase,
+    apply_patch_write_plan_from_read_outputs_with_boundary,
+    decode_shell_output_transport_with_diagnostics, exact_command_sha256, json_escape,
+    local_action_plan, runtime_action_result_is_suppressed_duplicate_file_mutation,
     runtime_agent_action_rejects_duplicate_success, runtime_agent_context_command,
     runtime_agent_execution_prompt_display_lines, runtime_agent_terminal_preview,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
@@ -81,6 +81,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
         plan: &mut mez_agent::LocalActionPlan,
+        path_boundary: &ApplyPatchPathBoundary,
     ) -> Result<()> {
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(());
@@ -90,6 +91,7 @@ impl RuntimeSessionService {
             self.agent.apply_patch_batch_states.insert(
                 key.clone(),
                 RuntimeApplyPatchBatchState {
+                    path_boundary: path_boundary.clone(),
                     remaining_paths: apply_patch_touched_paths(patch)?,
                     current_path: None,
                     current_path_read_retries: 0,
@@ -106,7 +108,7 @@ impl RuntimeSessionService {
             paths.insert(path.clone());
             state.current_path = Some(path);
             state.current_path_read_retries = 0;
-            *plan = apply_patch_read_plan_for_paths(&paths);
+            *plan = apply_patch_read_plan_for_paths_with_boundary(&paths, path_boundary);
         }
         Ok(())
     }
@@ -121,10 +123,14 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
         plan: mez_agent::LocalActionPlan,
+        path_boundary: ApplyPatchPathBoundary,
     ) -> Result<()> {
         self.agent.pending_apply_patch_phases.insert(
             Self::apply_patch_batch_state_key(&turn.turn_id, &action.id),
-            RuntimePendingApplyPatchPhase { plan },
+            RuntimePendingApplyPatchPhase {
+                plan,
+                path_boundary,
+            },
         );
         self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Ready);
         let _ = self.dispatch_stored_running_shell_actions(&turn.turn_id)?;
@@ -525,7 +531,59 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running shell result does not match an action")
                 })?;
-            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+            let is_apply_patch = matches!(action.payload, AgentActionPayload::ApplyPatch { .. });
+            let permission_evaluation = execution.action_results[index]
+                .permission_evaluation
+                .clone();
+            let permission_policy = self.permission_policy_for_turn(turn);
+            let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
+            let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
+                &sandbox_config,
+                &permission_policy,
+            );
+            let mut sandbox_bypassed = is_apply_patch
+                && bubblewrap_applies
+                && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
+            if is_apply_patch && bubblewrap_applies && !sandbox_bypassed {
+                match self.ensure_bubblewrap_path_resolution_for_action(
+                    turn,
+                    &action.id,
+                    permission_evaluation.as_deref(),
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        execution.action_results[index] = self.shell_action_runtime_error_result(
+                            turn,
+                            action,
+                            "apply_patch",
+                            "bubblewrap_path_resolution",
+                            &error,
+                        )?;
+                        continue;
+                    }
+                }
+                match self.ensure_bubblewrap_capability_for_action(turn, &action.id) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        execution.action_results[index] = self.shell_action_runtime_error_result(
+                            turn,
+                            action,
+                            "apply_patch",
+                            "bubblewrap_capability_probe",
+                            &error,
+                        )?;
+                        continue;
+                    }
+                }
+            }
+            let path_boundary = if is_apply_patch {
+                self.apply_patch_path_boundary_for_action(turn, &action.id)?
+            } else {
+                ApplyPatchPathBoundary::CurrentDirectoryOnly
+            };
+            if is_apply_patch {
                 self.record_agent_loop_apply_patch_for_turn(&turn.turn_id);
             }
             let apply_patch_state_key =
@@ -536,7 +594,21 @@ impl RuntimeSessionService {
                 .remove(&apply_patch_state_key);
             let has_pending_apply_patch_phase = pending_apply_patch_phase.is_some();
             let mut plan = match pending_apply_patch_phase {
-                Some(pending) => pending.plan,
+                Some(pending) => {
+                    if pending.path_boundary != path_boundary {
+                        execution.action_results[index] = self.shell_action_runtime_error_result(
+                            turn,
+                            action,
+                            "apply_patch",
+                            "apply_patch_authority_changed",
+                            &MezError::conflict(
+                                "apply_patch sandbox write authority changed before dispatch",
+                            ),
+                        )?;
+                        continue;
+                    }
+                    pending.plan
+                }
                 None => match local_action_plan(action) {
                     Ok(Some(plan)) => plan,
                     Ok(None) => continue,
@@ -557,10 +629,13 @@ impl RuntimeSessionService {
                     }
                 },
             };
-            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
-                && !has_pending_apply_patch_phase
-            {
-                self.prepare_apply_patch_batched_read_plan(turn, action, &mut plan)?;
+            if is_apply_patch && !has_pending_apply_patch_phase {
+                self.prepare_apply_patch_batched_read_plan(
+                    turn,
+                    action,
+                    &mut plan,
+                    &path_boundary,
+                )?;
             }
             let command = plan.command.as_str();
             self.append_agent_trace_turn_event(
@@ -928,10 +1003,13 @@ impl RuntimeSessionService {
             match hook_decision {
                 RuntimeHookPipelineDecision::Continue => {}
                 RuntimeHookPipelineDecision::Pending => {
-                    if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+                    if is_apply_patch {
                         self.agent.pending_apply_patch_phases.insert(
                             apply_patch_state_key.clone(),
-                            RuntimePendingApplyPatchPhase { plan: plan.clone() },
+                            RuntimePendingApplyPatchPhase {
+                                plan: plan.clone(),
+                                path_boundary: path_boundary.clone(),
+                            },
                         );
                     }
                     execution.action_results[index].structured_content_json =
@@ -991,18 +1069,11 @@ impl RuntimeSessionService {
                     continue;
                 }
             }
-            let permission_evaluation = execution.action_results[index]
-                .permission_evaluation
-                .clone();
-            let permission_policy = self.permission_policy_for_turn(turn);
-            let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
-            let bubblewrap_applies = crate::runtime::config::bubblewrap_applies_to_policy(
-                &sandbox_config,
-                &permission_policy,
-            );
-            let sandbox_bypassed = bubblewrap_applies
-                && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
-            if bubblewrap_applies && !sandbox_bypassed {
+            if !is_apply_patch {
+                sandbox_bypassed = bubblewrap_applies
+                    && self.activate_sandbox_bypass_after_approval(&turn.turn_id, &action.id);
+            }
+            if !is_apply_patch && bubblewrap_applies && !sandbox_bypassed {
                 match self.ensure_bubblewrap_path_resolution_for_action(
                     turn,
                     &action.id,
@@ -1228,9 +1299,15 @@ impl RuntimeSessionService {
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(false);
         };
+        let path_boundary = self.apply_patch_path_boundary_for_action(turn, &action.id)?;
         let write_plan = if let Some(mut state) =
             self.agent.apply_patch_batch_states.remove(&state_key)
         {
+            if state.path_boundary != path_boundary {
+                return Err(MezError::conflict(
+                    "apply_patch sandbox write authority changed after the read phase",
+                ));
+            }
             let retained_transport;
             let retained_transport = if state.current_read_transport.is_empty() {
                 transaction.observed_output_preview.as_str()
@@ -1248,7 +1325,8 @@ impl RuntimeSessionService {
                     paths.insert(state.current_path.clone().unwrap_or_default());
                     state.current_path_read_retries = 1;
                     state.current_read_transport.clear();
-                    let read_plan = apply_patch_read_plan_for_paths(&paths);
+                    let read_plan =
+                        apply_patch_read_plan_for_paths_with_boundary(&paths, &path_boundary);
                     self.agent.apply_patch_batch_states.insert(state_key, state);
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,
@@ -1258,7 +1336,12 @@ impl RuntimeSessionService {
                             action.id
                         ),
                     )?;
-                    self.dispatch_generated_apply_patch_phase(turn, &action, read_plan)?;
+                    self.dispatch_generated_apply_patch_phase(
+                        turn,
+                        &action,
+                        read_plan,
+                        path_boundary,
+                    )?;
                     return Ok(true);
                 }
                 apply_patch_error_plan(&apply_patch_read_transport_failure_message(
@@ -1275,7 +1358,8 @@ impl RuntimeSessionService {
                     paths.insert(path.clone());
                     state.current_path = Some(path);
                     state.current_path_read_retries = 0;
-                    let read_plan = apply_patch_read_plan_for_paths(&paths);
+                    let read_plan =
+                        apply_patch_read_plan_for_paths_with_boundary(&paths, &path_boundary);
                     self.agent.apply_patch_batch_states.insert(state_key, state);
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,
@@ -1285,11 +1369,20 @@ impl RuntimeSessionService {
                             action.id
                         ),
                     )?;
-                    self.dispatch_generated_apply_patch_phase(turn, &action, read_plan)?;
+                    self.dispatch_generated_apply_patch_phase(
+                        turn,
+                        &action,
+                        read_plan,
+                        path_boundary,
+                    )?;
                     return Ok(true);
                 }
-                apply_patch_write_plan_from_read_outputs(patch, &state.read_outputs)
-                    .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
+                apply_patch_write_plan_from_read_outputs_with_boundary(
+                    patch,
+                    &state.read_outputs,
+                    &path_boundary,
+                )
+                .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
             }
         } else {
             let decoded_output = decode_shell_output_transport_with_diagnostics(
@@ -1304,8 +1397,12 @@ impl RuntimeSessionService {
                     transaction.observed_output_truncated,
                 ))
             } else {
-                apply_patch_write_plan_from_read_output(patch, &decoded_output.output)
-                    .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
+                apply_patch_write_plan_from_read_outputs_with_boundary(
+                    patch,
+                    std::slice::from_ref(&decoded_output.output),
+                    &path_boundary,
+                )
+                .unwrap_or_else(|error| apply_patch_error_plan(error.message()))
             }
         };
 
@@ -1317,7 +1414,7 @@ impl RuntimeSessionService {
                 action.id
             ),
         )?;
-        self.dispatch_generated_apply_patch_phase(turn, &action, write_plan)?;
+        self.dispatch_generated_apply_patch_phase(turn, &action, write_plan, path_boundary)?;
         Ok(true)
     }
 

@@ -9,7 +9,7 @@ use super::{
     APPLY_PATCH_CONTENT_BEGIN_MARKER, APPLY_PATCH_CONTENT_END_MARKER,
     APPLY_PATCH_FILE_BEGIN_MARKER, APPLY_PATCH_FILE_END_MARKER, APPLY_PATCH_READ_BEGIN_MARKER,
     APPLY_PATCH_READ_END_MARKER, APPLY_PATCH_READ_PHASE_MARKER, APPLY_PATCH_RESULT_MARKER,
-    ApplyPatchFileChange, ApplyPatchOriginalState,
+    ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchPathBoundary,
 };
 use crate::shell_quote;
 use base64::Engine;
@@ -88,7 +88,38 @@ pub(super) fn write_content_lines(content: &str, target: &str, append: bool) -> 
     lines
 }
 
-pub(super) fn mez_apply_patch_read_command(paths: &BTreeSet<String>) -> String {
+fn apply_patch_boundary_case_lines(
+    boundary: &ApplyPatchPathBoundary,
+    failure_command: &str,
+) -> Vec<String> {
+    match boundary {
+        ApplyPatchPathBoundary::CurrentDirectoryOnly => vec![format!(
+            "case \"$MEZ_APPLY_PATH\" in /*) {failure_command} ;; *) case \"$MEZ_APPLY_RESOLVED\" in \"$MEZ_APPLY_CWD\"|\"$MEZ_APPLY_CWD_PREFIX\"/*) ;; *) {failure_command} ;; esac ;; esac"
+        )],
+        ApplyPatchPathBoundary::SandboxWriteScopes(scopes) => {
+            let patterns = scopes
+                .iter()
+                .flat_map(|scope| {
+                    let quoted = shell_quote(scope);
+                    [quoted.clone(), format!("{quoted}/*")]
+                })
+                .collect::<Vec<_>>()
+                .join("|");
+            if patterns.is_empty() {
+                vec![failure_command.to_string()]
+            } else {
+                vec![format!(
+                    "case \"$MEZ_APPLY_RESOLVED\" in {patterns}) ;; *) {failure_command} ;; esac"
+                )]
+            }
+        }
+    }
+}
+
+pub(super) fn mez_apply_patch_read_command(
+    paths: &BTreeSet<String>,
+    boundary: &ApplyPatchPathBoundary,
+) -> String {
     let mut lines = vec![
         format!("# {APPLY_PATCH_READ_PHASE_MARKER}"),
         "command -v base64 >/dev/null || { printf '%s\\n' 'apply_patch: base64 is required for apply_patch actions' >&2; exit 127; }".to_string(),
@@ -104,15 +135,23 @@ pub(super) fn mez_apply_patch_read_command(paths: &BTreeSet<String>) -> String {
         "MEZ_APPLY_RESOLVED=$(realpath -m -- \"$MEZ_APPLY_PATH\" 2>/dev/null) || MEZ_APPLY_RESOLVED=".to_string(),
         "MEZ_APPLY_STATUS=error".to_string(),
         "if [ -n \"$MEZ_APPLY_RESOLVED\" ]; then".to_string(),
-        "  case \"$MEZ_APPLY_RESOLVED\" in \"$MEZ_APPLY_CWD\"|\"$MEZ_APPLY_CWD_PREFIX\"/*)".to_string(),
+    ];
+    let outside_status = match boundary {
+        ApplyPatchPathBoundary::CurrentDirectoryOnly => "outside_cwd",
+        ApplyPatchPathBoundary::SandboxWriteScopes(_) => "outside_write_scopes",
+    };
+    lines.extend(apply_patch_boundary_case_lines(
+        boundary,
+        &format!("MEZ_APPLY_STATUS={outside_status}"),
+    ));
+    lines.extend([
+        "  if [ \"$MEZ_APPLY_STATUS\" = error ]; then".to_string(),
         "    if [ -e \"$MEZ_APPLY_PATH\" ] || [ -L \"$MEZ_APPLY_PATH\" ]; then".to_string(),
         "      if [ -f \"$MEZ_APPLY_RESOLVED\" ]; then MEZ_APPLY_STATUS=regular; else MEZ_APPLY_STATUS=non_regular; fi".to_string(),
         "    else".to_string(),
         "      MEZ_APPLY_STATUS=missing".to_string(),
         "    fi".to_string(),
-        "    ;;".to_string(),
-        "  *) MEZ_APPLY_STATUS=outside_cwd ;;".to_string(),
-        "  esac".to_string(),
+        "  fi".to_string(),
         "fi".to_string(),
         format!("printf '%s\\n' {}", shell_quote(APPLY_PATCH_FILE_BEGIN_MARKER)),
         "printf 'PATH_B64 %s\\n' \"$(mez_apply_patch_b64 \"$MEZ_APPLY_PATH\")\"".to_string(),
@@ -126,7 +165,7 @@ pub(super) fn mez_apply_patch_read_command(paths: &BTreeSet<String>) -> String {
         format!("printf '%s\\n' {}", shell_quote(APPLY_PATCH_FILE_END_MARKER)),
         "}".to_string(),
         format!("printf '%s\\n' {}", shell_quote(APPLY_PATCH_READ_BEGIN_MARKER)),
-    ];
+    ]);
     for path in paths {
         lines.push(format!("mez_apply_patch_emit_path {}", shell_quote(path)));
     }
@@ -138,26 +177,39 @@ pub(super) fn mez_apply_patch_read_command(paths: &BTreeSet<String>) -> String {
     lines.join("\n")
 }
 
-pub(super) fn apply_patch_write_command_prelude() -> String {
-    [
-        "command -v base64 >/dev/null || { printf '%s\\n' 'apply_patch: base64 is required for apply_patch actions' >&2; exit 127; }",
-        "command -v realpath >/dev/null || { printf '%s\\n' 'apply_patch: coreutils realpath is required for apply_patch actions' >&2; exit 127; }",
-        "command -v cmp >/dev/null || { printf '%s\\n' 'apply_patch: cmp is required for apply_patch actions' >&2; exit 127; }",
-        "command -v dirname >/dev/null || { printf '%s\\n' 'apply_patch: dirname is required for apply_patch actions' >&2; exit 127; }",
-        "if ! realpath -m -- . >/dev/null 2>&1; then printf '%s\\n' 'apply_patch: coreutils realpath -m is required for apply_patch actions' >&2; exit 127; fi",
-        "MEZ_APPLY_CWD=$(pwd -P) || exit 1",
-        "MEZ_APPLY_CWD_PREFIX=${MEZ_APPLY_CWD%/}",
-        "if [ -z \"$MEZ_APPLY_CWD_PREFIX\" ]; then MEZ_APPLY_CWD_PREFIX=/; fi",
-        "mez_apply_patch_resolve_checked() {",
-        "MEZ_APPLY_PATH=$1",
-        "MEZ_APPLY_EXPECTED_RESOLVED=$2",
-        "MEZ_APPLY_RESOLVED=$(realpath -m -- \"$MEZ_APPLY_PATH\" 2>/dev/null) || { printf '%s\\n' \"apply_patch: failed to resolve path: $MEZ_APPLY_PATH\" >&2; return 1; }",
-        "case \"$MEZ_APPLY_RESOLVED\" in \"$MEZ_APPLY_CWD\"|\"$MEZ_APPLY_CWD_PREFIX\"/*) ;; *) printf '%s\\n' \"apply_patch: resolved path is outside current working directory: $MEZ_APPLY_PATH\" >&2; return 1;; esac",
-        "if [ \"$MEZ_APPLY_RESOLVED\" != \"$MEZ_APPLY_EXPECTED_RESOLVED\" ]; then printf '%s\\n' \"apply_patch: resolved path changed before apply: $MEZ_APPLY_PATH\" >&2; return 1; fi",
-        "}",
-        "",
-    ]
-    .join("\n")
+pub(super) fn apply_patch_write_command_prelude(boundary: &ApplyPatchPathBoundary) -> String {
+    let mut lines = vec![
+        "command -v base64 >/dev/null || { printf '%s\\n' 'apply_patch: base64 is required for apply_patch actions' >&2; exit 127; }".to_string(),
+        "command -v realpath >/dev/null || { printf '%s\\n' 'apply_patch: coreutils realpath is required for apply_patch actions' >&2; exit 127; }".to_string(),
+        "command -v cmp >/dev/null || { printf '%s\\n' 'apply_patch: cmp is required for apply_patch actions' >&2; exit 127; }".to_string(),
+        "command -v dirname >/dev/null || { printf '%s\\n' 'apply_patch: dirname is required for apply_patch actions' >&2; exit 127; }".to_string(),
+        "if ! realpath -m -- . >/dev/null 2>&1; then printf '%s\\n' 'apply_patch: coreutils realpath -m is required for apply_patch actions' >&2; exit 127; fi".to_string(),
+        "MEZ_APPLY_CWD=$(pwd -P) || exit 1".to_string(),
+        "MEZ_APPLY_CWD_PREFIX=${MEZ_APPLY_CWD%/}".to_string(),
+        "if [ -z \"$MEZ_APPLY_CWD_PREFIX\" ]; then MEZ_APPLY_CWD_PREFIX=/; fi".to_string(),
+        "mez_apply_patch_resolve_checked() {".to_string(),
+        "MEZ_APPLY_PATH=$1".to_string(),
+        "MEZ_APPLY_EXPECTED_RESOLVED=$2".to_string(),
+        "MEZ_APPLY_RESOLVED=$(realpath -m -- \"$MEZ_APPLY_PATH\" 2>/dev/null) || { printf '%s\\n' \"apply_patch: failed to resolve path: $MEZ_APPLY_PATH\" >&2; return 1; }".to_string(),
+    ];
+    let diagnostic = match boundary {
+        ApplyPatchPathBoundary::CurrentDirectoryOnly => {
+            "apply_patch: resolved path is outside current working directory: $MEZ_APPLY_PATH"
+        }
+        ApplyPatchPathBoundary::SandboxWriteScopes(_) => {
+            "apply_patch: resolved path is outside configured sandbox write scopes: $MEZ_APPLY_PATH"
+        }
+    };
+    lines.extend(apply_patch_boundary_case_lines(
+        boundary,
+        &format!("printf '%s\\n' {} >&2; return 1", shell_quote(diagnostic)),
+    ));
+    lines.extend([
+        "if [ \"$MEZ_APPLY_RESOLVED\" != \"$MEZ_APPLY_EXPECTED_RESOLVED\" ]; then printf '%s\\n' \"apply_patch: resolved path changed before apply: $MEZ_APPLY_PATH\" >&2; return 1; fi".to_string(),
+        "}".to_string(),
+        String::new(),
+    ]);
+    lines.join("\n")
 }
 
 pub(super) fn apply_patch_write_change_command(

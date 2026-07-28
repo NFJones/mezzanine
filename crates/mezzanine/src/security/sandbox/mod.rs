@@ -138,6 +138,8 @@ pub(crate) struct BubblewrapCompileRequest<'a> {
     pub(crate) maximum_authority: &'a PathScopes,
     /// Structured evaluation computed from the original policy command.
     pub(crate) permission_evaluation: &'a PermissionEvaluation,
+    /// Whether this action requires the complete maximum filesystem authority.
+    pub(crate) preserve_maximum_authority: bool,
     /// Absolute child shell path in the pane environment.
     pub(crate) child_shell_path: &'a str,
     /// Absolute harness-owned command-file path in the pane environment.
@@ -718,8 +720,12 @@ fn effective_sandbox_policy(
 ) -> Result<EffectiveSandboxPolicy, SandboxCompileError> {
     validate_maximum_authority(request.maximum_authority)?;
     let evaluation = request.permission_evaluation;
-    let (mounts, authority_source) = if let Some(effects) = evaluation.confinement_effects.as_ref()
-    {
+    let (mounts, authority_source) = if request.preserve_maximum_authority {
+        (
+            maximum_mounts(request.maximum_authority),
+            SandboxAuthoritySource::Maximum,
+        )
+    } else if let Some(effects) = evaluation.confinement_effects.as_ref() {
         (
             narrowed_mounts(request.maximum_authority, effects)?,
             SandboxAuthoritySource::Narrowed,
