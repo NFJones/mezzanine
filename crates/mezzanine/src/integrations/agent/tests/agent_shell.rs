@@ -62,9 +62,9 @@ fn agent_shell_executes_builtin_slash_command_effects() {
         body.contains("| Category | Command | Description |"),
         "{body}"
     );
-    assert!(body.contains("| `/list-sessions` |"), "{body}");
+    assert!(!body.contains("| `/list-sessions` |"), "{body}");
     assert!(
-        body.contains("list resumable saved agent conversations."),
+        body.contains("resume a saved conversation or browse saved conversations."),
         "{body}"
     );
     assert!(body.contains("| `/list-skills` |"), "{body}");

@@ -187,6 +187,28 @@ impl RuntimeSessionService {
                     "approval browser records cannot be deleted",
                 ));
             }
+            RuntimeRecordBrowserOverlaySource::SavedSessions => {
+                if self
+                    .agent_shell_store()
+                    .sessions()
+                    .any(|session| !session.ephemeral && session.session_id == record_id)
+                {
+                    return Err(MezError::invalid_state(
+                        "cannot delete an active agent session; switch or clear its pane first",
+                    ));
+                }
+                let store = self
+                    .persistence
+                    .cloned_transcript_store()
+                    .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+                if !store.delete(record_id)? {
+                    return Err(MezError::new(
+                        crate::error::MezErrorKind::NotFound,
+                        "saved session was already deleted",
+                    ));
+                }
+                self.refresh_record_browser_overlay_source(source)?
+            }
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => {
                 return Err(MezError::invalid_state(
                     "personality browser records cannot be deleted",
@@ -515,6 +537,9 @@ impl RuntimeSessionService {
     ) -> Result<RecordBrowser> {
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => self.approval_record_browser(),
+            RuntimeRecordBrowserOverlaySource::SavedSessions => {
+                self.saved_sessions_record_browser()
+            }
             RuntimeRecordBrowserOverlaySource::Personalities { pane_id } => {
                 self.personality_record_browser(pane_id)
             }
@@ -613,6 +638,7 @@ impl RuntimeSessionService {
     ) -> RuntimeRecordBrowserOverlaySource {
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => source.clone(),
+            RuntimeRecordBrowserOverlaySource::SavedSessions => source.clone(),
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Context { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Issues {
@@ -666,6 +692,7 @@ impl RuntimeSessionService {
         let value = value.trim();
         match source {
             RuntimeRecordBrowserOverlaySource::Approvals => Ok(source.clone()),
+            RuntimeRecordBrowserOverlaySource::SavedSessions => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Context { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Issues {
@@ -814,6 +841,7 @@ fn set_record_browser_scope_indicator(
 ) {
     let indicator = match source {
         RuntimeRecordBrowserOverlaySource::Approvals => "live session".to_string(),
+        RuntimeRecordBrowserOverlaySource::SavedSessions => "saved conversations".to_string(),
         RuntimeRecordBrowserOverlaySource::Personalities { pane_id } => {
             format!("current pane {pane_id}")
         }

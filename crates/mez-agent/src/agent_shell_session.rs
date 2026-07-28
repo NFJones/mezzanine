@@ -810,7 +810,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "list-personalities"
         | "refresh-provider-info"
         | "sandbox" => "configuration",
-        "help" | "list-macros" | "list-mcp" | "list-sessions" | "list-skills" => "discovery",
+        "help" | "list-macros" | "list-mcp" | "list-skills" => "discovery",
         _ => "work control",
     }
 }
@@ -839,7 +839,6 @@ fn agent_shell_command_description(name: &str) -> &'static str {
             "inspect or change pane-local sandbox state; use --global for persisted enable/disable changes, and manage trust or typed toolchains through nested subcommands."
         }
         "list-macros" => "list available macros and their #macro prompt names.",
-        "list-sessions" => "list resumable saved agent conversations.",
         "name-session" => "assign or replace the current conversation's durable display name.",
         "list-skills" => "list available skills and their $skill prompt names.",
         "sync-builtin-skills" => {
@@ -874,7 +873,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "loop" => {
             "iterate on a prompt until an iteration completes without apply_patch actions or the loop limit is reached; pass --fork to use fresh parent-conversation forks, --new to use fresh empty conversations, or --limit <int> to override the loop limit for this command."
         }
-        "resume" => "resume a saved conversation.",
+        "resume" => "resume a saved conversation or browse saved conversations.",
         "fork" => "fork the current conversation into a new thread.",
         "new" => "start a fresh conversation in this pane.",
         "status" => "show the current agent shell session status.",

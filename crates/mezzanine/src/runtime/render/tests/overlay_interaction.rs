@@ -203,7 +203,7 @@ fn display_overlay_search_skips_offscreen_match_ranges() {
     );
 }
 
-/// Verifies `/list-sessions` only linkifies the first visible occurrence of
+/// Verifies `/resume` only linkifies the first visible occurrence of
 /// a saved conversation id.
 ///
 /// The markdown source keeps a hidden `mez-agent:` resume link on the
@@ -214,7 +214,7 @@ fn display_overlay_search_skips_offscreen_match_ranges() {
 fn agent_shell_markdown_overlay_linkifies_each_session_id_once() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
-        Some("list-sessions".to_string()),
+        Some("resume".to_string()),
         "- [`018f6b3a-1b2c-7000-9000-cafebabefeed`](mez-agent:%2Fresume%20018f6b3a-1b2c-7000-9000-cafebabefeed)",
         &ui_theme,
     );

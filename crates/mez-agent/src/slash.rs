@@ -76,7 +76,6 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("approve", &[], SlashCommandEffect::PolicyMutation, true),
         slash("show-approvals", &[], SlashCommandEffect::ReadOnly, true),
         slash("sandbox", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("list-sessions", &[], SlashCommandEffect::ReadOnly, true),
         slash("list-macros", &[], SlashCommandEffect::ReadOnly, true),
         slash("list-skills", &[], SlashCommandEffect::ReadOnly, true),
         slash(
@@ -310,6 +309,10 @@ mod tests {
             parse_slash_command("/title").unwrap_err(),
             SlashCommandParseError::UnknownCommand
         );
+        assert_eq!(
+            parse_slash_command("/list-sessions").unwrap_err(),
+            SlashCommandParseError::UnknownCommand
+        );
         assert!(
             baseline_slash_commands()
                 .iter()
@@ -327,7 +330,6 @@ mod tests {
             "approve",
             "sandbox",
             "directive",
-            "list-sessions",
             "name-session",
             "list-skills",
             "list-personalities",

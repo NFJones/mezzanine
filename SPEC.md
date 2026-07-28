@@ -2646,8 +2646,8 @@ conversation or forking the parent transcript. New-mode work conversations
 MUST also be ephemeral and MUST start with no transcript entries or parent
 transcript source.
 Fork-mode work conversations MUST be ephemeral: they MUST NOT be persisted as
-saved agent conversations, MUST NOT appear in `/list-sessions` or `/resume`
-pickers, and MUST NOT replace the parent conversation in active-session
+saved agent conversations, MUST NOT appear in `/resume` pickers, and MUST NOT
+replace the parent conversation in active-session
 metadata checkpoints. The parent conversation that invoked `/loop` MUST remain
 the resumable/listable conversation while fork-mode or new-mode iterations run.
 The `/loop` command MUST accept `--limit <int>` as a per-command positive
@@ -6236,15 +6236,18 @@ The baseline command capabilities are:
   already-running actions unchanged. Reload MUST run the complete disk-backed
   config reload. Toolchain commands MUST NOT become a general PATH,
   environment-variable, or arbitrary host-mount configuration surface.
-- `/list-sessions`: Show resumable saved agent sessions in the pane buffer as a
-  nested list keyed by conversation UUID. Named sessions MUST appear before
-  UUID-only sessions; each partition MUST be sorted by last activity with the
-  most recent session first. Prompt summaries MAY be truncated to the terminal
-  width and MUST NOT wrap. Conversation UUIDs SHOULD be rendered as bold
-  actionable command links that execute or otherwise provide `/resume <uuid>`
-  for the selected session. A named session MUST display as `<uuid> - <name>`,
-  with only the UUID included in the command link. Internal command-link
-  destinations MUST NOT be rendered as visible parenthesized URI text.
+- Bare `/resume`: Show resumable saved agent sessions in the shared interactive
+  record-browser table keyed by conversation UUID. The table MUST include name,
+  last activity, directory, transcript entry count, and latest prompt columns.
+  Named sessions MUST appear before UUID-only sessions; each partition MUST be
+  sorted by last activity with the most recent session first. Prompt summaries
+  MAY be truncated to the terminal width and MUST NOT wrap. Enter MUST resume
+  the selected UUID through `/resume <uuid>`, and `d` MUST immediately delete
+  the selected durable transcript and name metadata before refreshing the
+  table. Deletion MUST be rejected while that conversation is bound to any live
+  durable agent pane. The agent slash surface MUST NOT expose a separate
+  `/list-sessions` alias; the unrelated multiplexer `list-sessions` command
+  remains available.
 - `/name-session <name>`: Assign or replace the durable display name for the
   current agent conversation without changing its UUID, transcript, provider
   context, or lineage. The command MUST reject empty names, control characters,

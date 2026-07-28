@@ -4,18 +4,18 @@ use super::*;
 
 /// Verifies agent slash markdown shown in the command overlay keeps
 /// `mez-agent:` links selectable after markdown rendering. This preserves
-/// `/list-sessions` resume links while moving informational slash output
+/// `/resume` session links while moving informational slash output
 /// out of the pane transcript.
 #[test]
 fn agent_shell_markdown_overlay_preserves_agent_links() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
-        Some("list-sessions".to_string()),
+        Some("resume".to_string()),
         "- [`saved`](mez-agent:%2Fresume%20saved)",
         &ui_theme,
     );
 
-    assert_eq!(content.command.as_deref(), Some("list-sessions"));
+    assert_eq!(content.command.as_deref(), Some("resume"));
     assert!(
         content
             .lines
@@ -43,7 +43,7 @@ fn agent_shell_markdown_overlay_preserves_agent_links() {
 /// Verifies selectable pager links keep the markdown link styling emitted
 /// by the CommonMark renderer.
 ///
-/// `/list-sessions` and similar markdown-backed command overlays should
+/// `/resume` and similar markdown-backed command overlays should
 /// keep links readable as ordinary text links while remaining keyboard and
 /// mouse selectable, so the overlay must retain the rendered line spans in
 /// addition to the selection metadata.
@@ -51,7 +51,7 @@ fn agent_shell_markdown_overlay_preserves_agent_links() {
 fn agent_shell_markdown_overlay_preserves_selectable_link_style_spans() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
-        Some("list-sessions".to_string()),
+        Some("resume".to_string()),
         "- [`saved`](mez-agent:%2Fresume%20saved)",
         &ui_theme,
     );
@@ -103,7 +103,7 @@ fn agent_shell_markdown_overlay_preserves_selectable_link_style_spans() {
 fn active_markdown_overlay_link_keeps_tail_cell_link_styling() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
-        Some("list-sessions".to_string()),
+        Some("resume".to_string()),
         "- [`saved`](mez-agent:%2Fresume%20saved)",
         &ui_theme,
     );
@@ -154,7 +154,7 @@ fn active_markdown_overlay_link_keeps_tail_cell_link_styling() {
 /// Verifies an active saved-session UUID row keeps link styling on the
 /// final visible UUID character.
 ///
-/// `/list-sessions` rows are emitted as hidden `mez-agent:` resume links
+/// `/resume` rows are emitted as hidden `mez-agent:` resume links
 /// with bold UUID labels. The command overlay must preserve that link
 /// rendition across the full visible UUID when the row is selected,
 /// including the final character that previously fell back to plain text.
@@ -163,7 +163,7 @@ fn active_saved_session_overlay_uuid_keeps_tail_cell_link_styling() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
     let content = runtime_agent_shell_markdown_overlay_content(
-        Some("list-sessions".to_string()),
+        Some("resume".to_string()),
         &format!("- [**{session_id}**](mez-agent:%2Fresume%20{session_id})"),
         &ui_theme,
     );
@@ -224,7 +224,7 @@ fn active_saved_session_overlay_uuid_does_not_style_previous_cell() {
     let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
     let content = runtime_agent_shell_markdown_overlay_content(
-        Some("list-sessions".to_string()),
+        Some("resume".to_string()),
         &format!("- [**{session_id}**](mez-agent:%2Fresume%20{session_id})"),
         &ui_theme,
     );

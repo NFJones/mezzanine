@@ -521,7 +521,7 @@ fn markdown_presentation_replaces_overwide_leading_grapheme() {
 fn agent_shell_markdown_overlay_hides_internal_agent_link_destinations() {
     let theme = default_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
-        Some("list-sessions".to_string()),
+        Some("resume".to_string()),
         "- [**saved-session**](mez-agent:/resume%20saved-session)",
         &theme,
     );

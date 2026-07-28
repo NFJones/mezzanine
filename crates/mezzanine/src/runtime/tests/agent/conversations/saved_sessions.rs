@@ -44,7 +44,7 @@ fn runtime_agent_shell_names_and_resumes_zero_entry_conversations() {
         &primary,
     );
     let linked_uuid = format!(
-        "[**{conversation_id}**](mez-agent:/resume%20{conversation_id}) - Release investigation"
+        "[`{conversation_id}`](mez-agent:%2Fresume%20{conversation_id}) | Release investigation |"
     );
     assert!(picker.contains(&linked_uuid), "{picker}");
     assert!(!picker.contains("Release%20investigation"), "{picker}");
@@ -105,8 +105,8 @@ fn runtime_agent_shell_sorts_named_sessions_first_without_changing_latest() {
         r#"{"jsonrpc":"2.0","id":"list-order","method":"agent/shell/command","params":{"idempotency_key":"list-order","input":"/resume"}}"#,
         &primary,
     );
-    let named_position = picker.find("mez-agent:/resume%20named-old").unwrap();
-    let unnamed_position = picker.find("mez-agent:/resume%20recent-unnamed").unwrap();
+    let named_position = picker.find("[`named-old`]").unwrap();
+    let unnamed_position = picker.find("[`recent-unnamed`]").unwrap();
     assert!(named_position < unnamed_position, "{picker}");
 
     let latest = service.dispatch_runtime_control_body(
@@ -118,6 +118,89 @@ fn runtime_agent_shell_sorts_named_sessions_first_without_changing_latest() {
         "{latest}"
     );
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies the retained `/resume` browser deletes named metadata-only
+/// conversations through the shared record-browser backend and refreshes to
+/// the configured empty state.
+#[test]
+fn runtime_resume_browser_deletes_named_zero_entry_sessions() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-delete-named"));
+    transcript_store
+        .name_session("named-empty", "Pinned work", 10, None)
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+
+    let browser = service.saved_sessions_record_browser().unwrap();
+    assert!(browser.deletion_enabled());
+    assert_eq!(browser.records().len(), 1);
+    assert_eq!(browser.records()[0].id, "named-empty");
+    assert_eq!(
+        browser.records()[0].open_command.as_deref(),
+        Some("/resume named-empty")
+    );
+
+    let refreshed = service
+        .delete_record_browser_entry(
+            &crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions,
+            "named-empty",
+            0,
+        )
+        .unwrap();
+    assert!(refreshed.records().is_empty());
+    assert!(transcript_store.saved_sessions().unwrap().is_empty());
+    assert!(
+        refreshed
+            .render_page()
+            .raw_markdown
+            .contains("No saved agent sessions are available.")
+    );
+}
+
+/// Verifies saved conversations bound to a live durable agent pane cannot be
+/// deleted from `/resume`, preventing a later transcript append from silently
+/// recreating a conversation the picker claimed to remove.
+#[test]
+fn runtime_resume_browser_rejects_deleting_active_sessions() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-delete-active"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "active-saved".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-active".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "keep this session".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "active-saved", 1)
+        .unwrap();
+
+    let error = service
+        .delete_record_browser_entry(
+            &crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions,
+            "active-saved",
+            0,
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(
+        error
+            .message()
+            .contains("cannot delete an active agent session")
+    );
+    assert_eq!(transcript_store.inspect("active-saved").unwrap().len(), 1);
 }
 
 /// Verifies that saved agent conversations can be listed, resumed into the
@@ -239,14 +322,19 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         r#"{"jsonrpc":"2.0","id":"resume-list","method":"agent/shell/command","params":{"idempotency_key":"resume-list","input":"/resume"}}"#,
         &primary,
     );
-    assert!(picker.contains("mez-agent:/resume%20saved"), "{picker}");
-    assert!(picker.contains("mez-agent:/resume%20latest"), "{picker}");
-    let saved_section = picker
-        .split("\n\n")
-        .find(|section| section.contains("mez-agent:/resume%20saved"))
-        .expect("saved session section should exist");
-    assert!(saved_section.contains("  - Prompt: latest s"), "{picker}");
-    assert!(!saved_section.contains("  - Prompt: saved p"), "{picker}");
+    assert!(
+        picker.contains("[`saved`](mez-agent:%2Fresume%20saved)"),
+        "{picker}"
+    );
+    assert!(
+        picker.contains("[`latest`](mez-agent:%2Fresume%20latest)"),
+        "{picker}"
+    );
+    let saved_row = picker
+        .lines()
+        .find(|line| line.contains("[`saved`]"))
+        .expect("saved session table row should exist");
+    assert!(saved_row.contains("latest saved prompt"), "{picker}");
 
     let latest = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"resume-latest","method":"agent/shell/command","params":{"idempotency_key":"resume-latest","input":"/resume --latest"}}"#,

@@ -65,6 +65,8 @@ pub(crate) type RuntimeRecordBrowserOverlayFrame =
 pub(crate) enum RuntimeRecordBrowserOverlaySource {
     /// Live session-wide pending approval queue.
     Approvals,
+    /// Durable saved agent conversations displayed by bare `/resume`.
+    SavedSessions,
     /// Configured personality profiles selectable for one pane.
     Personalities {
         /// Pane whose effective personality is displayed and changed.

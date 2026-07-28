@@ -1,9 +1,8 @@
 //! Agent-shell saved-session resume command helpers.
 //!
-//! This module keeps `/resume` and `/list-sessions` transcript replay logic out
-//! of the broader command dispatcher. It owns only saved-session selection,
-//! directory restoration, transcript display fallback formatting, and the
-//! related markdown list rendering used by the agent shell.
+//! This module keeps `/resume` transcript replay logic out of the broader
+//! command dispatcher. It owns saved-session browsing, directory restoration,
+//! transcript display fallback formatting, and durable session naming.
 
 use super::{
     AgentShellCommandOutcome, MezError, PathBuf, Result, RuntimeSessionService, SplitDirection,
@@ -14,7 +13,9 @@ use super::{
 use base64::Engine;
 use mez_agent::transcript::ConversationSummary;
 use mez_mux::readline::ReadlineEdit;
+use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 
+use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
 use crate::storage::transcript::SavedAgentSession;
 
 /// Maximum saved transcript entries to render when `/resume` has no presentation log.
@@ -152,7 +153,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_args("resume command must be a slash command"))?;
         let conversation_arg = invocation.args.split_whitespace().next();
         if conversation_arg.is_none() {
-            return self.execute_agent_shell_list_sessions_command(pane_id);
+            return self.execute_agent_shell_resume_picker_command(pane_id);
         }
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(AgentShellCommandOutcome::Display {
@@ -174,7 +175,7 @@ impl RuntimeSessionService {
                 conversation_id
             }
             Some(conversation_id) => conversation_id.to_string(),
-            None => unreachable!("bare resume returns through list-sessions before store lookup"),
+            None => unreachable!("bare resume returns through the picker before store lookup"),
         };
         let saved = store
             .saved_sessions()?
@@ -323,36 +324,68 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// The attached prompt path owns pane-buffer rendering for display outcomes.
-    /// Keeping this command side-effect-free prevents duplicate command output
-    /// when the response body is rendered as markdown.
-    pub(super) fn execute_agent_shell_list_sessions_command(
+    /// Opens the retained table browser used to select or delete saved sessions.
+    fn execute_agent_shell_resume_picker_command(
         &mut self,
         pane_id: &str,
     ) -> Result<AgentShellCommandOutcome> {
-        let body = self.runtime_agent_list_sessions_display(pane_id)?;
+        let Some(_) = self.persistence.transcript_store() else {
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "resume".to_string(),
+                body: self.runtime_current_session_display(),
+            });
+        };
+        let browser = self.saved_sessions_record_browser()?;
+        let page = browser.render_page();
+        self.register_pending_record_browser_overlay(
+            pane_id,
+            "resume",
+            browser,
+            Some(RuntimeRecordBrowserOverlaySource::SavedSessions),
+        );
         Ok(AgentShellCommandOutcome::Display {
-            command: "list-sessions".to_string(),
-            body,
+            command: "resume".to_string(),
+            body: page.raw_markdown,
         })
     }
 
-    /// Builds `/list-sessions` from saved agent conversation transcripts.
-    fn runtime_agent_list_sessions_display(&self, pane_id: &str) -> Result<String> {
-        let width = self
-            .pane_screen(pane_id)
-            .map(|screen| usize::from(screen.size().columns))
-            .unwrap_or(120);
-        if let Some(store) = self.persistence.transcript_store() {
-            return Ok(Self::runtime_agent_saved_sessions_display(
-                &store.saved_sessions()?,
-                width,
-            ));
-        }
-        Ok(self.runtime_current_session_display())
+    /// Builds the shared table browser for durable saved agent conversations.
+    pub(crate) fn saved_sessions_record_browser(&self) -> Result<RecordBrowser> {
+        let store = self
+            .persistence
+            .transcript_store()
+            .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
+        let mut sessions = store.saved_sessions()?;
+        Self::sort_agent_saved_sessions_for_picker(&mut sessions);
+        let prompt_width = usize::from(self.session.authoritative_size.columns)
+            .saturating_sub(40)
+            .clamp(20, 80);
+        let records = sessions
+            .into_iter()
+            .map(|session| Self::saved_session_browser_record(session, prompt_width))
+            .collect();
+        let mut browser = RecordBrowser::new("Agent Sessions", records, Vec::new())?;
+        browser.enable_deletion();
+        browser.set_table_id_column("Conversation");
+        browser.set_table_columns_with_labels(vec![
+            ("Name".to_string(), "name".to_string()),
+            ("Last active".to_string(), "last_active".to_string()),
+            ("Directory".to_string(), "directory".to_string()),
+            ("Entries".to_string(), "entries".to_string()),
+            ("Latest prompt".to_string(), "latest_prompt".to_string()),
+        ]);
+        browser.set_help(
+            Some(
+                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `d` delete · `/` search"
+                    .to_string(),
+            ),
+            Some("**Keys:** `Esc` back · `d` delete · `/` search".to_string()),
+        );
+        browser.set_empty_message(Some("No saved agent sessions are available.".to_string()));
+        Ok(browser)
     }
 
-    /// Formats the active in-memory session for `/list-sessions` fallback output.
+    /// Formats the active in-memory session when transcript storage is unavailable.
     fn runtime_current_session_display(&self) -> String {
         let attached_clients = self
             .session
@@ -401,32 +434,9 @@ impl RuntimeSessionService {
         lines.join("\n")
     }
 
-    /// Encodes one agent command as a markdown link destination.
-    fn markdown_link_destination(command: &str) -> String {
-        let mut encoded = String::from("mez-agent:");
-        for byte in command.bytes() {
-            match byte {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
-                    encoded.push(char::from(byte))
-                }
-                other => encoded.push_str(&format!("%{other:02X}")),
-            }
-        }
-        encoded
-    }
-
-    /// Formats saved agent conversations as a nested resume list.
-    fn runtime_agent_saved_sessions_display(
-        sessions: &[SavedAgentSession],
-        width: usize,
-    ) -> String {
-        let mut lines = vec!["## Agent Sessions".to_string(), String::new()];
-        if sessions.is_empty() {
-            lines.push("No saved agent sessions are available.".to_string());
-            return lines.join("\n");
-        }
-        let mut sorted_sessions = sessions.iter().collect::<Vec<_>>();
-        sorted_sessions.sort_by(|left, right| {
+    /// Applies named-first ordering while retaining activity order per partition.
+    fn sort_agent_saved_sessions_for_picker(sessions: &mut [SavedAgentSession]) {
+        sessions.sort_by(|left, right| {
             right
                 .name
                 .is_some()
@@ -449,39 +459,48 @@ impl RuntimeSessionService {
                         })
                 })
         });
-        for (index, session) in sorted_sessions.iter().enumerate() {
-            if index > 0 {
-                lines.push(String::new());
-            }
-            let summary = &session.summary;
-            let resume_command = format!("/resume {}", summary.conversation_id);
-            let mut heading = format!(
-                "- [**{}**]({})",
-                summary.conversation_id,
-                Self::markdown_link_destination(&resume_command)
-            );
-            if let Some(name) = session.name.as_deref() {
-                heading.push_str(" - ");
-                heading.push_str(&escape_session_name_for_markdown(name));
-            }
-            lines.push(heading);
-            lines.push(format!(
-                "  - Last Active: {}",
-                unix_seconds_to_rfc3339(summary.last_created_at_unix_seconds)
-            ));
-            lines.push(format!(
-                "  - Directory: {}",
-                summary.directory.as_deref().unwrap_or("-")
-            ));
-            lines.push(format!(
-                "  - Prompt: {}",
-                runtime_fit_status_line(
-                    summary.latest_user_prompt.as_deref().unwrap_or("-"),
-                    width.saturating_sub("  - Prompt: ".len())
-                )
-            ));
+    }
+
+    /// Adapts one saved conversation to the shared record-browser contract.
+    fn saved_session_browser_record(
+        session: SavedAgentSession,
+        prompt_width: usize,
+    ) -> RecordBrowserRecord {
+        let summary = session.summary;
+        let escaped_name = session
+            .name
+            .as_deref()
+            .map(escape_session_name_for_markdown);
+        let title = escaped_name
+            .as_deref()
+            .map(|name| format!("{} - {name}", summary.conversation_id))
+            .unwrap_or_else(|| summary.conversation_id.clone());
+        RecordBrowserRecord {
+            id: summary.conversation_id.clone(),
+            open_command: Some(format!("/resume {}", summary.conversation_id)),
+            title,
+            metadata: vec![
+                ("name".to_string(), session.name.unwrap_or_default()),
+                (
+                    "last_active".to_string(),
+                    unix_seconds_to_rfc3339(summary.last_created_at_unix_seconds),
+                ),
+                (
+                    "directory".to_string(),
+                    summary.directory.unwrap_or_else(|| "-".to_string()),
+                ),
+                ("entries".to_string(), summary.entries.to_string()),
+                (
+                    "latest_prompt".to_string(),
+                    runtime_fit_status_line(
+                        summary.latest_user_prompt.as_deref().unwrap_or("-"),
+                        prompt_width,
+                    ),
+                ),
+            ],
+            markdown: "Select this saved conversation to resume it in the current pane."
+                .to_string(),
         }
-        lines.join("\n")
     }
 
     /// Formats a resumed transcript as prompt display lines so the user can

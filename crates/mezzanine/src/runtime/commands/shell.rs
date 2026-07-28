@@ -485,17 +485,6 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&name_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
-                    && command == "list-sessions"
-                {
-                    let sessions_outcome =
-                        self.execute_agent_shell_list_sessions_command(&pane_id)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&sessions_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
                     && command == "list-macros"
                 {
                     let macros_outcome = self.execute_agent_shell_list_macros_command(&pane_id)?;

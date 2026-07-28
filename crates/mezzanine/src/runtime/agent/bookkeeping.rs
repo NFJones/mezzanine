@@ -317,7 +317,7 @@ impl RuntimeSessionService {
     }
 
     /// Builds the one-time system transcript entry that makes saved sessions
-    /// self-describing in `/list-sessions` and `/resume` flows.
+    /// self-describing in `/resume` flows.
     ///
     /// # Parameters
     /// - `conversation_id`: The durable transcript conversation id.
