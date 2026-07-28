@@ -258,8 +258,6 @@ pub fn config_change_setting_path_description() -> String {
                 "read_scopes",
                 "write_scopes",
                 "bubblewrap",
-                "trusted_directories",
-                "trusted_projects",
                 "command_rules",
                 "session_command_rules",
                 "global_command_rules",
@@ -328,8 +326,6 @@ pub(super) const PERMISSION_KEYS: &[&str] = &[
     "read_scopes",
     "write_scopes",
     "bubblewrap",
-    "trusted_directories",
-    "trusted_projects",
     "command_rules",
     "session_command_rules",
     "global_command_rules",
@@ -392,8 +388,6 @@ pub(crate) fn config_change_path_is_user_only_sandbox_policy(path: &str) -> bool
             | "permissions.read_scopes"
             | "permissions.write_scopes"
             | "permissions.bubblewrap"
-            | "permissions.trusted_directories"
-            | "permissions.trusted_projects"
     ) || path.starts_with("permissions.bubblewrap.")
 }
 

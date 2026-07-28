@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 44
+version = 45
 
 [terminal]
 profile = "xterm-compatible"
@@ -493,8 +493,6 @@ sandbox = "policy-only"
 # required_executables = ["0:bin/acme"]
 # [permissions.bubblewrap.custom_toolchains.acme.environment]
 # ACME_HOME = "0:."
-trusted_directories = []
-trusted_projects = []
 command_rules = []
 session_command_rules = []
 global_command_rules = []

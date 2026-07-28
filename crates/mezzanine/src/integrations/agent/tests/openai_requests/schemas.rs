@@ -566,14 +566,7 @@ fn openai_responses_request_body_describes_config_change_schema() {
         .and_then(|(_, suffix)| suffix.split_once("] except user-only sandbox authority"))
         .map(|(paths, _)| paths)
         .expect("config-change guidance should advertise mutable permission paths");
-    for user_only_path in [
-        "sandbox",
-        "read_scopes",
-        "write_scopes",
-        "bubblewrap",
-        "trusted_directories",
-        "trusted_projects",
-    ] {
+    for user_only_path in ["sandbox", "read_scopes", "write_scopes", "bubblewrap"] {
         assert!(
             !permission_paths
                 .split(", ")

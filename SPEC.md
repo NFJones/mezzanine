@@ -2811,8 +2811,7 @@ opening a detail view. The table MUST NOT expose `system_prompt` or
 non-actionable empty state.
 
 The `permissions` table MUST support `approval_policy`, `sandbox`,
-`read_scopes`, `write_scopes`, `trusted_directories`, `trusted_projects`,
-`command_rules`, `session_command_rules`, `global_command_rules`,
+`read_scopes`, `write_scopes`, `command_rules`, `session_command_rules`, `global_command_rules`,
 `network_policy`, `destructive_action_policy`, `bypass_mode`, and the typed
 `bubblewrap` table. `sandbox` MUST default to `policy-only`; `bubblewrap` MUST
 be opt-in and fail closed. Policy-only execution provides approval
@@ -3218,6 +3217,11 @@ migration MUST preserve existing built-in and custom selections or omission and
 MUST NOT discover or enable either build tool. Both kinds MUST require an
 explicitly selected JDK. Detection MUST prefer a real executable repository-root
 `mvnw` or `gradlew` under trusted project authority with its real wrapper
+
+Schema v45 removes the inert `permissions.trusted_directories` and
+`permissions.trusted_projects` fields. The v44 to v45 primary-config migration
+MUST remove both fields without creating or altering durable project-trust
+records.
 properties file and one credential-free HTTPS `distributionUrl`. Symlinks,
 malformed or duplicate URLs, embedded credentials, fragments, and missing
 metadata MUST fail closed. Detection MUST NOT download wrapper distributions or

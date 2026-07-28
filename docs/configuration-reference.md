@@ -707,8 +707,6 @@ Provider options under a model profile:
 | `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.toolchains` | string array | omitted | Ordered direct-user-selected read-only built-in or `custom:<name>` toolchains. Built-in selectors persist identity rather than discovered host paths. |
 | `permissions.bubblewrap.custom_toolchains.<name>` | table | omitted | Schema-v32 primary-user constrained custom definition with `roots`, `path_entries`, optional `required_executables`, `description`, and synthesized root-relative `environment` values. Enabling the definition adds its validated roots to read authority only for fixed read-only projections; it adds no write authority or generic host-path mounts. |
-| `permissions.trusted_directories` | string array | `[]` | Trusted directory roots; never converted into mounts. |
-| `permissions.trusted_projects` | string array | `[]` | Trusted project roots for command authorization. A current project trust decision supplies default read-write authority when explicit scopes are omitted. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
 | `permissions.session_command_rules` | array | `[]` | Session-scoped command rule entries. |
 | `permissions.global_command_rules` | array | `[]` | Global command rule entries. |
@@ -1011,9 +1009,8 @@ paths are also supported by the live `config_change` mutation surface.
 
 Sandbox policy is user-only. Agents cannot use `config_change` to mutate
 `permissions.sandbox`, `permissions.bubblewrap`, `permissions.read_scopes`,
-`permissions.write_scopes`, `permissions.trusted_directories`, or
-`permissions.trusted_projects`, even if the action would otherwise be approved
-or auto-allowed. Change those settings directly with `mez config set`, `mez
+`permissions.write_scopes`, even if the action would otherwise be approved or
+auto-allowed. Change those settings directly with `mez config set`, `mez
 config unset`, or an equivalent primary-client configuration command.
 
 For streamable HTTP servers, `mez mcp login <name>` stores OAuth tokens in the

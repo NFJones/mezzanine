@@ -890,25 +890,6 @@ pub(crate) fn runtime_configured_permissions_from_config(
             policy.add_rule(runtime_command_rule_from_config(rule_value, default_scope)?);
         }
     }
-    if let Some(dirs) = permissions
-        .get("trusted_directories")
-        .and_then(Value::as_array)
-    {
-        policy.trusted_directories = dirs
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect();
-    }
-    if let Some(projects) = permissions
-        .get("trusted_projects")
-        .and_then(Value::as_array)
-    {
-        for project in projects.iter().filter_map(Value::as_str) {
-            policy.trusted_directories.push(project.to_string());
-        }
-    }
-
     let read_scopes =
         runtime_json_string_array(permissions.get("read_scopes"))?.unwrap_or_default();
     let write_scopes =

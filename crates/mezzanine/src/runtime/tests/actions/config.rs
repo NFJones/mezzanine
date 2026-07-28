@@ -172,8 +172,6 @@ fn runtime_config_change_rejects_user_only_sandbox_policy() {
         ),
         ("permissions.read_scopes", r#"[\"/\"]"#),
         ("permissions.write_scopes", r#"[\"/\"]"#),
-        ("permissions.trusted_directories", r#"[\"/\"]"#),
-        ("permissions.trusted_projects", r#"[\"/\"]"#),
     ]
     .into_iter()
     .enumerate()
