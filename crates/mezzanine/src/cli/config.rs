@@ -9,13 +9,13 @@ use super::{
     Args, CliEnv, CliOutputFormat, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation,
     ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope,
     DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML, EffectiveConfig, MezError, PathBuf,
-    ProjectTrustRecord, ProjectTrustStore, Result, Serialize, Subcommand, TrustDecision, Write,
+    ProjectTrustStore, Result, Serialize, Subcommand, TrustDecision, Write,
     compose_effective_config, default_trust_database_path, diagnostics_json, discover_project_root,
     fs, json_escape, persist_config_mutation, render_cli_help, serialize_json,
     validate_config_file, validate_config_text, write_json_or_plain,
 };
 
-// Config and project-trust subcommands.
+// Configuration subcommands.
 
 /// Runs the run config operation for this subsystem.
 ///
@@ -72,9 +72,6 @@ pub(super) fn run_config<W: Write>(
         Some(ConfigCliCommand::Unset(args)) => {
             run_config_unset(args, &paths, output_format, stdout)?
         }
-        Some(ConfigCliCommand::Trust(args)) => {
-            run_config_trust(args, &paths, output_format, stdout)?
-        }
     }
 
     Ok(())
@@ -114,8 +111,6 @@ enum ConfigCliCommand {
     Set(ConfigSetCliArgs),
     /// Removes a persisted scalar config value.
     Unset(ConfigUnsetCliArgs),
-    /// Inspects or changes project trust records.
-    Trust(ConfigTrustCliArgs),
 }
 
 /// Typed process CLI arguments for `mez config set`.
@@ -139,14 +134,6 @@ pub(super) struct ConfigUnsetCliArgs {
     /// Persistence target options.
     #[command(flatten)]
     target: CliConfigPersistOptions,
-}
-
-/// Typed process CLI arguments for `mez config trust`.
-#[derive(Debug, Clone, clap::Args)]
-pub(super) struct ConfigTrustCliArgs {
-    /// Optional trust subcommand, defaulting to `list`.
-    #[command(subcommand)]
-    command: Option<ConfigTrustCliCommand>,
 }
 
 /// Runs the run config get operation for this subsystem.
@@ -821,122 +808,6 @@ fn cli_config_layer_type_name(scope: ConfigScope) -> &'static str {
     }
 }
 
-/// Runs the run config trust operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn run_config_trust<W: Write>(
-    args: ConfigTrustCliArgs,
-    paths: &ConfigPaths,
-    output_format: CliOutputFormat,
-    stdout: &mut W,
-) -> Result<()> {
-    let trust_path = default_trust_database_path(paths.root());
-    let store = ProjectTrustStore::load_from_file(&trust_path)?;
-    match args.command.unwrap_or(ConfigTrustCliCommand::List) {
-        ConfigTrustCliCommand::List => {
-            let output = project_records_json(store.records())?;
-            write_json_or_plain(stdout, output_format, &output)?;
-        }
-        ConfigTrustCliCommand::Inspect { root } => {
-            let Some(record) = store.get(&root) else {
-                return Err(MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "project trust record not found",
-                ));
-            };
-            let output = project_record_json(record)?;
-            write_json_or_plain(stdout, output_format, &output)?;
-        }
-        ConfigTrustCliCommand::Trust { root } => {
-            persist_config_trust_decision(
-                &trust_path,
-                root,
-                TrustDecision::Trusted,
-                output_format,
-                stdout,
-            )?;
-        }
-        ConfigTrustCliCommand::Reject { root } => {
-            persist_config_trust_decision(
-                &trust_path,
-                root,
-                TrustDecision::Rejected,
-                output_format,
-                stdout,
-            )?;
-        }
-        ConfigTrustCliCommand::Revoke { root } => {
-            persist_config_trust_decision(
-                &trust_path,
-                root,
-                TrustDecision::Revoked,
-                output_format,
-                stdout,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-/// Persists one project trust decision and writes the resulting record.
-///
-/// # Parameters
-/// - `trust_path`: The trust database path to save.
-/// - `root`: The project root whose trust state changes.
-/// - `decision`: The requested trust decision.
-/// - `output_format`: The CLI output format.
-/// - `stdout`: The output sink for the response.
-fn persist_config_trust_decision<W: Write>(
-    trust_path: &std::path::Path,
-    root: PathBuf,
-    decision: TrustDecision,
-    output_format: CliOutputFormat,
-    stdout: &mut W,
-) -> Result<()> {
-    let git_marker = root.join(".git");
-    let git_marker = git_marker.exists().then_some(git_marker);
-    let snapshot = ProjectTrustStore::update_file(trust_path, |store| {
-        store.decide(root.clone(), decision, git_marker)
-    })?;
-    let record = snapshot.store.get(&root).ok_or_else(|| {
-        MezError::new(
-            crate::error::MezErrorKind::NotFound,
-            "project trust record not found after decision",
-        )
-    })?;
-    let output = project_record_json(record)?;
-    write_json_or_plain(stdout, output_format, &output)?;
-    Ok(())
-}
-
-/// Typed process CLI subcommands for project trust records.
-#[derive(Debug, Clone, Subcommand)]
-pub(super) enum ConfigTrustCliCommand {
-    /// Lists project trust records.
-    List,
-    /// Inspects one project trust record.
-    Inspect {
-        /// Project root path.
-        root: PathBuf,
-    },
-    /// Marks one project root as trusted.
-    Trust {
-        /// Project root path.
-        root: PathBuf,
-    },
-    /// Marks one project root as rejected.
-    Reject {
-        /// Project root path.
-        root: PathBuf,
-    },
-    /// Revokes one project trust record.
-    Revoke {
-        /// Project root path.
-        root: PathBuf,
-    },
-}
 /// Runs the json string array operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -951,77 +822,4 @@ pub(super) fn json_string_array(values: &[String]) -> String {
             .collect::<Vec<_>>()
             .join(",")
     )
-}
-
-/// Runs the project records json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn project_records_json<'a>(
-    records: impl Iterator<Item = &'a ProjectTrustRecord>,
-) -> Result<String> {
-    let records = records
-        .map(ProjectTrustRecordJson::from)
-        .collect::<Vec<_>>();
-    serialize_json(&records)
-}
-
-/// Runs the project record json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn project_record_json(record: &ProjectTrustRecord) -> Result<String> {
-    serialize_json(&ProjectTrustRecordJson::from(record))
-}
-
-/// Structured JSON payload emitted for one project trust record.
-#[derive(Serialize)]
-struct ProjectTrustRecordJson {
-    /// Canonical project root path associated with the trust record.
-    project_root: String,
-    /// Current trust decision label.
-    state: &'static str,
-    /// Canonical Git marker path used to bind trust when available.
-    git_marker_path: Option<String>,
-    /// Unix timestamp recording when the decision was made.
-    trusted_at_unix_seconds: u64,
-    /// Trust policy version recorded with the decision.
-    trust_policy_version: u32,
-    /// Configuration schema version recorded with the decision.
-    configuration_schema_version: u32,
-    /// VCS remote recorded with the decision when available.
-    vcs_remote: Option<String>,
-}
-
-impl From<&ProjectTrustRecord> for ProjectTrustRecordJson {
-    fn from(record: &ProjectTrustRecord) -> Self {
-        Self {
-            project_root: record.project_root.to_string_lossy().into_owned(),
-            state: trust_decision_name(record.state),
-            git_marker_path: record
-                .git_marker_path
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned()),
-            trusted_at_unix_seconds: record.trusted_at_unix_seconds,
-            trust_policy_version: record.trust_policy_version,
-            configuration_schema_version: record.configuration_schema_version,
-            vcs_remote: record.vcs_remote.clone(),
-        }
-    }
-}
-
-/// Runs the trust decision name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn trust_decision_name(decision: TrustDecision) -> &'static str {
-    match decision {
-        TrustDecision::Pending => "pending",
-        TrustDecision::Trusted => "trusted",
-        TrustDecision::Rejected => "rejected",
-        TrustDecision::Revoked => "revoked",
-    }
 }

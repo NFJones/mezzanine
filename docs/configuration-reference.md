@@ -785,11 +785,12 @@ reject symlinks and remain scoped to Mezzanine's private project/profile cache
 root. There is no automatic cleanup or persisted quota setting.
 
 Guided setup is available through `mez sandbox plan`, `enable`, `preset apply`,
-`disable`, and `trust-current-project`. The code-owned presets are
+and `disable`. Project trust records are managed through `mez sandbox trust`.
+The code-owned presets are
 `project-safe` (Bubblewrap plus `ask`), `project-auto` (Bubblewrap plus
 `auto-allow`), `project-read-only` (project read scope with no write scope),
 and `off` (policy-only while retaining the other sandbox settings). Planning
-and `--dry-run` are read-only. Every mutation requires confirmation;
+and `--dry-run` are read-only. Every guided setup mutation requires confirmation;
 noninteractive or JSON mutation requires `--yes`, and setup must explicitly
 choose `trusted-project` or `explicit-scope` authority. Trusted-project mode
 can activate applicable project overlays, macros, and skills, while

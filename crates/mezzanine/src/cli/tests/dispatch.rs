@@ -74,7 +74,7 @@ fn clap_renders_config_help_for_help_flag_and_empty_command() {
     let mut empty_stderr = Vec::new();
     run_with_plain(
         vec!["mez".to_string(), "config".to_string()],
-        env,
+        env.clone(),
         false,
         &mut empty_stdout,
         &mut empty_stderr,
@@ -83,8 +83,34 @@ fn clap_renders_config_help_for_help_flag_and_empty_command() {
 
     let empty_output = String::from_utf8(empty_stdout).unwrap();
     assert!(empty_output.contains("Usage: mez config"), "{empty_output}");
-    assert!(empty_output.contains("trust"), "{empty_output}");
+    assert!(!empty_output.contains("trust"), "{empty_output}");
     assert!(empty_stderr.is_empty());
+
+    let mut sandbox_stdout = Vec::new();
+    let mut sandbox_stderr = Vec::new();
+    run_with_plain(
+        vec![
+            "mez".to_string(),
+            "sandbox".to_string(),
+            "--help".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut sandbox_stdout,
+        &mut sandbox_stderr,
+    )
+    .unwrap();
+    let sandbox_output = String::from_utf8(sandbox_stdout).unwrap();
+    assert!(
+        sandbox_output.contains("Usage: mez sandbox"),
+        "{sandbox_output}"
+    );
+    assert!(sandbox_output.contains("trust"), "{sandbox_output}");
+    assert!(
+        !sandbox_output.contains("trust-current-project"),
+        "{sandbox_output}"
+    );
+    assert!(sandbox_stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }

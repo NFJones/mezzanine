@@ -15,8 +15,8 @@ use rustix::fs::{FlockOperation, flock};
 use serde::Deserialize;
 
 use super::{
-    CliEnv, CliOutputFormat, MezError, Result, Serialize, SocketSelection, cli_idempotency_key,
-    run_automation_control_request, serialize_json,
+    CliEnv, CliOutputFormat, MezError, ProjectTrustCliArgs, Result, Serialize, SocketSelection,
+    cli_idempotency_key, run_automation_control_request, run_project_trust, serialize_json,
 };
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
@@ -96,8 +96,8 @@ enum SandboxCliCommand {
     },
     /// Selects policy-only execution while retaining other sandbox settings.
     Disable(SandboxMutationArgs),
-    /// Trusts the independently discovered current project.
-    TrustCurrentProject(SandboxMutationArgs),
+    /// Inspects or changes project trust records.
+    Trust(ProjectTrustCliArgs),
     /// Detects or enables allowlisted read-only developer toolchains.
     Toolchains {
         /// Toolchain workflow to run.
@@ -245,8 +245,6 @@ enum SandboxSetupCommand {
     Enable(SandboxSetupArgs),
     /// Selects policy-only execution while retaining other settings.
     Disable(SandboxMutationArgs),
-    /// Trusts the independently discovered current project.
-    TrustCurrentProject(SandboxMutationArgs),
     /// Imports one reviewed sanitized profile.
     ProfileImport(SandboxSetupArgs, Vec<String>),
 }
@@ -414,14 +412,10 @@ pub(super) fn run_sandbox<W: Write>(
                 stdout,
             );
         }
-        Some(SandboxCliCommand::TrustCurrentProject(args)) => {
-            return run_sandbox_setup(
-                SandboxSetupCommand::TrustCurrentProject(args),
-                env,
-                interactive,
-                output_format,
-                stdout,
-            );
+        Some(SandboxCliCommand::Trust(args)) => {
+            let paths = env.config_paths()?;
+            run_project_trust(args, &paths, output_format, stdout)?;
+            return Ok(0);
         }
         None => (
             std::env::current_dir()?,
@@ -848,16 +842,6 @@ fn run_sandbox_setup<W: Write>(
                 args.yes,
                 false,
                 false,
-                None,
-            ),
-            SandboxSetupCommand::TrustCurrentProject(args) => (
-                "trust-current-project".to_string(),
-                Some("trusted-project".to_string()),
-                None,
-                args.dry_run,
-                args.yes,
-                false,
-                true,
                 None,
             ),
             SandboxSetupCommand::ProfileImport(args, toolchains) => (

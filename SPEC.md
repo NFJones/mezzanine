@@ -2947,8 +2947,9 @@ persisted quota policy.
 
 Guided setup MUST provide code-owned `project-safe`, `project-auto`,
 `project-read-only`, and `off` presets through `mez sandbox plan`, `enable`,
-`preset apply`, `disable`, and `trust-current-project`. Planning and `--dry-run`
-MUST be side-effect-free. Every mutation MUST require direct-user confirmation;
+`preset apply`, and `disable`. Project trust inspection and mutation MUST be
+provided through `mez sandbox trust`. Planning and `--dry-run`
+MUST be side-effect-free. Every guided setup mutation MUST require direct-user confirmation;
 noninteractive or JSON mutation MUST require `--yes`, and noninteractive setup
 MUST explicitly select `trusted-project` or `explicit-scope` authority. Preset
 changes MUST be composed and validated as one final config document and written

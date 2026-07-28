@@ -344,8 +344,8 @@ skill usage.
 - Put project config overlays under `.mezzanine/config.toml` when needed.
 - Project overlays are trusted per project root. Until trusted, behavior that
   depends on the overlay is blocked or skipped with diagnostics.
-- Inspect trust state with `mez config trust list`; trust, reject, or revoke
-  project roots through `mez config trust ...`.
+- Inspect trust state with `mez sandbox trust list`; trust, reject, or revoke
+  project roots through `mez sandbox trust ...`.
 ## Provider Support
 Mezzanine currently ships with native support for a small provider set. The table below summarizes the
 currently supported providers and the provider families that should eventually
@@ -416,9 +416,10 @@ Current support reflects behavior implemented in the repository today.
   managed-home readiness, pane-specific probe freshness, and stable
   diagnostics. It is strictly read-only: it does not migrate configuration,
   mutate trust, create managed homes, or populate capability-probe caches.
-- `mez sandbox plan`, `enable`, `preset apply`, `disable`, and
-  `trust-current-project` provide direct-user guided setup. Plans and
-  `--dry-run` never write; mutations require confirmation and noninteractive
+- `mez sandbox plan`, `enable`, `preset apply`, and `disable` provide
+  direct-user guided setup, while `mez sandbox trust ...` manages project
+  trust records. Plans and
+  `--dry-run` never write; guided setup mutations require confirmation and noninteractive
   use requires `--yes`. Persisted project-trust changes become visible to
   already-running services at their next trust-sensitive configuration or
   agent operation. Code-owned presets provide safe, automatic, read-only, and
@@ -557,7 +558,7 @@ Current support reflects behavior implemented in the repository today.
 1. Open the project in a pane.
 2. Inspect pending trust state:
    ```sh
-   mez config trust list
+   mez sandbox trust list
    ```
 3. Review `.mezzanine/config.toml` and `AGENTS.md`.
 4. Trust the project root only after you understand the additional authority it
@@ -614,7 +615,7 @@ mez [--json] <command> [options]
 | `mez config layers`         | Show loaded config layers and diagnostics. |
 | `mez config set PATH VALUE` | Persist a scalar value.                    |
 | `mez config unset PATH`     | Remove a persisted scalar value.           |
-| `mez config trust list`     | Inspect project trust records.             |
+| `mez sandbox trust list`    | Inspect project trust records.             |
 
 ### Auth and integration commands
 
@@ -673,8 +674,8 @@ Common tasks:
 | Inspect the effective config      | `mez config get`                   |
 | Show the built-in defaults        | `mez config default`               |
 | Change the active theme           | `mez config set theme.active nord` |
-| Inspect trust state               | `mez config trust list`            |
-| Trust a project root              | `mez config trust trust PATH`      |
+| Inspect trust state               | `mez sandbox trust list`           |
+| Trust a project root              | `mez sandbox trust trust PATH`     |
 | Change model selection at runtime | `/model`                           |
 | Toggle supported thinking mode    | `/thinking`                        |
 | Change pane-subtree approval mode | `/approval`                        |
@@ -742,8 +743,8 @@ it in provider requests. The discovery filenames are configurable under
 ### How do project config overlays become trusted?
 
 Project overlays are discovered from the project root and remain pending until
-the primary client trusts or rejects them. Use `mez config trust list` to see
-records and `mez config trust trust PATH` to trust a root. In the pane-local
+the primary client trusts or rejects them. Use `mez sandbox trust list` to see
+records and `mez sandbox trust trust PATH` to trust a root. In the pane-local
 agent shell, `/trust PATH` trusts an explicit project root (with relative paths
 resolved from the active pane), while `/trust`, `/trust latest`, and `/trust
 list` manage pending requests.

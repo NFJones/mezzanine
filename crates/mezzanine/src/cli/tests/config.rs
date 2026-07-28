@@ -198,7 +198,7 @@ fn config_set_project_scope_requires_trusted_project_root() {
     run_with(
         vec![
             "mez".to_string(),
-            "config".to_string(),
+            "sandbox".to_string(),
             "trust".to_string(),
             "trust".to_string(),
             project.to_string_lossy().to_string(),
@@ -240,14 +240,14 @@ fn config_set_project_scope_requires_trusted_project_root() {
     let _ = fs::remove_dir_all(home);
 }
 
-/// Verifies config trust subcommands persist project decisions.
+/// Verifies sandbox trust subcommands persist project decisions.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn config_trust_subcommands_persist_project_decisions() {
-    let (env, home) = test_env("config-trust");
+fn sandbox_trust_subcommands_persist_project_decisions() {
+    let (env, home) = test_env("sandbox-trust");
     let project = home.join("repo");
     fs::create_dir_all(project.join(".git")).unwrap();
     let mut trust_stdout = Vec::new();
@@ -256,7 +256,7 @@ fn config_trust_subcommands_persist_project_decisions() {
     run_with(
         vec![
             "mez".to_string(),
-            "config".to_string(),
+            "sandbox".to_string(),
             "trust".to_string(),
             "trust".to_string(),
             project.to_string_lossy().to_string(),
@@ -277,7 +277,7 @@ fn config_trust_subcommands_persist_project_decisions() {
     run_with(
         vec![
             "mez".to_string(),
-            "config".to_string(),
+            "sandbox".to_string(),
             "trust".to_string(),
             "list".to_string(),
         ],
