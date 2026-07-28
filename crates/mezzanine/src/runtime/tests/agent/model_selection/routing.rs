@@ -724,6 +724,89 @@ fn runtime_routed_loop_transfers_work_turn_ownership_to_selected_worker() {
     assert_eq!(state.routed_worker_profile.as_ref(), Some(&parent_profile));
 }
 
+/// Verifies a routed `/loop` continues when a worker applies a patch before a
+/// later provider continuation completes without another patch action.
+///
+/// The active execution is replaced for each provider response. Retaining the
+/// patch fact on the loop controller prevents the terminal response from
+/// incorrectly classifying the iteration as patch-free.
+#[test]
+fn runtime_routed_loop_retains_patch_work_across_provider_continuations() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 retain routed patch evidence");
+    let worker_profile = service
+        .agent_turn_model_profile(&worker_turn.turn_id)
+        .expect("routed worker profile should exist")
+        .clone();
+
+    let mut patch_execution = routed_patch_execution(&worker_turn);
+    patch_execution
+        .response
+        .action_batch
+        .as_mut()
+        .unwrap()
+        .final_turn = false;
+    patch_execution.final_turn = false;
+    patch_execution.terminal_state = AgentTurnState::Running;
+    service
+        .apply_agent_provider_execution(
+            &worker_turn,
+            &worker_profile,
+            "runtime-batch",
+            patch_execution,
+        )
+        .unwrap();
+
+    let completion_batch =
+        runtime_complete_batch_for(worker_turn.turn_id.clone(), worker_turn.agent_id.clone());
+    let completion_result = mez_agent::ActionResult::succeeded(
+        &worker_turn,
+        &completion_batch.actions[0],
+        vec!["Done.".to_string()],
+        None,
+    );
+    service
+        .apply_agent_provider_execution(
+            &worker_turn,
+            &worker_profile,
+            "runtime-batch",
+            mez_agent::AgentTurnExecution {
+                request: runtime_model_request_fixture_for_agent(
+                    &worker_turn.turn_id,
+                    &worker_turn.agent_id,
+                ),
+                response: mez_agent::ModelResponse {
+                    provider: "runtime-batch".to_string(),
+                    model: "test".to_string(),
+                    raw_text: "completed work".to_string(),
+                    usage: Default::default(),
+                    latest_request_usage: None,
+                    quota_usage: Default::default(),
+                    action_batch: Some(completion_batch),
+                    provider_transcript_events: Vec::new(),
+                },
+                latest_response_usage: Default::default(),
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                action_results: vec![completion_result],
+                final_turn: true,
+                terminal_state: AgentTurnState::Completed,
+            },
+        )
+        .unwrap();
+
+    let workflow = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .expect("patch work should retain the routed workflow");
+    assert_ne!(
+        workflow.child_turn_id.as_deref(),
+        Some(worker_turn.turn_id.as_str())
+    );
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult
+    );
+}
+
 /// Verifies a routed `/loop` keeps its parent blocked after patch work and
 /// reuses the selected worker for the next iteration before queueing one
 /// terminal handoff.

@@ -27,6 +27,9 @@ impl RuntimeSessionService {
     ) -> Result<AgentTurnExecution> {
         let turn_id = turn.turn_id.as_str();
         self.scope_provider_execution_action_ids(turn, &mut execution)?;
+        if mez_agent::outcome::runtime_execution_has_apply_patch_action(&execution) {
+            self.record_agent_loop_apply_patch_for_turn(turn_id);
+        }
         self.append_provider_request_audit(turn, model_profile, provider_id, "succeeded")?;
         let response_action_count = execution
             .response

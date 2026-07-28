@@ -7,6 +7,24 @@ use super::super::{
 use mez_agent::outcome::runtime_execution_has_apply_patch_action;
 
 impl RuntimeSessionService {
+    /// Records that a loop-owned turn emitted an `apply_patch` action.
+    ///
+    /// Provider continuations replace the active response batch after actions settle, so
+    /// loop accounting must retain this fact independently of the terminal batch.
+    pub(crate) fn record_agent_loop_apply_patch_for_turn(&mut self, turn_id: &str) {
+        let Some(loop_id) = self
+            .agent
+            .agent_loop_turns
+            .get(turn_id)
+            .map(|loop_turn| loop_turn.loop_id.clone())
+        else {
+            return;
+        };
+        if let Some(state) = self.agent.agent_loops_by_id.get_mut(&loop_id) {
+            state.emitted_apply_patch = true;
+        }
+    }
+
     /// Consumes one terminal loop-owned turn and either continues or terminates its logical loop.
     pub(crate) fn settle_agent_loop_after_terminal_execution(
         &mut self,

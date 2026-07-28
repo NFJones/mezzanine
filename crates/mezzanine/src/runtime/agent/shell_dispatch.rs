@@ -525,11 +525,8 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running shell result does not match an action")
                 })?;
-            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
-                && let Some(loop_turn) = self.agent.agent_loop_turns.get(&turn.turn_id)
-                && let Some(state) = self.agent.agent_loops_by_id.get_mut(&loop_turn.loop_id)
-            {
-                state.emitted_apply_patch = true;
+            if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+                self.record_agent_loop_apply_patch_for_turn(&turn.turn_id);
             }
             let apply_patch_state_key =
                 Self::apply_patch_batch_state_key(&turn.turn_id, &action.id);
