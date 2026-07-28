@@ -197,13 +197,33 @@ impl ReadlinePromptState {
             return ReadlineOutcome::Noop;
         };
         let query = search.query.clone();
+        let current_match = search
+            .matched_index
+            .and_then(|index| self.buffer.history().get(index))
+            .cloned();
         let next = if forward {
-            search
+            let mut next = search
                 .matched_index
-                .and_then(|index| self.buffer.history_substring_match_after(&query, index))
+                .and_then(|index| self.buffer.history_substring_match_after(&query, index));
+            while next
+                .is_some_and(|index| self.buffer.history().get(index) == current_match.as_ref())
+            {
+                next =
+                    next.and_then(|index| self.buffer.history_substring_match_after(&query, index));
+            }
+            next
         } else {
-            let before = search.matched_index.unwrap_or(self.buffer.history().len());
-            self.buffer.history_substring_match_before(&query, before)
+            let mut next = self.buffer.history_substring_match_before(
+                &query,
+                search.matched_index.unwrap_or(self.buffer.history().len()),
+            );
+            while next
+                .is_some_and(|index| self.buffer.history().get(index) == current_match.as_ref())
+            {
+                next = next
+                    .and_then(|index| self.buffer.history_substring_match_before(&query, index));
+            }
+            next
         };
         self.set_reverse_search_match(next)
     }

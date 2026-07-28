@@ -153,6 +153,43 @@ fn readline_reverse_i_search_cycles_backward_and_forward() {
     assert!(!prompt.reverse_search_active());
 }
 
+/// Verifies Ctrl+R and Ctrl+Shift+R skip matching entries whose text is the
+/// same as the currently presented match, stopping at the next distinct match
+/// or at the end of the matching history range.
+#[test]
+fn readline_reverse_i_search_skips_identical_matching_entries() {
+    let mut prompt = TestPrompt::new();
+    prompt.buffer.set_history(vec![
+        "list files".to_string(),
+        "list tests".to_string(),
+        "list files".to_string(),
+        "build project".to_string(),
+        "list files".to_string(),
+    ]);
+    prompt.buffer.set_line("list");
+
+    assert_eq!(
+        prompt.apply_terminal_input(b"\x12").unwrap(),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.line(), "list files");
+    assert_eq!(
+        prompt.apply_terminal_input(b"\x12").unwrap(),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.line(), "list tests");
+    assert_eq!(
+        prompt.apply_terminal_input(b"\x1b[82;6u").unwrap(),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.line(), "list files");
+    assert_eq!(
+        prompt.apply_terminal_input(b"\x1b[82;6u").unwrap(),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.line(), "list");
+}
+
 /// Verifies reverse search accepts matches without submitting the prompt.
 ///
 /// Users often use Enter or Right arrow to choose a found item and then edit it
