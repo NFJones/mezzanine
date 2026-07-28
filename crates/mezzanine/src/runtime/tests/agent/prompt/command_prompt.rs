@@ -258,6 +258,31 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
     service.clear_primary_display_overlay();
 
     service.enter_primary_command_prompt("").unwrap();
+    let duplicate = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"help\r".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(duplicate.forwarded_bytes, 0);
+    assert_eq!(
+        service.primary_command_prompt_history(),
+        &[String::from("help")]
+    );
+    assert_eq!(
+        transcript_store.command_prompt_history().unwrap(),
+        vec![String::from("help")]
+    );
+    service.clear_primary_display_overlay();
+
+    service.enter_primary_command_prompt("").unwrap();
     let second = service
         .apply_attached_terminal_step_plan(
             &primary,

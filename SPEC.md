@@ -2066,6 +2066,10 @@ theme-relative while avoiding abrupt reuse of unrelated pill accents.
 The agent shell MUST obey readline-style input semantics for line editing,
 history navigation, cursor movement, deletion, and submission.
 
+Agent and primary command prompt histories MUST retain only one entry from each
+consecutive run of exactly equal submitted text. Nonconsecutive repetitions
+MUST remain available to history navigation and reverse search.
+
 The primary Mezzanine command prompt entered from the terminal UI MUST obey
 readline-style input semantics for line editing, history navigation, cursor
 movement, deletion, and submission. Submitted command-prompt entries MUST be
@@ -8748,7 +8752,8 @@ The parent agent-session directory MUST contain one bounded agent
 prompt-history file shared by all agent sessions for readline navigation and one
 bounded command-prompt history file shared by the primary Mezzanine command
 prompt. These files MUST remain separate from each other and from
-conversation-scoped transcripts and presentation logs.
+conversation-scoped transcripts and presentation logs. Both files MUST omit
+consecutively repeated exact entries while preserving nonconsecutive repeats.
 
 The user MUST be able to list, inspect, fork, resume, and delete saved agent
 conversations.

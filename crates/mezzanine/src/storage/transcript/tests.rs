@@ -582,6 +582,12 @@ async fn transcript_store_async_appends_entries_and_prompt_history() {
             .await
             .unwrap()
     );
+    assert!(
+        !store
+            .append_command_prompt_history_async("list-buffers")
+            .await
+            .unwrap()
+    );
 
     let inspected = store.inspect("conv1").unwrap();
     let history = store.prompt_history("conv1").unwrap();
@@ -666,16 +672,19 @@ fn transcript_store_persists_prompt_history_in_shared_file() {
         .append(&entry("conv1", 1, TranscriptRole::User))
         .unwrap();
     assert!(store.append_prompt_history("conv1", "list files").unwrap());
+    assert!(!store.append_prompt_history("conv1", "list files").unwrap());
     assert!(
         store
             .append_prompt_history("conv1", "build project")
             .unwrap()
     );
+    assert!(store.append_prompt_history("conv1", "list files").unwrap());
     assert!(store.append_prompt_history("conv2", "run tests").unwrap());
 
     let history = vec![
         String::from("list files"),
         String::from("build project"),
+        String::from("list files"),
         String::from("run tests"),
     ];
     assert_eq!(store.prompt_history("conv1").unwrap(), history);
@@ -684,6 +693,13 @@ fn transcript_store_persists_prompt_history_in_shared_file() {
     assert!(!root.join("conv1").join("prompt-history.tsv").exists());
     assert!(!root.join("conv2").join("prompt-history.tsv").exists());
     assert_eq!(store.list().unwrap().len(), 1);
+    assert_eq!(
+        fs::read_to_string(root.join("prompt-history.tsv"))
+            .unwrap()
+            .lines()
+            .count(),
+        history.len()
+    );
 
     let fork = store.fork("conv1", "conv3", 99).unwrap();
     assert_eq!(fork.conversation_id, "conv3");
@@ -703,17 +719,30 @@ fn transcript_store_imports_isolated_prompt_history_once() {
     fs::create_dir_all(root.join("conversation-a")).unwrap();
     fs::write(
         root.join("prompt-history.tsv"),
-        format!("{}\n", encode_prompt_history_entry("shared first").unwrap()),
+        format!(
+            "{}\n{}\n",
+            encode_prompt_history_entry("shared first").unwrap(),
+            encode_prompt_history_entry("shared first").unwrap()
+        ),
     )
     .unwrap();
     fs::write(
         root.join("conversation-a").join("prompt-history.tsv"),
-        format!("{}\n", encode_prompt_history_entry("from a").unwrap()),
+        format!(
+            "{}\n{}\n{}\n",
+            encode_prompt_history_entry("shared first").unwrap(),
+            encode_prompt_history_entry("from a").unwrap(),
+            encode_prompt_history_entry("from a").unwrap()
+        ),
     )
     .unwrap();
     fs::write(
         root.join("conversation-b").join("prompt-history.tsv"),
-        format!("{}\n", encode_prompt_history_entry("from b").unwrap()),
+        format!(
+            "{}\n{}\n",
+            encode_prompt_history_entry("from a").unwrap(),
+            encode_prompt_history_entry("from b").unwrap()
+        ),
     )
     .unwrap();
     let store = AgentTranscriptStore::new(root.clone());
@@ -802,11 +831,17 @@ fn transcript_store_persists_command_prompt_history_in_shared_file() {
             .unwrap()
     );
     assert!(store.append_command_prompt_history("help").unwrap());
+    assert!(!store.append_command_prompt_history("help").unwrap());
     assert!(store.append_command_prompt_history("list-buffers").unwrap());
+    assert!(store.append_command_prompt_history("help").unwrap());
 
     assert_eq!(
         store.command_prompt_history().unwrap(),
-        vec![String::from("help"), String::from("list-buffers")]
+        vec![
+            String::from("help"),
+            String::from("list-buffers"),
+            String::from("help"),
+        ]
     );
     assert_eq!(
         store.prompt_history("conv1").unwrap(),
@@ -815,6 +850,13 @@ fn transcript_store_persists_command_prompt_history_in_shared_file() {
     assert!(root.join("command-prompt-history.tsv").exists());
     assert!(root.join("prompt-history.tsv").exists());
     assert!(!root.join("conv1").join("prompt-history.tsv").exists());
+    assert_eq!(
+        fs::read_to_string(root.join("command-prompt-history.tsv"))
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
 
     let _ = fs::remove_dir_all(root);
 }

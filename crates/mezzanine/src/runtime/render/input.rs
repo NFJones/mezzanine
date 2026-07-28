@@ -159,13 +159,21 @@ impl RuntimeSessionService {
         if command.trim().is_empty() {
             return Ok(());
         }
-        self.presentation
+        if self
+            .presentation
             .primary_command_prompt_history
-            .push(command.to_string());
-        while self.presentation.primary_command_prompt_history.len()
-            > DEFAULT_READLINE_HISTORY_LIMIT
+            .last()
+            .map(String::as_str)
+            != Some(command)
         {
-            self.presentation.primary_command_prompt_history.remove(0);
+            self.presentation
+                .primary_command_prompt_history
+                .push(command.to_string());
+            while self.presentation.primary_command_prompt_history.len()
+                > DEFAULT_READLINE_HISTORY_LIMIT
+            {
+                self.presentation.primary_command_prompt_history.remove(0);
+            }
         }
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(());

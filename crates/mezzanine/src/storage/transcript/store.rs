@@ -897,9 +897,8 @@ impl AgentTranscriptStore {
         let _lock = self.acquire_prompt_history_lock()?;
         self.migrate_prompt_history_locked()?;
         let mut prompts = self.read_prompt_history_file()?;
-        prompts.push(prompt.to_string());
-        while prompts.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
-            prompts.remove(0);
+        if !append_history_entry(&mut prompts, prompt.to_string()) {
+            return Ok(false);
         }
         self.write_prompt_history(prompts)?;
         Ok(true)
@@ -912,9 +911,8 @@ impl AgentTranscriptStore {
             return Ok(false);
         }
         let mut commands = self.command_prompt_history()?;
-        commands.push(command.to_string());
-        while commands.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
-            commands.remove(0);
+        if !append_history_entry(&mut commands, command.to_string()) {
+            return Ok(false);
         }
         self.write_command_prompt_history(commands)?;
         Ok(true)
@@ -947,9 +945,8 @@ impl AgentTranscriptStore {
             return Ok(false);
         }
         let mut commands = self.command_prompt_history_async().await?;
-        commands.push(command.to_string());
-        while commands.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
-            commands.remove(0);
+        if !append_history_entry(&mut commands, command.to_string()) {
+            return Ok(false);
         }
         self.write_command_prompt_history_async(commands).await?;
         Ok(true)
@@ -971,15 +968,12 @@ impl AgentTranscriptStore {
         }
         let mut data = String::new();
         std_fs::File::open(path)?.read_to_string(&mut data)?;
-        let mut commands = data
+        let commands = data
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(decode_prompt_history_entry)
             .collect::<Result<Vec<_>>>()?;
-        if commands.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
-            commands = commands[commands.len() - DEFAULT_AGENT_PROMPT_HISTORY_LIMIT..].to_vec();
-        }
-        Ok(commands)
+        Ok(canonicalize_history(commands))
     }
 
     /// Reads bounded submitted primary command prompt history through Tokio
@@ -996,15 +990,12 @@ impl AgentTranscriptStore {
             }
             Err(error) => return Err(error.into()),
         }
-        let mut commands = data
+        let commands = data
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(decode_prompt_history_entry)
             .collect::<Result<Vec<_>>>()?;
-        if commands.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
-            commands = commands[commands.len() - DEFAULT_AGENT_PROMPT_HISTORY_LIMIT..].to_vec();
-        }
-        Ok(commands)
+        Ok(canonicalize_history(commands))
     }
 
     /// Returns the shared prompt-history file path after validating the caller.
@@ -1491,9 +1482,7 @@ impl AgentTranscriptStore {
         for path in legacy_paths {
             prompts.extend(Self::read_prompt_history_path(&path)?);
         }
-        if prompts.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
-            prompts = prompts[prompts.len() - DEFAULT_AGENT_PROMPT_HISTORY_LIMIT..].to_vec();
-        }
+        prompts = canonicalize_history(prompts);
         if !prompts.is_empty() {
             self.write_prompt_history(prompts)?;
         }
@@ -1520,15 +1509,12 @@ impl AgentTranscriptStore {
         }
         let mut data = String::new();
         std_fs::File::open(path)?.read_to_string(&mut data)?;
-        let mut prompts = data
+        let prompts = data
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(decode_prompt_history_entry)
             .collect::<Result<Vec<_>>>()?;
-        if prompts.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
-            prompts = prompts[prompts.len() - DEFAULT_AGENT_PROMPT_HISTORY_LIMIT..].to_vec();
-        }
-        Ok(prompts)
+        Ok(canonicalize_history(prompts))
     }
 
     /// Runs the command prompt history path operation for this subsystem.
@@ -1657,6 +1643,32 @@ impl AgentTranscriptStore {
         }
         Ok(self.root.join(format!("{conversation_id}.tsv")))
     }
+}
+
+/// Collapses adjacent equal history entries and retains the newest bounded set.
+fn canonicalize_history(history: Vec<String>) -> Vec<String> {
+    let mut canonical = Vec::with_capacity(history.len());
+    for entry in history {
+        if canonical.last() != Some(&entry) {
+            canonical.push(entry);
+        }
+    }
+    if canonical.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
+        canonical.drain(..canonical.len() - DEFAULT_AGENT_PROMPT_HISTORY_LIMIT);
+    }
+    canonical
+}
+
+/// Appends an entry unless it exactly matches the current history tail.
+fn append_history_entry(history: &mut Vec<String>, entry: String) -> bool {
+    if history.last() == Some(&entry) {
+        return false;
+    }
+    history.push(entry);
+    if history.len() > DEFAULT_AGENT_PROMPT_HISTORY_LIMIT {
+        history.remove(0);
+    }
+    true
 }
 
 /// Encodes one conversation summary sidecar as compact JSON.

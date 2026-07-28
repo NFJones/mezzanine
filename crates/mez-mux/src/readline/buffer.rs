@@ -200,7 +200,8 @@ impl ReadlineBuffer {
         self.cursor
     }
 
-    /// Current bounded history, ordered from oldest to newest.
+    /// Current bounded history, ordered from oldest to newest without
+    /// consecutively equal submissions.
     pub fn history(&self) -> &[String] {
         &self.history
     }
@@ -814,6 +815,9 @@ impl ReadlineBuffer {
     /// on duplicated control-flow logic.
     fn remember_submission(&mut self, submitted: String) {
         if self.history_limit == 0 || submitted.is_empty() {
+            return;
+        }
+        if self.history.last() == Some(&submitted) {
             return;
         }
         self.history.push(submitted);

@@ -332,6 +332,54 @@ fn readline_submission_records_bounded_history() {
     );
 }
 
+/// Verifies adjacent exact duplicate submissions are omitted without evicting
+/// distinct entries, while later nonconsecutive repetitions remain available.
+#[test]
+fn readline_submission_omits_only_consecutive_duplicates() {
+    let mut buffer = ReadlineBuffer::with_history_limit(3);
+
+    for submission in ["first", "first", "second", "first"] {
+        buffer.insert_text(submission);
+        assert_eq!(buffer.submit(), submission);
+    }
+
+    assert_eq!(
+        buffer.history(),
+        &[
+            String::from("first"),
+            String::from("second"),
+            String::from("first"),
+        ]
+    );
+}
+
+/// Verifies loaded legacy history collapses adjacent duplicate runs before
+/// readline navigation and reverse search expose retained entries.
+#[test]
+fn readline_loaded_history_omits_only_consecutive_duplicates() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.set_history([
+        String::from("one"),
+        String::from("one"),
+        String::from("two"),
+        String::from("two"),
+        String::from("one"),
+    ]);
+
+    assert_eq!(
+        buffer.history(),
+        &[
+            String::from("one"),
+            String::from("two"),
+            String::from("one"),
+        ]
+    );
+    assert!(buffer.history_previous());
+    assert_eq!(buffer.line(), "one");
+    assert!(buffer.history_previous());
+    assert_eq!(buffer.line(), "two");
+}
+
 /// Verifies readline history navigation preserves draft.
 ///
 /// This regression scenario documents the behavior being protected so a
