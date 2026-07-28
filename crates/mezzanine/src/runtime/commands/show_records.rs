@@ -74,6 +74,7 @@ impl RuntimeSessionService {
             approvals.into_iter().map(approval_browser_record).collect(),
             Vec::new(),
         )?;
+        browser.set_table_id_column("Approval");
         browser.set_table_columns(vec![
             "Pane".to_string(),
             "Agent".to_string(),
@@ -168,6 +169,7 @@ impl RuntimeSessionService {
             Vec::new(),
         )?;
         browser.enable_deletion();
+        configure_context_record_browser(&mut browser);
         Ok(browser)
     }
 
@@ -371,6 +373,7 @@ impl RuntimeSessionService {
             issue_kind_filter_choices(),
         )?;
         browser.enable_deletion();
+        configure_issue_record_browser(&mut browser);
         if let Some(source) = source.as_ref() {
             set_record_browser_scope_indicator(&mut browser, source);
         }
@@ -456,6 +459,7 @@ impl RuntimeSessionService {
             memory_kind_filter_choices(),
         )?;
         browser.enable_deletion();
+        configure_memory_record_browser(&mut browser);
         if let Some(source) = source.as_ref() {
             set_record_browser_scope_indicator(&mut browser, source);
         }
@@ -547,6 +551,7 @@ impl RuntimeSessionService {
                     issue_kind_filter_choices(),
                 )?;
                 browser.enable_deletion();
+                configure_issue_record_browser(&mut browser);
                 set_record_browser_scope_indicator(&mut browser, source);
                 Ok(browser)
             }
@@ -586,6 +591,7 @@ impl RuntimeSessionService {
                     memory_kind_filter_choices(),
                 )?;
                 browser.enable_deletion();
+                configure_memory_record_browser(&mut browser);
                 set_record_browser_scope_indicator(&mut browser, source);
                 Ok(browser)
             }
@@ -732,6 +738,60 @@ impl RuntimeSessionService {
         fs::write(&destination, markdown)?;
         Ok(destination)
     }
+}
+
+/// Applies the table presentation shared by transcript browser construction paths.
+fn configure_context_record_browser(browser: &mut RecordBrowser) {
+    browser.set_table_id_column("Sequence");
+    browser.set_table_columns_with_labels(vec![
+        ("Role".to_string(), "role".to_string()),
+        ("Turn".to_string(), "turn_id".to_string()),
+        ("Agent".to_string(), "agent_id".to_string()),
+        ("Created".to_string(), "created_at_unix_seconds".to_string()),
+    ]);
+    browser.set_help(
+        Some(
+            "**Keys:** `↑`/`↓` focus sequence ID · `Enter` open · `d` delete · `/` search"
+                .to_string(),
+        ),
+        Some("**Keys:** `Esc` back · `d` delete · `/` search".to_string()),
+    );
+    browser.set_empty_message(Some(
+        "No transcript entries found for the active pane.".to_string(),
+    ));
+}
+
+/// Applies the table presentation shared by issue browser construction paths.
+fn configure_issue_record_browser(browser: &mut RecordBrowser) {
+    browser.set_table_id_column("Issue");
+    browser.set_table_columns_with_labels(vec![
+        ("Project".to_string(), "project".to_string()),
+        ("Kind".to_string(), "kind".to_string()),
+        ("State".to_string(), "state".to_string()),
+        ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
+    ]);
+    browser.set_help(
+        Some("**Keys:** `↑`/`↓` focus issue ID · `Enter` open · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `Esc` back · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+    );
+    browser.set_empty_message(Some("No issues found.".to_string()));
+}
+
+/// Applies the table presentation shared by memory browser construction paths.
+fn configure_memory_record_browser(browser: &mut RecordBrowser) {
+    browser.set_table_id_column("Memory");
+    browser.set_table_columns_with_labels(vec![
+        ("Scope".to_string(), "scope".to_string()),
+        ("Kind".to_string(), "kind".to_string()),
+        ("State".to_string(), "state".to_string()),
+        ("Priority".to_string(), "priority".to_string()),
+        ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
+    ]);
+    browser.set_help(
+        Some("**Keys:** `↑`/`↓` focus memory ID · `Enter` open · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `Esc` back · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+    );
+    browser.set_empty_message(Some("No memories found.".to_string()));
 }
 
 /// Applies the retained backend scope as visible record-browser context.

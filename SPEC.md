@@ -6321,16 +6321,19 @@ The baseline command capabilities are:
   detail and empty states, preserve generic `/` search, use `a` to approve the
   request represented by the focused link once, and use `d` to deny it.
 - `/show-context`: Browse durable transcript entries for the current pane conversation
-  in transcript order. It MUST support arrow-key selection, `Enter` for entry
-  details, `/` search, and `d` to delete the selected entry from durable context.
+  in transcript order. Its list MUST be a table with one selectable stable
+  sequence-id link in the left-most column for each entry. It MUST support
+  arrow-key selection, `Enter` for entry details, `/` search, and `d` to delete
+  the selected entry from durable context.
   Deletion MUST remain scoped to the active pane conversation and refresh the
   browser while preserving a valid selection.
 - `/show-issues`: Browse local issue records in a pager-backed record browser.
   It MUST default to open issues for the active pane project, support optional
   project glob, kind, state, full-text, and limit filters, and suggest known
   project paths for the value after `--project` or `--project-glob` without
-  changing glob matching, render selectable
-  Markdown rows that open issue details, allow deleting the selected issue with
+  changing glob matching. Its list MUST be a table with one selectable stable
+  issue-id link in the left-most column for each record; those links MUST open
+  issue details. It MUST allow deleting the selected issue with
   `d` only when no open issue depends on it, and allow saving the rendered raw
   Markdown view to a user-supplied file path, overwriting the destination. Save prompts
   MUST complete paths relative to the owning pane working directory: Tab and Shift-Tab
@@ -6338,8 +6341,10 @@ The baseline command capabilities are:
 - `/show-memories`: Browse persistent memory records in the shared
   pager-backed record browser. It MUST default to active records in the active
   pane project scope when that scope is known, support optional scope, kind,
-  state, full-text, and limit filters, render selectable Markdown rows that
-  open memory details, allow deleting the selected memory with `d`, and allow
+  state, full-text, and limit filters. Its list MUST be a table with one
+  selectable stable memory-id link in the left-most column for each record;
+  those links MUST open memory details. It MUST allow deleting the selected
+  memory with `d`, and allow
   saving the rendered raw Markdown view to a user-supplied file path,
   overwriting the destination.
   The shared record browser MUST preserve the generic `/` in-page pager search

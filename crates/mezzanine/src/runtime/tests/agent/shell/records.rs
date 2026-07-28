@@ -175,7 +175,7 @@ enabled = true
             .unwrap_or_else(|| config_root.clone()),
     );
     let store = crate::storage::issues::IssueStore::under_config_root(config_root.clone());
-    store
+    let older_issue = store
         .add_issue(
             project.clone(),
             mez_agent::issues::IssueKind::Defect,
@@ -185,9 +185,9 @@ enabled = true
             1,
         )
         .unwrap();
-    store
+    let recent_issue = store
         .add_issue(
-            project,
+            project.clone(),
             mez_agent::issues::IssueKind::Task,
             "First issue".to_string(),
             Some("First body".to_string()),
@@ -195,7 +195,7 @@ enabled = true
             2,
         )
         .unwrap();
-    store
+    let cross_project_issue = store
         .add_issue(
             "/other/project".to_string(),
             mez_agent::issues::IssueKind::Task,
@@ -227,11 +227,34 @@ enabled = true
     assert!(footer.contains("a: all"), "{footer}");
     assert!(footer.contains("k/p/x: filter"), "{footer}");
     assert!(footer.contains("s: save"), "{footer}");
+    let overlay = service.primary_display_overlay().unwrap();
+    let page = overlay
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page();
+    assert!(
+        page.raw_markdown
+            .contains("| Issue | Project | Kind | State | Updated |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert_eq!(overlay.selections.len(), 2);
+    assert_eq!(overlay.active_selection_index, Some(0));
+    assert_eq!(
+        overlay.selections[0].command,
+        format!("/show-issues {}", recent_issue.id)
+    );
+    assert_eq!(
+        overlay.selections[1].command,
+        format!("/show-issues {}", older_issue.id)
+    );
     assert!(
         !overlay_view
             .lines
             .iter()
-            .any(|line| line.contains("Cross-project issue")),
+            .any(|line| line.contains(&cross_project_issue.id)),
         "{overlay_view:?}"
     );
 
@@ -261,7 +284,7 @@ enabled = true
         overlay
             .lines
             .iter()
-            .any(|line| line.contains("Cross-project issue"))
+            .any(|line| line.contains(&cross_project_issue.id))
     );
 
     service
@@ -282,7 +305,20 @@ enabled = true
         !overlay
             .lines
             .iter()
-            .any(|line| line.contains("Cross-project issue"))
+            .any(|line| line.contains(&cross_project_issue.id))
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.active_selection_index, Some(1));
+    assert_eq!(
+        overlay
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id(),
+        Some(older_issue.id.as_str())
     );
 
     let report = service
@@ -309,8 +345,13 @@ enabled = true
         .as_ref()
         .expect("detail overlay should retain record-browser state");
     assert_eq!(record_browser.command, "show-issues");
-    assert_eq!(record_browser.browser.render_page().title, "First issue");
-    assert!(overlay.lines.iter().any(|line| line.contains("First body")));
+    assert_eq!(record_browser.browser.render_page().title, "Second issue");
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("Second body"))
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -506,17 +547,23 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
         .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
         .unwrap();
     let overlay = service.primary_display_overlay().unwrap();
-    let first_line = overlay
-        .lines
-        .iter()
-        .position(|line| line.contains("first context entry"))
-        .unwrap();
-    let second_line = overlay
-        .lines
-        .iter()
-        .position(|line| line.contains("second context entry"))
-        .unwrap();
-    assert!(first_line < second_line);
+    let page = overlay
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page();
+    assert!(
+        page.raw_markdown
+            .contains("| Sequence | Role | Turn | Agent | Created |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert_eq!(overlay.selections.len(), 3);
+    assert_eq!(overlay.active_selection_index, Some(0));
+    assert_eq!(overlay.selections[0].command, "/show-context 1");
+    assert_eq!(overlay.selections[1].command, "/show-context 2");
+    assert_eq!(overlay.selections[2].command, "/show-context 3");
     assert!(
         !overlay
             .lines
@@ -539,12 +586,8 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
     assert_eq!(record_browser.browser.active_index(), 1);
     assert_eq!(overlay.active_selection_index, Some(1));
     assert_eq!(record_browser.browser.active_record_id(), Some("2"));
-    assert!(
-        overlay
-            .lines
-            .iter()
-            .any(|line| line.contains("third context entry"))
-    );
+    assert_eq!(overlay.selections.len(), 2);
+    assert_eq!(overlay.selections[1].command, "/show-context 2");
 
     apply_record_browser_input(&mut service, &primary, b"d");
 
@@ -564,17 +607,12 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
     assert_eq!(record_browser.browser.active_index(), 0);
     assert_eq!(overlay.active_selection_index, Some(0));
     assert_eq!(record_browser.browser.active_record_id(), Some("1"));
-    assert!(
-        overlay
-            .lines
-            .iter()
-            .any(|line| line.contains("first context entry"))
-    );
+    assert!(overlay.lines.iter().any(|line| line.contains("Sequence")));
     assert!(
         !overlay
             .lines
             .iter()
-            .any(|line| line.contains("second context entry"))
+            .any(|line| line.contains("other pane context"))
     );
     assert!(transcript_store.inspect("other-conversation").is_ok());
     let _ = fs::remove_dir_all(root);
@@ -1318,6 +1356,99 @@ fn runtime_agent_shell_show_approvals_rejects_stale_selected_id() {
     );
 }
 
+/// Verifies `/show-memories` renders a selectable stable-ID table and opens the
+/// memory selected with pager arrow keys.
+///
+/// The list order is backend-defined, so this test reads the rendered stable
+/// IDs before moving. One Down-arrow must select the other logical record, and
+/// Enter must open that selected record's detail rather than a table fragment.
+#[test]
+fn runtime_agent_shell_show_memories_opens_arrow_selected_table_record() {
+    let root = temp_root("runtime-show-memories-table");
+    let _ = fs::remove_dir_all(&root);
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
+    for (id, updated_at, content) in [
+        ("memory-table-first", 10, "first memory detail"),
+        ("memory-table-second", 20, "second memory detail"),
+    ] {
+        store
+            .upsert(MemoryRecord::new_with_defaults(
+                id,
+                mez_agent::memory::MemoryScope::Global,
+                updated_at,
+                updated_at,
+                mez_agent::memory::MemorySource::Agent,
+                50,
+                content,
+            ))
+            .unwrap();
+    }
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-memories --scope global")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
+    let page = overlay
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page();
+    assert!(
+        page.raw_markdown
+            .contains("| Memory | Scope | Kind | State | Priority | Updated |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert_eq!(overlay.selections.len(), 2);
+    assert_eq!(overlay.active_selection_index, Some(0));
+    let second_id = overlay.selections[1]
+        .command
+        .strip_prefix("/show-memories ")
+        .unwrap()
+        .to_string();
+    let expected_detail = store.inspect(&second_id).unwrap().content;
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[B");
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.active_selection_index, Some(1));
+    assert_eq!(
+        overlay
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .active_record_id(),
+        Some(second_id.as_str())
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains(&expected_detail)),
+        "{overlay:?}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies the memory record browser deletes its selected durable record and
 /// refreshes the same pager to an empty, valid selection state.
 #[test]
@@ -1363,7 +1494,7 @@ fn runtime_agent_shell_show_memories_deletes_the_selected_record() {
         overlay
             .lines
             .iter()
-            .any(|line| line.contains("No records found."))
+            .any(|line| line.contains("No memories found."))
     );
     assert_eq!(overlay.active_selection_index, None);
     let _ = fs::remove_dir_all(root);

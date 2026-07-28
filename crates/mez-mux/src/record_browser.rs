@@ -151,7 +151,9 @@ pub struct RecordBrowser {
     scope_indicator: Option<String>,
     records: Vec<RecordBrowserRecord>,
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
+    table_id_column: String,
     table_columns: Vec<String>,
+    table_column_keys: Vec<String>,
     list_help: Option<String>,
     detail_help: Option<String>,
     empty_message: Option<String>,
@@ -191,7 +193,9 @@ impl RecordBrowser {
             scope_indicator: None,
             records,
             kind_filter_choices,
+            table_id_column: "ID".to_string(),
             table_columns: Vec::new(),
+            table_column_keys: Vec::new(),
             list_help: None,
             detail_help: None,
             empty_message: None,
@@ -214,12 +218,33 @@ impl RecordBrowser {
         self.scope_indicator = scope_indicator.filter(|value| !value.trim().is_empty());
     }
 
+    /// Replaces the heading for the stable record-id column in table lists.
+    pub fn set_table_id_column(&mut self, column: impl Into<String>) {
+        let column = column.into();
+        self.table_id_column = if column.trim().is_empty() {
+            "ID".to_string()
+        } else {
+            column
+        };
+    }
+
     /// Selects metadata fields rendered as columns in the list view.
     pub fn set_table_columns(&mut self, columns: Vec<String>) {
         self.table_columns = columns
             .into_iter()
             .filter(|column| !column.trim().is_empty())
             .collect();
+        self.table_column_keys = self.table_columns.clone();
+    }
+
+    /// Selects visible headings and metadata fields rendered in table lists.
+    pub fn set_table_columns_with_labels(&mut self, columns: Vec<(String, String)>) {
+        let (labels, keys) = columns
+            .into_iter()
+            .filter(|(label, key)| !label.trim().is_empty() && !key.trim().is_empty())
+            .unzip();
+        self.table_columns = labels;
+        self.table_column_keys = keys;
     }
 
     /// Replaces the default list and detail key guidance.
@@ -605,7 +630,8 @@ fn list_markdown(browser: &RecordBrowser) -> String {
         );
     } else if !browser.table_columns.is_empty() {
         lines.push(format!(
-            "| Approval | {} |",
+            "| {} | {} |",
+            browser.table_id_column,
             browser.table_columns.join(" | ")
         ));
         lines.push(format!(
@@ -628,13 +654,13 @@ fn list_markdown(browser: &RecordBrowser) -> String {
                 format!("**{}**", escape_markdown_table(&record.id))
             };
             let values = browser
-                .table_columns
+                .table_column_keys
                 .iter()
-                .map(|column| {
+                .map(|key| {
                     record
                         .metadata
                         .iter()
-                        .find(|(key, _)| key == column)
+                        .find(|(record_key, _)| record_key == key)
                         .map(|(_, value)| escape_markdown_table(value))
                         .unwrap_or_default()
                 })
@@ -971,10 +997,19 @@ mod tests {
             Vec::new(),
         )
         .unwrap();
-        browser.set_table_columns(vec!["Summary".to_string()]);
+        browser.set_table_id_column("Approval");
+        browser.set_table_columns_with_labels(vec![(
+            "Action summary".to_string(),
+            "Summary".to_string(),
+        )]);
 
         let page = browser.render_page();
 
+        assert!(
+            page.raw_markdown.contains("| Approval | Action summary |"),
+            "{}",
+            page.raw_markdown
+        );
         assert_eq!(page.raw_markdown.matches("](mez-agent:").count(), 1);
         assert!(
             page.raw_markdown
