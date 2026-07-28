@@ -515,6 +515,10 @@ pub(super) fn classify_tokens(
             effects.reads = vec![".".to_string()];
             effects
         }
+        "curl" => {
+            effects.network = true;
+            effects
+        }
         "rm" => {
             effects.destructive = true;
             effects.deletes = tokens[1..].to_vec();

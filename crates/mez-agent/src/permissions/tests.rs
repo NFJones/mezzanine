@@ -1180,6 +1180,20 @@ fn broad_interpreters_classify_as_unknown_effects() {
     assert!(effects[0].unknown);
 }
 
+/// Verifies direct curl requests retain their network requirement so a
+/// Bubblewrap launch can select the connected profile when policy authorizes it.
+///
+/// This regression protects the network-policy handoff from treating a known
+/// network client as an unclassified command with no network authority.
+#[test]
+fn curl_classifies_as_a_network_effect() {
+    let effects = classify_shell_command("curl --fail https://example.test", None).unwrap();
+
+    assert_eq!(effects.len(), 1);
+    assert!(effects[0].network);
+    assert!(!effects[0].unknown);
+}
+
 /// Verifies structured evaluation retains the stable rule identity and the
 /// complete resource requirements declared for an otherwise broad command.
 #[test]
