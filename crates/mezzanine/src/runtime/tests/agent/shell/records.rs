@@ -97,6 +97,11 @@ fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
         ],
     )
     .unwrap();
+    browser.set_table_id_column("Issue");
+    browser.set_table_columns_with_labels(vec![
+        ("Summary".to_string(), "summary".to_string()),
+        ("Kind".to_string(), "kind".to_string()),
+    ]);
     browser.set_active_index(1);
     let page = browser.render_page();
     service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
@@ -113,6 +118,17 @@ fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
         .unwrap();
 
     apply_record_browser_input(&mut service, &primary, b"k");
+    let overlay = service
+        .primary_display_overlay()
+        .expect("kind selector should retain the display overlay");
+    assert!(
+        overlay
+            .selections
+            .iter()
+            .all(|selection| selection.command.is_empty()),
+        "kind-selector focus must exclude record-link selections: {:?}",
+        overlay.selections
+    );
     let selector_view = service
         .render_client_view(
             ClientViewRole::Primary,

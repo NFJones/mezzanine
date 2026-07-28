@@ -131,8 +131,9 @@ pub(super) fn render_record_browser_overlay(
                 kind: OverlaySelectionKind::Primary,
             })
             .collect();
+    } else {
+        restore_record_browser_table_link_selections(&mut content, &record_browser.browser);
     }
-    restore_record_browser_table_link_selections(&mut content, &record_browser.browser);
     let content = content;
     overlay.lines = content.lines;
     overlay.line_style_spans = content.line_style_spans;
