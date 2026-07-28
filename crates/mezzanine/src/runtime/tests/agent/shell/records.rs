@@ -236,7 +236,12 @@ enabled = true
         .render_page();
     assert!(
         page.raw_markdown
-            .contains("| Issue | Project | Kind | State | Updated |"),
+            .contains("| Issue | Summary | Project | Kind | State | Updated |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert!(
+        page.raw_markdown.contains("First issue"),
         "{}",
         page.raw_markdown
     );
@@ -555,7 +560,12 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
         .render_page();
     assert!(
         page.raw_markdown
-            .contains("| Sequence | Role | Turn | Agent | Created |"),
+            .contains("| Sequence | Summary | Role | Turn | Agent | Created |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert!(
+        page.raw_markdown.contains("first context entry"),
         "{}",
         page.raw_markdown
     );
@@ -1056,6 +1066,23 @@ fn runtime_agent_shell_show_approvals_decides_selected_stable_ids() {
         .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
         .unwrap();
     let overlay = service.primary_display_overlay().unwrap();
+    let page = overlay
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser
+        .render_page();
+    assert!(
+        page.raw_markdown
+            .contains("| Approval | Summary | Pane | Agent | Action |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert!(
+        page.raw_markdown.contains("cargo check"),
+        "{}",
+        page.raw_markdown
+    );
     assert!(
         overlay
             .lines
@@ -1592,7 +1619,12 @@ fn runtime_agent_shell_show_memories_opens_arrow_selected_table_record() {
         .render_page();
     assert!(
         page.raw_markdown
-            .contains("| Memory | Scope | Kind | State | Priority | Updated |"),
+            .contains("| UUID | Summary | Scope | Kind | State | Priority | Updated |"),
+        "{}",
+        page.raw_markdown
+    );
+    assert!(
+        page.raw_markdown.contains("first memory detail"),
         "{}",
         page.raw_markdown
     );

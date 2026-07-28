@@ -76,10 +76,10 @@ impl RuntimeSessionService {
         )?;
         browser.set_table_id_column("Approval");
         browser.set_table_columns(vec![
+            "Summary".to_string(),
             "Pane".to_string(),
             "Agent".to_string(),
             "Action".to_string(),
-            "Summary".to_string(),
         ]);
         browser.set_help(
             Some(
@@ -754,6 +754,7 @@ impl RuntimeSessionService {
 fn configure_context_record_browser(browser: &mut RecordBrowser) {
     browser.set_table_id_column("Sequence");
     browser.set_table_columns_with_labels(vec![
+        ("Summary".to_string(), "summary".to_string()),
         ("Role".to_string(), "role".to_string()),
         ("Turn".to_string(), "turn_id".to_string()),
         ("Agent".to_string(), "agent_id".to_string()),
@@ -775,6 +776,7 @@ fn configure_context_record_browser(browser: &mut RecordBrowser) {
 fn configure_issue_record_browser(browser: &mut RecordBrowser) {
     browser.set_table_id_column("Issue");
     browser.set_table_columns_with_labels(vec![
+        ("Summary".to_string(), "summary".to_string()),
         ("Project".to_string(), "project".to_string()),
         ("Kind".to_string(), "kind".to_string()),
         ("State".to_string(), "state".to_string()),
@@ -789,8 +791,9 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser) {
 
 /// Applies the table presentation shared by memory browser construction paths.
 fn configure_memory_record_browser(browser: &mut RecordBrowser) {
-    browser.set_table_id_column("Memory");
+    browser.set_table_id_column("UUID");
     browser.set_table_columns_with_labels(vec![
+        ("Summary".to_string(), "summary".to_string()),
         ("Scope".to_string(), "scope".to_string()),
         ("Kind".to_string(), "kind".to_string()),
         ("State".to_string(), "state".to_string()),
@@ -1078,6 +1081,7 @@ fn context_browser_record(entry: mez_agent::transcript::TranscriptEntry) -> Reco
         open_command: Some(format!("/show-context {}", entry.sequence)),
         title: format!("{role} · {preview}"),
         metadata: vec![
+            ("summary".to_string(), preview),
             ("sequence".to_string(), entry.sequence.to_string()),
             ("role".to_string(), role.to_string()),
             ("turn_id".to_string(), entry.turn_id),
@@ -1099,6 +1103,7 @@ fn issue_browser_record(record: mez_agent::issues::IssueRecord) -> RecordBrowser
         open_command: Some(format!("/show-issues {}", record.id)),
         title: record.title.clone(),
         metadata: vec![
+            ("summary".to_string(), record.title),
             ("id".to_string(), record.id),
             ("project".to_string(), record.project),
             ("kind".to_string(), record.kind.as_str().to_string()),
@@ -1136,11 +1141,13 @@ fn issue_record_markdown(record: &mez_agent::issues::IssueRecord) -> String {
 }
 
 fn memory_browser_record(record: mez_agent::memory::MemoryRecord) -> RecordBrowserRecord {
+    let summary = memory_record_title(&record);
     RecordBrowserRecord {
         id: record.id.clone(),
         open_command: Some(format!("/show-memories {}", record.id)),
-        title: memory_record_title(&record),
+        title: summary.clone(),
         metadata: vec![
+            ("summary".to_string(), summary),
             ("id".to_string(), record.id),
             (
                 "scope".to_string(),
