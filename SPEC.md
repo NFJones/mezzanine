@@ -6241,8 +6241,10 @@ The baseline command capabilities are:
   last activity, directory, transcript entry count, and latest prompt columns.
   Named sessions MUST appear before UUID-only sessions; each partition MUST be
   sorted by last activity with the most recent session first. Prompt summaries
-  MAY be truncated to the terminal width and MUST NOT wrap. Enter MUST resume
-  the selected UUID through `/resume <uuid>`, and `d` MUST immediately delete
+  MAY be truncated to the terminal width and MUST NOT wrap. `i` MUST show the
+  selected session's complete readable transcript before resumption, and `Esc`
+  from that view MUST return to the table. Enter MUST resume the selected UUID
+  through `/resume <uuid>`, and `d` MUST immediately delete
   the selected durable transcript and name metadata before refreshing the
   table. Deletion MUST be rejected while that conversation is bound to any live
   durable agent pane. The agent slash surface MUST NOT expose a separate

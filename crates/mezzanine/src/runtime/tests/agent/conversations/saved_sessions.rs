@@ -158,28 +158,57 @@ fn runtime_resume_browser_deletes_named_zero_entry_sessions() {
     );
 }
 
-/// Verifies the saved-session browser resumes the focused conversation on
-/// Enter while retaining record details behind its `i` shortcut.
+/// Verifies the saved-session browser exposes every durable transcript entry
+/// through `i` before Enter resumes the focused conversation.
 ///
 /// Other record browsers open details on Enter, but `/resume` must submit the
-/// selected conversation to the resume command so users can restore it without
-/// leaving the picker. The detail shortcut preserves access to session metadata.
+/// selected conversation to the resume command so users can inspect its full
+/// ordered transcript without leaving the picker or truncating its content.
 #[test]
 fn runtime_resume_browser_enter_resumes_and_i_opens_details() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-browser-keys"));
-    transcript_store
-        .append(&TranscriptEntry {
-            conversation_id: "saved-session".to_string(),
-            sequence: 1,
-            created_at_unix_seconds: 10,
-            role: TranscriptRole::User,
-            turn_id: "turn-saved".to_string(),
-            agent_id: "agent-%9".to_string(),
-            pane_id: "%9".to_string(),
-            content: "saved session prompt".to_string(),
-        })
-        .unwrap();
+    let entries = [
+        (
+            TranscriptRole::User,
+            "first user line\nsecond user line".to_string(),
+        ),
+        (TranscriptRole::Assistant, "assistant response".to_string()),
+        (
+            TranscriptRole::Tool,
+            "structured_content: {\"text\":\"tool result\"}".to_string(),
+        ),
+        (TranscriptRole::System, "cwd=/tmp/saved-session".to_string()),
+        (TranscriptRole::User, "x".repeat(200)),
+    ];
+    for (index, (role, content)) in entries.into_iter().enumerate() {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: "saved-session".to_string(),
+                sequence: (index + 1) as u64,
+                created_at_unix_seconds: 10 + index as u64,
+                role,
+                turn_id: "turn-saved".to_string(),
+                agent_id: "agent-%9".to_string(),
+                pane_id: "%9".to_string(),
+                content,
+            })
+            .unwrap();
+    }
+    for sequence in 6..=65 {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: "saved-session".to_string(),
+                sequence,
+                created_at_unix_seconds: 10 + sequence,
+                role: TranscriptRole::Assistant,
+                turn_id: "turn-saved".to_string(),
+                agent_id: "agent-%9".to_string(),
+                pane_id: "%9".to_string(),
+                content: format!("later transcript entry {sequence}"),
+            })
+            .unwrap();
+    }
     service.set_agent_transcript_store(transcript_store);
     let primary = service
         .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
@@ -199,11 +228,31 @@ fn runtime_resume_browser_enter_resumes_and_i_opens_details() {
     service
         .apply_primary_display_overlay_input(&primary, b"i")
         .unwrap();
+    let detail = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .filter(|browser| browser.browser.is_detail_view())
+        .map(|browser| browser.browser.render_page().raw_markdown)
+        .expect("saved-session detail browser");
+    for expected in [
+        "## User entry 1",
+        "first user line\n    second user line",
+        "## Assistant entry 2",
+        "assistant response",
+        "## Tool entry 3",
+        "tool result",
+        "## System entry 4",
+        "Session directory: /tmp/saved-session",
+        "## User entry 5",
+        &"x".repeat(200),
+        "## Assistant entry 65",
+        "later transcript entry 65",
+    ] {
+        assert!(detail.contains(expected), "{detail}");
+    }
     assert!(
-        service
-            .primary_display_overlay()
-            .and_then(|overlay| overlay.record_browser.as_ref())
-            .is_some_and(|browser| browser.browser.is_detail_view())
+        detail.find("## User entry 1").unwrap() < detail.find("## User entry 5").unwrap(),
+        "{detail}"
     );
 
     service
@@ -218,6 +267,31 @@ fn runtime_resume_browser_enter_resumes_and_i_opens_details() {
             .get("%1")
             .map(|session| session.session_id.as_str()),
         Some("saved-session")
+    );
+}
+
+/// Verifies a named session with no durable transcript entries still opens a
+/// detail page that clearly distinguishes its empty transcript from a failure.
+#[test]
+fn runtime_resume_browser_shows_empty_named_session_transcript() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-empty-detail"));
+    transcript_store
+        .name_session("empty-session", "Empty investigation", 10, None)
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+
+    let mut browser = service.saved_sessions_record_browser().unwrap();
+    browser
+        .apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)
+        .unwrap();
+    let detail = browser.render_page().raw_markdown;
+
+    assert!(browser.is_detail_view());
+    assert!(detail.contains("Empty investigation"), "{detail}");
+    assert!(
+        detail.contains("No saved transcript entries were found for this session."),
+        "{detail}"
     );
 }
 

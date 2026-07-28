@@ -319,7 +319,7 @@ Useful slash commands include:
 | `/log-level`   | Show or set `normal`, `verbose`, `debug`, or `trace`. |
 | `/stop`        | Interrupt the active turn.                            |
 | `/new`         | Start a fresh conversation for the pane.              |
-| `/resume`      | Resume one of the most recent saved conversations.    |
+| `/resume`      | Browse saved conversations, inspect a full transcript with `i`, then resume the selected session. |
 | `/compact`     | Queue model-backed conversation compaction while opportunistically pruning expired persistent records. |
 | `/exit`        | Hide the agent shell.                                 |
 

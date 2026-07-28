@@ -362,8 +362,8 @@ impl RuntimeSessionService {
             .clamp(20, 80);
         let records = sessions
             .into_iter()
-            .map(|session| Self::saved_session_browser_record(session, prompt_width))
-            .collect();
+            .map(|session| Self::saved_session_browser_record(store, session, prompt_width))
+            .collect::<Result<Vec<_>>>()?;
         let mut browser = RecordBrowser::new("Agent Sessions", records, Vec::new())?;
         browser.enable_deletion();
         browser.set_table_id_column("Conversation");
@@ -463,10 +463,16 @@ impl RuntimeSessionService {
 
     /// Adapts one saved conversation to the shared record-browser contract.
     fn saved_session_browser_record(
+        store: &crate::storage::transcript::AgentTranscriptStore,
         session: SavedAgentSession,
         prompt_width: usize,
-    ) -> RecordBrowserRecord {
+    ) -> Result<RecordBrowserRecord> {
         let summary = session.summary;
+        let transcript_markdown = if summary.entries == 0 {
+            "No saved transcript entries were found for this session.".to_string()
+        } else {
+            Self::saved_session_transcript_markdown(&store.inspect(&summary.conversation_id)?)
+        };
         let escaped_name = session
             .name
             .as_deref()
@@ -475,7 +481,7 @@ impl RuntimeSessionService {
             .as_deref()
             .map(|name| format!("{} - {name}", summary.conversation_id))
             .unwrap_or_else(|| summary.conversation_id.clone());
-        RecordBrowserRecord {
+        Ok(RecordBrowserRecord {
             id: summary.conversation_id.clone(),
             open_command: Some(format!("/resume {}", summary.conversation_id)),
             title,
@@ -498,9 +504,33 @@ impl RuntimeSessionService {
                     ),
                 ),
             ],
-            markdown: "Select this saved conversation to resume it in the current pane."
-                .to_string(),
+            markdown: transcript_markdown,
+        })
+    }
+
+    /// Formats every durable transcript entry for saved-session inspection.
+    fn saved_session_transcript_markdown(entries: &[TranscriptEntry]) -> String {
+        let mut sections = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let role = match entry.role {
+                TranscriptRole::User => "User",
+                TranscriptRole::Assistant => "Assistant",
+                TranscriptRole::Tool => "Tool",
+                TranscriptRole::System => "System",
+            };
+            let content = Self::runtime_resume_entry_display_content(entry);
+            let body = if content.is_empty() {
+                "    (empty)".to_string()
+            } else {
+                content
+                    .lines()
+                    .map(|line| format!("    {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            sections.push(format!("## {role} entry {}\n\n{body}", entry.sequence));
         }
+        sections.join("\n\n")
     }
 
     /// Formats a resumed transcript as prompt display lines so the user can
