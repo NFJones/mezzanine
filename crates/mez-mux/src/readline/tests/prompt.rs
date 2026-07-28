@@ -112,8 +112,8 @@ fn readline_reverse_i_search_requires_substring_matches() {
     );
 }
 
-/// Verifies repeated Ctrl+R walks backward, Tab walks forward, and Shift-Tab
-/// walks backward through matching reverse-search history entries.
+/// Verifies repeated Ctrl+R walks backward, Ctrl+Shift+R walks forward, Tab
+/// accepts the presented match, and Shift-Tab does not change that match.
 #[test]
 fn readline_reverse_i_search_cycles_backward_and_forward() {
     let mut prompt = TestPrompt::new();
@@ -135,15 +135,22 @@ fn readline_reverse_i_search_cycles_backward_and_forward() {
     );
     assert_eq!(prompt.buffer.line(), "list files");
     assert_eq!(
-        prompt.apply_terminal_input(b"\t").unwrap(),
+        prompt.apply_terminal_input(b"\x1b[Z").unwrap(),
+        ReadlineOutcome::Noop
+    );
+    assert_eq!(prompt.buffer.line(), "list files");
+    assert!(prompt.reverse_search_active());
+    assert_eq!(
+        prompt.apply_terminal_input(b"\x1b[82;6u").unwrap(),
         ReadlineOutcome::Edited
     );
     assert_eq!(prompt.buffer.line(), "list tests");
     assert_eq!(
-        prompt.apply_terminal_input(b"\x1b[Z").unwrap(),
+        prompt.apply_terminal_input(b"\t").unwrap(),
         ReadlineOutcome::Edited
     );
-    assert_eq!(prompt.buffer.line(), "list files");
+    assert_eq!(prompt.buffer.line(), "list tests");
+    assert!(!prompt.reverse_search_active());
 }
 
 /// Verifies reverse search accepts matches without submitting the prompt.

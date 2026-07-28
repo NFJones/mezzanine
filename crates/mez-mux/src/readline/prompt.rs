@@ -106,8 +106,11 @@ impl ReadlinePromptState {
                 self.cancel_reverse_search();
                 return Ok(Some(ReadlineOutcome::Edited));
             }
-            b"\t" => return Ok(Some(self.reverse_search_step(true))),
-            b"\x1b[Z" => return Ok(Some(self.reverse_search_step(false))),
+            b"\t" => {
+                self.reverse_search = None;
+                return Ok(Some(ReadlineOutcome::Edited));
+            }
+            b"\x1b[Z" => return Ok(Some(ReadlineOutcome::Noop)),
             b"\x7f" | b"\x08" => return Ok(Some(self.reverse_search_backspace())),
             b"\x06" | b"\x1b[C" => {
                 self.reverse_search = None;
