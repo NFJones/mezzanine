@@ -804,7 +804,6 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "log-level"
         | "memory"
         | "directive"
-        | "logout"
         | "model"
         | "permissions"
         | "personality"
@@ -855,7 +854,6 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "copy" => "copy the latest model say text.",
         "exit" => "hide the agent shell after stopping active work.",
         "init" => "generate a project instruction scaffold.",
-        "logout" => "log out of a provider account.",
         "auth-status" => "show non-secret provider authentication status.",
         "refresh-provider-info" => "refresh cached provider model and quota information.",
         "list-mcp" => "list configured MCP servers and tools.",

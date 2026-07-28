@@ -2,16 +2,14 @@
 //!
 //! This module owns slash commands that read or materialize agent-adjacent
 //! artifacts: context exports, retained traces and patches, project instruction
-//! scaffolds, latest say-output copies, and auth logout side effects. Keeping
-//! them separate from the command facade leaves live dispatch and policy
-//! commands easier to navigate.
+//! scaffolds, and latest say-output copies. Keeping them separate from the
+//! command facade leaves live dispatch and policy commands easier to navigate.
 
 use super::{
     AgentShellCommandOutcome, MezError, PathBuf, Result, RuntimeSessionService, RuntimeSideEffect,
     json_escape, parse_slash_command, runtime_agent_init_scaffold,
-    runtime_append_auth_logout_audit, runtime_write_agent_context_for_pane,
-    runtime_write_agent_copy_output_for_pane, runtime_write_agent_patches_for_pane,
-    runtime_write_agent_trace_log_for_pane,
+    runtime_write_agent_context_for_pane, runtime_write_agent_copy_output_for_pane,
+    runtime_write_agent_patches_for_pane, runtime_write_agent_trace_log_for_pane,
 };
 
 impl RuntimeSessionService {
@@ -185,38 +183,6 @@ impl RuntimeSessionService {
                 output.output.clone(),
                 output.content_type.clone(),
             )
-        })
-    }
-
-    /// Executes `/logout` through the runtime auth store.
-    pub(super) fn execute_agent_shell_logout_command(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<AgentShellCommandOutcome> {
-        let visibility = self
-            .agent_shell_store()
-            .get(pane_id)
-            .map(|session| session.visibility)
-            .ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "agent shell session not found for pane",
-                )
-            })?;
-        let Some(auth_store) = self.auth_store() else {
-            return Ok(AgentShellCommandOutcome::Display {
-                command: "logout".to_string(),
-                body: "logged_out=false reason=auth-store-unavailable source=runtime-auth"
-                    .to_string(),
-            });
-        };
-        let changed = auth_store.logout()?;
-        runtime_append_auth_logout_audit(self, changed)?;
-        let body = format!("logged_out={changed} source=runtime-auth");
-        Ok(AgentShellCommandOutcome::Mutated {
-            command: "logout".to_string(),
-            body,
-            visibility,
         })
     }
 }

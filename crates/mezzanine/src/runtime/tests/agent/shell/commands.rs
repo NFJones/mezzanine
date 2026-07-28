@@ -1957,51 +1957,6 @@ fn runtime_agent_shell_init_creates_project_instruction_scaffold() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies that `/logout` executes through the runtime auth store and removes
-/// stored credentials without exposing a duplicate terminal logout command.
-#[test]
-fn runtime_agent_shell_logout_uses_attached_auth_store() {
-    let mut service = test_runtime_service();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    let root = temp_root("runtime-agent-logout");
-    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
-    auth_store
-        .login_provider_api_key_with_selected_store(
-            "openai",
-            "work",
-            "sk-runtime-secret",
-            Some("file"),
-        )
-        .unwrap();
-    service.set_auth_store(auth_store);
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-
-    let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-logout","method":"agent/shell/command","params":{"idempotency_key":"agent-logout","input":"/logout"}}"#,
-        &primary,
-    );
-
-    assert!(response.contains(r#""kind":"mutated""#), "{response}");
-    assert!(response.contains(r#""command":"logout""#), "{response}");
-    assert!(response.contains("logged_out=true"), "{response}");
-    assert!(!response.contains("requires_runtime"), "{response}");
-    assert!(!response.contains("sk-runtime-secret"), "{response}");
-    let status = service
-        .execute_agent_shell_command(&primary, "/auth-status")
-        .unwrap();
-    assert!(status.contains("Authentication Status"), "{status}");
-    assert!(
-        status.contains("| openai | false | none | none | logged-out |"),
-        "{status}"
-    );
-    let _ = fs::remove_dir_all(root);
-}
-
 /// Verifies `/auth-status` renders one ordered, secret-safe row for every
 /// configured provider, including providers without stored credentials.
 #[test]

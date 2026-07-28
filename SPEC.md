@@ -6311,7 +6311,6 @@ The baseline command capabilities are:
   model-profile override without changing the provider, model, reasoning
   profile, or latency preference. Providers that do not expose a native
   thinking toggle MUST reject the command without mutating model profiles.
-- `/logout`: Log out of a provider account.
 - `/list-mcp`: List configured Model Context Protocol servers and tools.
 - `/memory`: Inspect or change persistent memory enablement. It MUST accept
   `on`, `off`, `toggle`, and `status`, MUST display the active setting when

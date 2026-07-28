@@ -824,33 +824,6 @@ pub(super) fn runtime_append_observer_decision_audit(
     Ok(())
 }
 
-/// Runs the runtime append auth logout audit operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_append_auth_logout_audit(
-    service: &mut RuntimeSessionService,
-    changed: bool,
-) -> Result<()> {
-    let Some(audit_log) = service.persistence.audit_log_mut() else {
-        return Ok(());
-    };
-    let actor = AuditActor {
-        kind: "client".to_string(),
-        id: "agent-shell".to_string(),
-    };
-    let record = AuditRecord::logout(
-        service.session.id.to_string(),
-        actor,
-        "openai",
-        "default",
-        if changed { "succeeded" } else { "unchanged" },
-    );
-    let _ = audit_log.append(record)?;
-    Ok(())
-}
-
 /// Runs the runtime pipe pane command operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

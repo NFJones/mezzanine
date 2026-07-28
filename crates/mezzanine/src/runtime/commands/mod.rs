@@ -26,7 +26,7 @@ use super::{
     json_escape, parse_slash_command, runtime_add_command_rule,
     runtime_agent_shell_command_response_json, runtime_agent_shell_prompt_turn_response_json,
     runtime_agent_shell_stop_response_json, runtime_agent_turn_state_name,
-    runtime_append_auth_logout_audit, runtime_apply_persisted_config_mutation_batch,
+    runtime_apply_persisted_config_mutation_batch,
     runtime_apply_persisted_config_mutation_batch_atomically, runtime_approval_command,
     runtime_approval_policy_name, runtime_bypass_approvals_command, runtime_command_outcomes_json,
     runtime_cooperation_mode_name, runtime_effective_config_value,

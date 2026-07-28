@@ -581,16 +581,6 @@ impl RuntimeSessionService {
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&copy_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
-                    && command == "logout"
-                {
-                    let logout_outcome = self.execute_agent_shell_logout_command(&pane_id)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&logout_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
                     && command == "permissions"
                 {
                     let permissions_outcome =

@@ -115,7 +115,6 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("directive", &[], SlashCommandEffect::SessionMutation, true),
         slash("exit", &["quit"], SlashCommandEffect::SessionMutation, true),
         slash("init", &[], SlashCommandEffect::FileMutation, true),
-        slash("logout", &[], SlashCommandEffect::CredentialMutation, true),
         slash("auth-status", &[], SlashCommandEffect::ReadOnly, true),
         slash(
             "refresh-provider-info",
@@ -275,6 +274,10 @@ mod tests {
             parse_slash_command("/diff").unwrap_err(),
             SlashCommandParseError::UnknownCommand
         );
+        assert_eq!(
+            parse_slash_command("/logout").unwrap_err(),
+            SlashCommandParseError::UnknownCommand
+        );
         assert!(
             baseline_slash_commands()
                 .iter()
@@ -304,7 +307,6 @@ mod tests {
             "exit",
             "init",
             "thinking",
-            "logout",
             "list-mcp",
             "memory",
             "toolchain",
