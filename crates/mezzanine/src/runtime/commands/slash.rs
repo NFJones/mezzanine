@@ -119,26 +119,6 @@ pub(super) fn runtime_single_approval_invocation(args: &str) -> Result<CommandIn
     Ok(invocation.clone())
 }
 
-/// Runs the runtime single rename window invocation operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_single_rename_window_invocation(args: &str) -> Result<CommandInvocation> {
-    let invocations = parse_command_sequence(&format!("rename-window {args}"))?;
-    let [invocation] = invocations.as_slice() else {
-        return Err(MezError::invalid_args(
-            "title slash command accepts only one title value",
-        ));
-    };
-    if invocation.name != "rename-window" || invocation.target_arg().is_some() {
-        return Err(MezError::invalid_args(
-            "title slash command can only rename the active window",
-        ));
-    }
-    Ok(invocation.clone())
-}
-
 /// Runs the runtime agent init scaffold operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

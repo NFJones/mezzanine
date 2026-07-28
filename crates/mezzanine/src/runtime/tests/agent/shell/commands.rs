@@ -2577,51 +2577,6 @@ fn runtime_agent_shell_statusline_is_rejected_without_mutating_pane_frame_fields
     assert_eq!(service.pane_frame_template(), expected_frame_template);
 }
 
-/// Verifies that `/title` reads and mutates the active runtime window title
-/// through the live command path. This covers the agent shell title command
-/// without allowing the slash surface to target or rename unrelated windows.
-#[test]
-fn runtime_agent_shell_title_displays_and_renames_active_window() {
-    let mut service = test_runtime_service();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-
-    let display = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-title-display","method":"agent/shell/command","params":{"idempotency_key":"agent-title-display","input":"/title"}}"#,
-        &primary,
-    );
-
-    assert!(display.contains(r#""kind":"display""#), "{display}");
-    assert!(display.contains(r#""command":"title""#), "{display}");
-    assert!(display.contains("source=runtime-title"), "{display}");
-    assert!(display.contains("window_id=@1"), "{display}");
-    assert!(display.contains("window_title=shell"), "{display}");
-    assert!(display.contains("pane=%1"), "{display}");
-    assert!(display.contains("pane_title=shell"), "{display}");
-    assert!(!display.contains("requires_runtime"), "{display}");
-
-    let rename = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-title-rename","method":"agent/shell/command","params":{"idempotency_key":"agent-title-rename","input":"/title build shell"}}"#,
-        &primary,
-    );
-
-    assert!(rename.contains(r#""kind":"mutated""#), "{rename}");
-    assert!(rename.contains(r#""command":"title""#), "{rename}");
-    assert!(rename.contains("source=runtime-title"), "{rename}");
-    assert!(rename.contains("changed=true"), "{rename}");
-    assert!(rename.contains("window_title=build shell"), "{rename}");
-    assert!(!rename.contains("requires_runtime"), "{rename}");
-    assert_eq!(
-        service.session().active_window().unwrap().name,
-        "build shell"
-    );
-}
-
 /// Verifies that `/debug-config` reports live effective configuration, layer
 /// order, and policy diagnostics from runtime state instead of the generic
 /// runtime-required slash placeholder.

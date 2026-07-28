@@ -6431,7 +6431,6 @@ The baseline command capabilities are:
   unchanged.
 - `/debug-config`: Show effective configuration, layer order, and policy
   diagnostics.
-- `/title`: Configure terminal window or tab title fields.
 - `/log-level`: Show or set the pane-local agent log level. Accepted levels
   MUST include `normal`, `verbose`, `debug`, and `trace`; implementations MAY
   provide aliases for compatibility if they resolve to those canonical levels.

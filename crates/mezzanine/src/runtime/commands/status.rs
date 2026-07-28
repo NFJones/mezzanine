@@ -1,18 +1,16 @@
-//! Agent status, title, and debug display commands.
+//! Agent status and debug display commands.
 //!
 //! This module owns read-mostly agent presentation commands and their display
-//! formatting helpers: `/title`, `/status`, terminal-view
-//! clearing, and `/debug-config`. Keeping these report builders outside the
-//! command facade separates UI/status presentation from turn orchestration and
-//! policy mutation.
+//! formatting helpers: `/status`, terminal-view clearing, and `/debug-config`.
+//! Keeping these report builders outside the command facade separates UI/status
+//! presentation from turn orchestration and policy mutation.
 
 use super::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentShellCommandOutcome, BTreeMap,
     ConfigFormat, ConfigScope, MezError, ModelTokenUsage, ModelTokenUsageKey, Result,
-    RuntimeSessionService, agent_shell_visibility_json_name, compose_effective_config,
-    execute_command, json_escape, parse_slash_command, runtime_agent_turn_state_name,
-    runtime_approval_policy_name, runtime_cooperation_mode_name, runtime_markdown_table,
-    runtime_permission_preset_name, runtime_single_rename_window_invocation,
+    RuntimeSessionService, agent_shell_visibility_json_name, compose_effective_config, json_escape,
+    parse_slash_command, runtime_agent_turn_state_name, runtime_approval_policy_name,
+    runtime_cooperation_mode_name, runtime_markdown_table, runtime_permission_preset_name,
 };
 use crate::ui::command::auth_status_store_table_row;
 
@@ -62,62 +60,6 @@ impl RuntimeSessionService {
             command: "auth-status".to_string(),
             body: format!("## Authentication Status\n\n{body}"),
         })
-    }
-
-    /// Executes `/title` against the active runtime window title.
-    pub(super) fn execute_agent_shell_title_command(
-        &mut self,
-        primary_client_id: &mez_core::ids::ClientId,
-        pane_id: &str,
-        input: &str,
-    ) -> Result<AgentShellCommandOutcome> {
-        let visibility = self
-            .agent_shell_store()
-            .get(pane_id)
-            .map(|session| session.visibility)
-            .ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "agent shell session not found for pane",
-                )
-            })?;
-        let slash = parse_slash_command(input)?
-            .ok_or_else(|| MezError::invalid_args("title command must be a slash command"))?;
-        if slash.args.trim().is_empty() {
-            return Ok(AgentShellCommandOutcome::Display {
-                command: "title".to_string(),
-                body: self.runtime_agent_title_display(pane_id)?,
-            });
-        }
-        let invocation = runtime_single_rename_window_invocation(&slash.args)?;
-        execute_command(&mut self.session, primary_client_id, &invocation)?;
-        let body = format!(
-            "{} changed=true",
-            self.runtime_agent_title_display(pane_id)?
-        );
-        Ok(AgentShellCommandOutcome::Mutated {
-            command: "title".to_string(),
-            body,
-            visibility,
-        })
-    }
-
-    /// Builds the live `/title` display for the active window and pane.
-    pub(super) fn runtime_agent_title_display(&self, pane_id: &str) -> Result<String> {
-        let window = self
-            .session
-            .active_window()
-            .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
-        let pane_title = self
-            .find_pane_title(pane_id)
-            .unwrap_or_else(|| "unknown".to_string());
-        Ok(format!(
-            "window_id={} window_title={} pane={} pane_title={} source=runtime-title",
-            json_escape(window.id.as_str()),
-            json_escape(&window.title()),
-            json_escape(pane_id),
-            json_escape(&pane_title)
-        ))
     }
 
     /// Executes `/status` against the live runtime status source.

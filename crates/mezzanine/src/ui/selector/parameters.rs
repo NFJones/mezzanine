@@ -75,7 +75,6 @@ pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "resume" => Some(" <session-uuid|--latest>"),
         "fork" => Some(" [conversation-id]"),
         "list-mcp" => Some(" [server-name]"),
-        "title" => Some(" <title|default|off>"),
         "debug-config" => Some(" [filter]"),
         _ => None,
     }

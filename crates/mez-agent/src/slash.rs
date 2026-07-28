@@ -159,7 +159,6 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
             true,
         ),
         slash("debug-config", &[], SlashCommandEffect::ReadOnly, true),
-        slash("title", &[], SlashCommandEffect::SessionMutation, true),
         slash("log-level", &[], SlashCommandEffect::SessionMutation, true),
     ]
 }
@@ -278,6 +277,10 @@ mod tests {
             parse_slash_command("/logout").unwrap_err(),
             SlashCommandParseError::UnknownCommand
         );
+        assert_eq!(
+            parse_slash_command("/title").unwrap_err(),
+            SlashCommandParseError::UnknownCommand
+        );
         assert!(
             baseline_slash_commands()
                 .iter()
@@ -319,7 +322,6 @@ mod tests {
             "status",
             "reset-status",
             "debug-config",
-            "title",
             "log-level",
         ] {
             assert!(commands.contains(required), "missing {required}");

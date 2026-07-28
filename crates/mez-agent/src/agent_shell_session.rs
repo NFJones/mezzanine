@@ -883,7 +883,6 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "status" => "show the current agent shell session status.",
         "reset-status" => "reset pane token-accounting statistics.",
         "stop" => "stop the active agent turn.",
-        "title" => "set or clear the pane title.",
         "log-level" => "inspect or change pane agent log verbosity.",
         "debug-config" => "inspect parsed slash-command config behavior.",
         _ => "run the slash command.",

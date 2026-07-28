@@ -702,13 +702,6 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
-                    && command == "title"
-                {
-                    let title_outcome =
-                        self.execute_agent_shell_title_command(primary_client_id, &pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&title_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
                     && command == "loop"
                 {
                     let loop_outcome = self.execute_agent_shell_loop_command(&pane_id, input)?;
