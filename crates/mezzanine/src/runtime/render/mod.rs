@@ -96,6 +96,8 @@ pub(crate) struct RuntimePresentationSettings {
     terminal_agent_wrap_column_cap: usize,
     /// Whether optional terminal animation is disabled.
     terminal_reduced_motion: bool,
+    /// Whether completion-attention title pills alternate their attention color.
+    terminal_completion_attention_flashing: bool,
     /// Resolved color and rendition policy for product UI surfaces.
     ui_theme: UiTheme,
     /// Configured mux key chords.
@@ -135,6 +137,7 @@ impl Default for RuntimePresentationSettings {
             terminal_render_rate_limit_fps: 5,
             terminal_agent_wrap_column_cap: crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
+            terminal_completion_attention_flashing: true,
             ui_theme: UiTheme::default(),
             key_bindings: KeyBindings::default(),
             command_bindings: std::collections::BTreeMap::new(),
@@ -179,6 +182,8 @@ impl RuntimePresentationSettings {
             terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
                 root,
             )?,
+            terminal_completion_attention_flashing:
+                crate::runtime::runtime_terminal_completion_attention_flashing_from_config(root)?,
             ui_theme: crate::runtime::runtime_ui_theme_from_config(root)?,
             key_bindings: crate::runtime::runtime_key_bindings_from_config(root)?,
             command_bindings: crate::runtime::runtime_command_bindings_from_effective(effective)?,

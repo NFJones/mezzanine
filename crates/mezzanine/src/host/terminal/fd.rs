@@ -65,6 +65,8 @@ pub struct TerminalFrameContext {
     pub animation_tick_ms: u64,
     /// Whether optional frame/status animations should render as static UI.
     pub reduced_motion: bool,
+    /// Whether completion-attention title pills use their stable attention color.
+    pub completion_attention_static: bool,
     /// Right-side status fields rendered into the active pane frame.
     pub window_status: Option<TerminalWindowStatusContext>,
     /// Per-pane runtime metadata keyed by stable pane id.

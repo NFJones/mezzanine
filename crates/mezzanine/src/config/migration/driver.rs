@@ -34,12 +34,13 @@ use super::v41_v42::migrate_v41_to_v42;
 use super::v42_v43::migrate_v42_to_v43;
 use super::v43_v44::migrate_v43_to_v44;
 use super::v44_v45::migrate_v44_to_v45;
+use super::v45_v46::migrate_v45_to_v46;
 use super::{
     ConfigFormat, MezError, Path, Result, extract_config_values, fs, write_private_config_file,
 };
 
 /// The newest configuration schema version understood by this binary.
-pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 45;
+pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 46;
 
 /// Describes the result of migrating one configuration document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,6 +261,10 @@ pub fn migrate_config_text(format: ConfigFormat, text: &str) -> Result<ConfigMig
             44 => {
                 current_text = migrate_v44_to_v45(format, &current_text)?;
                 current_version = 45;
+            }
+            45 => {
+                current_text = migrate_v45_to_v46(format, &current_text)?;
+                current_version = 46;
             }
             unsupported => {
                 return Err(MezError::config(format!(

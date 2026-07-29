@@ -469,6 +469,7 @@ use config::{
     runtime_saved_agent_session_limit_from_config, runtime_string_array_json,
     runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
     runtime_terminal_agent_wrap_column_cap_from_config, runtime_terminal_clipboard_from_config,
+    runtime_terminal_completion_attention_flashing_from_config,
     runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_emoji_width_from_config,

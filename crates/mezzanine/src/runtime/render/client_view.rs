@@ -1035,7 +1035,11 @@ impl RuntimeSessionService {
     fn runtime_frame_animation_tick_ms(&self) -> u64 {
         if self.presentation.settings.terminal_reduced_motion
             || (!self.active_window_has_agent_animation()
-                && !self.has_visible_completion_attention())
+                && (!self.has_visible_completion_attention()
+                    || !self
+                        .presentation
+                        .settings
+                        .terminal_completion_attention_flashing))
         {
             0
         } else {
@@ -1167,6 +1171,10 @@ impl RuntimeSessionService {
             pressed_window_action: self.presentation.pressed_window_action.clone(),
             animation_tick_ms: self.runtime_frame_animation_tick_ms(),
             reduced_motion: self.presentation.settings.terminal_reduced_motion,
+            completion_attention_static: !self
+                .presentation
+                .settings
+                .terminal_completion_attention_flashing,
             window_status: self.runtime_window_status_context(),
             ..TerminalFrameContext::default()
         };

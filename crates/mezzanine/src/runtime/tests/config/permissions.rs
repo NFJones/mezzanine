@@ -958,7 +958,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_dir = root.join(".mezzanine");
     fs::create_dir_all(&overlay_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(&overlay_path, "version = 45\n[history]\nlines = 7\n").unwrap();
+    fs::write(&overlay_path, "version = 46\n[history]\nlines = 7\n").unwrap();
     let trust_path = root.join("trust.tsv");
     service.set_project_trust_store(ProjectTrustStore::default(), Some(trust_path.clone()));
     let initial_report = service
@@ -1149,7 +1149,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_dir = root.join(".mezzanine");
     fs::create_dir_all(&overlay_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(&overlay_path, "version = 45\n[history]\nlines = 11\n").unwrap();
+    fs::write(&overlay_path, "version = 46\n[history]\nlines = 11\n").unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);
     let initial_report = service
         .replace_config_layers(vec![

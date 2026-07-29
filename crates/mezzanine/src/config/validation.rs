@@ -906,7 +906,9 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
                 Some("terminal.emoji_width must be wide or narrow".to_string())
             }
         }
-        "terminal.cursor_blink" | "terminal.reduced_motion" => {
+        "terminal.cursor_blink"
+        | "terminal.reduced_motion"
+        | "terminal.completion_attention_flashing" => {
             if matches!(value, "true" | "false") {
                 None
             } else {

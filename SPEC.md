@@ -2524,7 +2524,7 @@ creation.
 The `terminal` table MUST support `profile`, `term`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
 `clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_multiplexer`,
-`passthrough`, `emoji_width`, `reduced_motion`, `resize_debounce_ms`,
+`passthrough`, `emoji_width`, `reduced_motion`, `completion_attention_flashing`, `resize_debounce_ms`,
 `render_rate_limit_fps`, `cursor_style`, `cursor_blink`, and
 `cursor_blink_interval_ms`.
 
@@ -2538,6 +2538,10 @@ frame/status animations MUST render as static UI while preserving the same
 semantic status text and color category.
 Completion-attention title pills MUST use their stable attention color instead
 of flashing while reduced motion is enabled.
+
+`terminal.completion_attention_flashing` MUST default to true. When false,
+completion-attention title pills MUST use their stable attention color without
+an animation refresh timer.
 
 `terminal.render_rate_limit_fps` MUST default to 5. When nonzero, attached
 foreground clients SHOULD coalesce bursty render invalidations so ordinary

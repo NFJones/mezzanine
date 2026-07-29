@@ -128,19 +128,21 @@ fn render_default_window_frame_uses_window_pillbox_context() {
 }
 
 /// Verifies completion attention flashes a window title pill by color only and
-/// becomes a stable semantic attention color when reduced motion is enabled.
+/// becomes a stable semantic attention color when reduced motion or the
+/// flashing preference is disabled.
 ///
 /// Alternating animation phases must preserve the rendered title text and
 /// geometry so attention does not move hit targets or alter window identity.
 #[test]
-fn render_window_completion_attention_flashes_without_changing_layout() {
+fn render_window_completion_attention_respects_flashing_preference() {
     let mut ids = IdFactory::default();
     let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap());
-    let render_phase = |animation_tick_ms, reduced_motion| {
+    let render_phase = |animation_tick_ms, reduced_motion, completion_attention_static| {
         let config = TerminalClientLoopConfig {
             frame_context: TerminalFrameContext {
                 animation_tick_ms,
                 reduced_motion,
+                completion_attention_static,
                 windows: vec![TerminalWindowFrameContext {
                     id: window.id.to_string(),
                     index: 0,
@@ -178,15 +180,17 @@ fn render_window_completion_attention_flashes_without_changing_layout() {
         )
     };
 
-    let attention_on = render_phase(0, false);
-    let attention_off = render_phase(400, false);
-    let reduced_motion = render_phase(400, true);
+    let attention_on = render_phase(0, false, false);
+    let attention_off = render_phase(400, false, false);
+    let reduced_motion = render_phase(400, true, false);
+    let flashing_disabled = render_phase(400, false, true);
 
     assert_eq!(attention_on.0, attention_off.0);
     assert_eq!(attention_on.1, attention_off.1);
     assert_eq!(attention_on.2, Some(attention_on.3));
     assert_ne!(attention_off.2, attention_on.2);
     assert_eq!(reduced_motion.2, Some(reduced_motion.3));
+    assert_eq!(flashing_disabled.2, Some(flashing_disabled.3));
 }
 
 /// Verifies that the window status bar renders single-cell action pills

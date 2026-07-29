@@ -81,6 +81,7 @@ pub(super) use terminal_options::{
     runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
     runtime_host_clipboard_from_config, runtime_saved_agent_session_limit_from_config,
     runtime_terminal_agent_wrap_column_cap_from_config, runtime_terminal_clipboard_from_config,
+    runtime_terminal_completion_attention_flashing_from_config,
     runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_emoji_width_from_config,

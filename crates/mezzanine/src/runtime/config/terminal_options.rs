@@ -298,6 +298,21 @@ pub(crate) fn runtime_terminal_reduced_motion_from_config(root: &Value) -> Resul
         .ok_or_else(|| MezError::config("terminal.reduced_motion must be true or false"))
 }
 
+/// Returns whether completion-attention title pills should alternate colors.
+pub(crate) fn runtime_terminal_completion_attention_flashing_from_config(
+    root: &Value,
+) -> Result<bool> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(true);
+    };
+    let Some(value) = terminal.get("completion_attention_flashing") else {
+        return Ok(true);
+    };
+    value.as_bool().ok_or_else(|| {
+        MezError::config("terminal.completion_attention_flashing must be true or false")
+    })
+}
+
 /// Runs the runtime terminal clipboard from config operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

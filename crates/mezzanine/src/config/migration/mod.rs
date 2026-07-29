@@ -40,6 +40,7 @@ mod v41_v42;
 mod v42_v43;
 mod v43_v44;
 mod v44_v45;
+mod v45_v46;
 
 #[cfg(test)]
 pub use driver::migrate_config_text;

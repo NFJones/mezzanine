@@ -194,6 +194,7 @@ pub(in crate::host::terminal::render) fn window_pillbox_rendition(
 ) -> GraphicRendition {
     let attention_on = completion_attention
         && (frame_context.reduced_motion
+            || frame_context.completion_attention_static
             || (frame_context.animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS)
                 .is_multiple_of(2));
     let pair = if attention_on {
@@ -541,6 +542,7 @@ pub(in crate::host::terminal::render) fn pane_frame_rendition(
 ) -> GraphicRendition {
     let attention_on = completion_attention
         && (frame_context.reduced_motion
+            || frame_context.completion_attention_static
             || (frame_context.animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS)
                 .is_multiple_of(2));
     let pair = if attention_on {
