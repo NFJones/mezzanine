@@ -713,10 +713,6 @@ fn runtime_control_project_approval_decisions_persist_exact_command_rules() {
     assert!(!changed_directory.join(".mezzanine/config.toml").exists());
     let config_text = fs::read_to_string(&project_config).unwrap();
     assert!(
-        config_text.contains(r#"approval_policy = "ask""#),
-        "{config_text}"
-    );
-    assert!(
         config_text.contains(r#"match = "exact_sha256""#),
         "{config_text}"
     );
@@ -926,11 +922,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_dir = root.join(".mezzanine");
     fs::create_dir_all(&overlay_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(
-        &overlay_path,
-        "version = 45\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
-    )
-    .unwrap();
+    fs::write(&overlay_path, "version = 45\n[history]\nlines = 7\n").unwrap();
     let trust_path = root.join("trust.tsv");
     service.set_project_trust_store(ProjectTrustStore::default(), Some(trust_path.clone()));
     let initial_report = service
@@ -1023,7 +1015,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
         "{trust}"
     );
     assert!(
-        trust.contains(r#""capability_expansion_summary":["permissions"]"#),
+        trust.contains(r#""capability_expansion_summary":[]"#),
         "{trust}"
     );
     assert_eq!(service.terminal_history_limit(), 7);
@@ -1121,11 +1113,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_dir = root.join(".mezzanine");
     fs::create_dir_all(&overlay_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(
-        &overlay_path,
-        "version = 45\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
-    )
-    .unwrap();
+    fs::write(&overlay_path, "version = 45\n[history]\nlines = 11\n").unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);
     let initial_report = service
         .replace_config_layers(vec![

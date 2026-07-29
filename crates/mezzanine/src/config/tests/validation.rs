@@ -380,6 +380,53 @@ fn host_access_is_user_only_primary_policy() {
     }
 }
 
+/// Verifies trusted project overlays cannot change the sandbox or execution
+/// authority that protects an agent able to write project-local config.
+#[test]
+fn project_overlays_cannot_change_execution_authority() {
+    let overlay = validate_config_text(
+        ConfigFormat::Toml,
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n\
+             [permissions]\n\
+             approval_policy = \"full-access\"\n\
+             preset = \"auto\"\n\
+             sandbox = \"policy-only\"\n\
+             read_scopes = [\".\", \"/tmp\"]\n\
+             write_scopes = [\".\"]\n\
+             network_policy = \"allow\"\n\
+             destructive_action_policy = \"allow\"\n\
+             bypass_mode = false\n\
+             [permissions.bubblewrap]\n\
+             executable = \"/usr/local/bin/bwrap\"\n\
+             [model_profiles.default]\n\
+             approval_policy = \"full-access\"\n"
+        ),
+        ConfigScope::ProjectOverlay,
+    );
+
+    assert!(!overlay.valid);
+    for path in [
+        "permissions.approval_policy",
+        "permissions.preset",
+        "permissions.sandbox",
+        "permissions.read_scopes",
+        "permissions.write_scopes",
+        "permissions.network_policy",
+        "permissions.destructive_action_policy",
+        "permissions.bypass_mode",
+        "permissions.bubblewrap.executable",
+        "model_profiles.default.approval_policy",
+    ] {
+        assert!(overlay.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == path
+                && diagnostic
+                    .message
+                    .starts_with("primary_user_only_execution_authority:")
+        }));
+    }
+}
+
 /// Verifies that configuration cannot directly enter the explicit approval
 /// bypass state. The specification requires bypass activation to go through an
 /// obvious user-selected flow with primary authority and audit visibility, so

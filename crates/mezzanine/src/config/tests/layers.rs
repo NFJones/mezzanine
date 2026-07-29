@@ -83,6 +83,41 @@ fn untrusted_project_overlay_is_skipped_with_diagnostic() {
     assert!(effective.diagnostics()[0].message.contains("pending trust"));
 }
 
+/// Verifies a trusted project overlay cannot replace a primary Bubblewrap
+/// boundary with policy-only execution during effective configuration composition.
+#[test]
+fn trusted_project_overlay_cannot_weaken_primary_sandbox() {
+    let error = compose_effective_config(&[
+        ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[permissions]\nsandbox = \"bubblewrap\"\n".to_string(),
+        },
+        ConfigLayer {
+            name: "project".to_string(),
+            path: Some(PathBuf::from("/repo/.mezzanine/config.toml")),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::ProjectOverlay,
+            trusted: true,
+            text: format!(
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"policy-only\"\n"
+            ),
+        },
+    ])
+    .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::Config);
+    assert!(error.to_string().contains("permissions.sandbox"));
+    assert!(
+        error
+            .to_string()
+            .contains("primary_user_only_execution_authority")
+    );
+}
+
 /// Verifies invalid layer prevents effective config.
 ///
 /// This regression scenario documents the behavior being protected so a

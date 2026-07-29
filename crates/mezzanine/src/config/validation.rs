@@ -385,6 +385,15 @@ pub fn validate_config_text(
             });
         }
 
+        if scope == ConfigScope::ProjectOverlay
+            && project_overlay_path_changes_execution_authority(path)
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path: path.clone(),
+                message: "primary_user_only_execution_authority: project overlays must not change sandbox or execution-authority settings".to_string(),
+            });
+        }
+
         if let Some(message) = validate_mcp_server_path(path) {
             diagnostics.push(ConfigDiagnostic {
                 path: path.clone(),
@@ -814,6 +823,28 @@ fn valid_custom_toolchain_environment_name(name: &str) -> bool {
 /// on duplicated control-flow logic.
 fn is_approval_policy_value_path(path: &str) -> bool {
     path == "permissions.approval_policy" || is_model_profile_approval_policy_path(path)
+}
+
+/// Reports whether a project-overlay path could change the execution boundary.
+///
+/// Project configuration is writable under the trusted-project authority that
+/// Bubblewrap may grant to an agent. It may therefore carry project command
+/// rules, but it must not select or alter the sandbox, filesystem scopes,
+/// network policy, approval behavior, or another execution boundary.
+fn project_overlay_path_changes_execution_authority(path: &str) -> bool {
+    matches!(
+        path,
+        "permissions.approval_policy"
+            | "permissions.preset"
+            | "permissions.sandbox"
+            | "permissions.read_scopes"
+            | "permissions.write_scopes"
+            | "permissions.network_policy"
+            | "permissions.destructive_action_policy"
+            | "permissions.bypass_mode"
+            | "permissions.bubblewrap"
+    ) || path.starts_with("permissions.bubblewrap.")
+        || is_model_profile_approval_policy_path(path)
 }
 
 /// Reports whether a path is one model profile's approval policy.

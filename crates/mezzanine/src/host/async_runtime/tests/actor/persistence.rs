@@ -730,7 +730,6 @@ async fn async_actor_defers_project_approval_config_to_persistence_worker() {
         assert!(persistence.bytes_written > 0);
 
         let config_text = std::fs::read_to_string(&project_config).unwrap();
-        assert!(config_text.contains(r#"approval_policy = "ask""#));
         assert!(config_text.contains(r#"match = "exact_sha256""#));
         assert!(config_text.contains(r#"decision = "allow""#));
         assert!(config_text.contains(r#"decision = "deny""#));

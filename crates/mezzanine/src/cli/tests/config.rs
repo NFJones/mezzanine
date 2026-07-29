@@ -233,7 +233,6 @@ fn config_set_project_scope_requires_trusted_project_root() {
     let output = String::from_utf8(set_stdout).unwrap();
     assert!(output.contains(r#""scope":"project""#), "{output}");
     let project_text = fs::read_to_string(&project_config).unwrap();
-    assert!(project_text.contains("approval_policy = \"ask\""));
     assert!(project_text.contains("lines = 12"));
     assert!(stderr.is_empty());
 

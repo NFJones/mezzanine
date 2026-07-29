@@ -2381,6 +2381,13 @@ explicitly defines replacement behavior.
 
 Project overlay configuration MUST NOT contain authentication secrets.
 
+Project overlays MAY carry project-local command rules, but MUST NOT change
+sandbox backend or Bubblewrap settings, filesystem scopes, network policy,
+approval policy (including model-profile approval policies), permission preset,
+destructive-action policy, or approval-bypass state. Those execution-boundary
+settings are primary-user-only even when the project is trusted, because a
+trusted-project agent may be able to write the overlay path.
+
 Project overlay configuration MUST NOT be applied until the project is trusted.
 When an untrusted project overlay is discovered and a primary client is
 attached, Mezzanine MUST prompt the primary client to trust or reject the
@@ -2438,11 +2445,11 @@ project root; reject a pending project root; and revoke a previously trusted
 project root. Trust and rejection decisions MUST require the primary client.
 
 Project overlay configuration under a trusted project root MUST be treated as
-trusted by virtue of that root, including overlay settings that can expand
-authority. A user-selected trust policy MAY require renewed approval for
-authority expansion, schema-version changes, trust-policy-version changes, or
-other configured risk signals, but such renewed approval is an explicit policy
-choice rather than the baseline behavior.
+trusted by virtue of that root, subject to the primary-user-only
+execution-boundary settings defined above. A user-selected trust policy MAY
+require renewed approval for other authority expansion, schema-version changes,
+trust-policy-version changes, or other configured risk signals, but such
+renewed approval is an explicit policy choice rather than the baseline behavior.
 
 For configuration overlay discovery, the project root MUST be the nearest
 ancestor of the pane current working directory that contains a `.git` directory

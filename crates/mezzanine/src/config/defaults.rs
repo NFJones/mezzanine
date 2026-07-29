@@ -463,6 +463,8 @@ allowed_reasoning_efforts = ["high"]
 # ask prompts when required; auto-allow uses the model gate; full-access skips
 # prompts but stays sandboxed. host-access is primary-user-only and executes
 # local shell actions on the host outside the configured sandbox.
+# Sandbox, scope, network, and approval settings are also primary-user-only;
+# trusted project overlays may not change this execution boundary.
 approval_policy = "ask"
 # policy-only performs approval classification and auditing but provides no OS
 # filesystem or shell-network confinement. Select bubblewrap for enforcement.
@@ -542,7 +544,4 @@ required = false
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_PROJECT_CONFIG_TOML: &str = r##"# Mezzanine project configuration.
 version = 1
-
-[permissions]
-approval_policy = "ask"
 "##;
