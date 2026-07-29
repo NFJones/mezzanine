@@ -534,12 +534,12 @@ fn runtime_agent_prompt_ctrl_v_preserves_multiline_clipboard_until_enter() {
             format!("{expected}suffix")
         );
         service
-            .agent_prompt_inputs_for_tests_mut()
+            .agent_prompt_inputs_mut_for_tests()
             .get_mut("%1")
             .unwrap()
             .prompt
             .buffer
-            .clear();
+            .set_line("");
     }
 
     service

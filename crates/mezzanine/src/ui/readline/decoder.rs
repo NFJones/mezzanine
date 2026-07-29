@@ -19,7 +19,7 @@ impl ReadlineInputDecoder {
 
     /// Decodes complete terminal input items while preserving incomplete input.
     pub fn decode(&mut self, input: &[u8]) -> Result<Vec<ReadlineDecodedInput>> {
-        self.inner.decode(input)
+        Ok(self.inner.decode(input)?)
     }
 
     /// Applies one decoded terminal input item to a prompt.
