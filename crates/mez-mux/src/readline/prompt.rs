@@ -148,7 +148,7 @@ impl ReadlinePromptState {
         if mode != ReadlinePromptMode::Multiline {
             return None;
         }
-        if input == b"\n" {
+        if input == b"\n" || input == b"\r\n" {
             return Some(
                 self.buffer
                     .apply(ReadlineEdit::InsertText("\n".to_string())),
@@ -330,5 +330,27 @@ mod tests {
             Some(ReadlineOutcome::Edited)
         );
         assert!(state.buffer.line().contains('\n'));
+    }
+
+    /// Verifies a CRLF paste fragment becomes one editable newline rather than
+    /// submitting the draft. Some terminals emit CRLF for unbracketed pasted
+    /// text, while a standalone carriage return remains the explicit submit
+    /// key for a multiline prompt.
+    #[test]
+    fn multiline_prompt_inserts_crlf_as_one_newline() {
+        let mut state = ReadlinePromptState::new();
+        state.buffer.set_line("first");
+
+        assert_eq!(
+            state.apply_mode_input(ReadlinePromptMode::Multiline, b"\r\n"),
+            Some(ReadlineOutcome::Edited)
+        );
+        state.buffer.insert_text("second");
+
+        assert_eq!(state.buffer.line(), "first\nsecond");
+        assert_eq!(
+            state.apply_mode_input(ReadlinePromptMode::Multiline, b"\r"),
+            None
+        );
     }
 }
