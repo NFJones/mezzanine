@@ -891,6 +891,14 @@ impl RuntimeSessionService {
             .remove(pane_id)
     }
 
+    /// Reports whether one terminal subagent pane is awaiting deferred close.
+    #[cfg(test)]
+    pub(crate) fn has_pending_terminal_subagent_pane_close(&self, pane_id: &str) -> bool {
+        self.agent
+            .pending_terminal_subagent_pane_closes
+            .contains(pane_id)
+    }
+
     /// Clears all subagent routing and placement state on session replacement.
     pub(crate) fn clear_subagent_placement_state(&mut self) {
         self.agent.subagent_task_routes.clear();

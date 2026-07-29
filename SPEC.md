@@ -5845,6 +5845,8 @@ failed, and the parent MUST NOT resume provider execution until it reacquires
 capacity. Duplicate terminal child observations MUST be idempotent. A join
 settlement invariant failure MUST fail the parent visibly and MUST NOT leave it
 indefinitely blocked.
+Joined dependency records are result-correlation metadata and MUST NOT by
+themselves keep a successfully completed child session alive.
 In `detach` mode, the parent may continue immediately after spawn creation
 while status updates may route to the controlling pane and final output routes
 to the parent agent through the local message passing protocol.
@@ -6128,6 +6130,8 @@ macro-created subagent MUST inherit the parent agent configuration, project
 instructions, permission policy, shell mode, routing state, and applicable scope limits
 in the same manner as other subagents, and it MUST count against the configured subagent
 concurrency and depth limits.
+After a successful intermediate macro step, Mezzanine MUST retain that persistent
+subagent session until the judge dispatches the next step or terminates the macro run.
 
 For the first step in a macro run, the runtime MUST submit the scripted prompt to the
 persistent subagent before any parent model continuation is required. The runtime MAY

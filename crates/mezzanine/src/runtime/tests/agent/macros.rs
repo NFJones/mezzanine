@@ -428,6 +428,22 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         Some(0)
     );
 
+    assert!(
+        service
+            .find_pane_descriptor(&first_child_turn.pane_id)
+            .is_some()
+    );
+    assert!(
+        service
+            .agent_shell_store()
+            .get(&first_child_turn.pane_id)
+            .is_some()
+    );
+    assert!(service.has_subagent_lineage(&first_child_turn.agent_id));
+    assert!(service.has_subagent_scope_declaration(&first_child_turn.agent_id));
+    assert!(service.has_macro_managed_subagent(&first_child_turn.agent_id));
+    assert!(!service.has_pending_terminal_subagent_pane_close(&first_child_turn.pane_id));
+
     let judge_provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -474,6 +490,8 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         second_child_turn.parent_turn_id.as_deref(),
         Some(parent_turn.turn_id.as_str())
     );
+    assert_eq!(second_child_turn.agent_id, first_child_turn.agent_id);
+    assert_eq!(second_child_turn.pane_id, first_child_turn.pane_id);
     assert!(service.has_joined_subagent_dependency(&second_child_turn.turn_id));
     let pane_text = service
         .pane_screen("%1")
@@ -494,6 +512,91 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
     assert!(
         pane_text.contains("macro release-check (1/2): result received; evaluating"),
         "{pane_text}"
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a failed macro step releases its worker without closing its pane.
+///
+/// Failed work must not remain reusable by macro routing or retain delegation
+/// authority, but its pane and shell session must stay available for user
+/// inspection and no subsequent macro step may be dispatched.
+#[test]
+fn runtime_agent_macro_failed_step_releases_worker_and_retains_pane() {
+    let config_root = temp_root("runtime-macro-failed-step-retains-pane");
+    let macro_dir = config_root.join("macros/release-check");
+    fs::create_dir_all(&macro_dir).unwrap();
+    fs::write(
+        macro_dir.join("MACRO.md"),
+        "---\nname: release-check\ndescription: Release readiness workflow\n---\n\n# Macro: release-check\n\n## Steps\n\n1. Inspect release notes.\n2. Summarize release blockers.\n",
+    )
+    .unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(config_root);
+
+    service
+        .execute_agent_shell_command(&primary, "#release-check for v1.2")
+        .unwrap();
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == "agent-%1")
+        .cloned()
+        .expect("parent macro orchestration turn should exist");
+    let child_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
+        .cloned()
+        .expect("runtime-owned macro step should create a child turn");
+
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &child_turn,
+            AgentTurnState::Failed,
+            "macro_step_failed",
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(!service.has_macro_run(parent_turn.turn_id.as_str()));
+    assert!(!service.has_macro_managed_subagent(&child_turn.agent_id));
+    assert!(!service.has_subagent_lineage(&child_turn.agent_id));
+    assert!(!service.has_subagent_scope_declaration(&child_turn.agent_id));
+    assert!(service.find_pane_descriptor(&child_turn.pane_id).is_some());
+    assert!(
+        service
+            .agent_shell_store()
+            .get(&child_turn.pane_id)
+            .is_some()
+    );
+    assert!(!service.has_pending_terminal_subagent_pane_close(&child_turn.pane_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
+            .count(),
+        1
     );
 
     service.terminate_all_pane_processes().unwrap();

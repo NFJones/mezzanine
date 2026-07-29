@@ -849,9 +849,7 @@ impl RuntimeSessionService {
                 Ok(())
             }
         };
-        let is_macro_step =
-            dependency.is_some() || turn.cooperation_mode.as_deref() == Some("macro-step");
-        let terminal_macro_step_failure = is_macro_step && !success;
+        let is_persistent_macro_step = turn.cooperation_mode.as_deref() == Some("macro-step");
         let settlement_error = if let Some(dependency) = dependency.as_ref() {
             self.resolve_joined_subagent_dependency_record(
                 turn,
@@ -872,11 +870,15 @@ impl RuntimeSessionService {
                 return Err(error);
             }
             self.agent.subagent_task_routes.remove(&turn.turn_id);
-            if !is_macro_step || terminal_macro_step_failure {
-                self.remove_subagent_authority_state(&turn.agent_id);
-                self.agent
-                    .pending_terminal_subagent_pane_closes
-                    .insert(turn.pane_id.clone());
+            self.remove_subagent_authority_state(&turn.agent_id);
+            if is_persistent_macro_step {
+                self.agent.macro_run_by_child_turn.remove(&turn.turn_id);
+                if let Some(dependency) = dependency.as_ref() {
+                    self.agent
+                        .macro_runs_by_parent_turn
+                        .remove(&dependency.parent_turn_id);
+                }
+                self.deregister_macro_managed_subagent(&turn.agent_id);
             }
             self.record_settled_subagent_result(&turn.turn_id);
             return Ok(());
@@ -893,10 +895,13 @@ impl RuntimeSessionService {
             )?;
         }
         self.agent.subagent_task_routes.remove(&turn.turn_id);
-        if !is_macro_step || terminal_macro_step_failure {
+        if !is_persistent_macro_step || !success {
             self.remove_subagent_authority_state(&turn.agent_id);
         }
-        if !is_macro_step || terminal_macro_step_failure {
+        if is_persistent_macro_step && !success {
+            self.deregister_macro_managed_subagent(&turn.agent_id);
+        }
+        if success && !is_persistent_macro_step {
             self.agent
                 .pending_terminal_subagent_pane_closes
                 .insert(turn.pane_id.clone());

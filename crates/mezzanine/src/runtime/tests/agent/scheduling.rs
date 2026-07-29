@@ -848,6 +848,24 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
     let child_two = service
         .start_agent_prompt_turn(child_two_pane.as_str(), "child two")
         .unwrap();
+    service.set_subagent_lineage(
+        child_one.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: parent.agent_id.clone(),
+            root_agent_id: parent.agent_id.clone(),
+            depth: 1,
+            display_name: "child one".to_string(),
+        },
+    );
+    service.set_subagent_lineage(
+        child_two.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: parent.agent_id.clone(),
+            root_agent_id: parent.agent_id.clone(),
+            depth: 1,
+            display_name: "child two".to_string(),
+        },
+    );
     let parent_turn = service
         .agent_turn_ledger()
         .turns()
@@ -996,6 +1014,18 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             .iter()
             .any(|block| block.content.contains("child two done"))
     );
+    assert!(
+        service
+            .agent_shell_store()
+            .get(child_one_pane.as_str())
+            .is_none()
+    );
+    assert!(
+        service
+            .find_pane_descriptor(child_one_pane.as_str())
+            .is_none()
+    );
+    assert!(!service.has_subagent_authority_state(&child_one.agent_id));
     assert_eq!(
         service
             .agent_turn_ledger()
@@ -1056,6 +1086,18 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             .iter()
             .any(|block| block.content.contains("child two done"))
     );
+    assert!(
+        service
+            .agent_shell_store()
+            .get(child_two_pane.as_str())
+            .is_none()
+    );
+    assert!(
+        service
+            .find_pane_descriptor(child_two_pane.as_str())
+            .is_none()
+    );
+    assert!(!service.has_subagent_authority_state(&child_two.agent_id));
     let child_two_result_blocks = parent_context
         .blocks()
         .iter()
@@ -1081,5 +1123,235 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             .filter(|block| block.content.contains(&child_two.turn_id))
             .count(),
         child_two_result_blocks
+    );
+}
+
+/// Blocks one running parent turn on a joined child result in lifecycle tests.
+///
+/// The helper installs the same running spawn result, chronology, routing, and
+/// scheduler wait state used by runtime-owned joined delegation while allowing
+/// nested tests to keep their pane setup compact and explicit.
+fn block_turn_on_joined_child(
+    service: &mut RuntimeSessionService,
+    parent: &mez_agent::AgentTurnRecord,
+    child: &mez_agent::AgentTurnRecord,
+    action_id: &str,
+    child_name: &str,
+) {
+    let spawn = runtime_spawn_agent_action(action_id, child_name);
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: format!("spawn {child_name}"),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "delegate joined work".to_string(),
+                thought: None,
+                turn_id: parent.turn_id.clone(),
+                agent_id: parent.agent_id.clone(),
+                actions: vec![spawn.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::running(
+            parent,
+            &spawn,
+            vec![format!("waiting for {child_name}")],
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .agent_turn_executions_mut()
+        .insert(parent.turn_id.clone(), execution.clone());
+    service
+        .append_agent_execution_chronology(parent, &execution)
+        .unwrap();
+    service.insert_joined_subagent_dependency(
+        child.turn_id.clone(),
+        JoinedSubagentDependency {
+            parent_turn_id: parent.turn_id.clone(),
+            parent_action_id: spawn.id.clone(),
+            child_turn_id: child.turn_id.clone(),
+            child_agent_id: child.agent_id.clone(),
+            child_display_name: Some(child_name.to_string()),
+        },
+    );
+    service.set_subagent_task_parent(child.turn_id.clone(), parent.agent_id.clone());
+    service.remove_pending_agent_provider_task(&parent.turn_id);
+    service
+        .agent_scheduler_mut()
+        .wait_running(&parent.turn_id)
+        .unwrap();
+    service
+        .agent_turn_ledger_mut()
+        .finish_turn(&parent.turn_id, AgentTurnState::Blocked)
+        .unwrap();
+}
+
+/// Verifies successful nested joined children close from the leaves upward.
+///
+/// A grandchild result must resume its immediate child parent and close only
+/// the grandchild pane. When that intermediate child later completes, its own
+/// result must reach the root and close the child pane without retaining any
+/// joined routes, dependencies, or delegation authority for either descendant.
+#[test]
+fn runtime_nested_joined_children_close_after_each_successful_handoff() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(3)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    let child_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let grandchild_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Horizontal)
+        .unwrap();
+    for pane in ["%1", child_pane.as_str(), grandchild_pane.as_str()] {
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane)
+            .unwrap();
+        let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
+        screen.feed(b"ready\n");
+        service.set_pane_screen(pane.to_string(), screen);
+    }
+
+    let root = service.start_agent_prompt_turn("%1", "root task").unwrap();
+    let child = service
+        .start_agent_prompt_turn(child_pane.as_str(), "child task")
+        .unwrap();
+    let grandchild = service
+        .start_agent_prompt_turn(grandchild_pane.as_str(), "grandchild task")
+        .unwrap();
+    let records = service.agent_turn_ledger().turns();
+    let root_record = records
+        .iter()
+        .find(|turn| turn.turn_id == root.turn_id)
+        .cloned()
+        .unwrap();
+    let child_record = records
+        .iter()
+        .find(|turn| turn.turn_id == child.turn_id)
+        .cloned()
+        .unwrap();
+    let grandchild_record = records
+        .iter()
+        .find(|turn| turn.turn_id == grandchild.turn_id)
+        .cloned()
+        .unwrap();
+    service.set_subagent_lineage(
+        child.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: root.agent_id.clone(),
+            root_agent_id: root.agent_id.clone(),
+            depth: 1,
+            display_name: "child".to_string(),
+        },
+    );
+    service.set_subagent_lineage(
+        grandchild.agent_id.clone(),
+        RuntimeSubagentLineage {
+            parent_agent_id: child.agent_id.clone(),
+            root_agent_id: root.agent_id.clone(),
+            depth: 2,
+            display_name: "grandchild".to_string(),
+        },
+    );
+    block_turn_on_joined_child(
+        &mut service,
+        &root_record,
+        &child_record,
+        "spawn-child",
+        "child",
+    );
+    block_turn_on_joined_child(
+        &mut service,
+        &child_record,
+        &grandchild_record,
+        "spawn-grandchild",
+        "grandchild",
+    );
+
+    let grandchild_provider = RuntimeBatchProvider {
+        response: runtime_say_response_for_agent(
+            &grandchild.turn_id,
+            &grandchild.agent_id,
+            "grandchild done",
+            true,
+        ),
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &grandchild.turn_id,
+            &grandchild_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert!(
+        service
+            .find_pane_descriptor(grandchild_pane.as_str())
+            .is_none()
+    );
+    assert!(service.find_pane_descriptor(child_pane.as_str()).is_some());
+    assert!(!service.has_subagent_authority_state(&grandchild.agent_id));
+    assert!(service.has_subagent_authority_state(&child.agent_id));
+    assert!(service.subagent_task_parent(&grandchild.turn_id).is_none());
+    assert!(!service.has_joined_subagent_dependency(&grandchild.turn_id));
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&child.turn_id)
+            .is_some_and(|context| context
+                .blocks()
+                .iter()
+                .any(|block| block.content.contains("grandchild done")))
+    );
+
+    let child_provider = RuntimeBatchProvider {
+        response: runtime_say_response_for_agent(
+            &child.turn_id,
+            &child.agent_id,
+            "child done",
+            true,
+        ),
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &child.turn_id,
+            &child_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert!(service.find_pane_descriptor(child_pane.as_str()).is_none());
+    assert!(service.find_pane_descriptor("%1").is_some());
+    assert!(!service.has_subagent_authority_state(&child.agent_id));
+    assert!(service.subagent_task_parent(&child.turn_id).is_none());
+    assert!(!service.has_joined_subagent_dependency(&child.turn_id));
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&root.turn_id)
+            .is_some_and(|context| context
+                .blocks()
+                .iter()
+                .any(|block| block.content.contains("child done")))
     );
 }
