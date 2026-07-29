@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    AgentContextUsageSnapshot, LatestModelRequestUsage, ModelTokenUsage, ModelTokenUsageKey,
+    AgentContextUsageSnapshot, AutoSizingRoutingPolicy, LatestModelRequestUsage, ModelTokenUsage,
+    ModelTokenUsageKey,
 };
 
 use super::TranscriptContractError;
@@ -40,6 +41,8 @@ pub struct AgentSessionMetadata {
     pub directive: Option<String>,
     /// Pane-local routing override, if one is active.
     pub routing_enabled: Option<bool>,
+    /// Pane-local root-turn routing application policy, if one is active.
+    pub root_routing_policy: Option<String>,
     /// Legacy saved approval policy name retained for checkpoint compatibility.
     pub approval_policy: Option<String>,
     /// Explicit permission-preset override owned by this pane, if any.
@@ -101,6 +104,13 @@ impl AgentSessionMetadata {
         }
         if let Some(approval_policy) = self.pane_approval_policy_override.as_deref() {
             validate_agent_approval_policy(approval_policy)?;
+        }
+        if let Some(policy) = self.root_routing_policy.as_deref()
+            && AutoSizingRoutingPolicy::parse(policy).is_none()
+        {
+            return Err(TranscriptContractError::new(
+                "root routing policy must be subagent or in-place",
+            ));
         }
         if let Some(snapshot) = self.context_usage_snapshot {
             if snapshot.input_tokens == 0 {

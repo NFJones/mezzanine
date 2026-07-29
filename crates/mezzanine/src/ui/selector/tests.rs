@@ -82,6 +82,14 @@ fn selector_plans_agent_argument_candidates() {
     .unwrap();
     assert_eq!(policy_plan.candidates[0].value, "subagent");
 
+    let global_policy_plan = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/routing policy --global i",
+        "/routing policy --global i".len(),
+    )
+    .unwrap();
+    assert_eq!(global_policy_plan.candidates[0].value, "in-place");
+
     let copy_plan = plan_selector(SelectorSurface::AgentCommand, "/copy c", 7).unwrap();
     assert_eq!(copy_plan.candidates[0].value, "clipboard");
 }
@@ -1331,7 +1339,10 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
     assert_eq!(loop_hint.text, " [--fork|--new] [--limit <int>] <prompt>");
     assert_eq!(latency_hint.text, " <slow|default|fast>");
     assert_eq!(trust_hint.text, " [project-root|latest|list|pending]");
-    assert_eq!(routing_hint.text, " <on|off|toggle|status|policy>");
+    assert_eq!(
+        routing_hint.text,
+        " <on|off|toggle|status|policy [--global] <subagent|in-place>>"
+    );
     assert_eq!(
         toolchain_hint.text,
         " <status|list|detect|define|enable|disable|remove|reload>"
@@ -1439,7 +1450,7 @@ fn selector_host_access_candidate_warns_about_host_execution() {
 }
 
 /// Verifies `/routing policy` exposes nested policy values through Tab
-/// completion and transient prompt shadow hints.
+/// completion and transient prompt shadow hints, including global scope.
 #[test]
 fn selector_shadow_hint_completes_routing_policy_values() {
     let policy_hint = shadow_hint(
@@ -1460,10 +1471,25 @@ fn selector_shadow_hint_completes_routing_policy_values() {
         "/routing policy i".len(),
     )
     .unwrap();
+    let global_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/routing policy --g",
+        "/routing policy --g".len(),
+    )
+    .unwrap();
+    let global_policy_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/routing policy --global ",
+        "/routing policy --global ".len(),
+    )
+    .unwrap();
 
-    assert_eq!(policy_hint.text, " <subagent|in-place>");
+    assert_eq!(policy_hint.text, " [--global] <subagent|in-place>");
     assert_eq!(subagent_hint.text, "ubagent");
     assert_eq!(in_place_hint.text, "n-place");
+    assert_eq!(global_hint.text, "lobal");
+    assert_eq!(global_hint.kind, SelectorCandidateKind::Flag);
+    assert_eq!(global_policy_hint.text, " <subagent|in-place>");
     assert_eq!(subagent_hint.kind, SelectorCandidateKind::Value);
     assert_eq!(in_place_hint.kind, SelectorCandidateKind::Value);
 }

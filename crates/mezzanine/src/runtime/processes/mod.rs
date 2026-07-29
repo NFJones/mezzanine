@@ -1997,6 +1997,7 @@ impl RuntimeSessionService {
             .pane_profiles
             .remove(pane_id);
         self.set_agent_auto_sizing_override(pane_id, None);
+        self.set_agent_root_routing_policy_override(pane_id, None);
         let pane_turn_ids = self
             .agent_turn_ledger()
             .turns()

@@ -333,13 +333,16 @@ fn runtime_agent_shell_routing_command_sets_pane_override() {
     assert_eq!(service.agent_routing_override("%1"), Some(false));
 }
 
-/// Verifies that `/routing policy` persists an explicit root-turn application
-/// policy, applies it immediately, rejects malformed values, and never changes
-/// the required in-place behavior for delegated subagent turns.
+/// Verifies `/routing policy` is pane-local unless `--global` is explicit.
+///
+/// Pane overrides must remain sparse and win over later global fallback
+/// changes, malformed forms must be mutation-free, and delegated subagents
+/// must continue to use in-place routing regardless of either root policy.
 #[test]
-fn runtime_agent_shell_routing_policy_persists_root_policy_and_preserves_subagents() {
+fn runtime_agent_shell_routing_policy_scopes_changes_and_preserves_subagents() {
     let mut service = test_runtime_service();
     let config_root = temp_root("runtime-agent-shell-routing-policy");
+    let _ = fs::remove_dir_all(&config_root);
     service.set_config_root(config_root.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -350,16 +353,17 @@ fn runtime_agent_shell_routing_policy_persists_root_policy_and_preserves_subagen
         .unwrap();
 
     let selected = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"routing-policy","method":"agent/shell/command","params":{"idempotency_key":"routing-policy","input":"/routing policy in-place"}}"#,
+        r#"{"jsonrpc":"2.0","id":"routing-policy","method":"agent/shell/command","params":{"idempotency_key":"routing-policy","input":"/routing policy subagent"}}"#,
         &primary,
     );
     assert!(selected.contains(r#""kind":"mutated""#), "{selected}");
-    assert!(selected.contains("root_policy=in-place"), "{selected}");
-    assert!(
-        fs::read_to_string(config_root.join("config.toml"))
-            .unwrap()
-            .contains("root_routing_policy = \"in-place\"")
+    assert!(selected.contains("root_policy=subagent"), "{selected}");
+    assert!(selected.contains("scope=pane"), "{selected}");
+    assert_eq!(
+        service.agent_root_routing_policy_override("%1"),
+        Some(mez_agent::AutoSizingRoutingPolicy::Subagent)
     );
+    assert!(!config_root.join("config.toml").exists());
 
     let root_turn = mez_agent::AgentTurnRecord {
         turn_id: "root-routing-policy".to_string(),
@@ -376,6 +380,38 @@ fn runtime_agent_shell_routing_policy_persists_root_policy_and_preserves_subagen
     };
     assert_eq!(
         service.auto_sizing_routing_policy_for_turn(&root_turn),
+        mez_agent::AutoSizingRoutingPolicy::Subagent
+    );
+
+    let other_root_turn = mez_agent::AgentTurnRecord {
+        turn_id: "other-root-routing-policy".to_string(),
+        agent_id: "agent-%2".to_string(),
+        pane_id: "%2".to_string(),
+        ..root_turn.clone()
+    };
+    assert_eq!(
+        service.auto_sizing_routing_policy_for_turn(&other_root_turn),
+        mez_agent::AutoSizingRoutingPolicy::Subagent
+    );
+
+    let global = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routing-policy-global","method":"agent/shell/command","params":{"idempotency_key":"routing-policy-global","input":"/routing policy --global in-place"}}"#,
+        &primary,
+    );
+    assert!(global.contains(r#""kind":"mutated""#), "{global}");
+    assert!(global.contains("scope=global"), "{global}");
+    assert!(global.contains("root_policy=in-place"), "{global}");
+    assert!(
+        fs::read_to_string(config_root.join("config.toml"))
+            .unwrap()
+            .contains("root_routing_policy = \"in-place\"")
+    );
+    assert_eq!(
+        service.auto_sizing_routing_policy_for_turn(&root_turn),
+        mez_agent::AutoSizingRoutingPolicy::Subagent
+    );
+    assert_eq!(
+        service.auto_sizing_routing_policy_for_turn(&other_root_turn),
         mez_agent::AutoSizingRoutingPolicy::InPlace
     );
 
@@ -390,18 +426,38 @@ fn runtime_agent_shell_routing_policy_persists_root_policy_and_preserves_subagen
     );
     let child_turn = mez_agent::AgentTurnRecord {
         agent_id: "agent-child".to_string(),
-        ..root_turn
+        ..root_turn.clone()
     };
     assert_eq!(
         service.auto_sizing_routing_policy_for_turn(&child_turn),
         mez_agent::AutoSizingRoutingPolicy::InPlace
     );
 
-    let rejected = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"routing-policy-invalid","method":"agent/shell/command","params":{"idempotency_key":"routing-policy-invalid","input":"/routing policy invalid"}}"#,
-        &primary,
+    let persisted_before_rejections = fs::read_to_string(config_root.join("config.toml")).unwrap();
+    for (id, input) in [
+        ("invalid", "/routing policy invalid"),
+        ("missing", "/routing policy --global"),
+        ("misplaced", "/routing policy in-place --global"),
+        ("duplicate", "/routing policy --global --global in-place"),
+        ("unknown", "/routing policy --session in-place"),
+    ] {
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":"{id}","method":"agent/shell/command","params":{{"idempotency_key":"{id}","input":"{input}"}}}}"#
+        );
+        let rejected = service.dispatch_runtime_control_body(&request, &primary);
+        assert!(rejected.contains("invalid_params"), "{rejected}");
+    }
+    assert_eq!(
+        service.agent_root_routing_policy_override("%1"),
+        Some(mez_agent::AutoSizingRoutingPolicy::Subagent)
     );
-    assert!(rejected.contains("invalid_params"), "{rejected}");
+    assert_eq!(
+        fs::read_to_string(config_root.join("config.toml")).unwrap(),
+        persisted_before_rejections
+    );
+
+    service.cleanup_removed_pane_runtime_state("%1");
+    assert_eq!(service.agent_root_routing_policy_override("%1"), None);
     let _ = fs::remove_dir_all(config_root);
 }
 

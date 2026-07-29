@@ -1420,6 +1420,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
                 response_style: None,
                 directive: None,
                 routing_enabled: None,
+                root_routing_policy: None,
                 approval_policy: Some("ask".to_string()),
                 pane_permission_preset_override: None,
                 pane_approval_policy_override: None,

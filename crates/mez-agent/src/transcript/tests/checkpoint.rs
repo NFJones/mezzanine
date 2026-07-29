@@ -21,6 +21,7 @@ fn valid_checkpoint() -> AgentSessionMetadata {
         response_style: None,
         directive: None,
         routing_enabled: None,
+        root_routing_policy: None,
         approval_policy: Some("ask".to_string()),
         pane_permission_preset_override: None,
         pane_approval_policy_override: None,
@@ -51,5 +52,12 @@ fn agent_session_checkpoint_rejects_unknown_policy_values() {
 
     checkpoint.approval_policy = Some("ask".to_string());
     checkpoint.log_level = "unknown".to_string();
+    assert!(checkpoint.validate().is_err());
+
+    checkpoint.log_level = "normal".to_string();
+    checkpoint.root_routing_policy = Some("in-place".to_string());
+    checkpoint.validate().unwrap();
+
+    checkpoint.root_routing_policy = Some("invalid".to_string());
     assert!(checkpoint.validate().is_err());
 }

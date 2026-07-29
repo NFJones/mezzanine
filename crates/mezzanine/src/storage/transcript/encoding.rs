@@ -319,6 +319,7 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
             .pane_approval_policy_override
             .clone()
             .unwrap_or_default(),
+        metadata.root_routing_policy.clone().unwrap_or_default(),
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -342,7 +343,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         || fields.len() == 25
         || fields.len() == 26
         || fields.len() == 27
-        || fields.len() == 29)
+        || fields.len() == 29
+        || fields.len() == 30)
         || fields[0] != AGENT_SESSION_METADATA_VERSION
     {
         return Err(MezError::invalid_args(
@@ -525,6 +527,7 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
             .transpose()?,
         pane_permission_preset_override: fields.get(27).filter(|value| !value.is_empty()).cloned(),
         pane_approval_policy_override: fields.get(28).filter(|value| !value.is_empty()).cloned(),
+        root_routing_policy: fields.get(29).filter(|value| !value.is_empty()).cloned(),
     };
     metadata.validate()?;
     Ok(metadata)

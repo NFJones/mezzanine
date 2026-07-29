@@ -268,13 +268,20 @@ fn parameter_shadow_hint(
         });
     }
     if surface == SelectorSurface::AgentCommand
-        && context.tokens_before.len() == 2
+        && matches!(context.tokens_before.len(), 2 | 3)
         && context.tokens_before[0].trim_start_matches('/') == "routing"
         && context.tokens_before[1] == "policy"
     {
+        let text = if context.tokens_before.len() == 3 && context.tokens_before[2] == "--global" {
+            " <subagent|in-place>"
+        } else if context.tokens_before.len() == 2 {
+            " [--global] <subagent|in-place>"
+        } else {
+            return None;
+        };
         return Some(SelectorShadowHint {
             insert_at: cursor,
-            text: " <subagent|in-place>".to_string(),
+            text: text.to_string(),
             kind: SelectorCandidateKind::Value,
         });
     }

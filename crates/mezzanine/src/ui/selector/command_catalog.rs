@@ -341,7 +341,17 @@ pub(super) fn agent_argument_candidates(
             .get(1)
             .is_some_and(|token| token == "policy")
     {
-        return value_candidates(&["subagent", "in-place"]);
+        return match context.tokens_before.get(2).map(String::as_str) {
+            None => {
+                let mut candidates = value_candidates(&["subagent", "in-place"]);
+                candidates.extend(flag_candidates(&["--global"]));
+                candidates
+            }
+            Some("--global") if context.tokens_before.len() == 3 => {
+                value_candidates(&["subagent", "in-place"])
+            }
+            _ => Vec::new(),
+        };
     }
     let candidates = match command {
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),

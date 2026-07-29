@@ -6478,10 +6478,11 @@ The baseline command capabilities are:
   model for the active scope.
 - `/routing`: Inspect or change automatic turn model sizing. It MUST
   accept `on`, `off`, `toggle`, and `status`. It MUST also accept
-  `policy <subagent|in-place>` to persist `agents.auto_sizing.root_routing_policy`
-  and apply it immediately to root turns; subagent turns MUST remain in-place.
-  The command MUST update the pane-local agent preference and MUST checkpoint
-  that preference with other pane-scoped agent shell preferences.
+  `policy <subagent|in-place>` to update the current pane's root-turn policy
+  and `policy --global <subagent|in-place>` to persist the global fallback at
+  `agents.auto_sizing.root_routing_policy`. Pane-local policy MUST take
+  precedence over the global fallback and MUST be checkpointed with other
+  pane-scoped agent shell preferences. Subagent turns MUST remain in-place.
 - `/personality`: Configure response style when supported.
 - `/list-personalities`: Browse configured personality profiles in a
   pager-backed table. The command MUST accept no arguments, mark the effective

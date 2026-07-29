@@ -188,6 +188,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_auto_sizing_overrides: BTreeMap<String, RuntimeAutoSizingConfig>,
     /// Configured application policy for root-turn routing decisions.
     agent_root_routing_policy: AutoSizingRoutingPolicy,
+    /// Explicit pane-local application policies for root-turn routing decisions.
+    agent_root_routing_policy_overrides: BTreeMap<String, AutoSizingRoutingPolicy>,
     /// Maximum iterations accepted by one loop controller.
     agent_loop_limit: usize,
     /// Active loop controller state keyed by stable logical loop id.
@@ -1477,7 +1479,7 @@ impl RuntimeSessionService {
         if self.subagent_lineage(&turn.agent_id).is_some() {
             AutoSizingRoutingPolicy::InPlace
         } else {
-            self.agent.agent_root_routing_policy
+            self.agent_root_routing_policy_for_pane(&turn.pane_id)
         }
     }
 
@@ -1810,6 +1812,43 @@ impl RuntimeSessionService {
     /// Replaces the configured root-turn routing application policy.
     pub(crate) fn set_agent_root_routing_policy(&mut self, policy: AutoSizingRoutingPolicy) {
         self.agent.agent_root_routing_policy = policy;
+    }
+
+    /// Returns an explicit pane-local root-turn routing application policy.
+    pub(crate) fn agent_root_routing_policy_override(
+        &self,
+        pane_id: &str,
+    ) -> Option<AutoSizingRoutingPolicy> {
+        self.agent
+            .agent_root_routing_policy_overrides
+            .get(pane_id)
+            .copied()
+    }
+
+    /// Replaces or clears one pane-local root-turn routing application policy.
+    pub(crate) fn set_agent_root_routing_policy_override(
+        &mut self,
+        pane_id: &str,
+        policy: Option<AutoSizingRoutingPolicy>,
+    ) {
+        if let Some(policy) = policy {
+            self.agent
+                .agent_root_routing_policy_overrides
+                .insert(pane_id.to_string(), policy);
+        } else {
+            self.agent
+                .agent_root_routing_policy_overrides
+                .remove(pane_id);
+        }
+    }
+
+    /// Returns the effective root-turn routing application policy for one pane.
+    pub(crate) fn agent_root_routing_policy_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> AutoSizingRoutingPolicy {
+        self.agent_root_routing_policy_override(pane_id)
+            .unwrap_or(self.agent.agent_root_routing_policy)
     }
 
     /// Replaces the router model profile in the default auto-sizing policy.

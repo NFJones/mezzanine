@@ -62,7 +62,7 @@ pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "sandbox" => Some(" <status|enable|disable|trust|toolchains>"),
         "model" => Some(" [--routing] <list|model> [reasoning]"),
         "latency" => Some(" <slow|default|fast>"),
-        "routing" => Some(" <on|off|toggle|status|policy>"),
+        "routing" => Some(" <on|off|toggle|status|policy [--global] <subagent|in-place>>"),
         "thinking" => Some(" <on|off|toggle|status>"),
         "log-level" => Some(" <normal|verbose|debug|trace>"),
         "copy" => Some(" <pane|buffer [name]|clipboard>"),

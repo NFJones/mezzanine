@@ -655,6 +655,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 response_style: None,
                 directive: None,
                 routing_enabled: None,
+                root_routing_policy: None,
                 approval_policy: None,
                 pane_permission_preset_override: None,
                 pane_approval_policy_override: None,

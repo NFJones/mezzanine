@@ -206,22 +206,43 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Persists the root-turn application policy selected through `/routing policy`.
+    /// Applies a pane-local or explicitly global root-turn routing policy.
     fn execute_agent_shell_root_routing_policy_command(
         &mut self,
         pane_id: &str,
         arguments: &[&str],
     ) -> Result<AgentShellCommandOutcome> {
-        let ["policy", requested] = arguments else {
-            return Err(MezError::invalid_args(
-                "routing policy expects exactly one value: subagent or in-place",
-            ));
+        let (global, requested) = match arguments {
+            ["policy", requested] => (false, *requested),
+            ["policy", "--global", requested] => (true, *requested),
+            _ => {
+                return Err(MezError::invalid_args(
+                    "routing policy expects: policy [--global] <subagent|in-place>",
+                ));
+            }
         };
         let policy = AutoSizingRoutingPolicy::parse(requested).ok_or_else(|| {
             MezError::invalid_args("routing policy expects one of: subagent, in-place")
         })?;
+        let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
+        if !global {
+            let changed = self.agent_root_routing_policy_override(pane_id) != Some(policy);
+            self.set_agent_root_routing_policy_override(pane_id, Some(policy));
+            return Ok(AgentShellCommandOutcome::Mutated {
+                command: "routing".to_string(),
+                body: format!(
+                    "pane={} root_policy={} scope=pane changed={} source=runtime-routing",
+                    json_escape(pane_id),
+                    policy.as_str(),
+                    changed
+                ),
+                visibility,
+            });
+        }
         let path = runtime_primary_config_path(self)?.ok_or_else(|| {
-            MezError::invalid_state("routing policy requires a configured primary config path")
+            MezError::invalid_state(
+                "global routing policy requires a configured primary config path",
+            )
         })?;
         let report = runtime_apply_persisted_config_mutation_batch(
             self,
@@ -234,11 +255,10 @@ impl RuntimeSessionService {
             }],
             "agent/shell/routing-policy",
         )?;
-        let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "routing".to_string(),
             body: format!(
-                "pane={} root_policy={} changed={} persisted_path={} source=runtime-routing",
+                "pane={} root_policy={} scope=global changed={} persisted_path={} source=runtime-routing",
                 json_escape(pane_id),
                 policy.as_str(),
                 report.changed,

@@ -51,6 +51,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 response_style: None,
                 directive: Some("Prefer focused tests.".to_string()),
                 routing_enabled: Some(true),
+                root_routing_policy: Some("in-place".to_string()),
                 approval_policy: Some("full-access".to_string()),
                 pane_permission_preset_override: None,
                 pane_approval_policy_override: None,
@@ -98,6 +99,10 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
         "{resumed}"
     );
     assert_eq!(service.agent_routing_override("%1"), Some(true));
+    assert_eq!(
+        service.agent_root_routing_policy_override("%1"),
+        Some(mez_agent::AutoSizingRoutingPolicy::InPlace)
+    );
     assert_eq!(
         service.permission_policy().approval_policy,
         ApprovalPolicy::Ask

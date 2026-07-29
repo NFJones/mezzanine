@@ -13,6 +13,7 @@ use super::{
 };
 use crate::integrations::agent::actions::next_transcript_sequence;
 use crate::runtime::{runtime_parse_permission_preset, runtime_permission_preset_name};
+use mez_agent::AutoSizingRoutingPolicy;
 use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 
 impl RuntimeSessionService {
@@ -178,6 +179,18 @@ impl RuntimeSessionService {
             self.set_agent_planning_enabled(&metadata.pane_id, metadata.planning_enabled);
             self.set_agent_response_style(&metadata.pane_id, metadata.response_style.clone());
             self.set_agent_routing_override(&metadata.pane_id, metadata.routing_enabled);
+            let root_routing_policy = metadata
+                .root_routing_policy
+                .as_deref()
+                .map(|policy| {
+                    AutoSizingRoutingPolicy::parse(policy).ok_or_else(|| {
+                        MezError::invalid_args(
+                            "agent session metadata root routing policy is invalid",
+                        )
+                    })
+                })
+                .transpose()?;
+            self.set_agent_root_routing_policy_override(&metadata.pane_id, root_routing_policy);
             self.restore_agent_permission_overrides_from_metadata(
                 &metadata.pane_id,
                 metadata.pane_permission_preset_override.as_deref(),
@@ -350,6 +363,9 @@ impl RuntimeSessionService {
                         .map(ToOwned::to_owned),
                     directive: session.directive.clone(),
                     routing_enabled: self.agent_routing_override(&session.pane_id),
+                    root_routing_policy: self
+                        .agent_root_routing_policy_override(&session.pane_id)
+                        .map(|policy| policy.as_str().to_string()),
                     approval_policy: None,
                     pane_permission_preset_override: self
                         .integration
@@ -417,6 +433,18 @@ impl RuntimeSessionService {
             self.set_agent_planning_enabled(pane_id, metadata.planning_enabled);
             self.set_agent_response_style(pane_id, metadata.response_style.clone());
             self.set_agent_routing_override(pane_id, metadata.routing_enabled);
+            let root_routing_policy = metadata
+                .root_routing_policy
+                .as_deref()
+                .map(|policy| {
+                    AutoSizingRoutingPolicy::parse(policy).ok_or_else(|| {
+                        MezError::invalid_args(
+                            "agent session metadata root routing policy is invalid",
+                        )
+                    })
+                })
+                .transpose()?;
+            self.set_agent_root_routing_policy_override(pane_id, root_routing_policy);
             self.restore_agent_permission_overrides_from_metadata(
                 pane_id,
                 metadata.pane_permission_preset_override.as_deref(),
