@@ -447,6 +447,17 @@ impl RecordBrowser {
     }
 
     fn submit_prompt(&mut self) -> Result<RecordBrowserOutcome> {
+        if let Some(RecordBrowserPrompt::Save { input }) = self.prompt.as_ref() {
+            let path = input.trim().to_string();
+            if path.is_empty() {
+                return Err(MuxError::invalid_args(
+                    "record browser save path must not be empty",
+                ));
+            }
+            let markdown = self.render_page().raw_markdown;
+            self.prompt = None;
+            return Ok(RecordBrowserOutcome::SaveSubmitted { path, markdown });
+        }
         let Some(prompt) = self.prompt.take() else {
             return Ok(RecordBrowserOutcome::Ignored);
         };
@@ -469,17 +480,8 @@ impl RecordBrowser {
                     value: selected.value,
                 })
             }
-            RecordBrowserPrompt::Save { input } => {
-                let path = input.trim().to_string();
-                if path.is_empty() {
-                    return Err(MuxError::invalid_args(
-                        "record browser save path must not be empty",
-                    ));
-                }
-                Ok(RecordBrowserOutcome::SaveSubmitted {
-                    path,
-                    markdown: self.render_page().raw_markdown,
-                })
+            RecordBrowserPrompt::Save { .. } => {
+                unreachable!("save prompts are handled before consumption")
             }
         }
     }
@@ -1011,6 +1013,17 @@ mod tests {
         browser
             .apply_action(RecordBrowserAction::StartSave)
             .unwrap();
+        let error = browser
+            .apply_action(RecordBrowserAction::SubmitPrompt)
+            .unwrap_err();
+        assert_eq!(
+            error.message(),
+            "record browser save path must not be empty"
+        );
+        assert!(matches!(
+            browser.prompt(),
+            Some(RecordBrowserPrompt::Save { input }) if input.is_empty()
+        ));
         browser
             .apply_action(RecordBrowserAction::EditPrompt("issue.md".to_string()))
             .unwrap();
