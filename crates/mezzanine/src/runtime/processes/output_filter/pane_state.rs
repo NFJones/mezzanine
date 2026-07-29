@@ -766,11 +766,24 @@ impl RuntimeSessionService {
         if bytes.is_empty() {
             return Ok((Vec::new(), false, false, Vec::new()));
         }
-        if matches!(
+        let hidden_render_mode = matches!(
             self.pane_output_render_mode(pane_id),
             PaneOutputRenderMode::HiddenLiveAgentShell
                 | PaneOutputRenderMode::HiddenRetainedAgentShell
-        ) {
+        );
+        let hidden_agent_action_output = hidden_render_mode
+            && self
+                .process
+                .running_shell_transactions
+                .values()
+                .any(|transaction| {
+                    transaction.pane_id == pane_id
+                        && matches!(
+                            transaction.kind,
+                            RunningShellTransactionKind::AgentAction { .. }
+                        )
+                });
+        if hidden_agent_action_output {
             return Ok((
                 self.hidden_agent_shell_osc_events_for_pane_bytes(pane_id, bytes),
                 false,

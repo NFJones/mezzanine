@@ -450,6 +450,81 @@ fn runtime_pane_output_device_status_report_is_forwarded_to_pane_input() {
     assert_eq!(deferred[0].pane_input_parts().1, b"\x1b[3;5R");
 }
 
+/// Verifies hidden retained shell traffic still updates the incremental
+/// terminal protocol observer and emits replies without reaching either
+/// retained display surface.
+#[test]
+fn runtime_hidden_retained_shell_output_preserves_terminal_protocol() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let _process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .process_pane_screen_mut(&pane_id)
+        .unwrap()
+        .feed(b"process-visible");
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .ensure_agent_pane_screen(&pane_id, &conversation_id, Size::new(80, 24).unwrap())
+        .unwrap()
+        .feed(b"agent-visible");
+    service.remember_hidden_shell_render_suppression(&pane_id);
+
+    service
+        .apply_pane_output_bytes(pane_id.clone(), b"\x1b[?1000;1006;2004".to_vec())
+        .unwrap();
+    service
+        .apply_pane_output_bytes(
+            pane_id.clone(),
+            b"h\x1b[?1004h\x1b=\x1b[3;5H\x1b[6n".to_vec(),
+        )
+        .unwrap();
+
+    let observer = service
+        .pane_transaction_osc_screens_for_tests()
+        .get(&pane_id)
+        .expect("hidden protocol observer should be retained");
+    assert!(observer.application_mouse_enabled());
+    assert!(observer.application_sgr_mouse_enabled());
+    assert!(observer.bracketed_paste_enabled());
+    assert!(observer.focus_events_enabled());
+    assert!(observer.application_keypad_enabled());
+    assert_eq!(
+        service
+            .process_pane_screen(&pane_id)
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .matches("process-visible")
+            .count(),
+        1
+    );
+    assert_eq!(
+        service
+            .agent_pane_screen(&pane_id)
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .matches("agent-visible")
+            .count(),
+        1
+    );
+    let deferred = service.drain_pane_io_transition().side_effects;
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0].pane_input_parts().0, pane_id);
+    assert_eq!(deferred[0].pane_input_parts().1, b"\x1b[3;5R");
+}
+
 /// Verifies that runtime frame context sources `pane.process_name` from the
 /// live host process metadata instead of only echoing the configured shell path.
 #[cfg(target_os = "linux")]
