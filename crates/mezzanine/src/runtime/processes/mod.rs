@@ -2147,7 +2147,7 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.clear_agent_routing_override(pane_id);
         self.clear_agent_pane_artifacts(pane_id);
-        self.active_copy_modes_mut().remove(pane_id);
+        self.clear_copy_state_for_pane(pane_id);
         self.process
             .pane_current_working_directories
             .remove(pane_id);

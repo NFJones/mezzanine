@@ -82,7 +82,11 @@ fn runtime_double_click_copies_readline_word_under_pointer() {
         TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().as_slice(),
         ["beta"]
     );
-    assert!(!service.active_copy_modes().contains_key("%1"));
+    assert!(
+        service
+            .active_copy_mode_for_presented_surface("%1")
+            .is_none()
+    );
 }
 
 /// Verifies that runtime `terminal/command` accepts only the spec-defined

@@ -50,7 +50,11 @@ fn runtime_deferred_foreground_paste_stays_ordered_and_exits_copy_mode() {
             .iter()
             .all(|effect| !effect.pane_input_parts().2)
     );
-    assert!(!service.active_copy_modes().contains_key("%1"));
+    assert!(
+        service
+            .active_copy_mode_for_presented_surface("%1")
+            .is_none()
+    );
 }
 
 /// Verifies the terminal `copy-mode` command opens over the same live pane
@@ -76,8 +80,7 @@ fn runtime_copy_mode_command_preserves_live_viewport_height() {
         .unwrap();
 
     let visible = service
-        .active_copy_modes()
-        .get(&pane_id)
+        .active_copy_mode_for_presented_surface(&pane_id)
         .unwrap()
         .visible_lines()
         .iter()
@@ -121,7 +124,11 @@ fn runtime_copy_mode_key_navigation_requests_diff_refresh() {
 
     assert!(report.view_refresh_required);
     assert!(!report.full_redraw_required);
-    assert!(service.active_copy_modes().contains_key(&pane_id));
+    assert!(
+        service
+            .active_copy_mode_for_presented_surface(&pane_id)
+            .is_some()
+    );
 }
 
 /// Verifies that `/copy` uses retained model-authored `say` text and supports

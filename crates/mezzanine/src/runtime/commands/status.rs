@@ -458,7 +458,7 @@ impl RuntimeSessionService {
 
     /// Moves the current terminal view into history and clears the viewport.
     pub(crate) fn clear_agent_shell_terminal_view(&mut self, pane_id: &str) -> Result<bool> {
-        self.active_copy_modes_mut().remove(pane_id);
+        self.clear_copy_state_for_surface(pane_id, crate::runtime::PaneSurfaceKind::Agent);
         let Some(conversation_id) = self
             .agent_shell_store()
             .get(pane_id)

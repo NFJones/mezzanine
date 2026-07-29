@@ -127,14 +127,10 @@ impl RuntimeSessionService {
                 )
             })?;
         self.clear_shell_output_filters_for_foreground_input(descriptor.pane_id.as_str());
-        self.presentation
-            .copy
-            .active_copy_modes
-            .remove(descriptor.pane_id.as_str());
-        self.presentation
-            .copy
-            .scrollback_copy_mode_panes
-            .remove(descriptor.pane_id.as_str());
+        self.clear_copy_state_for_surface(
+            descriptor.pane_id.as_str(),
+            crate::runtime::PaneSurfaceKind::Process,
+        );
         self.write_runtime_pane_input(descriptor.pane_id.as_str(), input)?;
         Ok(PaneInputDispatch {
             session_id: self.session.id.to_string(),
@@ -445,14 +441,10 @@ impl RuntimeSessionService {
                                 self.clear_shell_output_filters_for_foreground_input(
                                     descriptor.pane_id.as_str(),
                                 );
-                                self.presentation
-                                    .copy
-                                    .active_copy_modes
-                                    .remove(descriptor.pane_id.as_str());
-                                self.presentation
-                                    .copy
-                                    .scrollback_copy_mode_panes
-                                    .remove(descriptor.pane_id.as_str());
+                                self.clear_copy_state_for_surface(
+                                    descriptor.pane_id.as_str(),
+                                    crate::runtime::PaneSurfaceKind::Process,
+                                );
                                 pane_input_effects.push(self.deferred_pane_input_effect(
                                     descriptor.pane_id.to_string(),
                                     input.clone(),
@@ -485,14 +477,10 @@ impl RuntimeSessionService {
                         self.clear_shell_output_filters_for_foreground_input(
                             descriptor.pane_id.as_str(),
                         );
-                        self.presentation
-                            .copy
-                            .active_copy_modes
-                            .remove(descriptor.pane_id.as_str());
-                        self.presentation
-                            .copy
-                            .scrollback_copy_mode_panes
-                            .remove(descriptor.pane_id.as_str());
+                        self.clear_copy_state_for_surface(
+                            descriptor.pane_id.as_str(),
+                            crate::runtime::PaneSurfaceKind::Process,
+                        );
                         pane_input_effects.push(self.deferred_pane_input_effect(
                             descriptor.pane_id.to_string(),
                             input.clone(),

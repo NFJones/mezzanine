@@ -33,8 +33,8 @@ use super::{
     EffectiveConfig, EventKind, HostClipboard, KeyBindings, KeyChord, MezError, MouseAction,
     MouseResizeDragState, MouseSelectionDragState, MouseWindowActionFrameCell,
     ObserverDecisionState, PaneDescriptor, PaneInputDispatch, PaneNavigationDirection,
-    PasteBuffers, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind,
-    RenderedClientView, Result, RuntimeAgentPromptInput, RuntimeCommandBinding,
+    PaneSurfaceKind, PasteBuffers, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt,
+    ReadlinePromptKind, RenderedClientView, Result, RuntimeAgentPromptInput, RuntimeCommandBinding,
     RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition,
     Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext,
     TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis,
@@ -201,10 +201,10 @@ struct RuntimeCopyPresentationState {
     active_paste_buffer: Option<String>,
     /// Configured desktop clipboard adapter.
     host_clipboard: HostClipboard,
-    /// Interactive copy modes keyed by pane id.
-    active_copy_modes: std::collections::BTreeMap<String, CopyMode>,
-    /// Panes using copy mode only as transient mouse scrollback.
-    scrollback_copy_mode_panes: std::collections::BTreeSet<String>,
+    /// Interactive copy modes keyed by pane and independently retained surface.
+    active_copy_modes: std::collections::BTreeMap<(String, PaneSurfaceKind), CopyMode>,
+    /// Pane surfaces using copy mode only as transient mouse scrollback.
+    scrollback_copy_mode_panes: std::collections::BTreeSet<(String, PaneSurfaceKind)>,
 }
 
 impl Default for RuntimeCopyPresentationState {
@@ -380,14 +380,6 @@ impl RuntimeSessionService {
         &mut self.presentation.copy.host_clipboard
     }
 
-    /// Returns panes using copy mode as transient mouse scrollback.
-    #[cfg(test)]
-    pub(crate) fn scrollback_copy_mode_panes_for_tests(
-        &self,
-    ) -> &std::collections::BTreeSet<String> {
-        &self.presentation.copy.scrollback_copy_mode_panes
-    }
-
     /// Returns active agent prompt editors for integration tests.
     #[cfg(test)]
     pub(crate) fn agent_prompt_inputs_for_tests(
@@ -527,16 +519,127 @@ impl RuntimeSessionService {
         self.presentation.copy.active_paste_buffer = name;
     }
 
-    /// Returns active per-pane copy modes.
-    pub(crate) fn active_copy_modes(&self) -> &std::collections::BTreeMap<String, CopyMode> {
+    /// Returns active copy modes keyed by pane and retained surface.
+    pub(crate) fn active_copy_modes(
+        &self,
+    ) -> &std::collections::BTreeMap<(String, PaneSurfaceKind), CopyMode> {
         &self.presentation.copy.active_copy_modes
     }
 
-    /// Returns mutable per-pane copy modes to copy and process adapters.
+    /// Returns mutable surface-qualified copy modes to copy and process adapters.
     pub(crate) fn active_copy_modes_mut(
         &mut self,
-    ) -> &mut std::collections::BTreeMap<String, CopyMode> {
+    ) -> &mut std::collections::BTreeMap<(String, PaneSurfaceKind), CopyMode> {
         &mut self.presentation.copy.active_copy_modes
+    }
+
+    /// Returns the interaction key for a pane's currently presented surface.
+    pub(crate) fn presented_copy_mode_key(&self, pane_id: &str) -> (String, PaneSurfaceKind) {
+        self.copy_mode_key(pane_id, self.presented_pane_surface(pane_id))
+    }
+
+    /// Returns the interaction key for one explicitly owned pane surface.
+    pub(crate) fn copy_mode_key(
+        &self,
+        pane_id: &str,
+        surface: PaneSurfaceKind,
+    ) -> (String, PaneSurfaceKind) {
+        (pane_id.to_string(), surface)
+    }
+
+    /// Returns the retained copy mode for a pane's currently presented surface.
+    pub(crate) fn active_copy_mode_for_presented_surface(
+        &self,
+        pane_id: &str,
+    ) -> Option<&CopyMode> {
+        let key = self.presented_copy_mode_key(pane_id);
+        self.presentation.copy.active_copy_modes.get(&key)
+    }
+
+    /// Returns mutable copy state for a pane's currently presented surface.
+    pub(crate) fn active_copy_mode_for_presented_surface_mut(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<&mut CopyMode> {
+        let key = self.presented_copy_mode_key(pane_id);
+        self.presentation.copy.active_copy_modes.get_mut(&key)
+    }
+
+    /// Installs copy state for a pane's currently presented surface.
+    pub(crate) fn insert_active_copy_mode_for_presented_surface(
+        &mut self,
+        pane_id: &str,
+        copy_mode: CopyMode,
+    ) {
+        let key = self.presented_copy_mode_key(pane_id);
+        self.presentation
+            .copy
+            .active_copy_modes
+            .insert(key, copy_mode);
+    }
+
+    /// Removes copy state for a pane's currently presented surface.
+    pub(crate) fn remove_active_copy_mode_for_presented_surface(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<CopyMode> {
+        let key = self.presented_copy_mode_key(pane_id);
+        self.presentation.copy.active_copy_modes.remove(&key)
+    }
+
+    /// Reports whether transient scrollback copy mode owns the presented surface.
+    pub(crate) fn presented_surface_uses_scrollback_copy_mode(&self, pane_id: &str) -> bool {
+        let key = self.presented_copy_mode_key(pane_id);
+        self.presentation
+            .copy
+            .scrollback_copy_mode_panes
+            .contains(&key)
+    }
+
+    /// Marks the pane's currently presented surface as transient scrollback copy mode.
+    pub(crate) fn mark_presented_surface_scrollback_copy_mode(&mut self, pane_id: &str) {
+        let key = self.presented_copy_mode_key(pane_id);
+        self.presentation
+            .copy
+            .scrollback_copy_mode_panes
+            .insert(key);
+    }
+
+    /// Removes transient scrollback state from the pane's presented surface.
+    pub(crate) fn remove_presented_surface_scrollback_copy_mode(&mut self, pane_id: &str) -> bool {
+        let key = self.presented_copy_mode_key(pane_id);
+        self.presentation
+            .copy
+            .scrollback_copy_mode_panes
+            .remove(&key)
+    }
+
+    /// Clears copy and transient scrollback state for the presented surface only.
+    pub(crate) fn clear_copy_state_for_presented_surface(&mut self, pane_id: &str) {
+        let surface = self.presented_pane_surface(pane_id);
+        self.clear_copy_state_for_surface(pane_id, surface);
+    }
+
+    /// Clears copy and transient scrollback state for one explicit surface.
+    pub(crate) fn clear_copy_state_for_surface(&mut self, pane_id: &str, surface: PaneSurfaceKind) {
+        let key = self.copy_mode_key(pane_id, surface);
+        self.presentation.copy.active_copy_modes.remove(&key);
+        self.presentation
+            .copy
+            .scrollback_copy_mode_panes
+            .remove(&key);
+    }
+
+    /// Removes copy and transient scrollback state for every surface of a pane.
+    pub(crate) fn clear_copy_state_for_pane(&mut self, pane_id: &str) {
+        self.presentation
+            .copy
+            .active_copy_modes
+            .retain(|(candidate, _), _| candidate != pane_id);
+        self.presentation
+            .copy
+            .scrollback_copy_mode_panes
+            .retain(|(candidate, _)| candidate != pane_id);
     }
 
     /// Replaces the desktop clipboard adapter after configuration changes.

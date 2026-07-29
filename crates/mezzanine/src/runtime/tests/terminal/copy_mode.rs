@@ -1,6 +1,93 @@
 //! Runtime tests for terminal copy mode behavior.
 
 use super::*;
+use crate::runtime::PaneSurfaceKind;
+
+/// Verifies process and agent copy modes retain independent viewport and
+/// selection state when pane visibility switches between retained surfaces.
+#[test]
+fn runtime_copy_mode_state_is_retained_per_pane_surface() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    service.set_frame_visibility_for_tests(false, false);
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let size = Size::new(20, 4).unwrap();
+    let mut process_screen = TerminalScreen::new(size, 20).unwrap();
+    process_screen
+        .feed(b"process one\r\nprocess two\r\nprocess three\r\nprocess four\r\nprocess five");
+    service.set_process_pane_screen(&pane_id, process_screen);
+
+    let process_key = service.copy_mode_key(&pane_id, PaneSurfaceKind::Process);
+    let process_state = {
+        let copy_mode = service.ensure_active_copy_mode(&pane_id).unwrap();
+        copy_mode.scroll_to_top();
+        copy_mode
+            .select_range(
+                CopyPosition { line: 0, column: 0 },
+                CopyPosition { line: 0, column: 7 },
+            )
+            .unwrap();
+        (copy_mode.scroll_top(), copy_mode.selection())
+    };
+
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(size, 20).unwrap();
+    agent_screen.feed(b"agent one\r\nagent two\r\nagent three\r\nagent four\r\nagent five");
+    service.set_agent_pane_screen(&pane_id, &conversation_id, agent_screen);
+    let agent_key = service.copy_mode_key(&pane_id, PaneSurfaceKind::Agent);
+    let agent_state = {
+        let copy_mode = service.ensure_active_copy_mode(&pane_id).unwrap();
+        copy_mode.scroll_to_bottom();
+        copy_mode
+            .select_range(
+                CopyPosition { line: 4, column: 0 },
+                CopyPosition { line: 4, column: 5 },
+            )
+            .unwrap();
+        (copy_mode.scroll_top(), copy_mode.selection())
+    };
+
+    assert_ne!(process_state, agent_state);
+    assert_eq!(
+        service
+            .active_copy_modes()
+            .get(&process_key)
+            .map(|copy_mode| (copy_mode.scroll_top(), copy_mode.selection())),
+        Some(process_state)
+    );
+    assert_eq!(
+        service
+            .active_copy_modes()
+            .get(&agent_key)
+            .map(|copy_mode| (copy_mode.scroll_top(), copy_mode.selection())),
+        Some(agent_state)
+    );
+
+    service
+        .agent_shell_store_mut()
+        .request_exit(&pane_id)
+        .unwrap();
+    assert_eq!(
+        service
+            .active_copy_mode_for_presented_surface(&pane_id)
+            .map(|copy_mode| (copy_mode.scroll_top(), copy_mode.selection())),
+        Some(process_state)
+    );
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    assert_eq!(
+        service
+            .active_copy_mode_for_presented_surface(&pane_id)
+            .map(|copy_mode| (copy_mode.scroll_top(), copy_mode.selection())),
+        Some(agent_state)
+    );
+}
 
 /// Verifies mouse-wheel history scrolling updates the pane through a diff
 /// refresh. Scrollback movement changes the copy-mode viewport but not the
@@ -39,12 +126,12 @@ fn runtime_mouse_history_scroll_requests_diff_refresh() {
 
     assert!(report.view_refresh_required);
     assert!(!report.full_redraw_required);
-    assert!(service.active_copy_modes().contains_key(&pane_id));
     assert!(
         service
-            .scrollback_copy_mode_panes_for_tests()
-            .contains(&pane_id)
+            .active_copy_mode_for_presented_surface(&pane_id)
+            .is_some()
     );
+    assert!(service.presented_surface_uses_scrollback_copy_mode(&pane_id));
 
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())

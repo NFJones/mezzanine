@@ -40,12 +40,9 @@ fn ensure_agent_copy_mode_for_test<'a>(
         viewport_rows,
     )
     .expect("agent presentation copy mode");
+    service.insert_active_copy_mode_for_presented_surface(pane_id, copy_mode);
     service
-        .active_copy_modes_mut()
-        .insert(pane_id.to_string(), copy_mode);
-    service
-        .active_copy_modes_mut()
-        .get_mut(pane_id)
+        .active_copy_mode_for_presented_surface_mut(pane_id)
         .expect("retained agent presentation copy mode")
 }
 

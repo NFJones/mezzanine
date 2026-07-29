@@ -483,11 +483,7 @@ impl RuntimeSessionService {
         }
         drop(deferred_cleanup);
         for pane in window.panes() {
-            let Some(copy_mode) = self
-                .presentation
-                .copy
-                .active_copy_modes
-                .get(pane.id.as_str())
+            let Some(copy_mode) = self.active_copy_mode_for_presented_surface(pane.id.as_str())
             else {
                 continue;
             };
@@ -770,16 +766,11 @@ impl RuntimeSessionService {
             active_mouse_selection_state.and_then(|state| state.autoscroll_position);
         if let Some(pane_id) = active_pane_id {
             config.mouse_policy.copy_mode_active = self
-                .presentation
-                .copy
-                .active_copy_modes
-                .contains_key(pane_id.as_str())
+                .active_copy_mode_for_presented_surface(pane_id.as_str())
+                .is_some()
                 || active_mouse_selection_state.is_some();
-            config.scrollback_copy_mode_active = self
-                .presentation
-                .copy
-                .scrollback_copy_mode_panes
-                .contains(pane_id.as_str());
+            config.scrollback_copy_mode_active =
+                self.presented_surface_uses_scrollback_copy_mode(pane_id.as_str());
             config.mouse_policy.pane_application_mouse_mode = self
                 .process_pane_screen(pane_id.as_str())
                 .is_some_and(TerminalScreen::application_mouse_enabled);
@@ -834,10 +825,8 @@ impl RuntimeSessionService {
                         .process_pane_screen(pane_id.as_str())
                         .is_some_and(TerminalScreen::application_mouse_enabled),
                     copy_mode_active: self
-                        .presentation
-                        .copy
-                        .active_copy_modes
-                        .contains_key(pane_id.as_str()),
+                        .active_copy_mode_for_presented_surface(pane_id.as_str())
+                        .is_some(),
                     active: pane_id == active_pane_id,
                 })
             })
@@ -1295,10 +1284,8 @@ impl RuntimeSessionService {
                     .find(|turn| turn.pane_id == pane_id);
                 let agent_session = self.agent_shell_store().get(&pane_id);
                 let mode = if self
-                    .presentation
-                    .copy
-                    .active_copy_modes
-                    .contains_key(pane_id.as_str())
+                    .active_copy_mode_for_presented_surface(pane_id.as_str())
+                    .is_some()
                 {
                     "copy"
                 } else if agent_session.is_some_and(|session| {
@@ -1408,10 +1395,7 @@ impl RuntimeSessionService {
                 let agent_context_usage = agent_session
                     .and_then(|session| self.agent_context_usage_display(&session.session_id));
                 let history_position = self
-                    .presentation
-                    .copy
-                    .active_copy_modes
-                    .get(pane_id.as_str())
+                    .active_copy_mode_for_presented_surface(pane_id.as_str())
                     .filter(|copy_mode| !copy_mode.is_at_bottom())
                     .map(|copy_mode| {
                         format!(

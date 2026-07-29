@@ -19,16 +19,8 @@ impl RuntimeSessionService {
         action: CopyModeKeyAction,
     ) -> Result<bool> {
         let pane_id = self.active_pane_id()?;
-        if self
-            .presentation
-            .copy
-            .scrollback_copy_mode_panes
-            .remove(pane_id.as_str())
-        {
-            self.presentation
-                .copy
-                .active_copy_modes
-                .remove(pane_id.as_str());
+        if self.remove_presented_surface_scrollback_copy_mode(pane_id.as_str()) {
+            self.remove_active_copy_mode_for_presented_surface(pane_id.as_str());
             return Ok(true);
         }
         let mut should_exit = false;
@@ -59,14 +51,7 @@ impl RuntimeSessionService {
             )?;
         }
         if should_exit {
-            self.presentation
-                .copy
-                .active_copy_modes
-                .remove(pane_id.as_str());
-            self.presentation
-                .copy
-                .scrollback_copy_mode_panes
-                .remove(pane_id.as_str());
+            self.clear_copy_state_for_presented_surface(pane_id.as_str());
         }
         Ok(true)
     }
@@ -149,11 +134,9 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(crate) fn ensure_active_copy_mode(&mut self, pane_id: &str) -> Result<&mut CopyMode> {
-        if !self
-            .presentation
-            .copy
-            .active_copy_modes
-            .contains_key(pane_id)
+        if self
+            .active_copy_mode_for_presented_surface(pane_id)
+            .is_none()
         {
             let viewport_rows = self.copy_mode_viewport_rows_for_pane(pane_id);
             let screen = self.pane_screen(pane_id).ok_or_else(|| {
@@ -163,15 +146,9 @@ impl RuntimeSessionService {
                 )
             })?;
             let copy_mode = CopyMode::from_screen(screen, viewport_rows)?;
-            self.presentation
-                .copy
-                .active_copy_modes
-                .insert(pane_id.to_string(), copy_mode);
+            self.insert_active_copy_mode_for_presented_surface(pane_id, copy_mode);
         }
-        self.presentation
-            .copy
-            .active_copy_modes
-            .get_mut(pane_id)
+        self.active_copy_mode_for_presented_surface_mut(pane_id)
             .ok_or_else(|| MezError::invalid_state("active copy mode was not retained"))
     }
 }

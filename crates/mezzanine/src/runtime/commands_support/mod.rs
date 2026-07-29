@@ -612,9 +612,10 @@ pub(super) fn execute_runtime_live_terminal_command(
                 let viewport_rows = usize::from(descriptor.size.rows).saturating_sub(1).max(1);
                 let mut copy_mode = CopyMode::from_screen(screen, viewport_rows)?;
                 let position = copy_mode.search(query.as_str(), SearchDirection::Forward)?;
-                service
-                    .active_copy_modes_mut()
-                    .insert(descriptor.pane_id.to_string(), copy_mode);
+                service.insert_active_copy_mode_for_presented_surface(
+                    descriptor.pane_id.as_str(),
+                    copy_mode,
+                );
                 return Ok(Some(CommandOutcome::Display {
                     command: invocation.name.clone(),
                     body: format!(

@@ -477,7 +477,11 @@ fn runtime_mouse_drag_copies_visible_alternate_screen_content() {
         service.paste_buffers().get("mouse"),
         Some("alpha beta\nsecond")
     );
-    assert!(!service.active_copy_modes().contains_key(&pane_id));
+    assert!(
+        service
+            .active_copy_mode_for_presented_surface(&pane_id)
+            .is_none()
+    );
 }
 
 /// Verifies mouse focus uses the same pane-frame row accounting as rendering.
