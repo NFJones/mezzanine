@@ -385,14 +385,14 @@ pub enum AgentActionPayload {
         cooperation_mode: String,
         /// Stores the read scopes value for this data structure.
         ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        read_scopes: Vec<String>,
+        /// `None` preserves an omitted declaration so the runtime can inherit
+        /// the parent authority; `Some(Vec::new())` explicitly denies it.
+        read_scopes: Option<Vec<String>>,
         /// Stores the write scopes value for this data structure.
         ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        write_scopes: Vec<String>,
+        /// `None` preserves an omitted declaration so the runtime can inherit
+        /// the parent authority; `Some(Vec::new())` explicitly denies it.
+        write_scopes: Option<Vec<String>>,
         /// Stores the task prompt value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -1285,8 +1285,8 @@ fn parse_maap_action_value(
             cooperation_mode: optional_string(object, "cooperation_mode")?
                 .map(str::to_string)
                 .unwrap_or_else(|| maap_default_cooperation_mode(object)),
-            read_scopes: optional_string_array(object, "read_scopes")?,
-            write_scopes: optional_string_array(object, "write_scopes")?,
+            read_scopes: optional_present_string_array(object, "read_scopes")?,
+            write_scopes: optional_present_string_array(object, "write_scopes")?,
             task_prompt: required_string(object, "task_prompt")?.to_string(),
         },
         "config_change" => AgentActionPayload::ConfigChange {
@@ -1543,6 +1543,18 @@ fn optional_string_array(
     }
 }
 
+/// Returns an optional string array while preserving whether its field was present.
+fn optional_present_string_array(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> MaapContractResult<Option<Vec<String>>> {
+    if object.contains_key(field) {
+        required_string_array(object, field).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 /// Returns an optional string array where missing or null means unchanged.
 fn optional_nullable_string_array(
     object: &serde_json::Map<String, serde_json::Value>,
@@ -1730,6 +1742,41 @@ mod tests {
         assert!(matches!(
             &batch.actions[0].payload,
             AgentActionPayload::ShellCommand { command, .. } if command == "pwd"
+        ));
+    }
+
+    #[test]
+    /// Verifies subagent scope omission remains distinct from an explicit empty
+    /// declaration so the runtime can inherit only omitted parent authority.
+    fn spawn_agent_parser_preserves_scope_field_presence() {
+        let omitted = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate inspection","actions":[{"type":"spawn_agent","role":"explorer","task_prompt":"inspect the repository"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap();
+        let explicit_empty = parse_maap_action_batch_json_for_turn(
+            r#"{"rationale":"delegate inspection","actions":[{"type":"spawn_agent","role":"explorer","read_scopes":[],"write_scopes":[],"task_prompt":"inspect the repository"}]}"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &omitted.actions[0].payload,
+            AgentActionPayload::SpawnAgent {
+                read_scopes: None,
+                write_scopes: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &explicit_empty.actions[0].payload,
+            AgentActionPayload::SpawnAgent {
+                read_scopes: Some(read_scopes),
+                write_scopes: Some(write_scopes),
+                ..
+            } if read_scopes.is_empty() && write_scopes.is_empty()
         ));
     }
 

@@ -708,8 +708,8 @@ fn runtime_spawn_agent_action(id: &str, task_prompt: &str) -> mez_agent::AgentAc
             role: "default".to_string(),
             placement: "new-window".to_string(),
             cooperation_mode: "explore-only".to_string(),
-            read_scopes: Vec::new(),
-            write_scopes: Vec::new(),
+            read_scopes: None,
+            write_scopes: None,
             task_prompt: task_prompt.to_string(),
         },
     }

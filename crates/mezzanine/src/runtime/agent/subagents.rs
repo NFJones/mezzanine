@@ -286,7 +286,7 @@ impl RuntimeSessionService {
             role,
             self.integration.subagent_profiles().contains_key(role),
             normalized_cooperation_mode,
-            write_scopes,
+            write_scopes.as_deref().unwrap_or_default(),
         );
         let prompt = if normalized_role != *role {
             format!(
@@ -298,18 +298,26 @@ impl RuntimeSessionService {
         };
         let normalized_cooperation_mode_name =
             runtime_cooperation_mode_name(normalized_cooperation_mode);
-        let params = serde_json::json!({
-            "parent_agent": {
-                "agent_id": turn.agent_id,
-            },
-            "placement": placement,
-            "role": normalized_role,
-            "cooperation_mode": normalized_cooperation_mode_name,
-            "read_scopes": read_scopes,
-            "write_scopes": write_scopes,
-            "prompt": prompt,
-        })
-        .to_string();
+        let mut params = serde_json::Map::from_iter([
+            (
+                "parent_agent".to_string(),
+                serde_json::json!({ "agent_id": turn.agent_id }),
+            ),
+            ("placement".to_string(), serde_json::json!(placement)),
+            ("role".to_string(), serde_json::json!(normalized_role)),
+            (
+                "cooperation_mode".to_string(),
+                serde_json::json!(normalized_cooperation_mode_name),
+            ),
+            ("prompt".to_string(), serde_json::json!(prompt)),
+        ]);
+        if let Some(read_scopes) = read_scopes {
+            params.insert("read_scopes".to_string(), serde_json::json!(read_scopes));
+        }
+        if let Some(write_scopes) = write_scopes {
+            params.insert("write_scopes".to_string(), serde_json::json!(write_scopes));
+        }
+        let params = serde_json::Value::Object(params).to_string();
         let spawn = runtime_subagent_spawn_request(&params, false)?;
         let placement_mode = runtime_subagent_placement_mode(&params)?;
         let spawn_json = self.spawn_runtime_subagent_session_owned(spawn, placement_mode)?;
