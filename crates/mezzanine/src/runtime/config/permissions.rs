@@ -7,6 +7,8 @@
 //! JSON and scalar parsing utilities.
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -1040,6 +1042,22 @@ fn validate_configured_scopes(scopes: &[String], field: &str) -> Result<()> {
         return Err(MezError::config(format!(
             "{field} must contain non-empty, unexpanded paths without NUL bytes"
         )));
+    }
+    for scope in scopes.iter().filter(|scope| Path::new(scope).is_absolute()) {
+        match fs::metadata(scope) {
+            Ok(metadata) if !metadata.is_file() && !metadata.is_dir() => {
+                return Err(MezError::config(format!(
+                    "{field} entry `{scope}` must reference a regular file or directory"
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(MezError::config(format!(
+                    "failed to inspect {field} entry `{scope}`: {error}"
+                )));
+            }
+        }
     }
     Ok(())
 }

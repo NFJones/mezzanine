@@ -198,6 +198,42 @@ fn runtime_allows_bubblewrap_without_explicit_scopes() {
     assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
 }
 
+/// Verifies configured absolute scopes accept ordinary files and directories
+/// but reject Unix sockets before Bubblewrap can project a socket as authority.
+#[cfg(unix)]
+#[test]
+fn runtime_rejects_special_filesystem_objects_in_configured_absolute_scopes() {
+    use std::os::unix::net::UnixListener;
+
+    let root = temp_root("configured-scope-object-types");
+    let regular_file = root.join("allowed.txt");
+    let socket = root.join("daemon.sock");
+    fs::write(&regular_file, "allowed").unwrap();
+    let _listener = UnixListener::bind(&socket).unwrap();
+
+    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {
+            "read_scopes": [regular_file],
+            "write_scopes": [root]
+        }
+    }));
+    assert!(configured.is_ok(), "{configured:?}");
+
+    let error = runtime_configured_permissions_from_config(&serde_json::json!({
+        "permissions": {"read_scopes": [socket]}
+    }))
+    .unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("must reference a regular file or directory"),
+        "{error}"
+    );
+
+    drop(_listener);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies permission status distinguishes explicit Bubblewrap scopes from
 /// their effective active-pane authority without inventing a trusted root.
 #[test]
