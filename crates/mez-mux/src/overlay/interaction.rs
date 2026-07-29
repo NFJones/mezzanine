@@ -123,16 +123,27 @@ pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized>, size: Size) -> Strin
     {
         "esc: back | /: search | enter: open | a: approve once | d: deny | arrows pgup/pgdn"
             .to_string()
-    } else if overlay
-        .record_browser
-        .as_ref()
-        .is_some_and(|browser| browser.browser.deletion_enabled())
-    {
-        "esc: back | /: search | enter: open | a: all | k/p/x: filter | d: delete | s: save | arrows pgup/pgdn"
-            .to_string()
-    } else if overlay.record_browser.is_some() {
-        "esc: back | /: search | enter: open | a: all | k/p/x: filter | s: save | arrows pgup/pgdn"
-            .to_string()
+    } else if let Some(record_browser) = overlay.record_browser.as_ref() {
+        let browser = &record_browser.browser;
+        let mut hints = vec!["esc: back", "/: search", "enter: open"];
+        if browser.scope_toggle_enabled() {
+            hints.push("a: all");
+        }
+        if browser.supports_filter(crate::record_browser::RecordBrowserFilterField::Kind) {
+            hints.push("k: kind");
+        }
+        if browser.supports_filter(crate::record_browser::RecordBrowserFilterField::ProjectGlob) {
+            hints.push("p: project");
+        }
+        if browser.supports_filter(crate::record_browser::RecordBrowserFilterField::Text) {
+            hints.push("x: text");
+        }
+        if browser.deletion_enabled() {
+            hints.push("d: delete");
+        }
+        hints.push("s: save");
+        hints.push("arrows pgup/pgdn");
+        hints.join(" | ")
     } else if overlay.selections.is_empty() {
         "esc: return | /: search | up/down pgup/pgdn home/end".to_string()
     } else {

@@ -801,6 +801,9 @@ fn configure_context_record_browser(browser: &mut RecordBrowser) {
 
 /// Applies the table presentation shared by issue browser construction paths.
 fn configure_issue_record_browser(browser: &mut RecordBrowser) {
+    browser.enable_scope_toggle();
+    browser.enable_project_filter();
+    browser.enable_text_filter();
     browser.set_table_id_column("Issue");
     browser.set_table_columns_with_labels(vec![
         ("Summary".to_string(), "summary".to_string()),
@@ -818,6 +821,9 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser) {
 
 /// Applies the table presentation shared by memory browser construction paths.
 fn configure_memory_record_browser(browser: &mut RecordBrowser) {
+    browser.enable_scope_toggle();
+    browser.enable_project_filter();
+    browser.enable_text_filter();
     browser.set_table_id_column("UUID");
     browser.set_table_columns_with_labels(vec![
         ("Summary".to_string(), "summary".to_string()),

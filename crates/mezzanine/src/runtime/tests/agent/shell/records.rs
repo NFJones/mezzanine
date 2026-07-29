@@ -460,7 +460,9 @@ enabled = true
     assert!(footer.contains("esc: back"), "{footer}");
     assert!(footer.contains("enter: open"), "{footer}");
     assert!(footer.contains("a: all"), "{footer}");
-    assert!(footer.contains("k/p/x: filter"), "{footer}");
+    assert!(footer.contains("k: kind"), "{footer}");
+    assert!(footer.contains("p: project"), "{footer}");
+    assert!(footer.contains("x: text"), "{footer}");
     assert!(footer.contains("s: save"), "{footer}");
     let overlay = service.primary_display_overlay().unwrap();
     let page = overlay
@@ -1051,7 +1053,7 @@ fn runtime_record_browser_editable_prompts_accept_pager_hotkey_characters() {
         .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
         .unwrap();
     let pane_id = service.active_pane_id().unwrap().to_string();
-    let browser = mez_mux::record_browser::RecordBrowser::new(
+    let mut browser = mez_mux::record_browser::RecordBrowser::new(
         "Issues",
         vec![mez_mux::record_browser::RecordBrowserRecord {
             id: "issue-1".to_string(),
@@ -1063,6 +1065,7 @@ fn runtime_record_browser_editable_prompts_accept_pager_hotkey_characters() {
         Vec::new(),
     )
     .unwrap();
+    browser.enable_project_filter();
     let page = browser.render_page();
     service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
     let response = crate::runtime::runtime_agent_shell_command_response_json(
@@ -1169,6 +1172,29 @@ fn runtime_agent_shell_list_personalities_selects_the_focused_profile() {
     );
     assert!(!page.raw_markdown.contains("secret instructions"));
     assert_eq!(browser.active_record_id(), Some("alpha"));
+
+    let personality_view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(120, 16).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let footer = personality_view.lines.last().cloned().unwrap_or_default();
+    for unsupported_hint in ["a: all", "k: kind", "p: project", "x: text"] {
+        assert!(!footer.contains(unsupported_hint), "{footer}");
+    }
+    for input in [b"a".as_slice(), b"k", b"p", b"x"] {
+        apply_record_browser_input(&mut service, &primary, input);
+        assert!(
+            service
+                .primary_display_overlay()
+                .and_then(|overlay| overlay.record_browser.as_ref())
+                .and_then(|record_browser| record_browser.browser.prompt())
+                .is_none()
+        );
+    }
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[B");
     apply_record_browser_input(&mut service, &primary, b"\r");

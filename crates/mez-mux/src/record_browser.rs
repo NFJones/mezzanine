@@ -158,6 +158,9 @@ pub struct RecordBrowser {
     scope_indicator: Option<String>,
     records: Vec<RecordBrowserRecord>,
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
+    scope_toggle_enabled: bool,
+    project_filter_enabled: bool,
+    text_filter_enabled: bool,
     table_id_column: String,
     table_columns: Vec<String>,
     table_column_keys: Vec<String>,
@@ -200,6 +203,9 @@ impl RecordBrowser {
             scope_indicator: None,
             records,
             kind_filter_choices,
+            scope_toggle_enabled: false,
+            project_filter_enabled: false,
+            text_filter_enabled: false,
             table_id_column: "ID".to_string(),
             table_columns: Vec::new(),
             table_column_keys: Vec::new(),
@@ -258,6 +264,36 @@ impl RecordBrowser {
     pub fn set_help(&mut self, list_help: Option<String>, detail_help: Option<String>) {
         self.list_help = list_help.filter(|value| !value.trim().is_empty());
         self.detail_help = detail_help.filter(|value| !value.trim().is_empty());
+    }
+
+    /// Enables the all/default-scope toggle for a browser with a scoped backend.
+    pub fn enable_scope_toggle(&mut self) {
+        self.scope_toggle_enabled = true;
+    }
+
+    /// Enables project-path filtering for a browser with a project-aware backend.
+    pub fn enable_project_filter(&mut self) {
+        self.project_filter_enabled = true;
+    }
+
+    /// Enables text filtering for a browser with a backend query surface.
+    pub fn enable_text_filter(&mut self) {
+        self.text_filter_enabled = true;
+    }
+
+    /// Reports whether the browser supports toggling between default and all scopes.
+    pub fn scope_toggle_enabled(&self) -> bool {
+        self.scope_toggle_enabled
+    }
+
+    /// Reports whether one modal filter has a meaningful backend effect.
+    pub fn supports_filter(&self, field: RecordBrowserFilterField) -> bool {
+        match field {
+            RecordBrowserFilterField::Kind => !self.kind_filter_choices.is_empty(),
+            RecordBrowserFilterField::Tags => false,
+            RecordBrowserFilterField::ProjectGlob => self.project_filter_enabled,
+            RecordBrowserFilterField::Text => self.text_filter_enabled,
+        }
     }
 
     /// Replaces the default empty-list message.
@@ -382,6 +418,9 @@ impl RecordBrowser {
                 })
             }
             RecordBrowserAction::StartFilter(field) => {
+                if !self.supports_filter(field) {
+                    return Ok(RecordBrowserOutcome::Ignored);
+                }
                 self.prompt = Some(
                     if field == RecordBrowserFilterField::Kind
                         && !self.kind_filter_choices.is_empty()
@@ -890,6 +929,20 @@ mod tests {
                 .unwrap(),
             RecordBrowserOutcome::Ignored
         );
+        for field in [
+            RecordBrowserFilterField::Kind,
+            RecordBrowserFilterField::Tags,
+            RecordBrowserFilterField::ProjectGlob,
+            RecordBrowserFilterField::Text,
+        ] {
+            assert_eq!(
+                empty
+                    .apply_action(RecordBrowserAction::StartFilter(field))
+                    .unwrap(),
+                RecordBrowserOutcome::Ignored
+            );
+            assert_eq!(empty.prompt(), None);
+        }
     }
 
     /// Verifies filter and save prompts produce typed outcomes while empty and
@@ -897,6 +950,7 @@ mod tests {
     #[test]
     fn record_browser_prompts_and_empty_error_states_are_typed() {
         let mut browser = RecordBrowser::new("Memories", Vec::new(), Vec::new()).unwrap();
+        browser.enable_project_filter();
         browser.set_error(Some("database unavailable".to_string()));
         let empty_page = browser.render_page();
         assert!(empty_page.markdown.contains("No records found."));

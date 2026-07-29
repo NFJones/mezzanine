@@ -260,7 +260,7 @@ impl RuntimeSessionService {
                 prose_width,
             )));
         }
-        if input == b"a" {
+        if input == b"a" && record_browser.browser.scope_toggle_enabled() {
             let source = record_browser.source.clone();
             if let Some(source) = source {
                 let active_index =
@@ -448,15 +448,30 @@ impl RuntimeSessionService {
             {
                 Some(mez_mux::record_browser::RecordBrowserAction::OpenActive)
             }
-            b"k" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
-                mez_mux::record_browser::RecordBrowserFilterField::Kind,
-            )),
-            b"p" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
+            b"k" if record_browser
+                .browser
+                .supports_filter(mez_mux::record_browser::RecordBrowserFilterField::Kind) =>
+            {
+                Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
+                    mez_mux::record_browser::RecordBrowserFilterField::Kind,
+                ))
+            }
+            b"p" if record_browser.browser.supports_filter(
                 mez_mux::record_browser::RecordBrowserFilterField::ProjectGlob,
-            )),
-            b"x" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
-                mez_mux::record_browser::RecordBrowserFilterField::Text,
-            )),
+            ) =>
+            {
+                Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
+                    mez_mux::record_browser::RecordBrowserFilterField::ProjectGlob,
+                ))
+            }
+            b"x" if record_browser
+                .browser
+                .supports_filter(mez_mux::record_browser::RecordBrowserFilterField::Text) =>
+            {
+                Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
+                    mez_mux::record_browser::RecordBrowserFilterField::Text,
+                ))
+            }
             b"s" => {
                 self.presentation.record_browser_save_completion = None;
                 Some(mez_mux::record_browser::RecordBrowserAction::StartSave)
