@@ -807,9 +807,9 @@ impl RuntimeSessionService {
             return Ok(changed);
         }
         let action = overlay_input_action(input);
-        let input_text = matches!(action, OverlayInputAction::EditSearchText)
-            .then(|| std::str::from_utf8(input).ok())
-            .flatten();
+        let input_text = std::str::from_utf8(input).ok().filter(|text| {
+            !text.is_empty() && text.chars().all(|character| !character.is_control())
+        });
         let outcome = {
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(false);

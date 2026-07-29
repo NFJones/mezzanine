@@ -1806,6 +1806,47 @@ fn runtime_agent_shell_show_approvals_preserves_search_input_precedence() {
     );
 }
 
+/// Verifies literal `q` and slash characters remain query text while an
+/// approval browser search editor is active, without changing global bindings.
+#[test]
+fn runtime_agent_shell_record_browser_search_accepts_literal_q_and_slash() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-literal-search",
+            &pane_id,
+            "cargo audit",
+        ))
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-approvals")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    apply_record_browser_input(&mut service, &primary, b"/");
+    apply_record_browser_input(&mut service, &primary, b"q");
+    apply_record_browser_input(&mut service, &primary, b"/");
+
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .search_input
+            .as_deref(),
+        Some("q/")
+    );
+}
+
 /// Verifies a record-browser refresh clears an unmatched search status instead
 /// of letting it hide the controls for the refreshed approval list.
 #[test]

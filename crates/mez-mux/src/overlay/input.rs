@@ -306,6 +306,16 @@ fn apply_overlay_search_input<Source>(
     input_text: Option<&str>,
     size: Size,
 ) -> OverlayInputOutcome {
+    if matches!(
+        action,
+        OverlayInputAction::Exit | OverlayInputAction::StartSearch
+    ) && let Some(text) = input_text
+        .filter(|text| !text.is_empty() && text.chars().all(|character| !character.is_control()))
+        && let Some(search_input) = overlay.search_input.as_mut()
+    {
+        search_input.push_str(text);
+        return OverlayInputOutcome::Updated;
+    }
     match action {
         OverlayInputAction::Exit => {
             overlay.search_input = None;
@@ -811,6 +821,49 @@ mod tests {
             OverlayInputOutcome::Ignored
         );
         assert_eq!(overlay, unchanged);
+    }
+
+    /// Verifies search editing preserves printable global-binding characters
+    /// while Escape still cancels the active editor.
+    #[test]
+    fn overlay_search_editor_accepts_literal_q_and_slash() {
+        let size = Size::new(20, 4).unwrap();
+        let mut overlay = overlay(&["q/slash"]);
+
+        apply_overlay_input(
+            &mut overlay,
+            OverlayInputAction::StartSearch,
+            None,
+            true,
+            size,
+        );
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::Exit,
+                Some("q"),
+                true,
+                size,
+            ),
+            OverlayInputOutcome::Updated
+        );
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::StartSearch,
+                Some("/"),
+                true,
+                size,
+            ),
+            OverlayInputOutcome::Updated
+        );
+        assert_eq!(overlay.search_input.as_deref(), Some("q/"));
+
+        assert_eq!(
+            apply_overlay_input(&mut overlay, OverlayInputAction::Exit, None, true, size),
+            OverlayInputOutcome::Updated
+        );
+        assert_eq!(overlay.search_input, None);
     }
 
     /// Verifies cancellation and stale command selections return typed caller
