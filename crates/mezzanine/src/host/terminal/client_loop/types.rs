@@ -20,7 +20,7 @@ use mez_terminal::TerminalStyleSpan;
 ///
 /// Renderers advance the scan phase at this interval, and attach clients use
 /// the same value to request fresh views only while animation is active.
-pub const AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS: u64 = 180;
+pub const AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS: u64 = 400;
 
 /// Carries Terminal Client Loop Action state for this subsystem.
 ///

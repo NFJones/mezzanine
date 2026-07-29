@@ -179,8 +179,8 @@ fn render_window_completion_attention_flashes_without_changing_layout() {
     };
 
     let attention_on = render_phase(0, false);
-    let attention_off = render_phase(180, false);
-    let reduced_motion = render_phase(180, true);
+    let attention_off = render_phase(400, false);
+    let reduced_motion = render_phase(400, true);
 
     assert_eq!(attention_on.0, attention_off.0);
     assert_eq!(attention_on.1, attention_off.1);

@@ -150,7 +150,7 @@ async fn async_render_side_effect_service_refreshes_active_agent_status_without_
                 RuntimeSideEffect::ScheduleTimer { key, delay_ms }
                     if key.kind == RuntimeTimerKind::StatusRefresh
                         && key.owner_id == primary.to_string()
-                        && *delay_ms == 180
+                        && *delay_ms == 400
             )),
             "{timers:?}"
         );
@@ -261,7 +261,7 @@ async fn async_render_side_effect_service_retargets_status_refresh_for_agent_ani
                 RuntimeSideEffect::ScheduleTimer { key, delay_ms }
                     if key.kind == RuntimeTimerKind::StatusRefresh
                         && key.owner_id == primary.to_string()
-                        && *delay_ms == 180
+                        && *delay_ms == 400
             )),
             "{animation_timers:?}"
         );
