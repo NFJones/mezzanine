@@ -17,6 +17,25 @@ impl ReadlineInputDecoder {
         self.inner.pending_len()
     }
 
+    /// Decodes complete terminal input items while preserving incomplete input.
+    pub fn decode(&mut self, input: &[u8]) -> Result<Vec<ReadlineDecodedInput>> {
+        self.inner.decode(input)
+    }
+
+    /// Applies one decoded terminal input item to a prompt.
+    pub fn apply_decoded_to_prompt(
+        prompt: &mut ReadlinePrompt,
+        decoded: ReadlineDecodedInput,
+    ) -> Result<ReadlineOutcome> {
+        match decoded {
+            ReadlineDecodedInput::Sequence(sequence) => prompt.apply_terminal_input(&sequence),
+            ReadlineDecodedInput::BracketedPaste(text) => {
+                prompt.selector = None;
+                Ok(prompt.buffer.apply(ReadlineEdit::InsertText(text)))
+            }
+        }
+    }
+
     /// Apply a terminal byte batch to a prompt, preserving incomplete input.
     pub fn apply_to_prompt(
         &mut self,
@@ -24,16 +43,8 @@ impl ReadlineInputDecoder {
         input: &[u8],
     ) -> Result<Vec<ReadlineOutcome>> {
         let mut outcomes = Vec::new();
-        for decoded in self.inner.decode(input)? {
-            match decoded {
-                ReadlineDecodedInput::Sequence(sequence) => {
-                    outcomes.push(prompt.apply_terminal_input(&sequence)?);
-                }
-                ReadlineDecodedInput::BracketedPaste(text) => {
-                    prompt.selector = None;
-                    outcomes.push(prompt.buffer.apply(ReadlineEdit::InsertText(text)));
-                }
-            }
+        for decoded in self.decode(input)? {
+            outcomes.push(Self::apply_decoded_to_prompt(prompt, decoded)?);
         }
         Ok(outcomes)
     }

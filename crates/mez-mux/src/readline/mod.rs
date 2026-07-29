@@ -14,7 +14,7 @@ pub use buffer::{
 };
 pub use decoder::{
     ReadlineDecodedInput, ReadlineTerminalInputDecoder, apply_readline_terminal_input,
-    readline_input_is_ctrl_r, readline_input_is_ctrl_shift_r,
+    readline_input_is_ctrl_r, readline_input_is_ctrl_shift_r, readline_input_is_ctrl_v,
 };
 pub use prompt::{ReadlinePromptMode, ReadlinePromptState};
 

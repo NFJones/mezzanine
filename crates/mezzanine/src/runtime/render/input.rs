@@ -5,7 +5,6 @@
 //! execution, and agent-shell response application; deterministic overlay and
 //! selector state transitions remain in `mez_mux`.
 
-use super::paste::runtime_readline_paste_bytes;
 use super::{
     AgentTerminalPresentationStyle, AgentTurnState, DEFAULT_READLINE_HISTORY_LIMIT,
     ReadlineOutcome, ReadlinePromptKind, Result, RuntimeAgentShellDisplayOutput,
@@ -18,6 +17,7 @@ use super::{
     runtime_command_display_should_open_overlay,
 };
 use crate::runtime::service_state::RuntimeRecordBrowserOverlayState;
+use mez_mux::readline::{ReadlineDecodedInput, readline_input_is_ctrl_v};
 
 impl RuntimeSessionService {
     /// Runs the apply primary prompt terminal action operation for this subsystem.
@@ -233,19 +233,6 @@ impl RuntimeSessionService {
         if input.is_empty() {
             return Ok(false);
         }
-        // Ctrl+V is a product-owned clipboard paste request, not ordinary
-        // terminal input. Framing its text lets the readline decoder retain
-        // every embedded control character as one editable paste operation.
-        if input == b"\x16" {
-            let Some(content) = self.presentation.copy.host_clipboard.read() else {
-                return Ok(false);
-            };
-            return self.apply_attached_agent_prompt_input_for_pane(
-                primary_client_id,
-                pane_id,
-                &runtime_readline_paste_bytes(&content),
-            );
-        }
         if input == b"\x1b" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
         }
@@ -264,6 +251,29 @@ impl RuntimeSessionService {
             .unwrap_or(1)
             .max(1);
 
+        let decoded_input = if input == b"\x1b" {
+            Vec::new()
+        } else {
+            let state = self
+                .presentation
+                .agent_prompt_inputs
+                .entry(pane_id.to_string())
+                .or_insert_with(default_runtime_agent_prompt_input);
+            state.decoder.decode(input)?
+        };
+        let decoded_input = decoded_input
+            .into_iter()
+            .filter_map(|decoded| match decoded {
+                ReadlineDecodedInput::Sequence(sequence) if readline_input_is_ctrl_v(&sequence) => {
+                    self.presentation
+                        .copy
+                        .host_clipboard
+                        .read()
+                        .map(ReadlineDecodedInput::BracketedPaste)
+                }
+                decoded => Some(decoded),
+            })
+            .collect::<Vec<_>>();
         let outcomes = {
             let state = self
                 .presentation
@@ -280,7 +290,16 @@ impl RuntimeSessionService {
             if input == b"\x1b" {
                 vec![state.prompt.apply_terminal_input(input)?]
             } else {
-                state.decoder.apply_to_prompt(&mut state.prompt, input)?
+                let mut outcomes = Vec::new();
+                for decoded in decoded_input {
+                    outcomes.push(
+                        crate::ui::readline::ReadlineInputDecoder::apply_decoded_to_prompt(
+                            &mut state.prompt,
+                            decoded,
+                        )?,
+                    );
+                }
+                outcomes
             }
         };
 

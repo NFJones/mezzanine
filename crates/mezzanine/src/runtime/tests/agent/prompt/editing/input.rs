@@ -479,9 +479,10 @@ fn runtime_agent_prompt_escape_cancels_reverse_search() {
 /// Verifies Ctrl+V reads the host clipboard as one bracketed paste operation.
 ///
 /// Raw clipboard CRLF bytes must never pass through the ordinary key decoder,
-/// where their carriage returns would submit the prompt. The framed producer
-/// keeps CRLF, blank lines, tabs, and surrounding whitespace editable until a
-/// later explicit Enter submits exactly one agent turn.
+/// where their carriage returns would submit the prompt. Legacy, CSI-u, and
+/// modifyOtherKeys Ctrl+V sequences must each consume only the paste command,
+/// leaving coalesced suffix text editable until a later explicit Enter submits
+/// exactly one agent turn.
 #[test]
 fn runtime_agent_prompt_ctrl_v_preserves_multiline_clipboard_until_enter() {
     let mut service = test_runtime_service();
@@ -499,7 +500,49 @@ fn runtime_agent_prompt_ctrl_v_preserves_multiline_clipboard_until_enter() {
         TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
     );
 
-    let pasted = service
+    let expected = "  first\r\n\r\n\tsecond  \r\n";
+    for input in [
+        b"\x16suffix".as_slice(),
+        b"\x1b[118;5usuffix".as_slice(),
+        b"\x1b[27;5;118~suffix".as_slice(),
+    ] {
+        let pasted = service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(input.to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(pasted.forwarded_bytes, 0);
+        assert_eq!(pasted.agent_prompt_inputs_applied, 1);
+        assert!(service.pending_agent_provider_tasks().is_empty());
+        assert_eq!(
+            service
+                .agent_prompt_inputs_for_tests()
+                .get("%1")
+                .unwrap()
+                .prompt
+                .buffer
+                .line(),
+            format!("{expected}suffix")
+        );
+        service
+            .agent_prompt_inputs_for_tests_mut()
+            .get_mut("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .clear();
+    }
+
+    service
         .apply_attached_terminal_step_plan(
             &primary,
             &AttachedTerminalClientStepPlan {
@@ -512,21 +555,6 @@ fn runtime_agent_prompt_ctrl_v_preserves_multiline_clipboard_until_enter() {
             },
         )
         .unwrap();
-
-    assert_eq!(pasted.forwarded_bytes, 0);
-    assert_eq!(pasted.agent_prompt_inputs_applied, 1);
-    assert!(service.pending_agent_provider_tasks().is_empty());
-    let expected = "  first\r\n\r\n\tsecond  \r\n";
-    assert_eq!(
-        service
-            .agent_prompt_inputs_for_tests()
-            .get("%1")
-            .unwrap()
-            .prompt
-            .buffer
-            .line(),
-        expected
-    );
 
     let submitted = service
         .apply_attached_terminal_step_plan(

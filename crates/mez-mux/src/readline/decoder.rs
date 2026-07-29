@@ -164,6 +164,11 @@ pub fn readline_input_is_ctrl_r(input: &[u8]) -> bool {
     input == b"\x12" || readline_modified_key_is_ctrl(input, 'r')
 }
 
+/// Reports whether input encodes Ctrl+V.
+pub fn readline_input_is_ctrl_v(input: &[u8]) -> bool {
+    input == b"\x16" || readline_modified_key_is_ctrl(input, 'v')
+}
+
 /// Reports whether input encodes Ctrl+Shift+R.
 pub fn readline_input_is_ctrl_shift_r(input: &[u8]) -> bool {
     let Some((ch, modifiers)) = readline_modified_key(input) else {
