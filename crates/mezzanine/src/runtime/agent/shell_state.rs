@@ -841,8 +841,8 @@ impl RuntimeSessionService {
     }
 
     /// Resolves the exact pane's sandbox override over the persisted global
-    /// backend. Sandbox overrides deliberately do not inherit through agent
-    /// lineage, so one pane cannot change confinement for a sibling or child.
+    /// backend. Explicit parent overrides are copied to newly spawned children
+    /// as child-local snapshots, never dynamically resolved through lineage.
     pub(crate) fn sandbox_config_for_pane(&self, pane_id: &str) -> SandboxConfig {
         self.integration
             .pane_permission_override(pane_id)

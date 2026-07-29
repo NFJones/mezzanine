@@ -270,6 +270,44 @@ fn runtime_subagent_explicit_empty_scopes_do_not_inherit_parent_authority() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies spawned children receive a parent pane's explicit sandbox backend
+/// as a child-local snapshot before their first agent turn is started.
+#[test]
+fn runtime_subagent_inherits_explicit_parent_sandbox_override() {
+    let (mut service, primary, root, _) =
+        trusted_project_subagent_scope_service("runtime-subagent-inherit-sandbox-override");
+    service
+        .integration
+        .set_pane_sandbox_override("%1", Some(crate::runtime::SandboxConfig::PolicyOnly));
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "worker".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::OwnedWrite,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        task_prompt: "inherit sandbox state".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+
+    let (child_agent_id, _) = spawn_idle_subagent_scope(&mut service, &primary, spawn);
+    let child_pane_id = child_agent_id
+        .strip_prefix("agent-")
+        .expect("runtime subagent ids contain their pane id");
+
+    assert!(service.pane_has_sandbox_override(child_pane_id));
+    assert!(matches!(
+        service.sandbox_config_for_pane(child_pane_id),
+        crate::runtime::SandboxConfig::PolicyOnly
+    ));
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies child-requested scopes may narrow inherited Bubblewrap authority
 /// but cannot add a sibling path outside the trusted parent scope.
 #[test]

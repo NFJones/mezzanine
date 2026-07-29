@@ -6252,6 +6252,13 @@ The baseline command capabilities are:
   `enable --global --yes` and `disable --global --yes` MUST use the atomic
   persisted configuration and live-reload path. A global change MUST affect
   panes without overrides and MUST NOT clear an existing pane override.
+  A newly spawned subagent pane MUST receive a snapshot of its parent's
+  explicit pane sandbox override before entering agent mode. This copied
+  override is child-local: it affects neither siblings nor existing children,
+  is cleared when its pane is removed, and does not survive daemon restart.
+  A parent that follows the persisted global default MUST NOT create a copied
+  child override, so it and its child both continue following later global
+  backend changes.
   Mutations MUST require authenticated primary-client input, while unsupported
   subcommands, duplicate or unknown flags, missing `--yes`, and extra
   positional arguments MUST fail without changing state. Advanced setup,

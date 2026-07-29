@@ -17,7 +17,7 @@ use super::{
     runtime_agent_turn_state_json, runtime_cooperation_mode_name, runtime_pane_by_id,
     runtime_subagent_placement_mode, runtime_subagent_spawn_request, runtime_subagent_state_json,
 };
-use crate::runtime::RuntimeAgentPromptTurnStart;
+use crate::runtime::{RuntimeAgentPromptTurnStart, SandboxConfig};
 
 /// Minimum useful width for adding another pane to an existing subagent bucket.
 ///
@@ -375,6 +375,8 @@ impl RuntimeSessionService {
         }
         let inherited_scope =
             self.subagent_parent_effective_scope(&spawn.parent_agent_id, spawn.cooperation_mode);
+        let inherited_sandbox_override =
+            self.inherited_sandbox_override_for_child_agent(&spawn.parent_agent_id);
         if let Some(parent_scope) = inherited_scope.as_ref() {
             spawn.cooperation_mode = parent_scope.cooperation_mode;
             spawn.read_scopes = if read_scopes_requested {
@@ -456,6 +458,10 @@ impl RuntimeSessionService {
             },
         );
         self.set_subagent_scope_declaration(child_agent_id.clone(), child_scope);
+        if let Some(sandbox_config) = inherited_sandbox_override {
+            self.integration
+                .set_pane_sandbox_override(&started.pane_id, Some(sandbox_config));
+        }
         if let Err(error) = self.enter_agent_mode_for_pane(&started.pane_id) {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
@@ -839,6 +845,20 @@ impl RuntimeSessionService {
             self.runtime_auto_sizing_config_for_pane(parent_pane_id.as_str())
                 .clone(),
         )
+    }
+
+    /// Returns the parent's explicit sandbox backend for a newly spawned child.
+    ///
+    /// Global sandbox configuration is deliberately not copied so both panes
+    /// continue following future global changes. An exact-pane override is
+    /// copied as a child-local snapshot before the child enters agent mode.
+    pub(crate) fn inherited_sandbox_override_for_child_agent(
+        &self,
+        parent_agent_id: &str,
+    ) -> Option<SandboxConfig> {
+        let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
+        self.pane_has_sandbox_override(parent_pane_id.as_str())
+            .then(|| self.sandbox_config_for_pane(parent_pane_id.as_str()))
     }
 
     /// Returns the effective local action executor a child agent should inherit.
