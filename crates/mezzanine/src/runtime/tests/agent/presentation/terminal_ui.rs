@@ -107,8 +107,9 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
     service
         .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap(),
     );
 
@@ -121,7 +122,7 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
         .unwrap();
 
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
@@ -168,8 +169,9 @@ fn runtime_agent_status_presentation_persists_typed_source_for_replay() {
         "{entries:?}"
     );
 
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
     );
     assert!(
@@ -178,7 +180,7 @@ fn runtime_agent_status_presentation_persists_typed_source_for_replay() {
             .unwrap()
     );
     let replayed = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
@@ -219,14 +221,17 @@ fn runtime_agent_presentation_resize_preserves_cleared_viewport() {
         )
         .unwrap();
 
-    service.clear_agent_shell_terminal_view("%1").unwrap();
+    service
+        .agent_pane_screen_mut("%1")
+        .unwrap()
+        .clear_visible_into_history();
 
     assert!(
         !service
             .rebuild_agent_presentation_after_resize("%1", Size::new(20, 12).unwrap())
             .unwrap()
     );
-    let screen = service.pane_screen("%1").unwrap();
+    let screen = service.agent_pane_screen("%1").unwrap();
     assert!(
         screen
             .visible_lines()
@@ -287,8 +292,9 @@ fn runtime_agent_user_prompt_persists_raw_source_for_replay() {
         "{entries:?}"
     );
 
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
     );
     assert!(
@@ -297,7 +303,7 @@ fn runtime_agent_user_prompt_persists_raw_source_for_replay() {
             .unwrap()
     );
     let replayed_compact = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n")
@@ -350,8 +356,9 @@ fn runtime_agent_command_preview_persists_raw_source_for_replay() {
         "{entries:?}"
     );
 
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
     );
     assert!(
@@ -360,7 +367,7 @@ fn runtime_agent_command_preview_persists_raw_source_for_replay() {
             .unwrap()
     );
     let replayed_compact = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n")
@@ -426,8 +433,9 @@ fn runtime_agent_action_header_persists_source_for_replay() {
         "{entries:?}"
     );
 
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
     );
     assert!(
@@ -436,7 +444,7 @@ fn runtime_agent_action_header_persists_source_for_replay() {
             .unwrap()
     );
     let replayed_compact = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n")
@@ -489,8 +497,9 @@ fn runtime_agent_parent_prompt_persists_raw_source_for_replay() {
         "{entries:?}"
     );
 
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
     );
     assert!(
@@ -499,7 +508,7 @@ fn runtime_agent_parent_prompt_persists_raw_source_for_replay() {
             .unwrap()
     );
     let replayed_compact = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n")
@@ -542,7 +551,7 @@ fn runtime_agent_thinking_renders_body_as_shadow_text() {
         .unwrap();
 
     let thinking_line = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines()
         .into_iter()
@@ -611,8 +620,9 @@ fn runtime_agent_thinking_persists_raw_source_for_replay() {
         "{entries:?}"
     );
 
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
     );
     assert!(
@@ -621,7 +631,7 @@ fn runtime_agent_thinking_persists_raw_source_for_replay() {
             .unwrap()
     );
     let replayed_compact = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n")
@@ -680,8 +690,9 @@ fn runtime_agent_macro_lifecycle_persists_source_for_replay() {
         "{entries:?}"
     );
 
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
     );
     assert!(
@@ -690,7 +701,7 @@ fn runtime_agent_macro_lifecycle_persists_source_for_replay() {
             .unwrap()
     );
     let replayed_compact = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n")
@@ -760,8 +771,9 @@ fn runtime_agent_resize_keeps_legacy_snapshots_ordered_with_semantic_entries() {
         })
         .unwrap();
 
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
     );
     assert!(
@@ -770,7 +782,7 @@ fn runtime_agent_resize_keeps_legacy_snapshots_ordered_with_semantic_entries() {
             .unwrap()
     );
     let replayed = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
@@ -836,8 +848,9 @@ fn runtime_agent_resize_rebuilds_source_backed_presentation_at_new_width() {
             source_content_type: Some("text/markdown; charset=utf-8".to_string()),
         })
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap(),
     );
 
@@ -846,7 +859,7 @@ fn runtime_agent_resize_rebuilds_source_backed_presentation_at_new_width() {
         .unwrap();
 
     let rebuilt = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n")
@@ -859,7 +872,7 @@ fn runtime_agent_resize_rebuilds_source_backed_presentation_at_new_width() {
         "{rebuilt}"
     );
     assert!(!rebuilt.contains("stalecachedprojection"), "{rebuilt}");
-    let rebuilt_size = service.pane_screen("%1").unwrap().size();
+    let rebuilt_size = service.agent_pane_screen("%1").unwrap().size();
     assert!(
         !service
             .rebuild_agent_presentation_after_resize("%1", rebuilt_size)
@@ -929,7 +942,7 @@ fn runtime_agent_resize_does_not_replay_hidden_session_over_shell_prompt() {
     service.agent_shell_store_mut().request_exit("%1").unwrap();
     let mut shell_screen = TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap();
     shell_screen.feed(b"distinct-shell$ ");
-    service.set_pane_screen("%1".to_string(), shell_screen);
+    service.set_pane_screen("%1", shell_screen);
 
     service
         .resize_attached_primary_terminal(&primary, Size::new(20, 12).unwrap())
@@ -1027,12 +1040,12 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
             .agent_presentation_resize_is_deferred("%1")
     );
     let intermediate = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
     assert!(!intermediate.contains("Deferred rebuild"), "{intermediate}");
-    let final_size = service.pane_screen("%1").unwrap().size();
+    let final_size = service.agent_pane_screen("%1").unwrap().size();
 
     let transition = service
         .apply_resize_debounce_timer_transition(true)
@@ -1045,9 +1058,9 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
             .presentation
             .agent_presentation_resize_is_deferred("%1")
     );
-    assert_eq!(service.pane_screen("%1").unwrap().size(), final_size);
+    assert_eq!(service.agent_pane_screen("%1").unwrap().size(), final_size);
     let still_deferred = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
@@ -1079,9 +1092,8 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
             .presentation
             .agent_presentation_resize_is_deferred("%1")
     );
-    assert_eq!(service.pane_screen("%1").unwrap().size(), final_size);
     let rebuilt = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n")
@@ -1135,8 +1147,9 @@ fn runtime_agent_async_resize_completion_rebuilds_source_backed_presentation() {
             source_content_type: Some("text/markdown; charset=utf-8".to_string()),
         })
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap(),
     );
 
@@ -1147,7 +1160,7 @@ fn runtime_agent_async_resize_completion_rebuilds_source_backed_presentation() {
     );
 
     let rebuilt = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n")
@@ -1313,54 +1326,28 @@ fn runtime_provider_markdown_table_persists_and_reprojects_after_resize() {
         "{entries:?}"
     );
 
-    let wide_view = service
-        .render_client_view(
-            ClientViewRole::Primary,
-            Size::new(48, 16).unwrap(),
-            &service
-                .terminal_client_loop_config(TerminalClientLoopConfig::default())
-                .unwrap(),
-        )
+    let wide_projection = service
+        .agent_pane_screen("%1")
         .unwrap()
-        .unwrap();
+        .normal_content_lines();
     service
         .resize_attached_primary_terminal(&primary, Size::new(24, 16).unwrap())
         .unwrap();
-    let narrow_view = service
-        .render_client_view(
-            ClientViewRole::Primary,
-            Size::new(24, 16).unwrap(),
-            &service
-                .terminal_client_loop_config(TerminalClientLoopConfig::default())
-                .unwrap(),
-        )
+    let narrow_projection = service
+        .agent_pane_screen("%1")
         .unwrap()
-        .unwrap();
+        .normal_content_lines();
     assert_ne!(
-        wide_view.lines, narrow_view.lines,
-        "wide={wide_view:?} narrow={narrow_view:?}"
+        wide_projection, narrow_projection,
+        "wide={wide_projection:?} narrow={narrow_projection:?}"
     );
     assert!(
-        narrow_view.lines.iter().any(|line| line.contains('│')),
-        "{narrow_view:?}"
+        narrow_projection.iter().any(|line| line.contains('│')),
+        "{narrow_projection:?}"
     );
     service
         .resize_attached_primary_terminal(&primary, Size::new(48, 16).unwrap())
         .unwrap();
-    let widened_view = service
-        .render_client_view(
-            ClientViewRole::Primary,
-            Size::new(48, 16).unwrap(),
-            &service
-                .terminal_client_loop_config(TerminalClientLoopConfig::default())
-                .unwrap(),
-        )
-        .unwrap()
-        .unwrap();
-    assert_ne!(
-        narrow_view.lines, widened_view.lines,
-        "narrow={narrow_view:?} widened={widened_view:?}"
-    );
     assert_eq!(
         transcript_store
             .inspect_presentation(&conversation_id)

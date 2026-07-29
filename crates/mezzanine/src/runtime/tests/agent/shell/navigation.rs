@@ -63,10 +63,9 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
     let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
     screen.feed(b"history line\r\nvisible before agent");
     service.set_pane_screen("%1".to_string(), screen);
-    let history_before_enter = service.pane_screen("%1").unwrap().history().len();
     assert!(
         service
-            .pane_screen("%1")
+            .process_pane_screen("%1")
             .unwrap()
             .visible_lines()
             .join("\n")
@@ -97,8 +96,7 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
             .map(|session| session.visibility),
         Some(AgentShellVisibility::Visible)
     );
-    let after_enter_screen = service.pane_screen("%1").unwrap();
-    assert!(after_enter_screen.history().len() > history_before_enter);
+    let after_enter_screen = service.agent_pane_screen("%1").unwrap();
     assert!(
         !after_enter_screen
             .visible_lines()
@@ -106,19 +104,20 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
             .contains("visible before agent")
     );
     assert!(
-        after_enter_screen
-            .normal_content_lines()
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .visible_lines()
             .join("\n")
             .contains("visible before agent")
     );
-    let history_before_exit = after_enter_screen.history().len();
     service
-        .pane_screen_mut("%1")
+        .agent_pane_screen_mut("%1")
         .unwrap()
         .feed(b"visible inside agent");
     assert!(
         service
-            .pane_screen("%1")
+            .agent_pane_screen("%1")
             .unwrap()
             .visible_lines()
             .join("\n")
@@ -136,17 +135,18 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
             .map(|session| session.visibility),
         Some(AgentShellVisibility::Hidden)
     );
-    let after_exit_screen = service.pane_screen("%1").unwrap();
-    assert!(after_exit_screen.history().len() > history_before_exit);
-    assert!(
-        !after_exit_screen
-            .visible_lines()
-            .join("\n")
-            .contains("visible inside agent")
-    );
+    let after_exit_screen = service.process_pane_screen("%1").unwrap();
     assert!(
         after_exit_screen
-            .normal_content_lines()
+            .visible_lines()
+            .join("\n")
+            .contains("visible before agent")
+    );
+    assert!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .visible_lines()
             .join("\n")
             .contains("visible inside agent")
     );
@@ -155,19 +155,21 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(show_again.contains("visibility=visible"), "{show_again}");
-    let after_reentry_screen = service.pane_screen("%1").unwrap();
+    let after_reentry_screen = service.agent_pane_screen("%1").unwrap();
     assert!(
-        !after_reentry_screen
+        after_reentry_screen
             .visible_lines()
             .join("\n")
             .contains("visible inside agent"),
-        "agent reentry should start from a clean viewport, not scroll old agent logs back into view"
+        "agent reentry should restore the retained agent viewport"
     );
     assert!(
-        after_reentry_screen
-            .normal_content_lines()
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .visible_lines()
             .join("\n")
-            .contains("visible inside agent")
+            .contains("visible before agent")
     );
 }
 
@@ -387,12 +389,12 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
     assert_eq!(pane_input_effects(&enter_effects).len(), 1);
     assert!(service.agent_subshell_is_active(&pane_id));
     service
-        .pane_screen_mut(&pane_id)
+        .agent_pane_screen_mut(&pane_id)
         .unwrap()
         .feed(b"slash exit history\r\nslash exit visible text");
     assert!(
         service
-            .pane_screen(&pane_id)
+            .agent_pane_screen(&pane_id)
             .unwrap()
             .visible_lines()
             .join("\n")
@@ -416,9 +418,9 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
     );
     assert_eq!(exit_bytes.last(), Some(&b'\x04'));
     assert!(!service.agent_subshell_is_active(&pane_id));
-    let after_exit_screen = service.pane_screen(&pane_id).unwrap();
+    let after_exit_screen = service.agent_pane_screen(&pane_id).unwrap();
     assert!(
-        !after_exit_screen
+        after_exit_screen
             .visible_lines()
             .join("\n")
             .contains("slash exit visible text")
@@ -464,7 +466,7 @@ fn runtime_agent_shell_slash_exit_stops_running_turn_before_hiding() {
     assert_eq!(session.running_turn_id, None);
     assert!(!service.agent_turn_is_running("turn-1"));
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");

@@ -782,7 +782,7 @@ fn runtime_agent_markdown_say_displays_raw_mez_patch_examples() {
         .unwrap();
 
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");

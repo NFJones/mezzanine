@@ -486,8 +486,15 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         Some("latest")
     );
 
+    let latest_conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let process_size = service.process_pane_screen("%1").unwrap().size();
     service
-        .pane_screen_mut("%1")
+        .ensure_agent_pane_screen("%1", &latest_conversation_id, process_size)
         .unwrap()
         .feed(b"pre-resume stale cells\r\n");
 
@@ -508,7 +515,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         Some("saved")
     );
     let resumed_pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");

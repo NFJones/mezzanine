@@ -695,7 +695,10 @@ fn runtime_agent_markdown_lists_keep_content_on_marker_row() {
         )
         .unwrap();
 
-    let pane_lines = service.pane_screen("%1").unwrap().normal_content_lines();
+    let pane_lines = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
     let pane_text = pane_lines.join("\n");
 
     assert!(
@@ -953,7 +956,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
     for _ in 0..150 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         pane_text = service
-            .pane_screen("%1")
+            .process_pane_screen("%1")
             .unwrap()
             .normal_content_lines()
             .join("\n");

@@ -223,9 +223,14 @@ impl RuntimeSessionService {
         self.restore_agent_resume_state_for_conversation(pane_id, &session_id)?;
         self.record_pane_transcript_ref(pane_id, format!("transcript:{pane_id}:{session_id}"))?;
         self.reload_agent_prompt_history_for_pane(pane_id)?;
-        if let Some(size) = self.pane_screen(pane_id).map(|screen| screen.size()) {
-            self.set_pane_screen(
+        if let Some(size) = self
+            .agent_pane_screen(pane_id)
+            .or_else(|| self.process_pane_screen(pane_id))
+            .map(|screen| screen.size())
+        {
+            self.set_agent_pane_screen(
                 pane_id.to_string(),
+                session_id.clone(),
                 mez_terminal::TerminalScreen::new_with_history_config(
                     size,
                     self.terminal_history_limit(),

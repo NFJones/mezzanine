@@ -30,11 +30,15 @@ fn runtime_shared_prompt_history_does_not_bleed_into_pane_logs() {
         .agent_shell_store_mut()
         .bind_conversation("%1", "conversation-b", 0)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    service.set_agent_pane_screen(
+        "%1",
+        "conversation-b",
         TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
     );
-    let screen_before = service.pane_screen("%1").unwrap().normal_content_lines();
+    let screen_before = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
 
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
     assert_eq!(
@@ -48,7 +52,10 @@ fn runtime_shared_prompt_history_does_not_bleed_into_pane_logs() {
         &[String::from("prompt from a"), String::from("prompt from b")]
     );
     assert_eq!(
-        service.pane_screen("%1").unwrap().normal_content_lines(),
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines(),
         screen_before
     );
     assert!(
@@ -88,7 +95,10 @@ fn runtime_shared_prompt_history_does_not_bleed_into_pane_logs() {
         "prompt from b"
     );
     assert_eq!(
-        service.pane_screen("%1").unwrap().normal_content_lines(),
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines(),
         screen_before
     );
     assert!(

@@ -681,6 +681,7 @@ impl RuntimeSessionService {
     }
 
     /// Replaces the authoritative process terminal screen for one pane.
+    #[allow(dead_code, reason = "explicit process-screen fixture API used by test targets")]
     pub(crate) fn set_process_pane_screen(
         &mut self,
         pane_id: impl Into<String>,
@@ -711,6 +712,27 @@ impl RuntimeSessionService {
             .agent_pane_screens
             .get_mut(pane_id)
             .map(AgentPaneScreen::screen_mut)
+    }
+
+    /// Replaces one pane's retained agent screen with a conversation-bound value.
+    pub(crate) fn set_agent_pane_screen(
+        &mut self,
+        pane_id: impl Into<String>,
+        conversation_id: impl Into<String>,
+        screen: TerminalScreen,
+    ) {
+        self.process.agent_pane_screens.insert(
+            pane_id.into(),
+            AgentPaneScreen {
+                conversation_id: conversation_id.into(),
+                screen,
+            },
+        );
+    }
+
+    /// Removes one pane's retained agent screen during replacement rollback.
+    pub(crate) fn remove_agent_pane_screen(&mut self, pane_id: &str) {
+        self.process.agent_pane_screens.remove(pane_id);
     }
 
     /// Ensures one pane has an agent screen bound to the requested conversation.
@@ -770,20 +792,33 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Returns the process screen through the temporary compatibility surface.
-    ///
-    /// Dependent refactor slices migrate semantic agent and presented-surface
-    /// callers to explicit accessors before this compatibility API is removed.
-    pub(crate) fn pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
-        self.process_pane_screen(pane_id)
+    /// Returns mutable terminal state for the surface selected for presentation.
+    pub(crate) fn presented_pane_screen_mut(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<&mut TerminalScreen> {
+        match self.presented_pane_surface(pane_id) {
+            PaneSurfaceKind::Process => self.process_pane_screen_mut(pane_id),
+            PaneSurfaceKind::Agent => self.agent_pane_screen_mut(pane_id),
+        }
     }
 
-    /// Returns mutable process state through the temporary compatibility API.
+    /// Returns the displayed screen through the temporary compatibility surface.
+    ///
+    /// Process protocol callers must use `process_pane_screen`; dependent
+    /// refactor slices migrate remaining interaction callers to explicit
+    /// presented-surface accessors before this compatibility API is removed.
+    pub(crate) fn pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
+        self.presented_pane_screen(pane_id)
+    }
+
+    /// Returns mutable displayed state through the temporary compatibility API.
     pub(crate) fn pane_screen_mut(&mut self, pane_id: &str) -> Option<&mut TerminalScreen> {
-        self.process_pane_screen_mut(pane_id)
+        self.presented_pane_screen_mut(pane_id)
     }
 
     /// Replaces process state through the temporary compatibility API.
+    #[allow(dead_code, reason = "compatibility fixture API retained during screen migration")]
     pub(crate) fn set_pane_screen(&mut self, pane_id: impl Into<String>, screen: TerminalScreen) {
         self.set_process_pane_screen(pane_id, screen);
     }

@@ -234,7 +234,7 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
     assert_eq!(executions[0].terminal_state, AgentTurnState::Completed);
 
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
@@ -250,4 +250,97 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
         executions[0].action_results
     );
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies agent presentation appended while its surface is hidden never
+/// changes the process terminal and remains available for later reentry.
+#[test]
+fn runtime_hidden_agent_presentation_isolated_from_process_screen() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut process_screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 120).unwrap();
+    process_screen.feed(b"process-only sentinel\r\n");
+    service.set_process_pane_screen("%1", process_screen);
+    service
+        .agent_shell_store_mut()
+        .ensure_session("%1")
+        .unwrap();
+
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "hidden agent sentinel")
+        .unwrap();
+
+    let process_text = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let agent_text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        process_text.contains("process-only sentinel"),
+        "{process_text}"
+    );
+    assert!(
+        !process_text.contains("hidden agent sentinel"),
+        "{process_text}"
+    );
+    assert!(agent_text.contains("hidden agent sentinel"), "{agent_text}");
+    assert!(
+        !agent_text.contains("process-only sentinel"),
+        "{agent_text}"
+    );
+}
+
+/// Verifies persisted presentation from another pane conversation is rejected
+/// before replay can mutate either retained screen.
+#[test]
+fn runtime_agent_presentation_replay_rejects_mismatched_conversation() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut process_screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 120).unwrap();
+    process_screen.feed(b"process replay sentinel\r\n");
+    service.set_process_pane_screen("%1", process_screen);
+    service
+        .agent_shell_store_mut()
+        .ensure_session("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "current-conversation", 0)
+        .unwrap();
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "current agent sentinel")
+        .unwrap();
+    let process_before = service.process_pane_screen("%1").unwrap().clone();
+    let agent_before = service.agent_pane_screen("%1").unwrap().clone();
+    let stale = crate::storage::transcript::AgentPresentationEntry {
+        conversation_id: "stale-conversation".to_string(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        pane_id: "%1".to_string(),
+        turn_id: None,
+        terminal_width: 80,
+        style_names: vec!["assistant".to_string()],
+        display_lines: vec!["stale presentation sentinel".to_string()],
+        copy_lines: vec!["stale presentation sentinel".to_string()],
+        ansi_text: None,
+        source_text: Some("stale presentation sentinel".to_string()),
+        source_content_type: Some(mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string()),
+    };
+
+    let error = service
+        .replay_agent_presentation_entries_to_terminal_buffer("%1", &[stale])
+        .unwrap_err();
+
+    assert!(error.message().contains("active conversation"), "{error}");
+    assert_eq!(service.process_pane_screen("%1").unwrap(), &process_before);
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &agent_before);
 }

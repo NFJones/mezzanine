@@ -830,7 +830,7 @@ fn runtime_agent_shell_command_preview_caps_wide_panes_at_120_cells() {
         .unwrap();
 
     let styled_lines = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
     let command_lines = styled_lines

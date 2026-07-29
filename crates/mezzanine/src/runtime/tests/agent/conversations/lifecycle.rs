@@ -543,7 +543,7 @@ fn runtime_agent_shell_clear_command_resets_conversation_and_terminal_view() {
     );
     assert!(
         service
-            .pane_screen("%1")
+            .process_pane_screen("%1")
             .unwrap()
             .normal_content_lines()
             .join("\n")

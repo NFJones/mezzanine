@@ -42,6 +42,24 @@ impl AsyncRuntimeSessionHandle {
             .await
     }
 
+    /// Sends bytes directly to a process-owned pane without visible-surface routing.
+    #[cfg(test)]
+    pub async fn write_input_to_pane(
+        &self,
+        primary_client_id: ClientId,
+        pane_id: &str,
+        input: Vec<u8>,
+    ) -> Result<crate::runtime::PaneInputDispatch> {
+        let pane_id = pane_id.to_string();
+        self.request(|reply| AsyncRuntimeRequest::WriteInputToPane {
+            primary_client_id,
+            pane_id,
+            input,
+            reply,
+        })
+        .await?
+    }
+
     /// Runs the render client view operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

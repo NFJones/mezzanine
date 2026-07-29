@@ -94,6 +94,65 @@ fn catch_agent_terminal_presentation_panic(context: &str, operation: impl FnOnce
 }
 
 impl RuntimeSessionService {
+    /// Returns the active conversation and layout size for one presentation target.
+    fn agent_presentation_target(&self, pane_id: &str) -> Result<(String, Size)> {
+        let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
+            MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "agent terminal presentation target pane not found",
+            )
+        })?;
+        let conversation_id = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+            .ok_or_else(|| {
+                MezError::invalid_state("agent terminal presentation target session not found")
+            })?;
+        Ok((conversation_id, descriptor.size))
+    }
+
+    /// Ensures the agent destination is bound to the pane's active conversation.
+    fn ensure_current_agent_presentation_screen(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<&mut TerminalScreen> {
+        if self.agent_shell_store().get(pane_id).is_none() {
+            self.agent_shell_store_mut().ensure_session(pane_id)?;
+        }
+        let (conversation_id, size) = self.agent_presentation_target(pane_id)?;
+        let binding_changed = self
+            .agent_pane_screen_state(pane_id)
+            .is_some_and(|screen| screen.conversation_id() != conversation_id);
+        if binding_changed {
+            self.presentation
+                .agent_shell_output_status_lines
+                .remove(pane_id);
+            self.presentation
+                .agent_presentation_projection_cache
+                .remove(pane_id);
+        }
+        self.ensure_agent_pane_screen(pane_id, &conversation_id, size)
+    }
+
+    /// Validates that replay records belong to the pane's active conversation.
+    fn validate_agent_presentation_replay_target(
+        &self,
+        pane_id: &str,
+        entries: &[AgentPresentationEntry],
+    ) -> Result<String> {
+        let (conversation_id, _size) = self.agent_presentation_target(pane_id)?;
+        if entries
+            .iter()
+            .any(|entry| entry.conversation_id != conversation_id)
+        {
+            return Err(MezError::invalid_state(
+                "agent presentation replay target does not match the active conversation",
+            ));
+        }
+        Ok(conversation_id)
+    }
+
     /// Runs the append agent user prompt to terminal buffer operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -226,7 +285,7 @@ impl RuntimeSessionService {
             return Ok(columns);
         }
         let columns = self
-            .pane_screen(pane_id)
+            .agent_pane_screen(pane_id)
             .map(|screen| screen.size().columns)
             .unwrap_or(descriptor.size.columns);
         Ok(usize::from(columns))
@@ -245,7 +304,7 @@ impl RuntimeSessionService {
 
     /// Returns the pane width to persist with one agent presentation entry.
     fn agent_presentation_terminal_width(&self, pane_id: &str) -> Option<u16> {
-        self.pane_screen(pane_id)
+        self.agent_pane_screen(pane_id)
             .map(|screen| screen.size().columns)
             .or_else(|| {
                 self.find_pane_descriptor(pane_id)
@@ -313,6 +372,7 @@ impl RuntimeSessionService {
         if entries.is_empty() {
             return Ok(false);
         }
+        self.validate_agent_presentation_replay_target(pane_id, entries)?;
         self.presentation
             .agent_presentation_replay_panes
             .insert(pane_id.to_string());
@@ -393,22 +453,9 @@ impl RuntimeSessionService {
                     continue;
                 }
                 if let Some(ansi_text) = entry.ansi_text.as_deref() {
-                    let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
-                        MezError::new(
-                            crate::error::MezErrorKind::NotFound,
-                            "agent terminal presentation target pane not found",
-                        )
-                    })?;
-                    if self.pane_screen(pane_id).is_none() {
-                        let screen = TerminalScreen::new_with_history_config(
-                            descriptor.size,
-                            self.terminal_history_limit(),
-                            self.terminal_history_rotate_lines(),
-                        )?;
-                        self.set_pane_screen(pane_id.to_string(), screen);
-                    }
+                    self.ensure_current_agent_presentation_screen(pane_id)?;
                     self.clear_agent_shell_output_status_line(pane_id)?;
-                    let screen = self.pane_screen_mut(pane_id).ok_or_else(|| {
+                    let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
                         MezError::invalid_state(
                             "agent terminal presentation screen was not initialized",
                         )
@@ -441,7 +488,7 @@ impl RuntimeSessionService {
                     .collect::<Vec<_>>();
                 self.append_agent_terminal_styled_lines_to_buffer(pane_id, &styled_lines)?;
                 if !entry.copy_lines.is_empty()
-                    && let Some(screen) = self.pane_screen_mut(pane_id)
+                    && let Some(screen) = self.agent_pane_screen_mut(pane_id)
                 {
                     screen.set_recent_normal_copy_texts(&entry.copy_lines, AGENT_COPY_SKIP_LINE);
                 }
@@ -473,7 +520,7 @@ impl RuntimeSessionService {
         const MAX_PRESENTATION_REPLAY_ENTRIES: usize = 200;
 
         if self
-            .pane_screen(pane_id)
+            .agent_pane_screen(pane_id)
             .is_some_and(TerminalScreen::normal_viewport_detached_from_history)
         {
             return Ok(false);
@@ -503,18 +550,20 @@ impl RuntimeSessionService {
         if !entries.iter().any(|entry| entry.source_text.is_some()) {
             return Ok(false);
         }
-        let previous = self.pane_screen(pane_id).cloned();
+        let previous = self.agent_pane_screen(pane_id).cloned();
         let rebuilt = TerminalScreen::new_with_history_config(
             size,
             self.terminal_history_limit(),
             self.terminal_history_rotate_lines(),
         )?;
-        self.set_pane_screen(pane_id.to_string(), rebuilt);
+        self.set_agent_pane_screen(pane_id.to_string(), session_id.clone(), rebuilt);
         if let Err(error) =
             self.replay_agent_presentation_entries_to_terminal_buffer(pane_id, &entries)
         {
             if let Some(previous) = previous {
-                self.set_pane_screen(pane_id.to_string(), previous);
+                self.set_agent_pane_screen(pane_id.to_string(), session_id.clone(), previous);
+            } else {
+                self.remove_agent_pane_screen(pane_id);
             }
             return Err(error);
         }
@@ -768,7 +817,7 @@ impl RuntimeSessionService {
         /// boundary and avoids relying on call-site inference.
         const MAX_AGENT_COMMAND_PREVIEW_LINES: usize = 10;
         let columns = self
-            .pane_screen(pane_id)
+            .agent_pane_screen(pane_id)
             .map(|screen| usize::from(screen.size().columns))
             .or_else(|| {
                 self.find_pane_descriptor(pane_id)
@@ -849,24 +898,11 @@ impl RuntimeSessionService {
         if styled_lines.is_empty() {
             return Ok(());
         }
-        let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "agent terminal presentation target pane not found",
-            )
-        })?;
-        if self.pane_screen(pane_id).is_none() {
-            let screen = TerminalScreen::new_with_history_config(
-                descriptor.size,
-                self.terminal_history_limit(),
-                self.terminal_history_rotate_lines(),
-            )?;
-            self.set_pane_screen(pane_id.to_string(), screen);
-        }
+        self.ensure_current_agent_presentation_screen(pane_id)?;
         self.clear_agent_shell_output_status_line(pane_id)?;
         let ui_theme = self.presentation.settings.ui_theme.clone();
         let ansi_text = {
-            let screen = self.pane_screen_mut(pane_id).ok_or_else(|| {
+            let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
                 MezError::invalid_state("agent terminal presentation screen was not initialized")
             })?;
             let mut bytes = String::new();
@@ -931,24 +967,11 @@ impl RuntimeSessionService {
         if rendered_lines.is_empty() {
             return Ok(());
         }
-        let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "agent terminal presentation target pane not found",
-            )
-        })?;
-        if self.pane_screen(pane_id).is_none() {
-            let screen = TerminalScreen::new_with_history_config(
-                descriptor.size,
-                self.terminal_history_limit(),
-                self.terminal_history_rotate_lines(),
-            )?;
-            self.set_pane_screen(pane_id.to_string(), screen);
-        }
+        self.ensure_current_agent_presentation_screen(pane_id)?;
         self.clear_agent_shell_output_status_line(pane_id)?;
         let ui_theme = self.presentation.settings.ui_theme.clone();
         let ansi_text = {
-            let screen = self.pane_screen_mut(pane_id).ok_or_else(|| {
+            let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
                 MezError::invalid_state("agent terminal presentation screen was not initialized")
             })?;
             let mut bytes = String::new();
@@ -1001,24 +1024,11 @@ impl RuntimeSessionService {
         if self.agent_shell_view_enabled(pane_id) || lines.is_empty() {
             return Ok(());
         }
-        let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "agent terminal presentation target pane not found",
-            )
-        })?;
-        if self.pane_screen(pane_id).is_none() {
-            let screen = TerminalScreen::new_with_history_config(
-                descriptor.size,
-                self.terminal_history_limit(),
-                self.terminal_history_rotate_lines(),
-            )?;
-            self.set_pane_screen(pane_id.to_string(), screen);
-        }
-        let columns = self
-            .pane_screen(pane_id)
-            .map(|screen| usize::from(screen.size().columns))
-            .unwrap_or_else(|| usize::from(descriptor.size.columns));
+        let columns = usize::from(
+            self.ensure_current_agent_presentation_screen(pane_id)?
+                .size()
+                .columns,
+        );
         let content_columns = columns
             .saturating_sub(UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX))
             .max(1);
@@ -1039,7 +1049,7 @@ impl RuntimeSessionService {
             .map(Vec::len)
             .unwrap_or(0);
         let ui_theme = self.presentation.settings.ui_theme.clone();
-        let screen = self.pane_screen_mut(pane_id).ok_or_else(|| {
+        let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
             MezError::invalid_state("agent terminal presentation screen was not initialized")
         })?;
         let mut bytes = String::new();
@@ -1090,7 +1100,7 @@ impl RuntimeSessionService {
         else {
             return Ok(());
         };
-        if let Some(screen) = self.pane_screen_mut(pane_id) {
+        if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
             let mut bytes = String::new();
             for index in 0..lines.len() {
                 if index > 0 {

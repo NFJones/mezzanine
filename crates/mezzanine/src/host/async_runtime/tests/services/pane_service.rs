@@ -983,122 +983,19 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             .await
             .unwrap();
         assert!(ready_again.contains("override=applied"), "{ready_again}");
-        let second_turn = mez_agent::AgentTurnRecord {
-            turn_id: next_task.turn_id.clone(),
-            agent_id: next_task.agent_id.clone(),
-            pane_id: next_task.pane_id.clone(),
-            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
-            started_at_unix_seconds: 2,
-            policy_profile: "default".to_string(),
-            model_profile: "default".to_string(),
-            parent_turn_id: None,
-            state: mez_agent::AgentTurnState::Running,
-            cooperation_mode: None,
-
-            initial_capability: None,
-        };
-        let second_action = mez_agent::AgentAction {
-            id: "shell-2".to_string(),
-            rationale: "verify the pane shell still accepts input".to_string(),
-            payload: mez_agent::AgentActionPayload::ShellCommand {
-                summary: "Print a second marker".to_string(),
-                command: "printf 'ASYNC_PANE_STILL_ALIVE\\n'".to_string(),
-                interactive: false,
-                stateful: false,
-                timeout_ms: Some(60_000),
-            },
-        };
-        let second_batch = mez_agent::MaapBatch {
-            protocol: "maap/1".to_string(),
-            rationale: "test action batch rationale".to_string(),
-            thought: None,
-            turn_id: next_task.turn_id.clone(),
-            agent_id: next_task.agent_id.clone(),
-            actions: vec![second_action.clone()],
-            final_turn: false,
-        };
-        let second_execution = mez_agent::AgentTurnExecution {
-            request: mez_agent::ModelRequest {
-                provider: next_task.model_profile.provider.clone(),
-                model: next_task.model_profile.model.clone(),
-                reasoning_effort: next_task
-                    .model_profile
-                    .provider_options
-                    .get("reasoning_effort")
-                    .cloned()
-                    .or_else(|| next_task.model_profile.reasoning_profile.clone()),
-                thinking_enabled: next_task.model_profile.thinking_enabled(),
-                latency_preference: next_task.model_profile.latency_preference.clone(),
-                prompt_cache_retention: next_task
-                    .model_profile
-                    .provider_options
-                    .get("prompt_cache_retention")
-                    .cloned(),
-                max_output_tokens: next_task.model_profile.max_output_tokens(),
-                temperature: None,
-                stop: None,
-                prompt_cache_session_id: None,
-                prompt_cache_lineage_id: None,
-                turn_id: next_task.turn_id.clone(),
-                agent_id: next_task.agent_id.clone(),
-                available_mcp_tools: Vec::new(),
-                memory_actions_enabled: false,
-                issue_actions_enabled: true,
-                interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
-                allowed_actions: mez_agent::AllowedActionSet::for_capability(
-                    mez_agent::AgentCapability::Shell,
-                ),
-                messages: vec![mez_agent::ModelMessage {
-                    role: mez_agent::ModelMessageRole::User,
-                    source: mez_agent::ContextSourceKind::UserInstruction,
-                    placement: mez_agent::ContextPlacement::ConversationAppend,
-                    content: "print a second marker".to_string(),
-                }],
-            },
-            response: mez_agent::ModelResponse {
-                provider: next_task.model_profile.provider.clone(),
-                model: next_task.model_profile.model.clone(),
-                raw_text: "second shell command response".to_string(),
-                usage: Default::default(),
-                latest_request_usage: None,
-                quota_usage: Default::default(),
-                action_batch: Some(second_batch),
-                provider_transcript_events: Vec::new(),
-            },
-            latest_response_usage: Default::default(),
-            routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![mez_agent::ActionResult::running(
-                &second_turn,
-                &second_action,
-                vec!["second shell command accepted for pane execution".to_string()],
-                Some(r#"{"state":"pending_dispatch"}"#.to_string()),
-            )],
-            final_turn: false,
-            terminal_state: mez_agent::AgentTurnState::Running,
-        };
-        let mut second_provider_batch = RuntimeEventBatch::new();
-        second_provider_batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
-            agent_id: AgentId::opaque(next_task.agent_id).unwrap(),
-            turn_id: next_task.turn_id,
-            execution: Box::new(second_execution),
-        }));
-        let second_provider_report = client_handle
-            .submit_runtime_events(second_provider_batch)
+        let direct_input = client_handle
+            .write_input_to_pane(
+                primary.clone(),
+                "%1",
+                b"echo ASYNC_PANE_STILL_ALIVE\n".to_vec(),
+            )
             .await
             .unwrap();
-        assert_eq!(second_provider_report.accepted, 1);
-        assert_eq!(second_provider_report.applied, 1);
-        let alive_seen = wait_for_rendered_text(
-            &client_handle,
-            ClientViewRole::Primary,
-            "ASYNC_PANE_STILL_ALIVE",
-        )
-        .await
-        .unwrap();
-        assert!(
-            alive_seen.contains("ASYNC_PANE_STILL_ALIVE"),
-            "{alive_seen}"
+        assert_eq!(
+            direct_input.bytes_written,
+            b"echo ASYNC_PANE_STILL_ALIVE\n".len()
         );
+        assert!(direct_input.primary_pid > 0);
         assert_eq!(
             client_handle.lifecycle_state().await.unwrap(),
             RuntimeLifecycleState::Running

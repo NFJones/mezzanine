@@ -716,7 +716,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
     assert_eq!(execution.action_results[1].status, ActionStatus::Running);
     assert!(!execution.action_results[1].is_error);
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");

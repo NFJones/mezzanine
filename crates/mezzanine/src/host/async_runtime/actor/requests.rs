@@ -25,6 +25,23 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(metrics);
                 false
             }
+            #[cfg(test)]
+            AsyncRuntimeRequest::WriteInputToPane {
+                primary_client_id,
+                pane_id,
+                input,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .write_input_to_pane(&primary_client_id, Some(&pane_id), &input)
+                    .and_then(|dispatch| {
+                        self.queue_deferred_pane_io_side_effects_from_service()?;
+                        Ok(dispatch)
+                    });
+                let _ = reply.send(result);
+                false
+            }
             AsyncRuntimeRequest::RenderClientView {
                 role,
                 client_size,

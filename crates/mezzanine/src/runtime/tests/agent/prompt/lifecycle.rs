@@ -720,7 +720,7 @@ fn runtime_agent_user_prompt_renders_pasted_provider_error_without_terminal_fail
         .unwrap();
 
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");

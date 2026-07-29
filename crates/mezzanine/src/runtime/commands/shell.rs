@@ -214,8 +214,13 @@ impl RuntimeSessionService {
             .clone();
         self.reload_agent_prompt_history_for_pane(pane_id)?;
         self.enter_agent_subshell_if_needed(pane_id)?;
-        self.clear_agent_shell_terminal_view(pane_id)?;
         self.sync_tracked_pty_sizes()?;
+        let size = self
+            .process_pane_screen(pane_id)
+            .map(|screen| screen.size())
+            .or_else(|| self.find_pane_descriptor(pane_id).map(|pane| pane.size))
+            .ok_or_else(|| MezError::invalid_state("agent pane screen size is unavailable"))?;
+        self.ensure_agent_pane_screen(pane_id, &conversation_id, size)?;
         self.checkpoint_agent_session_metadata()?;
         Ok(conversation_id)
     }
@@ -1064,9 +1069,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<bool> {
-        let cleared = self.clear_agent_shell_terminal_view(pane_id)?;
-        let advanced = self.exit_agent_subshell_if_active(pane_id)?;
-        Ok(cleared || advanced)
+        self.exit_agent_subshell_if_active(pane_id)
     }
 
     /// Runs the persist agent prompt history entry operation for this subsystem.

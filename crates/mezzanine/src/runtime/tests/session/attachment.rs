@@ -202,7 +202,7 @@ fn runtime_control_initialize_observer_logs_and_lists_pending_request() {
         "{events:?}"
     );
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .visible_lines()
         .join("\n");

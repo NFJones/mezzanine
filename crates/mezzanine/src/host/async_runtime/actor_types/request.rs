@@ -12,6 +12,8 @@ use super::{
     RuntimeLifecycleState, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
     RuntimeSnapshotControlAsyncWork, Size, SnapshotRepository, TerminalClientLoopConfig, oneshot,
 };
+#[cfg(test)]
+use crate::runtime::PaneInputDispatch;
 use crate::runtime::PaneProcessInstance;
 
 /// Carries Async Runtime Request state for this subsystem.
@@ -44,6 +46,18 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<AsyncRuntimeActorMetrics>,
+    },
+    /// Sends bytes directly to one process-owned pane for boundary tests.
+    #[cfg(test)]
+    WriteInputToPane {
+        /// Primary client authorizing the pane input.
+        primary_client_id: ClientId,
+        /// Pane whose process terminal receives the bytes.
+        pane_id: String,
+        /// Exact bytes to write to the pane process.
+        input: Vec<u8>,
+        /// Receives the queued pane-input dispatch metadata.
+        reply: oneshot::Sender<Result<PaneInputDispatch>>,
     },
     /// Represents the Render Client View case for this enumeration.
     ///

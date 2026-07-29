@@ -3086,7 +3086,7 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
         .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     service
-        .pane_screen_mut(&pane_id)
+        .process_pane_screen_mut(&pane_id)
         .unwrap()
         .feed(b"control show history\ncontrol show visible text");
 
@@ -3095,7 +3095,7 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
         &primary,
     );
     assert!(show.contains(r#""visible":true"#), "{show}");
-    let after_show_screen = service.pane_screen(&pane_id).unwrap();
+    let after_show_screen = service.agent_pane_screen(&pane_id).unwrap();
     assert!(
         !after_show_screen
             .visible_lines()
@@ -3103,8 +3103,10 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
             .contains("control show visible text")
     );
     assert!(
-        after_show_screen
-            .normal_content_lines()
+        service
+            .process_pane_screen(&pane_id)
+            .unwrap()
+            .visible_lines()
             .join("\n")
             .contains("control show visible text")
     );

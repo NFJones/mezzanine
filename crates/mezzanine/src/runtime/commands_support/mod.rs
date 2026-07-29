@@ -446,7 +446,7 @@ pub(super) fn execute_runtime_live_terminal_command(
                 ));
             };
             let paste_bytes = runtime_paste_bytes(
-                service.pane_screen(descriptor.pane_id.as_str()),
+                service.process_pane_screen(descriptor.pane_id.as_str()),
                 content.as_str(),
             );
             let primary = service

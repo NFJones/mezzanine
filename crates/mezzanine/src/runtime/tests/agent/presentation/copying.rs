@@ -292,7 +292,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
         "{pane_response}"
     );
     let pane_text_after = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
@@ -426,7 +426,7 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
         "{pane_response}"
     );
     let pane_text_after = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
@@ -514,7 +514,7 @@ fn runtime_agent_copy_context_writes_idle_context_to_destinations() {
         "{pane_response}"
     );
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
@@ -641,7 +641,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
         "{pane_response}"
     );
     let pane_text_after = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");

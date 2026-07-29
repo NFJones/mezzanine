@@ -666,13 +666,15 @@ fn runtime_agent_prompt_ctrl_l_clears_pane_buffer() {
     let primary = service
         .attach_primary("primary", true, Size::new(50, 8).unwrap(), 120)
         .unwrap();
-    let mut screen = TerminalScreen::new(Size::new(50, 8).unwrap(), 120).unwrap();
-    screen.feed(b"old agent output");
-    service.set_pane_screen("%1".to_string(), screen);
-    service
+    let conversation_id = service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
-        .unwrap();
+        .unwrap()
+        .session_id
+        .clone();
+    let mut screen = TerminalScreen::new(Size::new(50, 8).unwrap(), 120).unwrap();
+    screen.feed(b"old agent output");
+    service.set_agent_pane_screen("%1", conversation_id, screen);
     assert!(
         service
             .pane_screen("%1")

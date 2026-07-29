@@ -815,7 +815,6 @@ impl RuntimeSessionService {
             }
             self.clear_stale_agent_loop_state_for_pane(pane_id)?;
         }
-        self.append_agent_user_prompt_to_terminal_buffer(pane_id, input)?;
         let parent_session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
@@ -852,6 +851,7 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
+        self.append_agent_user_prompt_to_terminal_buffer(pane_id, input)?;
         let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "loop".to_string(),

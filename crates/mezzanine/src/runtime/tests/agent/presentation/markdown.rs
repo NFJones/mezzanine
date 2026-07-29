@@ -64,7 +64,7 @@ fn runtime_agent_plain_say_does_not_render_markdown_divider() {
         .unwrap();
 
     let styled_lines = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
     assert!(
@@ -147,7 +147,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
         .unwrap();
 
     let styled_lines = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
     let assistant_line = styled_lines
@@ -196,7 +196,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
         "{styled_lines:?}"
     );
 
-    let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    let copy_mode = ensure_agent_copy_mode_for_test(&mut service, "%1");
     let scroll_top = copy_mode.scroll_top();
     let visible_lines = copy_mode.visible_lines();
     assert!(
@@ -254,8 +254,9 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
     service
         .attach_primary("primary", true, Size::new(34, 12).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(34, 12).unwrap(), 120).unwrap(),
     );
     let markdown = "| Name | Description |\n| --- | --- |\n| alpha | this description is intentionally long enough to wrap in a narrow pane |";
@@ -269,7 +270,7 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
         .unwrap();
 
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
@@ -307,7 +308,7 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
             .all(|(_, line)| line.matches('│').count() >= 3),
         "wrapped table rows should preserve column borders: {table_rows:?}"
     );
-    let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    let copy_mode = ensure_agent_copy_mode_for_test(&mut service, "%1");
     let visible_lines = copy_mode.visible_lines();
     let last_visible_index = visible_lines
         .iter()
@@ -343,8 +344,9 @@ fn runtime_agent_mermaid_diagram_copy_preserves_raw_fence() {
     service
         .attach_primary("primary", true, Size::new(96, 16).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(96, 16).unwrap(), 120).unwrap(),
     );
     let markdown = "```mermaid\nflowchart LR\nA[Start] --> B[Done]\n```";
@@ -357,7 +359,7 @@ fn runtime_agent_mermaid_diagram_copy_preserves_raw_fence() {
         )
         .unwrap();
 
-    let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    let copy_mode = ensure_agent_copy_mode_for_test(&mut service, "%1");
     let visible_lines = copy_mode.visible_lines();
     let last_visible_index = visible_lines
         .iter()
@@ -393,8 +395,9 @@ fn runtime_agent_markdown_copy_omits_synthetic_frame_row() {
     service
         .attach_primary("primary", true, Size::new(40, 12).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
     );
     let markdown = "# Heading";
@@ -408,12 +411,12 @@ fn runtime_agent_markdown_copy_omits_synthetic_frame_row() {
         .unwrap();
 
     let pane_text = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
     assert!(!pane_text.contains('─'), "{pane_text}");
-    let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    let copy_mode = ensure_agent_copy_mode_for_test(&mut service, "%1");
     copy_mode.scroll_to_top();
     let visible_lines = copy_mode.visible_lines();
     let heading_line_index = visible_lines
@@ -453,8 +456,9 @@ fn runtime_agent_markdown_partial_and_continuation_copy_matches_rendered_selecti
     service
         .attach_primary("primary", true, Size::new(24, 12).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(24, 12).unwrap(), 120).unwrap(),
     );
     let markdown = "# heading text that wraps";
@@ -467,7 +471,7 @@ fn runtime_agent_markdown_partial_and_continuation_copy_matches_rendered_selecti
         )
         .unwrap();
 
-    let copy_mode = service.ensure_active_copy_mode("%1").unwrap();
+    let copy_mode = ensure_agent_copy_mode_for_test(&mut service, "%1");
     copy_mode.scroll_to_top();
     let visible_lines = copy_mode.visible_lines();
     let heading_line_index = visible_lines
@@ -542,8 +546,9 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
     service
         .attach_primary("primary", true, Size::new(96, 40).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(96, 40).unwrap(), 120).unwrap(),
     );
     let markdown = "# Heading\n\n> quoted **bold** text\n\n1. first\n2. second\n\n- [x] done\n\n`code` and *em*\n\n[link](https://example.com)\n\n| Name | Count |\n|:--|--:|\n| alpha | 2 |\n\n```rust\nfn main() {}\n```\n\n~~gone~~\n\nparagraph\n## Later";
@@ -557,7 +562,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
         .unwrap();
 
     let styled_lines = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
     let heading = styled_lines
@@ -757,8 +762,9 @@ fn runtime_agent_markdown_uses_dark_neutral_accents_on_light_theme() {
     service
         .attach_primary("primary", true, Size::new(80, 16).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
     );
 
@@ -771,7 +777,7 @@ fn runtime_agent_markdown_uses_dark_neutral_accents_on_light_theme() {
         .unwrap();
 
     let styled_lines = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
     let inline = styled_lines
@@ -810,8 +816,9 @@ fn runtime_agent_markdown_wraps_to_120_cells_and_indents_continuations() {
     service
         .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
     );
     let markdown = format!("- {}", "alphabet ".repeat(40));
@@ -825,7 +832,7 @@ fn runtime_agent_markdown_wraps_to_120_cells_and_indents_continuations() {
         .unwrap();
 
     let styled_lines = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
     assert!(
@@ -869,8 +876,9 @@ fn runtime_agent_markdown_thematic_break_expands_to_capped_divider_width() {
     service
         .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
     );
     let markdown = "***";
@@ -884,7 +892,7 @@ fn runtime_agent_markdown_thematic_break_expands_to_capped_divider_width() {
         .unwrap();
 
     let styled_lines = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
     let expected = format!(
@@ -910,8 +918,9 @@ fn runtime_agent_markdown_tables_wrap_only_at_terminal_width() {
     service
         .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
     );
     let first_cell = "alpha".repeat(18);
@@ -927,7 +936,7 @@ fn runtime_agent_markdown_tables_wrap_only_at_terminal_width() {
         .unwrap();
 
     let styled_lines = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
     let data_row = styled_lines
@@ -961,8 +970,9 @@ fn runtime_agent_markdown_box_drawing_paragraph_uses_prose_width() {
     service
         .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
         .unwrap();
-    service.set_pane_screen(
-        "%1".to_string(),
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
         TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
     );
     let markdown = format!("│ {}", "not-a-table ".repeat(30));
@@ -976,7 +986,7 @@ fn runtime_agent_markdown_box_drawing_paragraph_uses_prose_width() {
         .unwrap();
 
     let styled_lines = service
-        .pane_screen("%1")
+        .agent_pane_screen("%1")
         .unwrap()
         .normal_styled_content_lines();
     let paragraph_lines = styled_lines
@@ -1010,7 +1020,7 @@ fn runtime_agent_slash_markdown_display_opens_command_overlay() {
         .enter_or_resume("%1")
         .unwrap();
     service.set_pane_screen(
-        "%1".to_string(),
+        "%1",
         TerminalScreen::new(Size::new(80, 60).unwrap(), 120).unwrap(),
     );
 

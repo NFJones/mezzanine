@@ -154,7 +154,7 @@ impl RuntimeSessionService {
         source: ClipboardPasteSource,
     ) -> Result<bool> {
         let paste_bytes = runtime_paste_bytes(
-            self.pane_screen(descriptor.pane_id.as_str()),
+            self.process_pane_screen(descriptor.pane_id.as_str()),
             source.content(),
         );
         let dispatch = self.write_input_to_pane(
