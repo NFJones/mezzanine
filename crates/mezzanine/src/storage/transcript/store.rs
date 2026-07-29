@@ -746,6 +746,15 @@ impl AgentTranscriptStore {
         Ok(session)
     }
 
+    /// Removes one durable conversation name without deleting conversation data.
+    ///
+    /// Returns true when a name existed and false when the conversation was
+    /// already unnamed.
+    pub fn clear_session_name(&self, conversation_id: &str) -> Result<bool> {
+        validate_conversation_id(conversation_id)?;
+        self.remove_named_session(conversation_id)
+    }
+
     /// Loads one durable name record when the conversation has been named.
     #[cfg(test)]
     pub fn named_session(&self, conversation_id: &str) -> Result<Option<NamedAgentSession>> {

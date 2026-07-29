@@ -6358,9 +6358,12 @@ The baseline command capabilities are:
   remains available.
 - `/name-session <name>`: Assign or replace the durable display name for the
   current agent conversation without changing its UUID, transcript, provider
-  context, or lineage. The command MUST reject empty names, control characters,
-  names longer than 80 Unicode scalar values, ephemeral conversations, active
-  turns, and unavailable transcript persistence.
+  context, or lineage. `/name-session --clear` MUST remove only the current
+  conversation's durable name and MUST be idempotent when it is already
+  unnamed. The command MUST reject empty names, mixed `--clear` and replacement
+  name forms, control characters, names longer than 80 Unicode scalar values,
+  ephemeral conversations, active turns, and unavailable transcript
+  persistence.
 - `/list-skills`: Show the effective skills available to the active pane,
   including each skill name, source scope, and description. The display MUST
   use the same catalog that backs `$<skill-name>` prompt expansion. It SHOULD
@@ -8865,11 +8868,13 @@ conversations.
 
 Every saved agent conversation MUST retain its UUID as its sole identity. The
 `/name-session <name>` command MUST assign or replace optional user-visible
-metadata for the current durable conversation. Names need not be unique. A
-name MUST be trimmed at its outer boundary, MUST preserve case and internal
-whitespace, MUST NOT be empty, MUST NOT contain control characters, and MUST
-contain at most 80 Unicode scalar values. New, cleared, and forked
-conversations MUST start unnamed; forking MUST NOT copy the source name.
+metadata for the current durable conversation. `/name-session --clear` MUST
+remove that metadata without deleting or rebinding the conversation, and MUST
+be idempotent. Names need not be unique. A name MUST be trimmed at its outer
+boundary, MUST preserve case and internal whitespace, MUST NOT be empty, MUST
+NOT contain control characters, and MUST contain at most 80 Unicode scalar
+values. New, cleared, and forked conversations MUST start unnamed; forking
+MUST NOT copy the source name.
 
 The `/resume` command MUST provide an interactive picker for saved
 conversations or snapshots. Agent prompt completion for `/resume` MUST include

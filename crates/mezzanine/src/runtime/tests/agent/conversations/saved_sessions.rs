@@ -66,6 +66,102 @@ fn runtime_agent_shell_names_and_resumes_zero_entry_conversations() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies `/name-session --clear` removes only durable name metadata,
+/// preserves the active conversation and transcript, and is idempotent.
+#[test]
+fn runtime_agent_shell_clears_session_names_without_deleting_conversations() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-clear-session-name"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-clear-name".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "preserve this transcript".to_string(),
+        })
+        .unwrap();
+
+    let named = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"name-before-clear","method":"agent/shell/command","params":{"idempotency_key":"name-before-clear","input":"/name-session Pinned investigation"}}"#,
+        &primary,
+    );
+    assert!(named.contains("named=true"), "{named}");
+
+    let cleared = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"clear-name","method":"agent/shell/command","params":{"idempotency_key":"clear-name","input":"/name-session --clear"}}"#,
+        &primary,
+    );
+    assert!(cleared.contains("named=false"), "{cleared}");
+    assert!(cleared.contains("cleared=true"), "{cleared}");
+    assert!(
+        transcript_store
+            .named_session(&conversation_id)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(transcript_store.inspect(&conversation_id).unwrap().len(), 1);
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some(conversation_id.as_str())
+    );
+
+    let picker = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"list-after-clear","method":"agent/shell/command","params":{"idempotency_key":"list-after-clear","input":"/resume"}}"#,
+        &primary,
+    );
+    assert!(
+        picker.contains(&format!("[`{conversation_id}`]")),
+        "{picker}"
+    );
+    assert!(!picker.contains("Pinned investigation"), "{picker}");
+
+    let repeated = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"clear-name-again","method":"agent/shell/command","params":{"idempotency_key":"clear-name-again","input":"/name-session --clear"}}"#,
+        &primary,
+    );
+    assert!(repeated.contains("cleared=false"), "{repeated}");
+
+    for (id, input) in [
+        (
+            "clear-name-mixed-after",
+            "/name-session --clear replacement",
+        ),
+        (
+            "clear-name-mixed-before",
+            "/name-session replacement --clear",
+        ),
+    ] {
+        let response = service.dispatch_runtime_control_body(
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":"{id}","method":"agent/shell/command","params":{{"idempotency_key":"{id}","input":"{input}"}}}}"#
+            ),
+            &primary,
+        );
+        assert!(response.contains("usage: /name-session"), "{response}");
+    }
+}
+
 /// Verifies named conversations sort ahead of newer unnamed conversations in
 /// the picker while `/resume --latest` remains based only on session activity.
 #[test]

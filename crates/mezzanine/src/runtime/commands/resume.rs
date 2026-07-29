@@ -104,7 +104,17 @@ impl RuntimeSessionService {
         })?;
         let name = invocation.args.trim();
         if name.is_empty() {
-            return Err(MezError::invalid_args("usage: /name-session <name>"));
+            return Err(MezError::invalid_args(
+                "usage: /name-session <name>|--clear",
+            ));
+        }
+        let clear_requested = name
+            .split_whitespace()
+            .any(|argument| argument == "--clear");
+        if clear_requested && name != "--clear" {
+            return Err(MezError::invalid_args(
+                "usage: /name-session <name>|--clear",
+            ));
         }
         let session = self
             .agent_shell_store()
@@ -124,6 +134,17 @@ impl RuntimeSessionService {
             .persistence
             .cloned_transcript_store()
             .ok_or_else(|| MezError::invalid_state("transcript persistence is unavailable"))?;
+        if name == "--clear" {
+            let cleared = store.clear_session_name(&conversation_id)?;
+            return Ok(AgentShellCommandOutcome::Mutated {
+                command: "name-session".to_string(),
+                body: format!(
+                    "conversation_id={} named=false cleared={cleared}",
+                    conversation_id
+                ),
+                visibility,
+            });
+        }
         let named =
             store.name_session(&conversation_id, name, current_unix_seconds(), directory)?;
         Ok(AgentShellCommandOutcome::Mutated {
