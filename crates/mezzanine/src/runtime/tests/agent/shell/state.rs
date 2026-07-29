@@ -3427,6 +3427,102 @@ fn runtime_deferred_foreground_input_clears_agent_shell_output_filters() {
     assert_eq!(prompt_repaint, b"\r$ ");
 }
 
+/// Verifies a visible agent surface hides retained process mouse modes from
+/// input classification and rejects stale direct mouse-forward actions.
+#[test]
+fn runtime_agent_surface_blocks_hidden_process_mouse_forwarding() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.set_process_pane_screen(
+        "%1",
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
+    );
+    service
+        .process_pane_screen_mut("%1")
+        .unwrap()
+        .feed(b"\x1b[?1000h\x1b[?1006h");
+    assert!(
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .application_mouse_enabled()
+    );
+
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .ensure_agent_pane_screen("%1", &conversation_id, Size::new(80, 24).unwrap())
+        .unwrap();
+
+    let agent_config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(!agent_config.mouse_policy.pane_application_mouse_mode);
+    assert!(!agent_config.mouse_policy.pane_sgr_mouse_mode);
+    let agent_region = agent_config
+        .mouse_pane_regions
+        .iter()
+        .find(|region| region.pane_id == "%1")
+        .unwrap();
+    assert!(!agent_region.application_mouse_mode);
+    assert!(!agent_region.application_sgr_mouse_mode);
+
+    let mouse_input = b"\x1b[<0;1;1M".to_vec();
+    let (blocked, blocked_effects) = service
+        .apply_attached_terminal_step_transition(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardMouseToPane {
+                    pane_id: "%1".to_string(),
+                    input: mouse_input.clone(),
+                }],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(blocked.forwarded_bytes, 0);
+    assert!(pane_input_effects(&blocked_effects.side_effects).is_empty());
+
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    let process_config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(process_config.mouse_policy.pane_application_mouse_mode);
+    assert!(process_config.mouse_policy.pane_sgr_mouse_mode);
+
+    let (forwarded, forwarded_effects) = service
+        .apply_attached_terminal_step_transition(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardMouseToPane {
+                    pane_id: "%1".to_string(),
+                    input: mouse_input.clone(),
+                }],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(forwarded.forwarded_bytes, mouse_input.len());
+    let pane_inputs = pane_input_effects(&forwarded_effects.side_effects);
+    assert_eq!(pane_inputs.len(), 1);
+    assert_eq!(pane_inputs[0].pane_input_parts().0, "%1");
+    assert_eq!(pane_inputs[0].pane_input_parts().1, mouse_input);
+}
+
 /// Verifies that a visible pane agent shell publishes the active model profile,
 /// reasoning profile, and idle status into pane frame context before any turn
 /// has started. The default header relies on these fields for agent mode.

@@ -470,6 +470,11 @@ impl RuntimeSessionService {
                     }
                 }
                 TerminalClientLoopAction::ForwardMouseToPane { pane_id, input } => {
+                    if self.presented_pane_surface(pane_id.as_str())
+                        != crate::runtime::PaneSurfaceKind::Process
+                    {
+                        continue;
+                    }
                     let Some(descriptor) = self.find_pane_descriptor(pane_id) else {
                         continue;
                     };

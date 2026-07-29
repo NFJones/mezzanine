@@ -765,18 +765,22 @@ impl RuntimeSessionService {
         config.mouse_selection_autoscroll_position =
             active_mouse_selection_state.and_then(|state| state.autoscroll_position);
         if let Some(pane_id) = active_pane_id {
+            let process_surface_presented = self.presented_pane_surface(pane_id.as_str())
+                == crate::runtime::PaneSurfaceKind::Process;
             config.mouse_policy.copy_mode_active = self
                 .active_copy_mode_for_presented_surface(pane_id.as_str())
                 .is_some()
                 || active_mouse_selection_state.is_some();
             config.scrollback_copy_mode_active =
                 self.presented_surface_uses_scrollback_copy_mode(pane_id.as_str());
-            config.mouse_policy.pane_application_mouse_mode = self
-                .process_pane_screen(pane_id.as_str())
-                .is_some_and(TerminalScreen::application_mouse_enabled);
-            config.mouse_policy.pane_sgr_mouse_mode = self
-                .process_pane_screen(pane_id.as_str())
-                .is_some_and(TerminalScreen::application_sgr_mouse_enabled);
+            config.mouse_policy.pane_application_mouse_mode = process_surface_presented
+                && self
+                    .process_pane_screen(pane_id.as_str())
+                    .is_some_and(TerminalScreen::application_mouse_enabled);
+            config.mouse_policy.pane_sgr_mouse_mode = process_surface_presented
+                && self
+                    .process_pane_screen(pane_id.as_str())
+                    .is_some_and(TerminalScreen::application_sgr_mouse_enabled);
             config.mouse_policy.pane_application_cursor_mode = self
                 .process_pane_screen(pane_id.as_str())
                 .is_some_and(TerminalScreen::application_cursor_enabled);
@@ -812,18 +816,22 @@ impl RuntimeSessionService {
                 let row = u16::try_from(row).ok()?;
                 let column = u16::try_from(column).ok()?;
                 let pane_id = pane.id.to_string();
+                let process_surface_presented = self.presented_pane_surface(pane_id.as_str())
+                    == crate::runtime::PaneSurfaceKind::Process;
                 Some(MousePaneRegion {
                     pane_id: pane_id.clone(),
                     column,
                     row,
                     columns: size.columns,
                     rows: size.rows,
-                    application_sgr_mouse_mode: self
-                        .process_pane_screen(pane_id.as_str())
-                        .is_some_and(TerminalScreen::application_sgr_mouse_enabled),
-                    application_mouse_mode: self
-                        .process_pane_screen(pane_id.as_str())
-                        .is_some_and(TerminalScreen::application_mouse_enabled),
+                    application_sgr_mouse_mode: process_surface_presented
+                        && self
+                            .process_pane_screen(pane_id.as_str())
+                            .is_some_and(TerminalScreen::application_sgr_mouse_enabled),
+                    application_mouse_mode: process_surface_presented
+                        && self
+                            .process_pane_screen(pane_id.as_str())
+                            .is_some_and(TerminalScreen::application_mouse_enabled),
                     copy_mode_active: self
                         .active_copy_mode_for_presented_surface(pane_id.as_str())
                         .is_some(),
