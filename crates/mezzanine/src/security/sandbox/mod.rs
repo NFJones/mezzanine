@@ -14,6 +14,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 use std::path::{Component, Path, PathBuf};
 
 use mez_agent::permissions::{
@@ -769,12 +771,6 @@ fn validate_maximum_authority(authority: &PathScopes) -> Result<(), SandboxCompi
                 "Bubblewrap authority must not expose the multi-user home root",
             ));
         }
-        if path_overlaps(path, "/run/user") || path_overlaps(path, "/var/run") {
-            return Err(SandboxCompileError::new(
-                SandboxCompileErrorKind::ForbiddenHostPath,
-                "Bubblewrap authority must not expose host user-runtime or IPC paths",
-            ));
-        }
         if path_is_credential_directory(path) {
             return Err(SandboxCompileError::new(
                 SandboxCompileErrorKind::ForbiddenHostPath,
@@ -782,7 +778,18 @@ fn validate_maximum_authority(authority: &PathScopes) -> Result<(), SandboxCompi
             ));
         }
     }
+    for path in &authority.read_scopes {
+        if path_overlaps(path, "/run/user") || path_overlaps(path, "/var/run") {
+            validate_ipc_read_scope(path)?;
+        }
+    }
     for path in &authority.write_scopes {
+        if path_overlaps(path, "/run/user") || path_overlaps(path, "/var/run") {
+            return Err(SandboxCompileError::new(
+                SandboxCompileErrorKind::ForbiddenHostPath,
+                "Bubblewrap write authority must not expose host user-runtime or IPC paths",
+            ));
+        }
         if [
             "/usr", "/bin", "/lib", "/lib64", "/etc", "/proc", "/dev", "/run", "/tmp",
         ]
@@ -794,6 +801,29 @@ fn validate_maximum_authority(authority: &PathScopes) -> Result<(), SandboxCompi
                 "Bubblewrap write authority overlaps the fixed runtime projection",
             ));
         }
+    }
+    Ok(())
+}
+
+/// Allows a protected IPC read scope only when it identifies one existing Unix
+/// socket node. Directories, regular files, missing paths, and symlinks could
+/// expose broader IPC authority and therefore remain forbidden.
+fn validate_ipc_read_scope(path: &str) -> Result<(), SandboxCompileError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            format!("Bubblewrap IPC read authority must name an existing Unix socket: {error}"),
+        )
+    })?;
+    #[cfg(unix)]
+    let is_socket = !metadata.file_type().is_symlink() && metadata.file_type().is_socket();
+    #[cfg(not(unix))]
+    let is_socket = false;
+    if !is_socket {
+        return Err(SandboxCompileError::new(
+            SandboxCompileErrorKind::ForbiddenHostPath,
+            "Bubblewrap IPC read authority must name an existing Unix socket",
+        ));
     }
     Ok(())
 }

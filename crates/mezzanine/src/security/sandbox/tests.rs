@@ -5,6 +5,8 @@ mod real_bubblewrap;
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
+use std::path::Path;
 
 use mez_agent::permissions::{
     CandidateEvaluation, EffectCompleteness, EffectiveCommandEffects, PathScopes,
@@ -191,6 +193,112 @@ fn bubblewrap_failure_remediation_points_to_verbose_status() {
         bubblewrap_failure_remediation("Bubblewrap probe failed."),
         "Bubblewrap probe failed. Run `mez sandbox status --verbose` to inspect the executable, authority, and configuration remedies."
     );
+}
+
+/// Unix sockets are the sole IPC endpoint type that may receive the narrow
+/// read-only exception; regular files and directories must remain forbidden.
+#[test]
+fn ipc_read_scope_requires_an_existing_unix_socket() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-ipc-read-scope-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let socket = root.join("service.sock");
+    let _listener = UnixListener::bind(&socket).unwrap();
+    let file = root.join("regular");
+    std::fs::write(&file, "not a socket").unwrap();
+
+    assert!(validate_ipc_read_scope(socket.to_str().unwrap()).is_ok());
+    assert_eq!(
+        validate_ipc_read_scope(file.to_str().unwrap())
+            .unwrap_err()
+            .kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+    assert_eq!(
+        validate_ipc_read_scope(Path::new(&root).to_str().unwrap())
+            .unwrap_err()
+            .kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    drop(_listener);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// An exact Unix socket below the protected runtime root may be projected
+/// read-only, while the protected directory, a regular file, and write access
+/// remain forbidden by the production authority compiler.
+#[test]
+fn protected_ipc_socket_read_scope_is_compiled_read_only() {
+    let root = Path::new("/run/user").join(format!(
+        "mez-ipc-authority-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let socket = root.join("service.sock");
+    let _listener = UnixListener::bind(&socket).unwrap();
+    let file = root.join("regular");
+    std::fs::write(&file, "not a socket").unwrap();
+    let config = config();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let socket_scope = socket.to_string_lossy().into_owned();
+
+    let socket_authority = PathScopes::try_shell_resolved(
+        "/workspace",
+        vec!["/workspace".to_string(), socket_scope.clone()],
+        Vec::new(),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let plan =
+        compile_bubblewrap_launch_plan(request(&config, &socket_authority, &evaluation)).unwrap();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", socket_scope.as_str(), socket_scope.as_str()])
+    );
+
+    for read_scope in [
+        root.to_string_lossy().into_owned(),
+        file.to_string_lossy().into_owned(),
+    ] {
+        let authority = PathScopes::try_shell_resolved(
+            "/workspace",
+            vec!["/workspace".to_string(), read_scope],
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation))
+                .unwrap_err()
+                .kind(),
+            SandboxCompileErrorKind::ForbiddenHostPath
+        );
+    }
+
+    let write_authority = PathScopes::try_shell_resolved(
+        "/workspace",
+        vec!["/workspace".to_string()],
+        vec![socket_scope],
+        BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        compile_bubblewrap_launch_plan(request(&config, &write_authority, &evaluation))
+            .unwrap_err()
+            .kind(),
+        SandboxCompileErrorKind::ForbiddenHostPath
+    );
+
+    drop(_listener);
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// Unknown effects retain configured maximum authority without exposing host

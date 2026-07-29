@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::fs::symlink;
@@ -15,6 +15,7 @@ use std::os::unix::net::{SocketAddr, UnixListener};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -342,6 +343,64 @@ fn real_bubblewrap_enforces_maximum_authority_and_isolation() {
         "visible\n"
     );
     assert!(!fixture.host_home.join("inside.txt").exists());
+}
+
+/// Proves a configured exact Unix socket beneath the protected user-runtime
+/// root is projected read-only and remains connectable when the command has
+/// separately authorized host networking.
+#[test]
+fn real_bubblewrap_projects_configured_ipc_socket() {
+    let config = config();
+    let Some(capability) = verified_capability(&config) else {
+        return;
+    };
+    if !Path::new("/usr/bin/python3").is_file() {
+        eprintln!("skipping real Bubblewrap IPC socket test: /usr/bin/python3 is unavailable");
+        return;
+    }
+    let socket_root = Path::new("/run/user").join(format!(
+        "mez-ipc-socket-{}-{}",
+        std::process::id(),
+        NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = fs::remove_dir_all(&socket_root);
+    fs::create_dir_all(&socket_root).unwrap();
+    let socket_path = socket_root.join("service.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let (received_sender, received) = mpsc::channel();
+    let receiver = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut message = String::new();
+        stream.read_to_string(&mut message).unwrap();
+        received_sender.send(message).unwrap();
+    });
+    let fixture = RealBubblewrapFixture::new("configured-ipc-socket");
+    let mut authorized = effects();
+    authorized.network = true;
+    authorized.unknown = true;
+    let evaluation = evaluation(EffectCompleteness::Unknown, authorized);
+    let authority = fixture.authority_with_additional_reads(&[socket_path.as_path()]);
+    let plan = real_plan(&config, capability, &authority, &evaluation);
+    let command = format!(
+        "test -S {socket} && printf socket-message | /usr/bin/python3 -c 'import socket,sys; connection=socket.socket(socket.AF_UNIX); connection.connect(sys.argv[1]); connection.sendall(sys.stdin.buffer.read()); connection.close()' {socket} && printf '%s\\n' REAL_BWRAP_IPC_SOCKET_OK",
+        socket = shell_quote(&socket_path),
+    );
+
+    let output = execute_plan(plan, &command);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("REAL_BWRAP_IPC_SOCKET_OK"),
+        "status={:?} stdout={stdout:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        received.recv_timeout(Duration::from_secs(2)).unwrap(),
+        "socket-message"
+    );
+    receiver.join().unwrap();
+    fs::remove_file(&socket_path).unwrap();
+    fs::remove_dir_all(&socket_root).unwrap();
 }
 
 #[test]
