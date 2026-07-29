@@ -198,6 +198,45 @@ fn runtime_allows_bubblewrap_without_explicit_scopes() {
     assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
 }
 
+/// Verifies live config application adds user skill and macro directories to
+/// sandbox authority without replacing explicitly configured resource scopes.
+#[test]
+fn runtime_adds_user_authoring_directories_to_sandbox_scopes() {
+    let mut service = test_runtime_service();
+    let config_root = temp_root("runtime-user-authoring-sandbox-scopes");
+    service.set_config_root(config_root.clone());
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[permissions]\nread_scopes = [\"src\"]\nwrite_scopes = [\"target\"]\n"
+                .to_string(),
+        }])
+        .unwrap();
+
+    let configured = service.configured_permissions();
+    let skills = config_root
+        .join(crate::integrations::skills::SKILLS_DIRECTORY_NAME)
+        .to_string_lossy()
+        .into_owned();
+    let macros = config_root
+        .join(crate::integrations::macros::MACROS_DIRECTORY_NAME)
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        configured.resources.read_scopes,
+        vec!["src".to_string(), skills.clone(), macros.clone()]
+    );
+    assert_eq!(
+        configured.resources.write_scopes,
+        vec!["target".to_string(), skills, macros]
+    );
+}
+
 /// Verifies configured absolute read scopes accept ordinary files and Unix
 /// sockets while write scopes continue to reject socket endpoints.
 #[cfg(unix)]

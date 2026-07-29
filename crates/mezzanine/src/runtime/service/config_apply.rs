@@ -332,6 +332,34 @@ impl RuntimeSessionService {
         self.configure_agent_scheduler_limit(max_concurrent_agents)?;
         self.start_ready_agent_turns()?;
         let mut configured_permissions = runtime_configured_permissions_from_config(&structured)?;
+        if let Some(config_root) = self.integration.config_root() {
+            for directory_name in [
+                crate::integrations::skills::SKILLS_DIRECTORY_NAME,
+                crate::integrations::macros::MACROS_DIRECTORY_NAME,
+            ] {
+                let scope = config_root
+                    .join(directory_name)
+                    .to_string_lossy()
+                    .into_owned();
+                if !configured_permissions
+                    .resources
+                    .read_scopes
+                    .contains(&scope)
+                {
+                    configured_permissions
+                        .resources
+                        .read_scopes
+                        .push(scope.clone());
+                }
+                if !configured_permissions
+                    .resources
+                    .write_scopes
+                    .contains(&scope)
+                {
+                    configured_permissions.resources.write_scopes.push(scope);
+                }
+            }
+        }
         if let Some(active) = self.integration.live_approval_bypass_override() {
             configured_permissions
                 .authorization

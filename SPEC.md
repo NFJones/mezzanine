@@ -2899,7 +2899,11 @@ classification and auditing, not operating-system filesystem or shell-network
 confinement. Under policy-only execution, configured and subagent scopes are
 advisory approval and coordination metadata. When Bubblewrap is active,
 configured scopes define maximum filesystem authority and MUST be resolved in
-the pane environment. When both configured scope arrays are empty, a pane
+the pane environment. The live user configuration root's `skills` and `macros`
+directories MUST be added to both effective read and write authority so built-in
+authoring workflows can manage user-scoped artifacts. These code-owned scopes
+MUST be additive and MUST NOT replace explicitly configured scopes. When both
+configured scope arrays are empty, a pane
 within an explicitly trusted project MUST receive that project root as its
 default read-write authority. When multiple trusted roots contain the pane
 working directory, Mezzanine MUST select the deepest matching root; no other
