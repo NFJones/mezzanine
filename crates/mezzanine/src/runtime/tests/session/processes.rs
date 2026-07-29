@@ -308,6 +308,39 @@ fn runtime_pane_output_routes_each_visible_class_to_one_surface() {
     assert!(observed_after_hidden > observed_before_hidden);
 
     service.running_shell_transactions_mut_for_tests().clear();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Trace)
+        .unwrap();
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid: 7,
+                bytes: b"delayed process output\r\n".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    let process_after_settlement = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let agent_after_settlement = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        process_after_settlement.contains("delayed process output"),
+        "{process_after_settlement}"
+    );
+    assert!(
+        !agent_after_settlement.contains("delayed process output"),
+        "{agent_after_settlement}"
+    );
+
     service.agent_shell_store_mut().request_exit("%1").unwrap();
     service.clear_shell_output_filters_for_foreground_input("%1");
     service

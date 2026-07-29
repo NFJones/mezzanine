@@ -419,16 +419,6 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn pane_output_render_mode(&self, pane_id: &str) -> PaneOutputRenderMode {
-        if self.agent_trace_enabled(pane_id)
-            && self
-                .agent_shell_store()
-                .get(pane_id)
-                .is_some_and(|session| {
-                    session.visibility != crate::runtime::AgentShellVisibility::Hidden
-                })
-        {
-            return PaneOutputRenderMode::Trace;
-        }
         let shell_view_enabled = self.agent_shell_view_enabled(pane_id);
         let mut has_agent_action = false;
         for transaction in self
@@ -450,7 +440,16 @@ impl RuntimeSessionService {
             }
         }
         if has_agent_action {
-            if shell_view_enabled {
+            if self.agent_trace_enabled(pane_id)
+                && self
+                    .agent_shell_store()
+                    .get(pane_id)
+                    .is_some_and(|session| {
+                        session.visibility != crate::runtime::AgentShellVisibility::Hidden
+                    })
+            {
+                PaneOutputRenderMode::Trace
+            } else if shell_view_enabled {
                 PaneOutputRenderMode::VerboseAgentAction
             } else {
                 PaneOutputRenderMode::HiddenLiveAgentShell
