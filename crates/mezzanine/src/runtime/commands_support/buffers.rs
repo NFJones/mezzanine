@@ -74,12 +74,14 @@ pub(super) fn runtime_copy_mode_command(
         .active_copy_mode_for_presented_surface(pane_id.as_str())
         .is_none()
     {
-        let screen = service.pane_screen(pane_id.as_str()).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "pane screen not found",
-            )
-        })?;
+        let screen = service
+            .presented_pane_screen(pane_id.as_str())
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "pane screen not found",
+                )
+            })?;
         let viewport_rows = service.copy_mode_viewport_rows_for_pane(pane_id.as_str());
         let copy_mode = CopyMode::from_screen(screen, viewport_rows)?;
         service.insert_active_copy_mode_for_presented_surface(pane_id.as_str(), copy_mode);

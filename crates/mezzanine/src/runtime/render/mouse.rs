@@ -627,7 +627,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         position: CopyPosition,
     ) -> Option<String> {
-        let screen = self.pane_screen(pane_id)?;
+        let screen = self.presented_pane_screen(pane_id)?;
         let line = screen.visible_lines().get(position.line)?.to_string();
         agent_command_link_at_line_column(line.as_str(), position.column)
     }
@@ -1090,7 +1090,7 @@ impl RuntimeSessionService {
             .is_none()
         {
             let viewport_rows = self.copy_mode_viewport_rows_for_pane(pane_id);
-            let screen = self.pane_screen(pane_id).ok_or_else(|| {
+            let screen = self.presented_pane_screen(pane_id).ok_or_else(|| {
                 MezError::new(
                     crate::error::MezErrorKind::NotFound,
                     "pane screen not found",

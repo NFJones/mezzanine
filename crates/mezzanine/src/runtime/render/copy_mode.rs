@@ -139,7 +139,7 @@ impl RuntimeSessionService {
             .is_none()
         {
             let viewport_rows = self.copy_mode_viewport_rows_for_pane(pane_id);
-            let screen = self.pane_screen(pane_id).ok_or_else(|| {
+            let screen = self.presented_pane_screen(pane_id).ok_or_else(|| {
                 MezError::new(
                     crate::error::MezErrorKind::NotFound,
                     "pane screen not found",

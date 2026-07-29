@@ -482,7 +482,7 @@ pub(super) fn execute_runtime_live_terminal_command(
         }
         "capture-pane" => {
             let descriptor = service.active_window_pane_descriptor(invocation.target_arg())?;
-            let Some(screen) = service.pane_screen(descriptor.pane_id.as_str()) else {
+            let Some(screen) = service.presented_pane_screen(descriptor.pane_id.as_str()) else {
                 return Ok(Some(CommandOutcome::Display {
                     command: invocation.name.clone(),
                     body: format!(
@@ -570,7 +570,8 @@ pub(super) fn execute_runtime_live_terminal_command(
                     ),
                 }));
             }
-            let Some(screen) = service.pane_screen_mut(descriptor.pane_id.as_str()) else {
+            let Some(screen) = service.presented_pane_screen_mut(descriptor.pane_id.as_str())
+            else {
                 return Ok(Some(CommandOutcome::Display {
                     command: invocation.name.clone(),
                     body: format!(
@@ -591,7 +592,7 @@ pub(super) fn execute_runtime_live_terminal_command(
         }
         "search-history" => {
             let descriptor = service.active_window_pane_descriptor(invocation.target_arg())?;
-            let Some(screen) = service.pane_screen(descriptor.pane_id.as_str()) else {
+            let Some(screen) = service.presented_pane_screen(descriptor.pane_id.as_str()) else {
                 return Ok(Some(CommandOutcome::Display {
                     command: invocation.name.clone(),
                     body: format!(
@@ -655,7 +656,7 @@ pub(super) fn execute_runtime_live_terminal_command(
         }
         "export-history" => {
             let descriptor = service.active_window_pane_descriptor(invocation.target_arg())?;
-            let Some(screen) = service.pane_screen(descriptor.pane_id.as_str()) else {
+            let Some(screen) = service.presented_pane_screen(descriptor.pane_id.as_str()) else {
                 return Ok(Some(CommandOutcome::Display {
                     command: invocation.name.clone(),
                     body: format!(

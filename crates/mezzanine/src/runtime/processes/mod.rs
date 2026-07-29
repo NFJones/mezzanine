@@ -666,7 +666,9 @@ impl RuntimeSessionService {
     }
 
     /// Returns all modeled pane screens for whole-layout presentation.
-    pub(crate) fn pane_screens(&self) -> &std::collections::BTreeMap<String, TerminalScreen> {
+    pub(crate) fn process_pane_screens(
+        &self,
+    ) -> &std::collections::BTreeMap<String, TerminalScreen> {
         &self.process.process_pane_screens
     }
 
@@ -811,11 +813,13 @@ impl RuntimeSessionService {
     /// Process protocol callers must use `process_pane_screen`; dependent
     /// refactor slices migrate remaining interaction callers to explicit
     /// presented-surface accessors before this compatibility API is removed.
+    #[cfg(test)]
     pub(crate) fn pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
         self.presented_pane_screen(pane_id)
     }
 
     /// Returns mutable displayed state through the temporary compatibility API.
+    #[cfg(test)]
     pub(crate) fn pane_screen_mut(&mut self, pane_id: &str) -> Option<&mut TerminalScreen> {
         self.presented_pane_screen_mut(pane_id)
     }

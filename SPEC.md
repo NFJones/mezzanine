@@ -1271,10 +1271,19 @@ mode, so the containing terminal's normal scrollback remains available while
 pane-local alternate-screen parsing, rendering, and history rules remain owned
 by Mezzanine.
 
-Visible native-mode agent shells MUST render as pane-local overlays above normal
-and alternate-screen pane contents while leaving the pane process, PTY state,
-and terminal buffers unchanged. Hiding or exiting the agent shell MUST reveal
-the same pane application screen state that remained active under the overlay.
+Every pane MUST retain two independent presentation surfaces: a process
+terminal screen owned by the pane PTY and a conversation-bound agent log
+screen owned by the active agent session. Visible native-mode agent shells
+MUST select the agent log surface and render the pane-local prompt over that
+surface. They MUST NOT expose, copy, merge, clear, or append to the retained
+process screen. Hiding or exiting the agent shell MUST select the same process
+screen state that remained retained while agent mode was visible.
+
+The process screen MUST remain authoritative for PTY protocol state, including
+normal and alternate screens, cursor and terminal modes, application mouse and
+keypad modes, focus events, bracketed paste, terminal replies, and live pane
+snapshots. Displaying the agent log MUST NOT derive or overwrite those states
+from agent presentation rows.
 
 While a native-mode agent shell is visible, `Ctrl+V` MUST read the host
 clipboard and deliver it to the editable agent prompt as one bracketed-paste
@@ -1745,10 +1754,15 @@ the confirmation requirement. While a pane-local agent task is active,
 Using the agent shell toggle while the agent shell is visible MUST request
 `/stop` for any in-progress pane-local agent task before hiding the prompt and
 returning focus to the pane.
-Entering or exiting agent mode MUST move the pane's used visible terminal rows
-into the pane's retained history, clear the live viewport, and move the cursor
-to the home position as if the user had pressed `Ctrl+L`; it MUST NOT erase
-pane logs, retained scrollback, or history buffer content.
+Entering or exiting agent mode MUST select between retained process and agent
+surfaces without clearing, merging, copying, or transferring rows, history,
+cursor state, viewport state, or terminal modes. The agent surface MUST remain
+selected while visibility is `Visible` or `HidePendingTaskCompletion`; the
+process surface MUST be selected only when visibility becomes `Hidden`.
+Reentering the same in-memory conversation MUST restore its exact retained
+agent screen and interaction state. Starting, resuming, forking, or otherwise
+rebinding a different conversation MUST bind a blank or reconstructed agent
+screen for that conversation without changing process terminal state.
 When agent mode is shown for a pane with a live shell, Mezzanine MUST enter a
 child instance of the resolved pane shell in the pane's current working
 directory before sending agent-owned shell commands. Agent command side effects
@@ -1814,17 +1828,26 @@ provider request is already in flight, Mezzanine MUST retain the steering input
 and deliver it in the next provider request for the same turn instead of
 starting an unrelated turn or silently discarding the input.
 
-Agent prompt submissions MUST be appended to the pane's normal terminal buffer
-as user-visible, copyable text before the resulting turn is queued or started.
-Non-command assistant responses, final responses, concise user-facing progress
-statuses, and internal or provider errors MUST also be appended to the same
-normal terminal buffer, interleaved with pane process output in observation
-order. By default, shell commands selected by the model MUST be rendered into
-the pane terminal buffer as bounded command previews before dispatch, while
-their resulting PTY output MUST be captured for audit, transcript, and
-follow-up model context but MUST NOT be rendered into the pane terminal buffer.
-Semantic file, directory, search, and URL actions MUST render a single
-human-readable execution line in the pane buffer in normal mode. That line MUST
+Agent prompt submissions MUST be appended only to the conversation-bound agent
+log as user-visible, copyable text before the resulting turn is queued or
+started. Non-command assistant responses, final responses, concise
+user-facing progress statuses, actions, results, recovery messages, and
+internal or provider errors MUST also be appended only to that agent log.
+Mezzanine-authored agent presentation MUST never enter the process screen.
+
+Ordinary non-agent PTY output MUST append only to the process screen. Hidden
+agent child-shell bootstrap, wrapper, action, and exit traffic MUST append to
+neither display surface, while readiness, transaction capture, audit,
+observation, and process terminal protocol parsing continue independently.
+Verbose agent-action and trace PTY output MAY be displayed, but MUST append
+only to the active conversation's agent log.
+
+By default, shell commands selected by the model MUST be rendered into the
+agent log as bounded command previews before dispatch, while their resulting
+PTY output MUST be captured for audit, transcript, and follow-up model context
+but MUST NOT be rendered into either display surface. Semantic file,
+directory, search, and URL actions MUST render a single human-readable
+execution line in the agent log in normal mode. That line MUST
 identify the action kind and target, MUST use the configured agent transcript
 theme colors, and MUST NOT include generated shell command text, result payloads,
 file contents, URL bodies, shell prompts, or wrapper traffic. Successful
@@ -1943,7 +1966,16 @@ Markdown table rows MUST preserve their table layout until they exceed the
 pane terminal width; that configured cap MUST NOT force table rows to wrap on
 wider terminals.
 Durable agent presentation records MUST retain semantic source and renderer media type whenever available. On `/resume`, Mezzanine MUST rerender source-backed records at the active pane geometry and MUST treat saved rows or ANSI bytes only as optional projections. Legacy snapshot-only records MAY use their saved projection fallback; mixed histories MUST preserve presentation order.
-When a visible agent pane changes width, Mezzanine MUST rebuild its bounded source-backed presentation projection at the new geometry before swapping the pane screen. Hidden and HidePendingTaskCompletion agent sessions MUST retain their durable presentation history but MUST resize their shell-owned screen normally. Arbitrary PTY panes and snapshot-only presentation histories MUST retain ordinary terminal-cell resize behavior. Replay during reconstruction MUST NOT append duplicate durable presentation records.
+Process presentation geometry, agent transcript geometry, and actual PTY
+interaction geometry MUST be calculated independently. A pane resize MUST
+reflow the retained process screen at the full process presentation geometry,
+resize or rebuild the conversation-bound agent screen at the transcript
+geometry after prompt-row reservation, and signal the PTY with its interaction
+geometry. Agent replay success or rollback MUST replace or restore only the
+agent screen. Divider-drag replay MAY be coalesced, but MUST remain agent-only.
+Snapshot-only presentation histories MAY retain ordinary terminal-cell resize
+behavior. Replay during reconstruction MUST NOT append duplicate durable
+presentation records.
 When the agent runs a shell command, Mezzanine MUST render the MAAP shell
 action's concise summary and exact command preview before dispatch. The exact
 command preview MUST be visible in normal mode, MUST account for the pane's
@@ -2163,7 +2195,9 @@ but such extensions MUST NOT remove the expected baseline editing behavior.
 ### 7.6 Copy Mode and Paste Buffers
 
 Mezzanine MUST provide a keyboard-driven copy mode for selecting and copying
-pane history.
+the currently presented pane surface. Process and agent surfaces MUST retain
+independent copy-mode viewport, cursor, search, selection, source-copy, and
+mouse interaction state across visibility changes.
 
 Copy mode MUST allow keyboard navigation through pane history.
 
@@ -2215,8 +2249,9 @@ Mezzanine-owned decoration removed and `--format source` for complete raw source
 groups intersected by the selection. Source mode MUST emit each group once in
 display order and omit rows without a source association.
 
-Mezzanine MUST provide commands to capture pane contents from the visible
-screen, from the bounded history buffer, or from a configured line range.
+Mezzanine MUST provide commands to capture pane contents from the currently
+presented surface's visible screen, bounded history buffer, or configured line
+range. No implicit buffer operation may expose or mutate the hidden surface.
 
 The `capture-pane` command MUST support targeting a pane, choosing visible-only
 or history-inclusive capture, and writing captured text to command output or a
@@ -2228,8 +2263,11 @@ user-specified path or standard output according to policy.
 The `search-history` command MUST search the bounded history buffer of a target
 pane and return matching lines or enter copy mode at the selected match.
 
-The `clear-history` command MUST clear a target pane's history buffer after
-confirmation or when policy permits noninteractive clearing.
+The `clear-history` command MUST clear only the target pane's currently
+presented history buffer after confirmation or when policy permits
+noninteractive clearing. Capture, export, search, paging, keyboard selection,
+word selection, and drag selection MUST likewise target only the presented
+surface.
 
 Mezzanine MUST maintain paste buffers.
 
@@ -3837,9 +3875,10 @@ Command output, file contents, directory listings, search results, web content,
 and similar external observations MUST enter model context only as results of
 actions requested by the user or emitted by the model.
 
-The agent harness MAY maintain terminal buffers for rendering, copy selection,
-capture commands, search commands, and transaction observation. Maintaining that
-state MUST NOT cause pane contents to be passively injected into model context.
+The agent harness MAY maintain independent process-terminal and
+conversation-bound agent-log buffers for rendering, copy selection, capture
+commands, search commands, and transaction observation. Maintaining that state
+MUST NOT cause pane contents to be passively injected into model context.
 
 The agent harness MUST be able to send commands to the pane and observe the
 effects of those harness-initiated commands through terminal output.
@@ -8849,11 +8888,14 @@ conversations MAY exceed `history.saved_sessions_limit`. Explicit deletion MUST
 remain available and MUST remove both conversation data and name metadata.
 
 When `/resume <session-uuid>` is invoked, Mezzanine MUST load the saved
-conversation transcript into subsequent model context, MUST replay saved
-presentation log entries into the current pane buffer when they are available,
-MUST fall back to a bounded human-readable transcript/log summary when no
-presentation log exists, and MUST reload the shared prompt history into the
-current pane's agent prompt.
+conversation transcript into subsequent model context, MUST bind the pane's
+agent screen to that conversation before replaying saved presentation log
+entries, MUST fall back to a bounded human-readable transcript/log summary when
+no presentation log exists, and MUST reload the shared prompt history into the
+current pane's agent prompt. Restart recovery MUST restore process snapshots
+independently, bind and hydrate the correct agent conversation, and only then
+append interrupted-turn or recovery diagnostics. Exact agent viewport state is
+required for in-memory same-conversation reentry but not after restart.
 
 The `/fork` command MUST clone the current conversation into a new thread with
 a fresh identity while preserving the original transcript and any presentation
