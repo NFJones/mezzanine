@@ -20,12 +20,13 @@ use super::{
     modal_overlay_page_rows, mouse_border_cells_for_geometries, overlay_footer,
     overlay_render_lines, overlay_rendered_line_style_spans, overlay_rendered_selection_start,
     overlay_selection_rendition, overlay_styled_lines, overlay_text_at,
-    pane_frame_agent_status_pillbox_cells, plan_window_presentation, render_attached_client_view,
-    runtime_agent_turn_duration_display, runtime_agent_turn_state_name, runtime_fit_status_line,
-    runtime_human_system_uptime, runtime_local_datetime_seconds_string,
-    runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_layout,
-    runtime_selector_line, terminal_text_width, window_frame_action_pillbox_cells,
-    window_frame_pillbox_cells, window_group_frame_pillbox_cells,
+    pane_frame_agent_status_pillbox_cells, plan_window_presentation,
+    render_attached_client_view_with_screen_resolvers, runtime_agent_turn_duration_display,
+    runtime_agent_turn_state_name, runtime_fit_status_line, runtime_human_system_uptime,
+    runtime_local_datetime_seconds_string, runtime_pane_agent_selector_rendition,
+    runtime_pane_agent_status_selector_layout, runtime_selector_line, terminal_text_width,
+    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    window_group_frame_pillbox_cells,
 };
 
 /// Runs the apply copy mode selection spans operation for this subsystem.
@@ -152,8 +153,14 @@ impl RuntimeSessionService {
                 Err(MezError::invalid_state("session has no active window"))
             };
         };
-        let mut view =
-            render_attached_client_view(role, window, self.pane_screens(), config, client_size)?;
+        let mut view = render_attached_client_view_with_screen_resolvers(
+            role,
+            window,
+            |pane_id| self.presented_pane_screen(pane_id),
+            |pane_id| self.process_pane_screen(pane_id),
+            config,
+            client_size,
+        )?;
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
         {

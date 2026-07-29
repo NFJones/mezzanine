@@ -5,6 +5,7 @@
 //! styled/plain pane composition in one place so the facade does not carry the
 //! whole rendering pipeline.
 
+#[cfg(test)]
 use std::collections::BTreeMap;
 
 #[cfg(test)]
@@ -71,22 +72,24 @@ pub fn draw_window_from_screens(
     })
 }
 
-/// Renders a window while preserving pane SGR style spans in terminal-cell coordinates.
-pub fn draw_styled_window_from_screens(
+/// Renders a window from borrowed pane screens selected by the product runtime.
+pub fn draw_styled_window_from_screen_resolver<'a>(
     window: &Window,
-    screens: &BTreeMap<String, TerminalScreen>,
     config: &TerminalClientLoopConfig,
+    screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen>,
 ) -> Result<Vec<TerminalStyledLine>> {
     let render_window = window_with_group_frame_space(window, config)?;
     let pane_inputs = window
         .panes()
         .iter()
-        .map(|pane| StyledPaneRenderInput {
-            pane_id: pane.id.to_string(),
-            lines: screens
-                .get(&pane.id.to_string())
-                .map(TerminalScreen::visible_styled_lines)
-                .unwrap_or_default(),
+        .map(|pane| {
+            let pane_id = pane.id.to_string();
+            StyledPaneRenderInput {
+                pane_id: pane_id.clone(),
+                lines: screen_for_pane(&pane_id)
+                    .map(TerminalScreen::visible_styled_lines)
+                    .unwrap_or_default(),
+            }
         })
         .collect::<Vec<_>>();
     let mut lines = render_styled_window_with_pane_frame_template(

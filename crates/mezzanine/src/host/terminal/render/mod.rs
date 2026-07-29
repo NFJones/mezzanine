@@ -6,14 +6,14 @@
 //! models, product labels, configured themes, animation timing, and hit actions
 //! into those lower plans.
 
-#[cfg(test)]
-use super::PaneRenderInput;
 use super::{
-    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, BTreeMap, GraphicRendition, MezError,
+    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, GraphicRendition, MezError,
     MousePaneAgentStatusCell, MouseWindowActionFrameCell, PaneAgentStatusField, Result,
     TerminalClientLoopConfig, TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen,
     TerminalStyleSpan, TerminalStyledLine, WindowFrameAction,
 };
+#[cfg(test)]
+use super::{BTreeMap, PaneRenderInput};
 use mez_mux::input::{MouseWindowFrameCell, MouseWindowGroupFrameCell};
 use mez_mux::layout::{PaneGeometry, Size, Window};
 use mez_mux::presentation::{ClientViewRole, ReadlinePromptRegion, RenderedClientView};
@@ -77,7 +77,7 @@ pub use overlay::compose_modal_display_overlay_lines;
 pub use overlay::{
     compose_display_overlay_line_style_spans, compose_modal_display_overlay_line_style_spans,
 };
-pub use panes::draw_styled_window_from_screens;
+pub use panes::draw_styled_window_from_screen_resolver;
 #[cfg(test)]
 pub use panes::{draw_window_from_screens, render_window, render_window_with_pane_frame_template};
 #[cfg(test)]
@@ -218,6 +218,7 @@ impl<'a> TerminalFrameRenderOptions<'a> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn render_attached_client_view(
     role: ClientViewRole,
     window: &Window,
@@ -225,10 +226,30 @@ pub fn render_attached_client_view(
     config: &TerminalClientLoopConfig,
     client_size: Size,
 ) -> Result<Option<RenderedClientView>> {
+    render_attached_client_view_with_screen_resolvers(
+        role,
+        window,
+        |pane_id| screens.get(pane_id),
+        |pane_id| screens.get(pane_id),
+        config,
+        client_size,
+    )
+}
+
+/// Renders selected pane surfaces while sourcing PTY protocol flags separately.
+pub fn render_attached_client_view_with_screen_resolvers<'a>(
+    role: ClientViewRole,
+    window: &Window,
+    visual_screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen> + Copy,
+    process_screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen> + Copy,
+    config: &TerminalClientLoopConfig,
+    client_size: Size,
+) -> Result<Option<RenderedClientView>> {
     if role == ClientViewRole::PendingObserver {
         return Ok(None);
     }
-    let styled_lines = draw_styled_window_from_screens(window, screens, config)?;
+    let styled_lines =
+        draw_styled_window_from_screen_resolver(window, config, visual_screen_for_pane)?;
     let mut lines = Vec::with_capacity(styled_lines.len());
     let mut line_style_spans = Vec::with_capacity(styled_lines.len());
     for line in styled_lines {
@@ -236,7 +257,7 @@ pub fn render_attached_client_view(
         line_style_spans.push(line.style_spans);
     }
     let (cursor_row, cursor_column, cursor_visible) =
-        rendered_cursor(window, screens, config, role)?;
+        rendered_cursor(window, visual_screen_for_pane, config, role)?;
     let agent_prompt_region = active_agent_prompt_region(window, config, role)?;
     align_active_agent_prompt_block_to_region(
         window,
@@ -248,10 +269,14 @@ pub fn render_attached_client_view(
     );
     let requires_client_scroll = role == ClientViewRole::Observer
         && (client_size.columns < window.size.columns || client_size.rows < window.size.rows);
-    let active_pane_screen = window
-        .panes()
-        .get(window.active_pane_index())
-        .and_then(|active_pane| screens.get(&active_pane.id.to_string()));
+    let active_pane_screen =
+        window
+            .panes()
+            .get(window.active_pane_index())
+            .and_then(|active_pane| {
+                let pane_id = active_pane.id.to_string();
+                process_screen_for_pane(&pane_id)
+            });
     Ok(Some(RenderedClientView {
         role,
         authoritative_size: window.size,
@@ -320,9 +345,9 @@ fn window_presentation_plan(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn rendered_cursor(
+fn rendered_cursor<'a>(
     window: &Window,
-    screens: &BTreeMap<String, TerminalScreen>,
+    screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen>,
     config: &TerminalClientLoopConfig,
     role: ClientViewRole,
 ) -> Result<(usize, usize, bool)> {
@@ -358,7 +383,8 @@ fn rendered_cursor(
     }
     let max_cursor_row = content_rows.saturating_sub(1);
     let max_cursor_column = content_columns.saturating_sub(1);
-    let screen = screens.get(&active_pane.id.to_string());
+    let pane_id = active_pane.id.to_string();
+    let screen = screen_for_pane(&pane_id);
     let cursor = screen
         .map(TerminalScreen::cursor_state)
         .unwrap_or(mez_terminal::TerminalCursorState { row: 0, column: 0 });

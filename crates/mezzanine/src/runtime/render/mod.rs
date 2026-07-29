@@ -40,7 +40,7 @@ use super::{
     TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis,
     current_unix_seconds, json_escape, mouse_action_name, mux_action_command_prompt_prefill,
     mux_action_name, pane_navigation_direction, parse_command_sequence,
-    render_attached_client_view, runtime_agent_shell_command_response_json,
+    render_attached_client_view_with_screen_resolvers, runtime_agent_shell_command_response_json,
     runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
     runtime_approval_policy_name, runtime_copy_position_for_view, runtime_fit_status_line,
     runtime_paste_bytes, select_clipboard_paste_source, window_frame_action_pillbox_cells,
