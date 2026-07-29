@@ -689,6 +689,9 @@ impl RuntimeSessionService {
                     },
                 );
             }
+            let process_presentation_geometry_changed = self
+                .process_pane_screen(pane_id)
+                .is_some_and(|screen| screen.size() != process_presentation_size);
             if let Some(screen) = self
                 .process
                 .process_pane_screens
@@ -696,18 +699,24 @@ impl RuntimeSessionService {
             {
                 screen.resize(process_presentation_size);
             }
-            let agent_screen_width_changed = self
-                .agent_pane_screen(pane_id)
-                .is_some_and(|screen| screen.size().columns != process_size.columns);
-            let defer_agent_presentation =
-                agent_screen_width_changed && self.presentation.mouse_resize_drag_active();
+            let agent_screen_size = self.agent_pane_screen(pane_id).map(|screen| screen.size());
+            let agent_screen_width_changed =
+                agent_screen_size.is_some_and(|size| size.columns != process_size.columns);
+            let agent_screen_geometry_changed =
+                agent_screen_size.is_some_and(|size| size != process_size);
+            let agent_geometry_should_update = self.presented_pane_surface(pane_id)
+                == crate::runtime::PaneSurfaceKind::Agent
+                || process_presentation_geometry_changed;
+            let defer_agent_presentation = agent_geometry_should_update
+                && agent_screen_width_changed
+                && self.presentation.mouse_resize_drag_active();
             if defer_agent_presentation {
                 self.presentation
                     .defer_agent_presentation_resize(pane_id, process_size);
                 if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
                     screen.resize(process_size);
                 }
-            } else if agent_screen_width_changed {
+            } else if agent_geometry_should_update && agent_screen_width_changed {
                 self.presentation
                     .clear_deferred_agent_presentation_resize(pane_id);
                 if self.rebuild_agent_presentation_after_resize(pane_id, process_size)? {
@@ -715,7 +724,8 @@ impl RuntimeSessionService {
                 } else if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
                     screen.resize(process_size);
                 }
-            } else if self.presented_pane_surface(pane_id) == crate::runtime::PaneSurfaceKind::Agent
+            } else if agent_geometry_should_update
+                && agent_screen_geometry_changed
                 && let Some(screen) = self.agent_pane_screen_mut(pane_id)
             {
                 screen.resize(process_size);

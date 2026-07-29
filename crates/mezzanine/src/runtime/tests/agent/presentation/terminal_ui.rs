@@ -969,6 +969,65 @@ fn runtime_agent_resize_does_not_replay_hidden_session_over_shell_prompt() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a row-only terminal resize updates a retained hidden agent screen
+/// without replacing either surface or requiring source-backed width replay.
+#[test]
+fn runtime_hidden_agent_screen_resizes_when_only_rows_change() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap();
+    agent_screen.feed(b"retained-agent-view");
+    service.set_agent_pane_screen("%1", &conversation_id, agent_screen);
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    let mut process_screen = TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap();
+    process_screen.feed(b"retained-process-view");
+    service.set_process_pane_screen("%1", process_screen);
+
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(28, 16).unwrap())
+        .unwrap();
+
+    let window = service.session().active_window().unwrap();
+    let expected_process_size = service.pane_presentation_size_for(window, "%1").unwrap();
+    let expected_agent_size = service.pane_process_size_for(window, "%1").unwrap();
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        expected_process_size
+    );
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().size(),
+        expected_agent_size
+    );
+    assert!(
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("retained-process-view")
+    );
+    assert!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("retained-agent-view")
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies pane-divider dragging defers expensive source-backed agent replay
 /// until the resize gesture finishes at its final pane size.
 ///
