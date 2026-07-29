@@ -475,3 +475,93 @@ fn runtime_agent_prompt_escape_cancels_reverse_search() {
     assert_eq!(prompt_state.prompt.buffer.line(), "/s");
     assert!(service.agent_shell_store().get("%1").is_some());
 }
+
+/// Verifies Ctrl+V reads the host clipboard as one bracketed paste operation.
+///
+/// Raw clipboard CRLF bytes must never pass through the ordinary key decoder,
+/// where their carriage returns would submit the prompt. The framed producer
+/// keeps CRLF, blank lines, tabs, and surrounding whitespace editable until a
+/// later explicit Enter submits exactly one agent turn.
+#[test]
+fn runtime_agent_prompt_ctrl_v_preserves_multiline_clipboard_until_enter() {
+    let mut service = test_runtime_service();
+    *service.host_clipboard_mut_for_tests() =
+        HostClipboard::new(ignored_host_clipboard_copy, ctrl_v_host_clipboard_read);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
+    );
+
+    let pasted = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x16".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(pasted.forwarded_bytes, 0);
+    assert_eq!(pasted.agent_prompt_inputs_applied, 1);
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    let expected = "  first\r\n\r\n\tsecond  \r\n";
+    assert_eq!(
+        service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .line(),
+        expected
+    );
+
+    let submitted = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(submitted.agent_prompt_inputs_applied, 1);
+    assert_eq!(
+        service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .history(),
+        std::slice::from_ref(&expected.to_string())
+    );
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+}
+
+/// Supplies multiline clipboard text for the Ctrl+V prompt regression.
+fn ctrl_v_host_clipboard_read() -> Option<String> {
+    Some("  first\r\n\r\n\tsecond  \r\n".to_string())
+}
+
+/// Ignores copy requests because this regression exercises only clipboard reads.
+fn ignored_host_clipboard_copy(_: &str) -> bool {
+    true
+}

@@ -1276,6 +1276,12 @@ and alternate-screen pane contents while leaving the pane process, PTY state,
 and terminal buffers unchanged. Hiding or exiting the agent shell MUST reveal
 the same pane application screen state that remained active under the overlay.
 
+While a native-mode agent shell is visible, `Ctrl+V` MUST read the host
+clipboard and deliver it to the editable agent prompt as one bracketed-paste
+operation. The operation MUST preserve embedded line endings, blank lines,
+tabs, and surrounding whitespace, and MUST NOT submit the prompt; only a later
+explicit Enter may submit the resulting draft.
+
 Mezzanine SHOULD provide a command or first-run step that installs or prints
 the Mezzanine terminfo entry for the current user. If terminfo installation is
 not possible, Mezzanine MUST continue with the best documented fallback and

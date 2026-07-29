@@ -284,6 +284,10 @@ than visual continuation rows.
 Press `Ctrl+A a` in a pane and type a request. The agent works from the focused
 pane's working directory, conversation state, and runtime settings.
 
+Use `Ctrl+V` to paste host clipboard text into the editable agent prompt.
+Multiline text, including blank lines and whitespace, stays intact until you
+edit it and press Enter to submit one request.
+
 Agent-mode logs and rendered transcript entries wrap to the active pane width,
 capped at `terminal.agent_wrap_column_cap` display columns (120 by default), so
 persisted and replayed transcript rows remain bounded on wide terminals.

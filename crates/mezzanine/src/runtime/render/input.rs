@@ -232,6 +232,19 @@ impl RuntimeSessionService {
         if input.is_empty() {
             return Ok(false);
         }
+        // Ctrl+V is a product-owned clipboard paste request, not ordinary
+        // terminal input. Framing its text lets the readline decoder retain
+        // every embedded control character as one editable paste operation.
+        if input == b"\x16" {
+            let Some(content) = self.presentation.copy.host_clipboard.read() else {
+                return Ok(false);
+            };
+            return self.apply_attached_agent_prompt_input_for_pane(
+                primary_client_id,
+                pane_id,
+                &super::runtime_readline_paste_bytes(&content),
+            );
+        }
         if input == b"\x1b" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
         }
