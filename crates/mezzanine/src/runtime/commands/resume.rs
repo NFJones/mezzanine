@@ -22,8 +22,6 @@ use crate::storage::transcript::SavedAgentSession;
 const AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;
 /// Maximum transcript bytes to read for `/resume` fallback replay.
 const AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
-/// Maximum persisted presentation rows to replay when resuming an agent shell.
-const AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES: usize = 200;
 
 /// Returns the saved working directory from transcript context entries.
 ///
@@ -200,10 +198,7 @@ impl RuntimeSessionService {
         let presentation_entries = if summary.entries == 0 {
             Vec::new()
         } else {
-            store.inspect_presentation_replay_tail(
-                &conversation_id,
-                AGENT_RESUME_PRESENTATION_REPLAY_ENTRIES,
-            )?
+            store.inspect_presentation(&conversation_id)?
         };
         let resume_directory = runtime_resume_directory_from_summary(&summary)
             .or_else(|| runtime_resume_directory_from_entries(&entries));

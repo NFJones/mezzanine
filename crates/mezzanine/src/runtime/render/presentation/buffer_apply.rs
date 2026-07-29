@@ -507,7 +507,7 @@ impl RuntimeSessionService {
         result
     }
 
-    /// Rebuilds a resized agent pane from bounded durable presentation source.
+    /// Rebuilds a resized agent pane from complete durable presentation source.
     ///
     /// The rebuild is intentionally limited to histories that contain semantic
     /// source. Snapshot-only histories retain ordinary terminal resize behavior
@@ -517,8 +517,6 @@ impl RuntimeSessionService {
         pane_id: &str,
         size: Size,
     ) -> Result<bool> {
-        const MAX_PRESENTATION_REPLAY_ENTRIES: usize = 200;
-
         if self
             .agent_pane_screen(pane_id)
             .is_some_and(TerminalScreen::normal_viewport_detached_from_history)
@@ -545,8 +543,7 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.transcript_store() else {
             return Ok(false);
         };
-        let entries =
-            store.inspect_presentation_replay_tail(&session_id, MAX_PRESENTATION_REPLAY_ENTRIES)?;
+        let entries = store.inspect_presentation(&session_id)?;
         if !entries.iter().any(|entry| entry.source_text.is_some()) {
             return Ok(false);
         }
