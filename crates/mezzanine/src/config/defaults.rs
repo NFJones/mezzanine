@@ -469,6 +469,10 @@ approval_policy = "ask"
 # policy-only performs approval classification and auditing but provides no OS
 # filesystem or shell-network confinement. Select bubblewrap for enforcement.
 sandbox = "policy-only"
+# Scope paths may name files or directories. A Unix-domain socket may also be
+# placed in read_scopes for an explicitly trusted service endpoint; a read-only
+# mount does not make requests sent through that socket read-only.
+# read_scopes = ["/var/run/docker.sock"]
 # Optional sanitized Git identity for Bubblewrap commits. Configure both fields;
 # Mezzanine never imports the host global Git configuration.
 # [permissions.bubblewrap]

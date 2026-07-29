@@ -2863,6 +2863,11 @@ narrow Bubblewrap mounts. Ordinary outside, missing, symlink-escaping, globbed,
 tilde-prefixed, or otherwise shell-expanded operands MUST be attempted inside
 the bounded namespace and reported as sandboxed payload outcomes.
 
+Configured read scopes MAY name existing Unix-domain sockets. Such a scope is
+an explicit opt-in to connect to that endpoint: a read-only Bubblewrap mount
+does not constrain requests sent through a socket. Write scopes MUST continue
+to name only regular files or directories.
+
 Bubblewrap preflight MUST distinguish a missing pane environment signature
 from a valid pane environment that has no maximum filesystem authority. The
 latter MUST report that configured read/write scopes or a matching trusted

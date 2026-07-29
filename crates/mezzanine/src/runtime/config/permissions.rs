@@ -10,6 +10,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
+
 use serde_json::Value;
 
 use mez_agent::messaging::Recipient;
@@ -896,8 +899,8 @@ pub(crate) fn runtime_configured_permissions_from_config(
         runtime_json_string_array(permissions.get("read_scopes"))?.unwrap_or_default();
     let write_scopes =
         runtime_json_string_array(permissions.get("write_scopes"))?.unwrap_or_default();
-    validate_configured_scopes(&read_scopes, "permissions.read_scopes")?;
-    validate_configured_scopes(&write_scopes, "permissions.write_scopes")?;
+    validate_configured_scopes(&read_scopes, "permissions.read_scopes", true)?;
+    validate_configured_scopes(&write_scopes, "permissions.write_scopes", false)?;
     let network_policy =
         match runtime_json_string(permissions.get("network_policy")).unwrap_or("prompt") {
             "deny" => NetworkPolicy::Deny,
@@ -1034,7 +1037,11 @@ pub(crate) fn runtime_configured_permissions_from_config(
     })
 }
 
-fn validate_configured_scopes(scopes: &[String], field: &str) -> Result<()> {
+fn validate_configured_scopes(
+    scopes: &[String],
+    field: &str,
+    allow_unix_sockets: bool,
+) -> Result<()> {
     if scopes
         .iter()
         .any(|scope| scope.is_empty() || scope.contains('\0') || scope.starts_with('~'))
@@ -1045,12 +1052,19 @@ fn validate_configured_scopes(scopes: &[String], field: &str) -> Result<()> {
     }
     for scope in scopes.iter().filter(|scope| Path::new(scope).is_absolute()) {
         match fs::metadata(scope) {
-            Ok(metadata) if !metadata.is_file() && !metadata.is_dir() => {
+            Ok(metadata) if metadata.is_file() || metadata.is_dir() => {}
+            #[cfg(unix)]
+            Ok(metadata) if allow_unix_sockets && metadata.file_type().is_socket() => {}
+            Ok(_) => {
                 return Err(MezError::config(format!(
-                    "{field} entry `{scope}` must reference a regular file or directory"
+                    "{field} entry `{scope}` must reference a regular file or directory{}",
+                    if allow_unix_sockets {
+                        ", or a Unix-domain socket"
+                    } else {
+                        ""
+                    }
                 )));
             }
-            Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(MezError::config(format!(

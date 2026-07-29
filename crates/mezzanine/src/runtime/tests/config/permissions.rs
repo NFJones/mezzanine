@@ -198,11 +198,11 @@ fn runtime_allows_bubblewrap_without_explicit_scopes() {
     assert!(matches!(configured.sandbox, SandboxConfig::Bubblewrap(_)));
 }
 
-/// Verifies configured absolute scopes accept ordinary files and directories
-/// but reject Unix sockets before Bubblewrap can project a socket as authority.
+/// Verifies configured absolute read scopes accept ordinary files and Unix
+/// sockets while write scopes continue to reject socket endpoints.
 #[cfg(unix)]
 #[test]
-fn runtime_rejects_special_filesystem_objects_in_configured_absolute_scopes() {
+fn runtime_allows_unix_sockets_in_configured_read_scopes() {
     use std::os::unix::net::UnixListener;
 
     let root = temp_root("configured-scope-object-types");
@@ -213,14 +213,14 @@ fn runtime_rejects_special_filesystem_objects_in_configured_absolute_scopes() {
 
     let configured = runtime_configured_permissions_from_config(&serde_json::json!({
         "permissions": {
-            "read_scopes": [regular_file],
+            "read_scopes": [regular_file, socket],
             "write_scopes": [root]
         }
     }));
     assert!(configured.is_ok(), "{configured:?}");
 
     let error = runtime_configured_permissions_from_config(&serde_json::json!({
-        "permissions": {"read_scopes": [socket]}
+        "permissions": {"write_scopes": [socket]}
     }))
     .unwrap_err();
     assert!(

@@ -1543,8 +1543,8 @@ fn sandbox_setup_trusted_project_persists_trust_without_explicit_scopes() {
     assert_eq!(exit_code, 0);
     let config = fs::read_to_string(home.join(".config/mezzanine/config.toml")).unwrap();
     assert!(config.contains("sandbox = \"bubblewrap\""), "{config}");
-    assert!(!config.contains("read_scopes"), "{config}");
-    assert!(!config.contains("write_scopes"), "{config}");
+    assert!(!config.contains("\nread_scopes = ["), "{config}");
+    assert!(!config.contains("\nwrite_scopes = ["), "{config}");
     let trust =
         ProjectTrustStore::load_from_file(&home.join(".config/mezzanine/project-trust.tsv"))
             .unwrap();
