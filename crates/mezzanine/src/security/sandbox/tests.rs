@@ -238,9 +238,9 @@ fn unknown_effects_compile_to_bounded_maximum_authority() {
     );
 }
 
-/// Verifies every sandbox launch projects the host resolver, NSS, and TLS
-/// certificate inputs, independent of whether the workload receives a private
-/// network namespace.
+/// Verifies every sandbox launch projects the fixed host runtime inputs,
+/// including Debian-style executable alternatives, independent of whether the
+/// workload receives a private network namespace.
 #[test]
 fn network_support_files_are_projected_for_every_network_policy() {
     let config = config();
@@ -263,6 +263,7 @@ fn network_support_files_are_projected_for_every_network_policy() {
             "missing TLS certificate parent directory with {network_policy:?} policy"
         );
         for path in [
+            "/etc/alternatives",
             "/etc/ssl/certs",
             "/etc/resolv.conf",
             "/etc/nsswitch.conf",

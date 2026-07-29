@@ -74,7 +74,9 @@ Bubblewrap projects only the authority needed by the compiled plan:
   by canonical project root and sandbox runtime profile. Its HOME and XDG
   paths remain inside that managed home.
 - The default runtime environment is rebuilt from a fixed non-secret set with
-  a minimal PATH. Host system and global Git configuration are disabled. A
+  a minimal PATH. Debian-style executable alternatives at `/etc/alternatives`
+  are projected read-only so system compiler symlinks resolve. Host system and
+  global Git configuration are disabled. A
   configured paired Git author name and email may be projected, but credential
   helpers, signing keys, includes, hooks, URL rewrites, and other host Git
   settings are excluded.
