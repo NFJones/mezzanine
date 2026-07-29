@@ -792,12 +792,26 @@ impl RuntimeSessionService {
                 let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                Ok(render_record_browser_overlay(
+                let changed = render_record_browser_overlay(
                     overlay,
                     &self.presentation.settings.ui_theme,
                     terminal_width,
                     prose_width,
-                ))
+                );
+                if prompt_has_selector
+                    && let Some(selection) = overlay.active_selection_index
+                    && let Some(line_index) = overlay
+                        .selections
+                        .get(selection)
+                        .map(|selection| selection.line_index)
+                {
+                    mez_mux::overlay::scroll_overlay_to_line(
+                        overlay,
+                        line_index,
+                        self.session.authoritative_size,
+                    );
+                }
+                Ok(changed)
             }
         }
     }

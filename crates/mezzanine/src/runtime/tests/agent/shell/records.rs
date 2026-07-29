@@ -106,6 +106,11 @@ fn runtime_record_browser_ctrl_arrows_scroll_five_lines_and_paging_uses_modal_he
 
     apply_record_browser_input(&mut service, &primary, b"\x1b[5~");
     assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 0);
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[6~");
+    assert!(service.primary_display_overlay().unwrap().scroll_offset > 0);
+    apply_record_browser_input(&mut service, &primary, b"s");
+    assert_eq!(service.primary_display_overlay().unwrap().scroll_offset, 0);
 }
 
 /// Verifies kind-selector navigation preserves the retained record cursor.
@@ -288,6 +293,56 @@ fn runtime_record_browser_kind_selector_navigation_preserves_record_cursor() {
             .map(|selection| selection.active_index),
         Some(1)
     );
+}
+
+/// Verifies an overflowing kind selector scrolls its End-selected option into
+/// the modal viewport instead of leaving keyboard focus on an invisible row.
+#[test]
+fn runtime_record_browser_kind_selector_keeps_end_selection_visible() {
+    let size = Size::new(80, 6).unwrap();
+    let mut service = test_runtime_service();
+    let primary = service.attach_primary("primary", true, size, 120).unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let choices = (0..8)
+        .map(|index| mez_mux::record_browser::RecordBrowserFilterChoice {
+            label: format!("kind-{index}"),
+            value: format!("kind-{index}"),
+        })
+        .collect();
+    let browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![mez_mux::record_browser::RecordBrowserRecord {
+            id: "issue-1".to_string(),
+            open_command: Some("/show-issues issue-1".to_string()),
+            title: "First issue".to_string(),
+            metadata: Vec::new(),
+            markdown: "Body".to_string(),
+        }],
+        choices,
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"k");
+    apply_record_browser_input(&mut service, &primary, b"\x1b[F");
+
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.active_selection_index, Some(7));
+    assert!(mez_mux::overlay::overlay_selection_index_is_visible(
+        overlay, 7, size
+    ));
 }
 
 /// Verifies retained record browsers reflow from raw Markdown when the primary

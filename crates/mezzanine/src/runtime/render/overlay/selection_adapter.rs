@@ -158,6 +158,9 @@ pub(super) fn render_record_browser_overlay(
             })
             .or(Some(0))
     };
+    if record_browser.browser.prompt().is_some() {
+        overlay.scroll_offset = 0;
+    }
     overlay.search_input = None;
     overlay.search_query = None;
     overlay.search_match = None;
