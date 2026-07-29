@@ -392,6 +392,9 @@ Current support reflects behavior implemented in the repository today.
 - `policy-only` is an approval and audit backend, not OS confinement. Its path
   and shell-network classifications can trigger `ask` or `auto-allow` gates,
   but they do not prevent a running host process from accessing resources.
+- See [Sandbox mechanism](docs/sandbox-mechanism.md) for the Bubblewrap launch
+  boundary, authority resolution, network profiles, managed homes, and
+  fail-closed fallback behavior.
 - Bubblewrap subagents inherit their parent's effective filesystem authority;
   omitted scopes inherit, explicit scopes may only narrow, and explicit empty
   scope arrays remain empty. Outside Bubblewrap, subagent scopes are retained

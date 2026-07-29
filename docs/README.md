@@ -24,6 +24,8 @@ reference documentation.
 
 - [configuration-reference.md](configuration-reference.md): generated default
   configuration, supported fields, and layer behavior.
+- [sandbox-mechanism.md](sandbox-mechanism.md): Bubblewrap confinement,
+  authority resolution, network profiles, failure handling, and inspection.
 - [terminal-compatibility-matrix.md](terminal-compatibility-matrix.md):
   advertised terminal capabilities, current regression coverage, unsupported
   behavior, and full-screen TUI fixture backlog.
