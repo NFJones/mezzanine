@@ -334,10 +334,13 @@ impl RuntimeSessionService {
         self.presentation
             .agent_presentation_projection_cache
             .remove(pane_id);
-        let Some(store) = self.persistence.transcript_store() else {
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
             return;
         };
-        let Some(session) = self.agent_shell_store().get(pane_id) else {
+        if session.ephemeral {
+            return;
+        }
+        let Some(store) = self.persistence.transcript_store() else {
             return;
         };
         let Some(terminal_width) = self.agent_presentation_terminal_width(pane_id) else {

@@ -384,12 +384,11 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
         .expect("routed child shell should exist")
         .session_id
         .clone();
-    assert_eq!(
+    assert!(
         transcript_store
             .inspect_presentation(&child_conversation_id)
             .unwrap()
-            .len(),
-        1
+            .is_empty()
     );
 
     service
@@ -423,9 +422,14 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
     let presentation = transcript_store
         .inspect_presentation(&child_conversation_id)
         .unwrap();
-    assert_eq!(presentation.len(), 2);
-    assert_eq!(presentation[0].style_names, vec!["user-prompt"]);
-    assert_eq!(presentation[1].style_names, vec!["assistant"]);
+    assert!(presentation.is_empty(), "{presentation:#?}");
+    assert!(
+        transcript_store
+            .saved_sessions()
+            .unwrap()
+            .iter()
+            .all(|session| session.summary.conversation_id != child_conversation_id)
+    );
     assert_eq!(
         service
             .routed_workflow_for_tests("turn-1")
