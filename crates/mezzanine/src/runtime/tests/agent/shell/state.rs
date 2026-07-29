@@ -3064,6 +3064,77 @@ fn runtime_control_agent_shell_state_persists_in_service() {
     );
 }
 
+/// Verifies control API reentry selects the retained agent screen without
+/// clearing its viewport or mutating the independent process screen.
+#[test]
+fn runtime_control_agent_shell_show_preserves_retained_surface_state() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 2).unwrap(), 120)
+        .unwrap();
+    let mut process_screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+    process_screen.feed(b"process history\r\nprocess visible");
+    service.set_process_pane_screen("%1", process_screen);
+
+    let first_show = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"show-first","method":"agent/shell/show","params":{"target":{"pane_id":"%1"},"idempotency_key":"show-agent-first"}}"#,
+        &primary,
+    );
+    assert!(first_show.contains(r#""visible":true"#), "{first_show}");
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+    agent_screen.feed(b"agent history\r\nagent visible");
+    service.set_agent_pane_screen("%1", &conversation_id, agent_screen);
+
+    let hide = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"hide","method":"agent/shell/hide","params":{"target":{"pane_id":"%1"},"idempotency_key":"hide-agent"}}"#,
+        &primary,
+    );
+    assert!(hide.contains(r#""visible":false"#), "{hide}");
+    let agent_visible_before = service.agent_pane_screen("%1").unwrap().visible_lines();
+    let agent_history_before = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .history()
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let agent_cursor_before = service.agent_pane_screen("%1").unwrap().cursor_state();
+    let process_content_before = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+
+    let second_show = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"show-second","method":"agent/shell/show","params":{"target":{"pane_id":"%1"},"idempotency_key":"show-agent-second"}}"#,
+        &primary,
+    );
+    assert!(second_show.contains(r#""visible":true"#), "{second_show}");
+    let agent_screen_after = service.agent_pane_screen("%1").unwrap();
+    assert_eq!(agent_screen_after.visible_lines(), agent_visible_before);
+    assert_eq!(
+        agent_screen_after
+            .history()
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>(),
+        agent_history_before
+    );
+    assert_eq!(agent_screen_after.cursor_state(), agent_cursor_before);
+    assert_eq!(
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines(),
+        process_content_before
+    );
+}
+
 /// Verifies that the JSON-RPC agent shell visibility endpoints apply the same
 /// live pane subshell side effects as the terminal `agent-shell` command. This
 /// protects clients that enter agent mode through control APIs from bypassing

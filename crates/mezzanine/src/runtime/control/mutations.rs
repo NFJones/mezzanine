@@ -718,8 +718,7 @@ impl RuntimeSessionService {
             return response;
         }
         let side_effect = if request.method == "agent/shell/show" {
-            self.enter_agent_mode_for_pane(&pane_id)
-                .and_then(|_| self.clear_agent_shell_terminal_view(&pane_id).map(|_| ()))
+            self.enter_agent_mode_for_pane(&pane_id).map(|_| ())
         } else {
             self.request_agent_shell_exit_for_pane(&pane_id).map(|_| ())
         }
