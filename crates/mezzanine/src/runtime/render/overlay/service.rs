@@ -135,19 +135,28 @@ impl RuntimeSessionService {
                         );
                         Some((target_command, stack))
                     });
-            self.presentation.primary_display_overlay = None;
             let body = self.execute_agent_shell_command(primary_client_id, command)?;
-            if let Some((target_command, stack)) = record_browser_stack {
-                self.presentation
-                    .pending_record_browser_overlay_stacks
-                    .insert((pane_id.clone(), target_command), stack);
-            }
             let display_output = runtime_agent_shell_display_output(
                 &body,
                 &self.presentation.settings.ui_theme,
                 usize::from(self.session.authoritative_size.columns),
                 self.presentation.settings.terminal_agent_wrap_column_cap,
             )?;
+            let opens_child_overlay = matches!(
+                &display_output,
+                RuntimeAgentShellDisplayOutput::Overlay(content)
+                    if runtime_command_display_should_open_overlay(content)
+            );
+            if record_browser_stack.is_none() || opens_child_overlay {
+                self.presentation.primary_display_overlay = None;
+            }
+            if let Some((target_command, stack)) = record_browser_stack
+                && opens_child_overlay
+            {
+                self.presentation
+                    .pending_record_browser_overlay_stacks
+                    .insert((pane_id.clone(), target_command), stack);
+            }
             self.set_agent_prompt_display_output(&pane_id, display_output)?;
             if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
                 self.presentation.agent_prompt_inputs.remove(&pane_id);

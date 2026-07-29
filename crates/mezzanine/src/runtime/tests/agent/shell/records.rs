@@ -794,6 +794,77 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
     assert!(overlay.lines.iter().any(|line| line.contains("issue-2")));
 }
 
+/// Verifies a failed nested record command retains the parent browser rather
+/// than closing it before a child overlay has successfully opened.
+#[test]
+fn runtime_agent_shell_failed_nested_record_command_preserves_parent_overlay() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        (0..20)
+            .map(|index| mez_mux::record_browser::RecordBrowserRecord {
+                id: format!("issue-{index}"),
+                open_command: Some("/show-issues \"".to_string()),
+                title: format!("Issue {index}"),
+                metadata: vec![("kind".to_string(), "task".to_string())],
+                markdown: format!("Body {index}"),
+            })
+            .collect(),
+        Vec::new(),
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"\x1b[1;5B");
+    let overlay = service.primary_display_overlay().unwrap();
+    let expected_id = overlay
+        .record_browser
+        .as_ref()
+        .and_then(|record_browser| record_browser.browser.active_record_id())
+        .map(str::to_string)
+        .unwrap();
+    let expected_scroll_offset = overlay.scroll_offset;
+    assert!(expected_scroll_offset > 0);
+
+    service
+        .execute_primary_display_overlay_selection_command(&primary, "/show-issues \"")
+        .unwrap();
+
+    let overlay = service
+        .primary_display_overlay()
+        .expect("failed nested command must retain the parent overlay");
+    let record_browser = overlay
+        .record_browser
+        .as_ref()
+        .expect("parent overlay must retain record-browser state");
+    assert_eq!(record_browser.browser.render_page().title, "Issues");
+    assert_eq!(
+        record_browser.browser.active_record_id(),
+        Some(expected_id.as_str())
+    );
+    assert_eq!(overlay.scroll_offset, expected_scroll_offset);
+}
+
 /// Verifies `/show-context` renders only the active pane conversation in
 /// transcript order and deletes the entry selected with pager arrow keys.
 #[test]
