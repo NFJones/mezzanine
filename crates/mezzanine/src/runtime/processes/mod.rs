@@ -67,6 +67,46 @@ use transactions::{
     RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS, runtime_running_shell_transaction_kind_name,
 };
 
+/// Identifies one independently retained pane presentation surface.
+// Dependency-gated refactor slices consume this type after the storage
+// foundation lands, so it is intentionally dormant in non-test builds here.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum PaneSurfaceKind {
+    /// Terminal emulator state owned by the pane's shell or active process.
+    Process,
+    /// Product-authored log state owned by the pane's active agent conversation.
+    Agent,
+}
+
+/// Conversation-bound terminal state for one pane's agent log.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) struct AgentPaneScreen {
+    /// Conversation whose presentation entries own this screen.
+    conversation_id: String,
+    /// Independently retained terminal state for agent presentation.
+    screen: TerminalScreen,
+}
+
+#[allow(dead_code)]
+impl AgentPaneScreen {
+    /// Returns the conversation that owns this agent presentation screen.
+    pub(crate) fn conversation_id(&self) -> &str {
+        &self.conversation_id
+    }
+
+    /// Returns the retained terminal screen for this agent conversation.
+    pub(crate) fn screen(&self) -> &TerminalScreen {
+        &self.screen
+    }
+
+    /// Returns mutable retained terminal state for agent presentation.
+    pub(crate) fn screen_mut(&mut self) -> &mut TerminalScreen {
+        &mut self.screen
+    }
+}
+
 /// Runtime-owned identity for one process handle moved to an async adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DetachedPaneProcess {
@@ -287,8 +327,10 @@ pub(crate) struct RuntimeProcessComponent {
     >,
     /// Panes with an in-flight bootstrap transaction.
     pane_bootstrap_pending: BTreeSet<String>,
-    /// Modeled terminal screen state keyed by pane id.
-    pane_screens: std::collections::BTreeMap<String, TerminalScreen>,
+    /// Authoritative process terminal screen state keyed by pane id.
+    process_pane_screens: std::collections::BTreeMap<String, TerminalScreen>,
+    /// Conversation-bound agent log screen state keyed by pane id.
+    agent_pane_screens: std::collections::BTreeMap<String, AgentPaneScreen>,
     /// Live shell transactions keyed by their OSC marker.
     running_shell_transactions: std::collections::BTreeMap<String, RunningShellTransactionRef>,
     /// Markers whose runtime wrappers must emit start before completion.
@@ -608,8 +650,13 @@ impl RuntimeSessionService {
         };
         mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
         if emoji_width_changed {
-            for screen in self.process.pane_screens.values_mut() {
+            for screen in self.process.process_pane_screens.values_mut() {
                 screen.rebuild_for_width_policy_change(terminal_emoji_width);
+            }
+            for agent_screen in self.process.agent_pane_screens.values_mut() {
+                agent_screen
+                    .screen_mut()
+                    .rebuild_for_width_policy_change(terminal_emoji_width);
             }
             for screen in self.process.pane_transaction_osc_screens.values_mut() {
                 screen.rebuild_for_width_policy_change(terminal_emoji_width);
@@ -620,27 +667,131 @@ impl RuntimeSessionService {
 
     /// Returns all modeled pane screens for whole-layout presentation.
     pub(crate) fn pane_screens(&self) -> &std::collections::BTreeMap<String, TerminalScreen> {
-        &self.process.pane_screens
+        &self.process.process_pane_screens
     }
 
-    /// Returns the modeled terminal screen for one pane.
+    /// Returns the authoritative process terminal screen for one pane.
+    pub(crate) fn process_pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
+        self.process.process_pane_screens.get(pane_id)
+    }
+
+    /// Returns mutable authoritative process terminal state for one pane.
+    pub(crate) fn process_pane_screen_mut(&mut self, pane_id: &str) -> Option<&mut TerminalScreen> {
+        self.process.process_pane_screens.get_mut(pane_id)
+    }
+
+    /// Replaces the authoritative process terminal screen for one pane.
+    pub(crate) fn set_process_pane_screen(
+        &mut self,
+        pane_id: impl Into<String>,
+        screen: TerminalScreen,
+    ) {
+        self.process
+            .process_pane_screens
+            .insert(pane_id.into(), screen);
+    }
+
+    /// Returns the conversation-bound agent screen state for one pane.
+    #[allow(dead_code)]
+    pub(crate) fn agent_pane_screen_state(&self, pane_id: &str) -> Option<&AgentPaneScreen> {
+        self.process.agent_pane_screens.get(pane_id)
+    }
+
+    /// Returns the retained agent terminal screen for one pane.
+    #[allow(dead_code)]
+    pub(crate) fn agent_pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
+        self.agent_pane_screen_state(pane_id)
+            .map(AgentPaneScreen::screen)
+    }
+
+    /// Returns mutable retained agent terminal state for one pane.
+    #[allow(dead_code)]
+    pub(crate) fn agent_pane_screen_mut(&mut self, pane_id: &str) -> Option<&mut TerminalScreen> {
+        self.process
+            .agent_pane_screens
+            .get_mut(pane_id)
+            .map(AgentPaneScreen::screen_mut)
+    }
+
+    /// Ensures one pane has an agent screen bound to the requested conversation.
+    ///
+    /// A conversation change replaces the prior screen instead of allowing
+    /// delayed presentation from one session to contaminate another session.
+    #[allow(dead_code)]
+    pub(crate) fn ensure_agent_pane_screen(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        size: Size,
+    ) -> Result<&mut TerminalScreen> {
+        let replace = self
+            .process
+            .agent_pane_screens
+            .get(pane_id)
+            .is_none_or(|screen| screen.conversation_id() != conversation_id);
+        if replace {
+            let screen = TerminalScreen::new_with_history_config(
+                size,
+                self.process.settings.terminal_history_limit,
+                self.process.settings.terminal_history_rotate_lines,
+            )?;
+            self.process.agent_pane_screens.insert(
+                pane_id.to_string(),
+                AgentPaneScreen {
+                    conversation_id: conversation_id.to_string(),
+                    screen,
+                },
+            );
+        }
+        self.agent_pane_screen_mut(pane_id)
+            .ok_or_else(|| MezError::invalid_state("agent pane screen was not initialized"))
+    }
+
+    /// Returns the presentation surface selected by pane-local agent visibility.
+    #[allow(dead_code)]
+    pub(crate) fn presented_pane_surface(&self, pane_id: &str) -> PaneSurfaceKind {
+        if self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| session.visibility != super::AgentShellVisibility::Hidden)
+        {
+            PaneSurfaceKind::Agent
+        } else {
+            PaneSurfaceKind::Process
+        }
+    }
+
+    /// Returns the retained screen selected for presentation in one pane.
+    #[allow(dead_code)]
+    pub(crate) fn presented_pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
+        match self.presented_pane_surface(pane_id) {
+            PaneSurfaceKind::Process => self.process_pane_screen(pane_id),
+            PaneSurfaceKind::Agent => self.agent_pane_screen(pane_id),
+        }
+    }
+
+    /// Returns the process screen through the temporary compatibility surface.
+    ///
+    /// Dependent refactor slices migrate semantic agent and presented-surface
+    /// callers to explicit accessors before this compatibility API is removed.
     pub(crate) fn pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
-        self.process.pane_screens.get(pane_id)
+        self.process_pane_screen(pane_id)
     }
 
-    /// Returns mutable modeled terminal state for one runtime operation.
+    /// Returns mutable process state through the temporary compatibility API.
     pub(crate) fn pane_screen_mut(&mut self, pane_id: &str) -> Option<&mut TerminalScreen> {
-        self.process.pane_screens.get_mut(pane_id)
+        self.process_pane_screen_mut(pane_id)
     }
 
-    /// Replaces the modeled terminal screen for one pane.
+    /// Replaces process state through the temporary compatibility API.
     pub(crate) fn set_pane_screen(&mut self, pane_id: impl Into<String>, screen: TerminalScreen) {
-        self.process.pane_screens.insert(pane_id.into(), screen);
+        self.set_process_pane_screen(pane_id, screen);
     }
 
     /// Clears modeled terminal state when the live session is replaced.
     pub(crate) fn clear_pane_screens(&mut self) {
-        self.process.pane_screens.clear();
+        self.process.process_pane_screens.clear();
+        self.process.agent_pane_screens.clear();
     }
 
     /// Applies new history retention policy to every modeled pane screen.
@@ -649,9 +800,15 @@ impl RuntimeSessionService {
         history_limit: usize,
         rotate_lines: usize,
     ) -> Result<()> {
-        for screen in self.process.pane_screens.values_mut() {
+        for screen in self.process.process_pane_screens.values_mut() {
             screen.set_history_limit(history_limit)?;
             screen.set_history_rotate_lines(rotate_lines)?;
+        }
+        for agent_screen in self.process.agent_pane_screens.values_mut() {
+            agent_screen.screen_mut().set_history_limit(history_limit)?;
+            agent_screen
+                .screen_mut()
+                .set_history_rotate_lines(rotate_lines)?;
         }
         Ok(())
     }
@@ -1086,7 +1243,7 @@ impl RuntimeSessionService {
             .remove(descriptor.pane_id.as_str());
         self.session
             .set_pane_live_state(descriptor.pane_id.as_str(), true)?;
-        self.process.pane_screens.insert(
+        self.process.process_pane_screens.insert(
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
@@ -1335,7 +1492,7 @@ impl RuntimeSessionService {
         if !self.rebuild_agent_presentation_after_resize(&pane_id, size)?
             && let Some(screen) = self
                 .process
-                .pane_screens
+                .process_pane_screens
                 .get_mut(descriptor.pane_id.as_str())
         {
             screen.resize(size);
@@ -1559,7 +1716,7 @@ impl RuntimeSessionService {
         self.process
             .pane_exit_records
             .remove(descriptor.pane_id.as_str());
-        self.process.pane_screens.insert(
+        self.process.process_pane_screens.insert(
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
@@ -1956,7 +2113,8 @@ impl RuntimeSessionService {
         self.process.pane_foreground_process_groups.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
         self.persistence.cleanup_pane_io(pane_id);
-        self.process.pane_screens.remove(pane_id);
+        self.process.process_pane_screens.remove(pane_id);
+        self.process.agent_pane_screens.remove(pane_id);
         self.process.pane_transaction_osc_screens.remove(pane_id);
         self.process.pane_transaction_osc_pending.remove(pane_id);
         self.process

@@ -1,6 +1,150 @@
 //! Runtime tests for session processes behavior.
 
 use super::*;
+use crate::runtime::PaneSurfaceKind;
+
+/// Verifies process and agent surfaces retain independent rows and that agent
+/// visibility selects only the screen bound to the active conversation.
+#[test]
+fn runtime_pane_screens_are_independent_and_conversation_bound() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let size = Size::new(80, 24).unwrap();
+    let mut process_screen = TerminalScreen::new(size, 100).unwrap();
+    process_screen.feed(b"process-only\n");
+    service.set_process_pane_screen("%1", process_screen);
+
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .ensure_agent_pane_screen("%1", &conversation_id, size)
+        .unwrap()
+        .feed(b"agent-only\n");
+
+    let process_content = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let agent_content = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(process_content.contains("process-only"));
+    assert!(!process_content.contains("agent-only"));
+    assert!(agent_content.contains("agent-only"));
+    assert!(!agent_content.contains("process-only"));
+    assert_eq!(
+        service
+            .agent_pane_screen_state("%1")
+            .unwrap()
+            .conversation_id(),
+        conversation_id
+    );
+    assert_eq!(service.presented_pane_surface("%1"), PaneSurfaceKind::Agent);
+    assert!(
+        service
+            .presented_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("agent-only")
+    );
+
+    service
+        .agent_shell_store_mut()
+        .request_hide_pending_task_completion("%1")
+        .unwrap();
+    assert_eq!(service.presented_pane_surface("%1"), PaneSurfaceKind::Agent);
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    assert_eq!(
+        service.presented_pane_surface("%1"),
+        PaneSurfaceKind::Process
+    );
+    assert!(
+        service
+            .presented_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("process-only")
+    );
+
+    service
+        .ensure_agent_pane_screen("%1", "replacement-conversation", size)
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_pane_screen_state("%1")
+            .unwrap()
+            .conversation_id(),
+        "replacement-conversation"
+    );
+    assert!(
+        !service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("agent-only")
+    );
+}
+
+/// Verifies terminal retention settings and pane cleanup apply to both screen
+/// stores without allowing one surface to outlive its pane.
+#[test]
+fn runtime_pane_screen_configuration_and_cleanup_cover_both_surfaces() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let size = Size::new(80, 24).unwrap();
+    service.set_process_pane_screen(
+        "%1",
+        TerminalScreen::new_with_history_config(size, 100, 10).unwrap(),
+    );
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .ensure_session("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .ensure_agent_pane_screen("%1", &conversation_id, size)
+        .unwrap();
+
+    service.configure_pane_screen_history(17, 3).unwrap();
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().history_limit(),
+        17
+    );
+    assert_eq!(
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .history_rotate_lines(),
+        3
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap().history_limit(), 17);
+    assert_eq!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .history_rotate_lines(),
+        3
+    );
+
+    service.cleanup_removed_pane_runtime_state("%1");
+    assert!(service.process_pane_screen("%1").is_none());
+    assert!(service.agent_pane_screen("%1").is_none());
+}
 
 /// Verifies terminal-generated response bytes are forwarded back to the pane.
 ///

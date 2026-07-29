@@ -177,7 +177,7 @@ impl RuntimeSessionService {
         ) = {
             let screen = self
                 .process
-                .pane_screens
+                .process_pane_screens
                 .entry(output.pane_id.clone())
                 .or_insert(TerminalScreen::new_with_history_config(
                     descriptor_size,
