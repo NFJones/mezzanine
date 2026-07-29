@@ -97,6 +97,75 @@ fn runtime_pane_screens_are_independent_and_conversation_bound() {
     );
 }
 
+/// Verifies control capture follows the presented surface without exposing a
+/// hidden process screen or accepting an agent screen from another conversation.
+#[test]
+fn runtime_pane_capture_uses_only_the_presented_conversation_bound_surface() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let size = Size::new(80, 24).unwrap();
+    let mut process_screen = TerminalScreen::new(size, 100).unwrap();
+    process_screen.feed(b"process-capture-only\r\n");
+    service.set_process_pane_screen("%1", process_screen);
+
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(size, 100).unwrap();
+    agent_screen.feed(b"agent-capture-only\r\n");
+    service.set_agent_pane_screen("%1", &conversation_id, agent_screen);
+
+    let visible_capture = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"capture-agent","method":"pane/capture","params":{"target":{"pane_id":"%1"},"range":{"origin":"visible","start":"start","end":"end"}}}"#,
+        &primary,
+    );
+    assert!(
+        visible_capture.contains("agent-capture-only"),
+        "{visible_capture}"
+    );
+    assert!(
+        !visible_capture.contains("process-capture-only"),
+        "{visible_capture}"
+    );
+
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    let hidden_capture = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"capture-process","method":"pane/capture","params":{"target":{"pane_id":"%1"},"range":{"origin":"visible","start":"start","end":"end"}}}"#,
+        &primary,
+    );
+    assert!(
+        hidden_capture.contains("process-capture-only"),
+        "{hidden_capture}"
+    );
+    assert!(
+        !hidden_capture.contains("agent-capture-only"),
+        "{hidden_capture}"
+    );
+
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_agent_pane_screen(
+        "%1",
+        "stale-conversation",
+        TerminalScreen::new(size, 100).unwrap(),
+    );
+    let stale_capture = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"capture-stale","method":"pane/capture","params":{"target":{"pane_id":"%1"},"range":{"origin":"visible","start":"start","end":"end"}}}"#,
+        &primary,
+    );
+    assert!(
+        !stale_capture.contains("process-capture-only"),
+        "stale agent ownership must not fall back to hidden process content: {stale_capture}"
+    );
+}
+
 /// Verifies pane output reaches exactly one retained display surface for
 /// verbose, trace, and ordinary post-agent process traffic.
 #[test]

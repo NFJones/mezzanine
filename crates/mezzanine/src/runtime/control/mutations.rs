@@ -1115,8 +1115,9 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn pane_capture_sources(&self) -> Vec<PaneCaptureSource> {
         self.process_pane_screens()
-            .iter()
-            .map(|(pane_id, screen)| {
+            .keys()
+            .filter_map(|pane_id| {
+                let screen = self.presented_pane_screen(pane_id)?;
                 let history_styled_lines = screen.history().styled_lines().collect::<Vec<_>>();
                 let primary_pid = self.primary_pid_for_live_pane_process(pane_id);
                 let process_state = primary_pid.map(|_| "running").unwrap_or_else(|| {
@@ -1126,7 +1127,7 @@ impl RuntimeSessionService {
                         Err(_) => "unknown",
                     }
                 });
-                PaneCaptureSource {
+                Some(PaneCaptureSource {
                     pane_id: pane_id.clone(),
                     visible_lines: screen.visible_lines(),
                     visible_line_style_spans: screen
@@ -1151,7 +1152,7 @@ impl RuntimeSessionService {
                             .to_string(),
                     ),
                     exit_status: self.pane_exit_status(pane_id),
-                }
+                })
             })
             .collect()
     }

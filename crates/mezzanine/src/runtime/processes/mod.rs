@@ -793,7 +793,11 @@ impl RuntimeSessionService {
     pub(crate) fn presented_pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
         match self.presented_pane_surface(pane_id) {
             PaneSurfaceKind::Process => self.process_pane_screen(pane_id),
-            PaneSurfaceKind::Agent => self.agent_pane_screen(pane_id),
+            PaneSurfaceKind::Agent => {
+                let session = self.agent_shell_store().get(pane_id)?;
+                let screen = self.agent_pane_screen_state(pane_id)?;
+                (screen.conversation_id() == session.session_id).then(|| screen.screen())
+            }
         }
     }
 

@@ -510,6 +510,9 @@ impl RuntimeSessionService {
         }
 
         if !runtime_mutating_method(&request.method) {
+            if request.method == "pane/capture" {
+                return self.dispatch_runtime_pane_capture(body, &request.id, primary_client_id);
+            }
             if request.method == "event/list" {
                 return match self.dispatch_runtime_event_list_request(&request, primary_client_id) {
                     Ok(result) => format!(
