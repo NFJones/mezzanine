@@ -1923,6 +1923,7 @@ impl RuntimeSessionService {
     /// deferred I/O, and subagent bookkeeping that would otherwise make a
     /// closed pane appear partially alive to later agent/session surfaces.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) {
+        self.presentation.remove_completion_attention(pane_id);
         let removed_transaction_markers = self
             .process
             .running_shell_transactions

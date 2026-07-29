@@ -1034,12 +1034,62 @@ impl RuntimeSessionService {
     /// Builds the animation tick used by terminal frame rendering.
     fn runtime_frame_animation_tick_ms(&self) -> u64 {
         if self.presentation.settings.terminal_reduced_motion
-            || !self.active_window_has_agent_animation()
+            || (!self.active_window_has_agent_animation()
+                && !self.has_visible_completion_attention())
         {
             0
         } else {
             current_unix_millis()
         }
+    }
+
+    /// Reports whether a pending completion can currently reach a title pill.
+    fn has_visible_completion_attention(&self) -> bool {
+        if self.presentation.completion_attention_panes.is_empty() {
+            return false;
+        }
+        let pane_titles_visible = self.presentation.settings.pane_frames_enabled
+            && self
+                .presentation
+                .settings
+                .pane_frame_template
+                .contains("#{pane.title}");
+        let window_titles_visible = self.presentation.settings.window_frames_enabled
+            && self.presentation.settings.window_frame_template
+                == crate::host::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE;
+        let group_titles_visible = self.session.window_groups().len() > 1;
+        let active_window_id = self
+            .session
+            .active_window()
+            .map(|window| window.id.as_str());
+        let active_group = self.session.active_group();
+
+        self.presentation
+            .completion_attention_panes
+            .iter()
+            .any(|pane_id| {
+                let Some(window) = self.session.windows().iter().find(|window| {
+                    window
+                        .panes()
+                        .iter()
+                        .any(|pane| pane.id.as_str() == pane_id)
+                }) else {
+                    return false;
+                };
+                if pane_titles_visible && active_window_id == Some(window.id.as_str()) {
+                    return true;
+                }
+                let Some(group) = self
+                    .session
+                    .window_groups()
+                    .iter()
+                    .find(|group| group.window_ids.contains(&window.id))
+                else {
+                    return false;
+                };
+                (window_titles_visible && active_group.is_some_and(|active| active.id == group.id))
+                    || group_titles_visible
+            })
     }
     /// Builds right-status context only for fields the active template uses.
     fn runtime_window_status_context(&self) -> Option<TerminalWindowStatusContext> {
@@ -1128,6 +1178,46 @@ impl RuntimeSessionService {
             .session
             .active_group()
             .map(|group| group.id.to_string());
+        let pane_title_attention = self.presentation.settings.pane_frames_enabled
+            && self
+                .presentation
+                .settings
+                .pane_frame_template
+                .contains("#{pane.title}");
+        let window_title_attention = self.presentation.settings.window_frames_enabled
+            && self.presentation.settings.window_frame_template
+                == crate::host::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE;
+        let group_title_attention = self.session.window_groups().len() > 1;
+        let mut attention_panes = std::collections::BTreeSet::new();
+        let mut attention_windows = std::collections::BTreeSet::new();
+        let mut attention_groups = std::collections::BTreeSet::new();
+        for pane_id in &self.presentation.completion_attention_panes {
+            let Some(window) = self.session.windows().iter().find(|window| {
+                window
+                    .panes()
+                    .iter()
+                    .any(|pane| pane.id.as_str() == pane_id)
+            }) else {
+                continue;
+            };
+            let Some(group) = self
+                .session
+                .window_groups()
+                .iter()
+                .find(|group| group.window_ids.contains(&window.id))
+            else {
+                continue;
+            };
+            if pane_title_attention && active_window_id.as_deref() == Some(window.id.as_str()) {
+                attention_panes.insert(pane_id.clone());
+            } else if window_title_attention
+                && active_group_id.as_deref() == Some(group.id.as_str())
+            {
+                attention_windows.insert(window.id.to_string());
+            } else if group_title_attention {
+                attention_groups.insert(group.id.to_string());
+            }
+        }
 
         for group in self.session.window_groups() {
             context.groups.push(TerminalWindowGroupFrameContext {
@@ -1139,6 +1229,7 @@ impl RuntimeSessionService {
                     group.name.clone()
                 },
                 active: active_group_id.as_ref() == Some(&group.id.to_string()),
+                completion_attention: attention_groups.contains(group.id.as_str()),
             });
         }
 
@@ -1152,6 +1243,7 @@ impl RuntimeSessionService {
                 title: window.title(),
                 active: active_window_id.as_ref() == Some(&window.id.to_string()),
                 subagent: self.is_subagent_window(window.id.as_str()),
+                completion_attention: attention_windows.contains(window.id.as_str()),
             });
             let pane_ids = window
                 .panes()
@@ -1320,6 +1412,7 @@ impl RuntimeSessionService {
                 context.panes.insert(
                     pane_id.clone(),
                     TerminalPaneFrameContext {
+                        completion_attention: attention_panes.contains(pane_id.as_str()),
                         primary_pid: self.primary_pid_for_live_pane_process(pane_id.as_str()),
                         process_name: self.pane_process_name(pane_id.as_str()).or_else(|| {
                             self.primary_pid_for_live_pane_process(pane_id.as_str())

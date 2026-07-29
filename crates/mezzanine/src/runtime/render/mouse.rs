@@ -323,6 +323,7 @@ impl RuntimeSessionService {
             MouseAction::FocusWindow { index } => {
                 self.session
                     .select_window(primary_client_id, &index.to_string())?;
+                self.acknowledge_focused_pane_completion();
                 Ok(true)
             }
             MouseAction::FocusGroup { index } => {
@@ -330,6 +331,7 @@ impl RuntimeSessionService {
                     .session
                     .select_group_transition(primary_client_id, &index.to_string())?;
                 self.sync_pane_resize_effects(&effects)?;
+                self.acknowledge_focused_pane_completion();
                 Ok(true)
             }
             MouseAction::PressWindowAction { action } => {
@@ -405,6 +407,7 @@ impl RuntimeSessionService {
                 let pane_id = target.pane_id.clone();
                 self.session
                     .select_pane_global(primary_client_id, pane_id.as_str())?;
+                self.acknowledge_focused_pane_completion();
                 if self.execute_agent_command_link_at_pane_position(
                     primary_client_id,
                     pane_id.as_str(),
@@ -470,6 +473,7 @@ impl RuntimeSessionService {
                     });
                 self.session
                     .select_pane_global(primary_client_id, target.pane_id.as_str())?;
+                self.acknowledge_focused_pane_completion();
                 self.presentation.mouse_selection_drag_state = None;
                 Ok(true)
             }
@@ -483,6 +487,7 @@ impl RuntimeSessionService {
                     });
                 self.session
                     .select_pane_global(primary_client_id, target.pane_id.as_str())?;
+                self.acknowledge_focused_pane_completion();
                 let Some(descriptor) = self.find_pane_descriptor(target.pane_id.as_str()) else {
                     return Ok(true);
                 };
@@ -555,6 +560,7 @@ impl RuntimeSessionService {
                 let target = self.mouse_selection_target_at(position)?;
                 self.session
                     .select_pane_global(primary_client_id, target.pane_id.as_str())?;
+                self.acknowledge_focused_pane_completion();
                 let pane_id = target.pane_id;
                 self.presentation.mouse_selection_drag_state = Some(MouseSelectionDragState {
                     pane_id: pane_id.clone(),
@@ -1023,6 +1029,7 @@ impl RuntimeSessionService {
         let target = self.mouse_selection_target_at(position)?;
         self.session
             .select_pane_global(primary_client_id, target.pane_id.as_str())?;
+        self.acknowledge_focused_pane_completion();
         let pane_id = target.pane_id;
         let anchor = self
             .presentation
@@ -1141,6 +1148,7 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         self.session
             .select_pane_global(primary_client_id, pane_id)?;
+        self.acknowledge_focused_pane_completion();
         // Ensure a copy mode exists, then take ownership so the selection
         // highlight persists for one render frame before cleanup.
         self.ensure_active_copy_mode(pane_id)?;

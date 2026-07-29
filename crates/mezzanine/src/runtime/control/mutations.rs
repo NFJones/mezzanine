@@ -187,6 +187,7 @@ impl RuntimeSessionService {
     ) -> Result<String> {
         if let Some(target) = pane_target_checked_resolved(&self.session, params)? {
             self.session.select_pane(primary_client_id, &target)?;
+            self.acknowledge_focused_pane_completion();
         }
         let split =
             runtime_json_string_field(params, "split").unwrap_or_else(|| "vertical".to_string());

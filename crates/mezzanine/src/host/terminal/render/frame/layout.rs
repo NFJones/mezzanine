@@ -208,10 +208,20 @@ pub(in crate::host::terminal::render) fn write_styled_merged_pane_frames_on_divi
         );
         if let Some(spans) = style_canvas.get_mut(placement.row) {
             if layout.left_text_width > 0 {
+                let completion_attention = frame_context
+                    .panes
+                    .get(pane.id.as_str())
+                    .is_some_and(|context| context.completion_attention);
                 spans.push(TerminalStyleSpan {
                     start: placement.column_start,
                     length: layout.left_text_width,
-                    rendition: pane_frame_rendition(pane, pane_frame.style, ui_theme),
+                    rendition: pane_frame_rendition(
+                        pane,
+                        completion_attention,
+                        frame_context,
+                        pane_frame.style,
+                        ui_theme,
+                    ),
                 });
             }
             for segment in &layout.right_status_segments {

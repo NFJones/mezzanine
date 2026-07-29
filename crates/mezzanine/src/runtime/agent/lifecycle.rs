@@ -131,6 +131,14 @@ impl RuntimeSessionService {
             .runtime_metrics_mut()
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut().finish_turn(turn_id, state)?;
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            let focused_pane_id = self.active_pane_id().ok().map(|id| id.to_string());
+            self.presentation
+                .register_completion_attention(pane_id, focused_pane_id.as_deref());
+        }
         self.append_agent_trace_turn_transition(&turn, previous_state, state, "finish_agent_turn")?;
         self.agent_turn_contexts_mut().remove(turn_id);
         self.agent_turn_executions_mut().remove(turn_id);
@@ -218,6 +226,14 @@ impl RuntimeSessionService {
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut()
             .finish_turn(&turn.turn_id, state)?;
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            let focused_pane_id = self.active_pane_id().ok().map(|id| id.to_string());
+            self.presentation
+                .register_completion_attention(&turn.pane_id, focused_pane_id.as_deref());
+        }
         self.append_agent_trace_turn_transition(
             turn,
             turn.state,

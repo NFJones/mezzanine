@@ -84,6 +84,7 @@ pub(in crate::host::terminal::render) fn window_frame_action_entry(
         text,
         active,
         subagent: false,
+        completion_attention: false,
     }
 }
 
@@ -93,6 +94,7 @@ fn window_frame_entry(window: &TerminalWindowFrameContext) -> WindowFramePillbox
         text: format!(" {} {} ", window.index, sanitize_frame_text(&window.title)),
         active: window.active,
         subagent: window.subagent,
+        completion_attention: window.completion_attention,
     }
 }
 
@@ -102,6 +104,7 @@ fn window_group_frame_entry(group: &TerminalWindowGroupFrameContext) -> WindowFr
         text: format!(" {} {} ", group.index, sanitize_frame_text(&group.title)),
         active: group.active,
         subagent: false,
+        completion_attention: group.completion_attention,
     }
 }
 
@@ -124,6 +127,7 @@ pub(in crate::host::terminal::render) fn window_frame_pillbox_entries(
             ),
             active: true,
             subagent: false,
+            completion_attention: false,
         }];
     }
     frame_context

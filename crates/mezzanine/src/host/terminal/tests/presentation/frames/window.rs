@@ -73,6 +73,7 @@ fn render_default_window_frame_uses_window_pillbox_context() {
                 title: "shell".to_string(),
                 active: false,
                 subagent: true,
+                completion_attention: false,
             },
             TerminalWindowFrameContext {
                 id: "@2".to_string(),
@@ -80,6 +81,7 @@ fn render_default_window_frame_uses_window_pillbox_context() {
                 title: "work".to_string(),
                 active: true,
                 subagent: false,
+                completion_attention: false,
             },
         ],
         ..TerminalFrameContext::default()
@@ -125,6 +127,68 @@ fn render_default_window_frame_uses_window_pillbox_context() {
     }));
 }
 
+/// Verifies completion attention flashes a window title pill by color only and
+/// becomes a stable semantic attention color when reduced motion is enabled.
+///
+/// Alternating animation phases must preserve the rendered title text and
+/// geometry so attention does not move hit targets or alter window identity.
+#[test]
+fn render_window_completion_attention_flashes_without_changing_layout() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap());
+    let render_phase = |animation_tick_ms, reduced_motion| {
+        let config = TerminalClientLoopConfig {
+            frame_context: TerminalFrameContext {
+                animation_tick_ms,
+                reduced_motion,
+                windows: vec![TerminalWindowFrameContext {
+                    id: window.id.to_string(),
+                    index: 0,
+                    title: "work".to_string(),
+                    active: true,
+                    subagent: false,
+                    completion_attention: true,
+                }],
+                ..TerminalFrameContext::default()
+            },
+            window_frames_enabled: true,
+            window_frame_template: DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
+            pane_frames_enabled: false,
+            ..TerminalClientLoopConfig::default()
+        };
+        let view = render_attached_client_view(
+            ClientViewRole::Primary,
+            &window,
+            &BTreeMap::new(),
+            &config,
+            window.size,
+        )
+        .unwrap()
+        .unwrap();
+        let title_span = view.line_style_spans[2]
+            .iter()
+            .rev()
+            .find(|span| span.start == 0 && span.length > 0)
+            .unwrap();
+        (
+            view.lines[2].clone(),
+            title_span.length,
+            title_span.rendition.background,
+            config.ui_theme.colors.agent_status_blocked.background,
+        )
+    };
+
+    let attention_on = render_phase(0, false);
+    let attention_off = render_phase(180, false);
+    let reduced_motion = render_phase(180, true);
+
+    assert_eq!(attention_on.0, attention_off.0);
+    assert_eq!(attention_on.1, attention_off.1);
+    assert_eq!(attention_on.2, Some(attention_on.3));
+    assert_ne!(attention_off.2, attention_on.2);
+    assert_eq!(reduced_motion.2, Some(reduced_motion.3));
+}
+
 /// Verifies that the window status bar renders single-cell action pills
 /// with mouse-addressable geometry, a distinct pressed style, and a trailing
 /// safety column. This protects the templated controls as clickable terminal
@@ -155,6 +219,7 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
             title: "abcdefghijklmnopqrstuvwxZ".to_string(),
             active: true,
             subagent: false,
+            completion_attention: false,
         }],
         ..TerminalFrameContext::default()
     };
@@ -227,6 +292,7 @@ fn render_window_status_uses_right_aligned_themed_segments() {
             title: "work".to_string(),
             active: true,
             subagent: false,
+            completion_attention: false,
         }],
         window_status: Some(TerminalWindowStatusContext {
             template: DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
@@ -296,6 +362,7 @@ fn render_window_status_uses_cached_command_status_pills() {
             title: "work".to_string(),
             active: true,
             subagent: false,
+            completion_attention: false,
         }],
         window_status: Some(TerminalWindowStatusContext {
             template: "#{pill.cpu} #{datetime.local}".to_string(),

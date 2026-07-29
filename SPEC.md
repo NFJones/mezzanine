@@ -2284,6 +2284,15 @@ When a background pane emits a bell, activity event, silence event, agent
 approval request, or agent completion event, Mezzanine MUST make that state
 visible through the window frame, pane frame, message log, or command prompt.
 
+When an agent turn completes in an unfocused pane, Mezzanine MUST flash the
+lowest-level title pill that is currently visible for that pane: the pane title
+pill when rendered, otherwise its window title pill when rendered, otherwise
+its window-group title pill when the group bar is visible. Focusing the
+completed pane MUST acknowledge and stop the flash until a later completion
+event. A completion in the focused pane MUST NOT start a flash. If no eligible
+title pill is visible, the completion marker MUST remain pending without
+creating a substitute presentation surface.
+
 When a read-only observer attach request is pending, Mezzanine MUST make that
 state visible to the primary client through the same notification surfaces.
 Read-only observers MUST NOT receive pending observer request details unless
@@ -2527,6 +2536,8 @@ defined by the active terminal compatibility settings.
 `terminal.reduced_motion` MUST default to false. When true, optional
 frame/status animations MUST render as static UI while preserving the same
 semantic status text and color category.
+Completion-attention title pills MUST use their stable attention color instead
+of flashing while reduced motion is enabled.
 
 `terminal.render_rate_limit_fps` MUST default to 5. When nonzero, attached
 foreground clients SHOULD coalesce bursty render invalidations so ordinary

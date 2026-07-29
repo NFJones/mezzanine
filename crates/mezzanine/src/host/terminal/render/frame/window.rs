@@ -295,6 +295,7 @@ pub(in crate::host::terminal::render) fn window_status_field_value(
 /// on duplicated control-flow logic.
 pub(in crate::host::terminal::render) fn window_status_style_spans(
     status: &WindowRightStatusLayout,
+    frame_context: &TerminalFrameContext,
     ui_theme: &UiTheme,
 ) -> Vec<TerminalStyleSpan> {
     status
@@ -304,9 +305,14 @@ pub(in crate::host::terminal::render) fn window_status_style_spans(
             start: segment.start,
             length: segment.width,
             rendition: match &segment.key {
-                WindowStatusSegmentKind::Action { pressed, .. } => {
-                    window_pillbox_rendition(*pressed, false, TerminalFrameStyle::Default, ui_theme)
-                }
+                WindowStatusSegmentKind::Action { pressed, .. } => window_pillbox_rendition(
+                    *pressed,
+                    false,
+                    false,
+                    frame_context,
+                    TerminalFrameStyle::Default,
+                    ui_theme,
+                ),
                 WindowStatusSegmentKind::Uptime => ui_theme.colors.window_status_uptime.rendition(),
                 WindowStatusSegmentKind::DateTime => {
                     ui_theme.colors.window_status_datetime.rendition()

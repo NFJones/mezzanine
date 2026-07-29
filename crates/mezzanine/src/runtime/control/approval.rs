@@ -204,6 +204,7 @@ impl RuntimeSessionService {
                     let error = crate::error::MezError::from(error);
                     return runtime_json_rpc_error(&request.id, error.kind(), error.message());
                 }
+                self.acknowledge_focused_pane_completion();
                 if let Err(error) = self.enter_agent_mode_for_pane(&approval.pane_id) {
                     return runtime_json_rpc_error(&request.id, error.kind(), error.message());
                 }

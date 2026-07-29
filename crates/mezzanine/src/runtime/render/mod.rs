@@ -270,6 +270,8 @@ pub(crate) struct RuntimePresentationComponent {
     primary_error_status_overlay: Option<String>,
     /// Active pane-agent status selector.
     pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
+    /// Unacknowledged background agent completions keyed by stable pane id.
+    completion_attention_panes: std::collections::BTreeSet<String>,
 }
 
 /// Candidate cycle retained while one record-browser Save prompt is active.
@@ -288,6 +290,27 @@ struct RuntimeRecordBrowserSaveCompletion {
 }
 
 impl RuntimePresentationComponent {
+    /// Records a completion only when its pane is not currently focused.
+    pub(crate) fn register_completion_attention(
+        &mut self,
+        pane_id: &str,
+        focused_pane_id: Option<&str>,
+    ) {
+        if focused_pane_id != Some(pane_id) {
+            self.completion_attention_panes.insert(pane_id.to_string());
+        }
+    }
+
+    /// Acknowledges any completion currently owned by the focused pane.
+    pub(crate) fn acknowledge_completion_attention(&mut self, pane_id: &str) {
+        self.completion_attention_panes.remove(pane_id);
+    }
+
+    /// Removes completion state for a pane that no longer exists.
+    pub(crate) fn remove_completion_attention(&mut self, pane_id: &str) {
+        self.completion_attention_panes.remove(pane_id);
+    }
+
     /// Replaces validated presentation settings and synchronizes global width policy.
     pub(crate) fn apply_settings(&mut self, settings: RuntimePresentationSettings) {
         crate::host::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
@@ -332,6 +355,14 @@ impl RuntimePresentationComponent {
 }
 
 impl RuntimeSessionService {
+    /// Acknowledges pending completion attention for the currently focused pane.
+    pub(crate) fn acknowledge_focused_pane_completion(&mut self) {
+        if let Ok(pane_id) = self.active_pane_id() {
+            self.presentation
+                .acknowledge_completion_attention(pane_id.as_str());
+        }
+    }
+
     /// Returns host clipboard state for presentation integration tests.
     #[cfg(test)]
     pub(crate) fn host_clipboard_for_tests(&self) -> &HostClipboard {

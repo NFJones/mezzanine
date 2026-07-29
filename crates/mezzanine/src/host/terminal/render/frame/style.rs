@@ -56,6 +56,8 @@ pub(in crate::host::terminal::render) fn styled_group_frame_line(
                     rendition: window_pillbox_rendition(
                         segment.active,
                         segment.subagent,
+                        segment.completion_attention,
+                        frame_context,
                         frame_style,
                         ui_theme,
                     ),
@@ -94,7 +96,7 @@ pub(in crate::host::terminal::render) fn styled_window_frame_line(
     let mut line = styled_frame_line_with_rendition(&text, width, rendition);
     if let Some(status) = window_right_status_layout(frame_context, width) {
         line.style_spans
-            .extend(window_status_style_spans(&status, ui_theme));
+            .extend(window_status_style_spans(&status, frame_context, ui_theme));
     }
     line
 }
@@ -133,6 +135,8 @@ pub(in crate::host::terminal::render) fn styled_window_pillbox_line(
                     rendition: window_pillbox_rendition(
                         segment.active,
                         segment.subagent,
+                        segment.completion_attention,
+                        frame_context,
                         frame_style,
                         ui_theme,
                     ),
@@ -149,6 +153,8 @@ pub(in crate::host::terminal::render) fn styled_window_pillbox_line(
                             window_pillbox_rendition(
                                 *pressed,
                                 false,
+                                false,
+                                frame_context,
                                 TerminalFrameStyle::Default,
                                 ui_theme,
                             )
@@ -181,10 +187,18 @@ pub(in crate::host::terminal::render) fn styled_window_pillbox_line(
 pub(in crate::host::terminal::render) fn window_pillbox_rendition(
     active: bool,
     subagent: bool,
+    completion_attention: bool,
+    frame_context: &TerminalFrameContext,
     frame_style: TerminalFrameStyle,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
-    let pair = if active {
+    let attention_on = completion_attention
+        && (frame_context.reduced_motion
+            || (frame_context.animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS)
+                .is_multiple_of(2));
+    let pair = if attention_on {
+        ui_theme.colors.agent_status_blocked
+    } else if active {
         ui_theme.colors.window_active
     } else if subagent {
         ui_theme.colors.agent_status_idle
@@ -213,7 +227,17 @@ pub(in crate::host::terminal::render) fn styled_pane_frame_line(
     ui_theme: &UiTheme,
 ) -> TerminalStyledLine {
     let layout = pane_frame_row_layout(window, pane, frame_context, template, width, ' ');
-    let rendition = pane_frame_rendition(pane, frame_style, ui_theme);
+    let completion_attention = frame_context
+        .panes
+        .get(pane.id.as_str())
+        .is_some_and(|context| context.completion_attention);
+    let rendition = pane_frame_rendition(
+        pane,
+        completion_attention,
+        frame_context,
+        frame_style,
+        ui_theme,
+    );
     let style_spans: Vec<TerminalStyleSpan> = if layout.left_text_width == 0 {
         subtle_frame_fill_span(width, frame_style, ui_theme)
             .into_iter()
@@ -510,10 +534,18 @@ pub(in crate::host::terminal::render) fn subtle_frame_fill_span(
 /// on duplicated control-flow logic.
 pub(in crate::host::terminal::render) fn pane_frame_rendition(
     pane: &mez_mux::layout::Pane,
+    completion_attention: bool,
+    frame_context: &TerminalFrameContext,
     frame_style: TerminalFrameStyle,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
-    let pair = if pane.active {
+    let attention_on = completion_attention
+        && (frame_context.reduced_motion
+            || (frame_context.animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS)
+                .is_multiple_of(2));
+    let pair = if attention_on {
+        ui_theme.colors.agent_status_blocked
+    } else if pane.active {
         ui_theme.colors.pane_frame_active
     } else {
         ui_theme.colors.pane_frame_inactive

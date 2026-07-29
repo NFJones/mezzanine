@@ -129,6 +129,97 @@ fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
     );
 }
 
+/// Verifies background agent completion attention follows visible frame
+/// hierarchy and is acknowledged only when the completed pane gains focus.
+///
+/// The marker must prefer a visible pane title, fall back to the owning window
+/// title when pane frames are disabled, remain pending when no title surface is
+/// visible, and disappear after an explicit focus command selects the pane.
+#[test]
+fn runtime_background_completion_attention_projects_and_acknowledges_on_focus() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let background_pane = service.active_pane_id().unwrap();
+    let focused_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+
+    service
+        .start_agent_turn(mez_agent::AgentTurnRecord {
+            turn_id: "attention-turn".to_string(),
+            agent_id: format!("agent-{background_pane}"),
+            pane_id: background_pane.clone(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 200,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            state: mez_agent::AgentTurnState::Queued,
+            initial_capability: None,
+        })
+        .unwrap();
+    service
+        .finish_agent_turn(
+            &background_pane,
+            "attention-turn",
+            mez_agent::AgentTurnState::Completed,
+        )
+        .unwrap();
+
+    let pane_context = service.terminal_frame_context();
+    assert!(
+        pane_context
+            .panes
+            .get(&background_pane)
+            .is_some_and(|pane| pane.completion_attention)
+    );
+    assert!(pane_context.animation_tick_ms > 0);
+
+    service.set_frame_visibility_for_tests(true, false);
+    let window_context = service.terminal_frame_context();
+    assert!(window_context.windows[0].completion_attention);
+    assert!(
+        window_context
+            .panes
+            .get(&background_pane)
+            .is_some_and(|pane| !pane.completion_attention)
+    );
+
+    service.set_frame_visibility_for_tests(false, false);
+    let hidden_context = service.terminal_frame_context();
+    assert!(
+        hidden_context
+            .windows
+            .iter()
+            .all(|window| !window.completion_attention)
+    );
+    assert_eq!(hidden_context.animation_tick_ms, 0);
+
+    service.set_frame_visibility_for_tests(true, true);
+    service
+        .execute_terminal_command(&primary, &format!("select-pane -t {background_pane}"))
+        .unwrap();
+    assert_eq!(service.active_pane_id().unwrap(), background_pane);
+    assert_ne!(service.active_pane_id().unwrap(), focused_pane.to_string());
+    let acknowledged_context = service.terminal_frame_context();
+    assert!(
+        acknowledged_context
+            .panes
+            .values()
+            .all(|pane| !pane.completion_attention)
+    );
+    assert!(
+        acknowledged_context
+            .windows
+            .iter()
+            .all(|window| !window.completion_attention)
+    );
+}
+
 /// Verifies that the pane renderer blocks shell prompt repaint bytes while an
 /// agent turn is running, even when no shell transaction is currently active.
 /// Provider iteration can leave the pane between command result handling and

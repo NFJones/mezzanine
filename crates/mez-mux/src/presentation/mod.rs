@@ -587,6 +587,8 @@ pub fn plan_headless_attached_client_cycle<Action, ErrorRole: Copy>(
 /// without making the mux depend on product-owned prompt or agent types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
+    /// Whether this pane's visible title pill should request completion attention.
+    pub completion_attention: bool,
     /// Primary process id shown by `pane.primary_pid`.
     pub primary_pid: Option<u32>,
     /// Primary process name shown by `pane.process_name` when known.
@@ -630,6 +632,7 @@ pub struct TerminalPaneFrameContext<Prompt = (), DisplayLines = Vec<String>> {
 impl<Prompt, DisplayLines: Default> Default for TerminalPaneFrameContext<Prompt, DisplayLines> {
     fn default() -> Self {
         Self {
+            completion_attention: false,
             primary_pid: None,
             process_name: None,
             exit_status: None,
@@ -681,6 +684,8 @@ pub struct TerminalWindowFrameContext {
     pub active: bool,
     /// Whether this window is dedicated to spawned subagent panes.
     pub subagent: bool,
+    /// Whether this window title pill should request completion attention.
+    pub completion_attention: bool,
 }
 
 /// Runtime window-group metadata made available to group-frame rendering.
@@ -694,6 +699,8 @@ pub struct TerminalWindowGroupFrameContext {
     pub title: String,
     /// Whether this group is currently focused.
     pub active: bool,
+    /// Whether this group title pill should request completion attention.
+    pub completion_attention: bool,
 }
 
 /// Placement of a one-row terminal frame within its owning region.

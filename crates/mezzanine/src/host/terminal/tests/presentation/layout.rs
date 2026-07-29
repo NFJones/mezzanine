@@ -1045,6 +1045,7 @@ fn render_attached_view_uses_conditional_window_group_bar() {
                 index: 0,
                 title: "default".to_string(),
                 active: true,
+                completion_attention: false,
             }],
             ..TerminalFrameContext::default()
         },
@@ -1074,12 +1075,14 @@ fn render_attached_view_uses_conditional_window_group_bar() {
                     index: 0,
                     title: "default".to_string(),
                     active: false,
+                    completion_attention: false,
                 },
                 TerminalWindowGroupFrameContext {
                     id: "g2".to_string(),
                     index: 1,
                     title: "work".to_string(),
                     active: true,
+                    completion_attention: false,
                 },
             ],
             ..TerminalFrameContext::default()
@@ -1125,6 +1128,7 @@ fn render_pane_pwd_fields_compact_deep_paths_to_three_segments() {
             title: "work".to_string(),
             active: true,
             subagent: false,
+            completion_attention: false,
         }],
         panes: BTreeMap::from([(
             pane_id,

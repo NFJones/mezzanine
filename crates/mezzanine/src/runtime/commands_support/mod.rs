@@ -102,18 +102,25 @@ fn execute_runtime_planned_terminal_command(
     active_client_id: &mut mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<CommandOutcome> {
-    if let Some(outcome) =
+    let outcome = if let Some(outcome) =
         execute_runtime_live_terminal_command(service, active_client_id, invocation)?
     {
-        return Ok(outcome);
-    }
-    if let Some(outcome) =
+        outcome
+    } else if let Some(outcome) =
         execute_runtime_layout_terminal_command(service, active_client_id, invocation)?
     {
-        return Ok(outcome);
+        outcome
+    } else {
+        let outcome = execute_command(&mut service.session, active_client_id, invocation)?;
+        resolve_runtime_layout_command_outcome(service, active_client_id, outcome)?
+    };
+    if matches!(
+        invocation.name.as_str(),
+        "select-pane" | "selectp" | "select-window" | "selectw" | "select-group" | "selectg"
+    ) {
+        service.acknowledge_focused_pane_completion();
     }
-    let outcome = execute_command(&mut service.session, active_client_id, invocation)?;
-    resolve_runtime_layout_command_outcome(service, active_client_id, outcome)
+    Ok(outcome)
 }
 
 /// Runs the runtime send prefix command operation for this subsystem.

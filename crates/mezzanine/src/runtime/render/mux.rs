@@ -50,9 +50,11 @@ impl RuntimeSessionService {
                     primary_client_id,
                     pane_navigation_direction(direction),
                 )?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::FocusLastPane => {
                 self.session.select_last_pane(primary_client_id)?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::EnterCopyMode => {
                 let pane_id = self.active_pane_id()?;
@@ -65,16 +67,20 @@ impl RuntimeSessionService {
             }
             MuxAction::FocusWindow(WindowFocusTarget::Next) => {
                 self.session.next_window(primary_client_id)?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::FocusWindow(WindowFocusTarget::Previous) => {
                 self.session.previous_window(primary_client_id)?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::FocusWindow(WindowFocusTarget::LastActive) => {
                 self.session.last_window(primary_client_id)?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::FocusWindow(WindowFocusTarget::Index(index)) => {
                 self.session
                     .select_window(primary_client_id, &index.to_string())?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::FocusWindow(WindowFocusTarget::ChooseInteractively) => {
                 self.execute_attached_display_command(primary_client_id, "choose-window")?;
@@ -82,14 +88,17 @@ impl RuntimeSessionService {
             MuxAction::FocusGroup(GroupFocusTarget::Next) => {
                 let effects = self.session.next_group_transition(primary_client_id)?;
                 self.sync_pane_resize_effects(&effects)?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::FocusGroup(GroupFocusTarget::Previous) => {
                 let effects = self.session.previous_group_transition(primary_client_id)?;
                 self.sync_pane_resize_effects(&effects)?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::FocusGroup(GroupFocusTarget::LastActive) => {
                 let effects = self.session.last_group_transition(primary_client_id)?;
                 self.sync_pane_resize_effects(&effects)?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::FocusGroup(GroupFocusTarget::ChooseInteractively) => {
                 self.execute_attached_display_command(primary_client_id, "choose-group")?;
@@ -97,6 +106,7 @@ impl RuntimeSessionService {
             MuxAction::CyclePane => {
                 self.session
                     .select_adjacent_pane(primary_client_id, PaneNavigationDirection::Right)?;
+                self.acknowledge_focused_pane_completion();
             }
             MuxAction::ShowPaneIndexes => {
                 self.execute_attached_display_command(primary_client_id, "display-panes")?;

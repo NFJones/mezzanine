@@ -555,6 +555,8 @@ pub struct FramePillboxEntry<K> {
     pub active: bool,
     /// Whether the pill represents a spawned-subagent window.
     pub subagent: bool,
+    /// Whether the pill requests transient completion attention.
+    pub completion_attention: bool,
 }
 
 /// Display-column placement of one rendered frame pill.
@@ -570,6 +572,8 @@ pub struct FramePillboxSegment<K> {
     pub active: bool,
     /// Whether the pill represents a spawned-subagent window.
     pub subagent: bool,
+    /// Whether the pill requests transient completion attention.
+    pub completion_attention: bool,
 }
 
 /// Joins frame pills with one separating terminal cell.
@@ -598,6 +602,7 @@ pub fn render_frame_pillbox_segments<K: Clone>(
             target: entry.target.clone(),
             active: entry.active,
             subagent: entry.subagent,
+            completion_attention: entry.completion_attention,
         });
         start = start.saturating_add(width);
     }
@@ -1365,6 +1370,7 @@ mod tests {
             text: " window ".to_string(),
             active: true,
             subagent: false,
+            completion_attention: false,
         }];
         let pill_cells = frame_pillbox_hit_cells(&render_frame_pillbox_segments(&entries), 3, 4);
         let status = position_frame_status(
@@ -1573,12 +1579,14 @@ mod tests {
                 text: " 1 shell ".to_string(),
                 active: true,
                 subagent: false,
+                completion_attention: false,
             },
             FramePillboxEntry {
                 target: "second",
                 text: " 界 ".to_string(),
                 active: false,
                 subagent: true,
+                completion_attention: false,
             },
         ];
         let segments = render_frame_pillbox_segments(&entries);
@@ -1604,6 +1612,7 @@ mod tests {
             text: " 1 shell ".to_string(),
             active: true,
             subagent: false,
+            completion_attention: false,
         }];
         let status = render_frame_status(&[FrameStatusValue {
             key: "status",
