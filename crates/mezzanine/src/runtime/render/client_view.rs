@@ -786,8 +786,12 @@ impl RuntimeSessionService {
                 .pane_screen(pane_id.as_str())
                 .is_some_and(TerminalScreen::application_keypad_enabled);
             config.pane_bracketed_paste_mode = self
-                .pane_screen(pane_id.as_str())
-                .is_some_and(TerminalScreen::bracketed_paste_enabled);
+                .agent_shell_store()
+                .get(pane_id.as_str())
+                .is_some_and(|session| session.visibility == AgentShellVisibility::Visible)
+                || self
+                    .pane_screen(pane_id.as_str())
+                    .is_some_and(TerminalScreen::bracketed_paste_enabled);
         }
         Ok(config)
     }

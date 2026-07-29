@@ -20,6 +20,10 @@ fn runtime_attached_input_submits_visible_agent_prompt_non_modally() {
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
     );
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(config.pane_bracketed_paste_mode);
     let step = AttachedTerminalClientStepPlan {
         actions: vec![TerminalClientLoopAction::ForwardToPane(
             b"summarize\nmore\r".to_vec(),
