@@ -66,6 +66,7 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
         "Prefer Markdown for `say` content when it improves clarity",
         "Inline ```<syntax> code and ```mermaid diagrams are appropriate when useful",
         "do not add code or diagrams gratuitously",
+        "reuse and extend existing abstractions when they fit",
     ] {
         assert!(prompt.contains(invariant), "missing invariant: {invariant}");
     }
