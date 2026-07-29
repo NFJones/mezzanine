@@ -395,6 +395,27 @@ impl AgentShellStore {
         self.sessions_by_pane.remove(pane_id)
     }
 
+    /// Replaces one pane's complete shell-session state during transactional rollback.
+    ///
+    /// The restored value must belong to the same pane so conversation failure
+    /// recovery cannot move session state across pane identities.
+    pub fn restore_session(
+        &mut self,
+        pane_id: &str,
+        session: AgentShellSession,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        validate_agent_shell_required("pane id", pane_id)?;
+        if session.pane_id != pane_id {
+            return Err(AgentShellSessionError::invalid_args(
+                "restored agent shell session belongs to a different pane",
+            ));
+        }
+        self.sessions_by_pane.insert(pane_id.to_string(), session);
+        self.get(pane_id).ok_or_else(|| {
+            AgentShellSessionError::invalid_state("restored agent shell session was not retained")
+        })
+    }
+
     /// Retains a bounded count of recent transcript entries for raw replay.
     ///
     /// The transcript file remains append-only; this method only moves the

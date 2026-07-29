@@ -110,6 +110,15 @@ impl RuntimePersistenceComponent {
             .unwrap_or_default()
     }
 
+    /// Replaces one pane's exact transcript references during rollback.
+    pub(crate) fn replace_pane_transcript_refs(&mut self, pane_id: &str, refs: Vec<String>) {
+        if refs.is_empty() {
+            self.pane_transcript_refs.remove(pane_id);
+        } else {
+            self.pane_transcript_refs.insert(pane_id.to_string(), refs);
+        }
+    }
+
     /// Removes durable transcript references for one pane.
     pub(crate) fn remove_pane_transcript_refs(&mut self, pane_id: &str) {
         self.pane_transcript_refs.remove(pane_id);

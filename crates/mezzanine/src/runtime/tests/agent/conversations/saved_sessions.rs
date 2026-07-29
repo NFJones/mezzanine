@@ -340,6 +340,154 @@ fn runtime_resume_browser_rejects_deleting_active_sessions() {
     assert_eq!(transcript_store.inspect("active-saved").unwrap().len(), 1);
 }
 
+/// Verifies presentation-only conversations remain discoverable and resumable
+/// even when they have no model transcript entries.
+#[test]
+fn runtime_resume_recovers_presentation_only_conversations() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-presentation-only"));
+    transcript_store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id: "presentation-only".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            pane_id: "%9".to_string(),
+            turn_id: None,
+            terminal_width: 80,
+            style_names: vec!["assistant".to_string()],
+            display_lines: vec!["mez> presentation-only history".to_string()],
+            copy_lines: vec!["presentation-only history".to_string()],
+            ansi_text: None,
+            source_text: Some("presentation-only history".to_string()),
+            source_content_type: Some(mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string()),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_process_pane_screen(
+        "%1",
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
+    );
+
+    let picker = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"presentation-picker","method":"agent/shell/command","params":{"idempotency_key":"presentation-picker","input":"/resume"}}"#,
+        &primary,
+    );
+    assert!(picker.contains("[`presentation-only`]"), "{picker}");
+
+    let resumed = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"presentation-resume","method":"agent/shell/command","params":{"idempotency_key":"presentation-resume","input":"/resume presentation-only"}}"#,
+        &primary,
+    );
+    assert!(
+        resumed.contains("conversation_id=presentation-only"),
+        "{resumed}"
+    );
+    assert!(resumed.contains("entries=0"), "{resumed}");
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some("presentation-only")
+    );
+    let agent_text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        agent_text.contains("presentation-only history"),
+        "{agent_text}"
+    );
+}
+
+/// Verifies a replay ownership failure restores the prior conversation and
+/// both retained pane surfaces instead of leaving a partial resume binding.
+#[test]
+fn runtime_resume_replay_failure_restores_prior_pane_state() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-rollback"));
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "resume-target".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            role: TranscriptRole::User,
+            turn_id: "turn-target".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "target prompt".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id: "resume-target".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 10,
+            pane_id: "%9".to_string(),
+            turn_id: None,
+            terminal_width: 80,
+            style_names: vec!["assistant".to_string()],
+            display_lines: vec!["target presentation".to_string()],
+            copy_lines: vec!["target presentation".to_string()],
+            ansi_text: None,
+            source_text: None,
+            source_content_type: None,
+        })
+        .unwrap();
+    let presentation_path = transcript_store.presentation_path("resume-target").unwrap();
+    let corrupt = fs::read_to_string(&presentation_path).unwrap().replacen(
+        "resume-target",
+        "wrong-conversation",
+        1,
+    );
+    fs::write(&presentation_path, corrupt).unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let prior_conversation = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut process_screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap();
+    process_screen.feed(b"prior-process-surface");
+    service.set_process_pane_screen("%1", process_screen);
+    let mut agent_screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap();
+    agent_screen.feed(b"prior-agent-surface");
+    service.set_agent_pane_screen("%1", &prior_conversation, agent_screen);
+    let process_before = service.process_pane_screen("%1").unwrap().clone();
+    let agent_before = service.agent_pane_screen("%1").unwrap().clone();
+
+    let failed = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"resume-failure","method":"agent/shell/command","params":{"idempotency_key":"resume-failure","input":"/resume resume-target"}}"#,
+        &primary,
+    );
+    assert!(failed.contains("error"), "{failed}");
+    assert!(
+        failed.contains("presentation replay target does not match"),
+        "{failed}"
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some(prior_conversation.as_str())
+    );
+    assert_eq!(service.process_pane_screen("%1").unwrap(), &process_before);
+    assert_eq!(service.agent_pane_screen("%1").unwrap(), &agent_before);
+}
+
 /// Verifies that saved agent conversations can be listed, resumed into the
 /// current pane, exposed to prompt context, and forked while keeping readline
 /// prompt history shared across conversation bindings.

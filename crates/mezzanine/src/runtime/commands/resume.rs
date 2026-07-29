@@ -195,52 +195,85 @@ impl RuntimeSessionService {
                 AGENT_RESUME_TRANSCRIPT_REPLAY_BYTES,
             )?
         };
-        let presentation_entries = if summary.entries == 0 {
-            Vec::new()
-        } else {
-            store.inspect_presentation(&conversation_id)?
-        };
+        let presentation_entries = store.inspect_presentation(&conversation_id)?;
         let resume_directory = runtime_resume_directory_from_summary(&summary)
             .or_else(|| runtime_resume_directory_from_entries(&entries));
-        let (session_id, transcript_entries, visibility) = {
-            let session = self.agent_shell_store_mut().bind_conversation(
+        let previous_session = self
+            .agent_shell_store()
+            .get(pane_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+        let previous_agent_screen = self
+            .agent_pane_screen_state(pane_id)
+            .map(|state| (state.conversation_id().to_string(), state.screen().clone()));
+        let previous_presentation = self.snapshot_agent_resume_presentation(pane_id);
+        let previous_transcript_refs = self.persistence.pane_transcript_refs(pane_id);
+        let previous_working_directory = self.pane_current_working_directory(pane_id);
+
+        let resume_result = (|| -> Result<(String, u64, mez_agent::AgentShellVisibility)> {
+            let (session_id, transcript_entries, visibility) = {
+                let session = self.agent_shell_store_mut().bind_conversation(
+                    pane_id,
+                    &conversation_id,
+                    summary.entries as u64,
+                )?;
+                (
+                    session.session_id.clone(),
+                    session.transcript_entries,
+                    session.visibility,
+                )
+            };
+            self.reload_agent_prompt_history_for_pane(pane_id)?;
+            if let Some(size) = self
+                .agent_pane_screen(pane_id)
+                .or_else(|| self.process_pane_screen(pane_id))
+                .map(|screen| screen.size())
+            {
+                self.set_agent_pane_screen(
+                    pane_id.to_string(),
+                    session_id.clone(),
+                    mez_terminal::TerminalScreen::new_with_history_config(
+                        size,
+                        self.terminal_history_limit(),
+                        self.terminal_history_rotate_lines(),
+                    )?,
+                );
+            }
+            if !self.replay_agent_presentation_entries_to_terminal_buffer(
                 pane_id,
-                &conversation_id,
-                summary.entries as u64,
-            )?;
-            (
-                session.session_id.clone(),
-                session.transcript_entries,
-                session.visibility,
-            )
+                &presentation_entries,
+            )? {
+                self.set_agent_prompt_display_lines(
+                    pane_id,
+                    Self::runtime_resume_transcript_display(&summary, &entries),
+                )?;
+            }
+            self.restore_agent_resume_state_for_conversation(pane_id, &session_id)?;
+            self.record_pane_transcript_ref(pane_id, format!("transcript:{pane_id}:{session_id}"))?;
+            Ok((session_id, transcript_entries, visibility))
+        })();
+        let (session_id, transcript_entries, visibility) = match resume_result {
+            Ok(result) => result,
+            Err(error) => {
+                self.agent_shell_store_mut()
+                    .restore_session(pane_id, previous_session)?;
+                if let Some((conversation_id, screen)) = previous_agent_screen {
+                    self.set_agent_pane_screen(pane_id, conversation_id, screen);
+                } else {
+                    self.remove_agent_pane_screen(pane_id);
+                }
+                self.restore_agent_resume_presentation(pane_id, previous_presentation);
+                self.persistence
+                    .replace_pane_transcript_refs(pane_id, previous_transcript_refs);
+                if let Some(path) = previous_working_directory {
+                    self.set_pane_current_working_directory(pane_id, path);
+                } else {
+                    self.remove_pane_current_working_directory(pane_id);
+                }
+                return Err(error);
+            }
         };
         self.restore_agent_resume_directory(pane_id, resume_directory.as_deref())?;
-        self.restore_agent_resume_state_for_conversation(pane_id, &session_id)?;
-        self.record_pane_transcript_ref(pane_id, format!("transcript:{pane_id}:{session_id}"))?;
-        self.reload_agent_prompt_history_for_pane(pane_id)?;
-        if let Some(size) = self
-            .agent_pane_screen(pane_id)
-            .or_else(|| self.process_pane_screen(pane_id))
-            .map(|screen| screen.size())
-        {
-            self.set_agent_pane_screen(
-                pane_id.to_string(),
-                session_id.clone(),
-                mez_terminal::TerminalScreen::new_with_history_config(
-                    size,
-                    self.terminal_history_limit(),
-                    self.terminal_history_rotate_lines(),
-                )?,
-            );
-        }
-        if !self
-            .replay_agent_presentation_entries_to_terminal_buffer(pane_id, &presentation_entries)?
-        {
-            self.set_agent_prompt_display_lines(
-                pane_id,
-                Self::runtime_resume_transcript_display(&summary, &entries),
-            )?;
-        }
         Ok(AgentShellCommandOutcome::Mutated {
             command: "resume".to_string(),
             body: format!(

@@ -81,7 +81,7 @@ pub(crate) enum PaneSurfaceKind {
 
 /// Conversation-bound terminal state for one pane's agent log.
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AgentPaneScreen {
     /// Conversation whose presentation entries own this screen.
     conversation_id: String,
@@ -944,6 +944,13 @@ impl RuntimeSessionService {
         self.process
             .pane_current_working_directories
             .insert(pane_id.into(), path);
+    }
+
+    /// Removes one pane's best-known working directory during rollback.
+    pub(crate) fn remove_pane_current_working_directory(&mut self, pane_id: &str) {
+        self.process
+            .pane_current_working_directories
+            .remove(pane_id);
     }
 
     /// Terminates every process still owned by the runtime.

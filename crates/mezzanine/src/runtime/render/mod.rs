@@ -279,6 +279,18 @@ pub(crate) struct RuntimePresentationComponent {
     completion_attention_panes: std::collections::BTreeSet<String>,
 }
 
+/// Pane-local presentation state restored when conversation resume fails.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeAgentResumePresentationSnapshot {
+    prompt_input: Option<RuntimeAgentPromptInput>,
+    shell_output_status_lines: Option<Vec<String>>,
+    projection: Option<(String, Size)>,
+    pending_resize: Option<Size>,
+    replay_active: bool,
+    copy_modes: Vec<((String, PaneSurfaceKind), CopyMode)>,
+    scrollback_surfaces: Vec<(String, PaneSurfaceKind)>,
+}
+
 /// Candidate cycle retained while one record-browser Save prompt is active.
 ///
 /// The backend-neutral browser continues to own the editable path. Runtime
@@ -360,6 +372,106 @@ impl RuntimePresentationComponent {
 }
 
 impl RuntimeSessionService {
+    /// Captures presentation state owned only by one pane's resume transition.
+    pub(crate) fn snapshot_agent_resume_presentation(
+        &self,
+        pane_id: &str,
+    ) -> RuntimeAgentResumePresentationSnapshot {
+        RuntimeAgentResumePresentationSnapshot {
+            prompt_input: self.presentation.agent_prompt_inputs.get(pane_id).cloned(),
+            shell_output_status_lines: self
+                .presentation
+                .agent_shell_output_status_lines
+                .get(pane_id)
+                .cloned(),
+            projection: self
+                .presentation
+                .agent_presentation_projection_cache
+                .get(pane_id)
+                .cloned(),
+            pending_resize: self
+                .presentation
+                .pending_agent_presentation_resize_sizes
+                .get(pane_id)
+                .copied(),
+            replay_active: self
+                .presentation
+                .agent_presentation_replay_panes
+                .contains(pane_id),
+            copy_modes: self
+                .presentation
+                .copy
+                .active_copy_modes
+                .iter()
+                .filter(|((candidate, _), _)| candidate == pane_id)
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            scrollback_surfaces: self
+                .presentation
+                .copy
+                .scrollback_copy_mode_panes
+                .iter()
+                .filter(|(candidate, _)| candidate == pane_id)
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Restores one pane's exact presentation state after resume failure.
+    pub(crate) fn restore_agent_resume_presentation(
+        &mut self,
+        pane_id: &str,
+        snapshot: RuntimeAgentResumePresentationSnapshot,
+    ) {
+        self.presentation.agent_prompt_inputs.remove(pane_id);
+        if let Some(value) = snapshot.prompt_input {
+            self.presentation
+                .agent_prompt_inputs
+                .insert(pane_id.to_string(), value);
+        }
+        self.presentation
+            .agent_shell_output_status_lines
+            .remove(pane_id);
+        if let Some(value) = snapshot.shell_output_status_lines {
+            self.presentation
+                .agent_shell_output_status_lines
+                .insert(pane_id.to_string(), value);
+        }
+        self.presentation
+            .agent_presentation_projection_cache
+            .remove(pane_id);
+        if let Some(value) = snapshot.projection {
+            self.presentation
+                .agent_presentation_projection_cache
+                .insert(pane_id.to_string(), value);
+        }
+        self.presentation
+            .pending_agent_presentation_resize_sizes
+            .remove(pane_id);
+        if let Some(value) = snapshot.pending_resize {
+            self.presentation
+                .pending_agent_presentation_resize_sizes
+                .insert(pane_id.to_string(), value);
+        }
+        self.presentation
+            .agent_presentation_replay_panes
+            .remove(pane_id);
+        if snapshot.replay_active {
+            self.presentation
+                .agent_presentation_replay_panes
+                .insert(pane_id.to_string());
+        }
+        self.clear_copy_state_for_pane(pane_id);
+        self.presentation
+            .copy
+            .active_copy_modes
+            .extend(snapshot.copy_modes);
+        self.presentation
+            .copy
+            .scrollback_copy_mode_panes
+            .extend(snapshot.scrollback_surfaces);
+    }
+
     /// Acknowledges pending completion attention for the currently focused pane.
     pub(crate) fn acknowledge_focused_pane_completion(&mut self) {
         if let Ok(pane_id) = self.active_pane_id() {

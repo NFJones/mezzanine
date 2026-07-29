@@ -643,8 +643,57 @@ impl AgentTranscriptStore {
             .iter()
             .map(|session| session.summary.conversation_id.clone())
             .collect::<BTreeSet<_>>();
+        if self.root.exists() {
+            for entry in std_fs::read_dir(&self.root)? {
+                let path = entry?.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let Some(conversation_id) = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(ToOwned::to_owned)
+                else {
+                    continue;
+                };
+                if transcript_ids.contains(&conversation_id)
+                    || (!path.join(SESSION_PRESENTATION_FILE_NAME).exists()
+                        && !path
+                            .join(SESSION_PRESENTATION_COMPRESSED_FILE_NAME)
+                            .exists())
+                {
+                    continue;
+                }
+                let presentation = self.inspect_presentation(&conversation_id)?;
+                let (Some(first), Some(last)) = (presentation.first(), presentation.last()) else {
+                    continue;
+                };
+                saved.push(SavedAgentSession {
+                    summary: ConversationSummary {
+                        conversation_id: conversation_id.clone(),
+                        entries: 0,
+                        first_created_at_unix_seconds: first.created_at_unix_seconds,
+                        last_created_at_unix_seconds: last.created_at_unix_seconds,
+                        last_turn_id: last.turn_id.clone().unwrap_or_default(),
+                        agent_id: String::new(),
+                        pane_id: last.pane_id.clone(),
+                        directory: names
+                            .get(&conversation_id)
+                            .and_then(|session| session.directory.clone()),
+                        initial_prompt: None,
+                        latest_user_prompt: None,
+                    },
+                    name: names
+                        .get(&conversation_id)
+                        .map(|session| session.name.clone()),
+                });
+            }
+        }
         for named in names.values() {
-            if transcript_ids.contains(&named.conversation_id) {
+            if saved
+                .iter()
+                .any(|session| session.summary.conversation_id == named.conversation_id)
+            {
                 continue;
             }
             saved.push(SavedAgentSession {
