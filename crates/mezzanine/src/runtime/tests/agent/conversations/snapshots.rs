@@ -60,6 +60,12 @@ fn runtime_terminal_snapshot_commands_create_and_resume_snapshots() {
         let policy = service.permission_policy_for_pane(pane_id);
         assert_eq!(policy.preset, mez_agent::PermissionPreset::ReadOnly);
         assert_eq!(policy.approval_policy, ApprovalPolicy::Ask);
+        let process_screen = service.process_pane_screen(pane_id).unwrap();
+        let process_text = process_screen.normal_content_lines().join("\n");
+        assert!(
+            process_text.contains("pane restarted with a fresh primary PID"),
+            "{process_text}"
+        );
     }
     let events = service
         .event_log()

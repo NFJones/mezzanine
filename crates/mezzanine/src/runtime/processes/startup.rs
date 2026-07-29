@@ -104,11 +104,31 @@ impl RuntimeSessionService {
                 explicit_command,
                 start_directory.as_deref(),
             )?;
-            if let Some(mut screen) = restored_screen {
-                screen.feed(b"\n[mezzanine: pane restarted with a fresh primary PID]\n");
+            if let Some(screen) = restored_screen {
                 self.process
                     .process_pane_screens
                     .insert(started.pane_id.clone(), screen);
+            }
+            if let Some(screen) = self
+                .process
+                .process_pane_screens
+                .get_mut(started.pane_id.as_str())
+            {
+                let marker_row = screen
+                    .visible_lines()
+                    .iter()
+                    .rposition(|line| !line.trim().is_empty())
+                    .map(|row| row.saturating_add(1))
+                    .unwrap_or(0);
+                let marker = if marker_row == 0 {
+                    "[mezzanine: pane restarted with a fresh primary PID]\r\n".to_string()
+                } else {
+                    format!(
+                        "\x1b[{};1H\x1b[1E[mezzanine: pane restarted with a fresh primary PID]\r\n",
+                        marker_row
+                    )
+                };
+                screen.feed(marker.as_bytes());
             }
             self.session.set_pane_live_state(&started.pane_id, true)?;
             self.append_lifecycle_event(
