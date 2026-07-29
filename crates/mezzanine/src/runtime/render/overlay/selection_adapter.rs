@@ -159,7 +159,9 @@ pub(super) fn render_record_browser_overlay(
             .or(Some(0))
     };
     overlay.search_input = None;
+    overlay.search_query = None;
     overlay.search_match = None;
+    overlay.search_status = None;
     true
 }
 

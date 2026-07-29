@@ -1806,6 +1806,59 @@ fn runtime_agent_shell_show_approvals_preserves_search_input_precedence() {
     );
 }
 
+/// Verifies a record-browser refresh clears an unmatched search status instead
+/// of letting it hide the controls for the refreshed approval list.
+#[test]
+fn runtime_agent_shell_record_browser_refresh_clears_stale_search_status() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let approval_id = service
+        .queue_blocked_approval(pending_approval_request(
+            "agent-search-refresh",
+            &pane_id,
+            "cargo audit",
+        ))
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-approvals")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    apply_record_browser_input(&mut service, &primary, b"/");
+    apply_record_browser_input(&mut service, &primary, b"absent");
+    apply_record_browser_input(&mut service, &primary, b"\r");
+
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .unwrap()
+            .search_status
+            .as_deref(),
+        Some("pattern not found: absent")
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"a");
+
+    assert_eq!(
+        service.blocked_approvals().get(&approval_id).unwrap().state,
+        mez_agent::permissions::BlockedApprovalState::Approved
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    assert_eq!(overlay.search_input, None);
+    assert_eq!(overlay.search_query, None);
+    assert_eq!(overlay.search_match, None);
+    assert_eq!(overlay.search_status, None);
+}
+
 /// Verifies a concurrently settled approval cannot transfer a browser
 /// decision to the row that moves into its former list position.
 ///
