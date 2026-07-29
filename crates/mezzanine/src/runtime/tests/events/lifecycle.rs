@@ -729,10 +729,29 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
     transcript_store
         .save_agent_session_metadata(service.session().id.as_str(), &routed_metadata)
         .unwrap();
+    transcript_store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id: conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            pane_id: "%1".to_string(),
+            turn_id: Some("turn-running-restore".to_string()),
+            terminal_width: 80,
+            style_names: vec!["assistant".to_string()],
+            display_lines: vec!["durable restart projection".to_string()],
+            copy_lines: vec!["durable restart projection".to_string()],
+            ansi_text: None,
+            source_text: Some("durable restart projection".to_string()),
+            source_content_type: Some(mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string()),
+        })
+        .unwrap();
 
     let mut restored = test_runtime_service();
     restored.session.id = service.session().id.clone();
     restored.set_agent_transcript_store(transcript_store.clone());
+    let mut process_screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 120).unwrap();
+    process_screen.feed(b"process restore seed");
+    restored.set_process_pane_screen("%1", process_screen);
     let restored_count = restored
         .restore_agent_sessions_from_transcript_store()
         .unwrap();
@@ -750,6 +769,34 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
     assert_eq!(restored_turn.state, AgentTurnState::Interrupted);
     assert!(restored.pending_agent_provider_tasks().is_empty());
     assert!(!restored.has_active_routed_workflow("turn-running-restore"));
+    assert_eq!(
+        restored
+            .agent_pane_screen_state("%1")
+            .unwrap()
+            .conversation_id(),
+        conversation_id
+    );
+    let restored_agent_text = restored
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        restored_agent_text.contains("durable restart projection"),
+        "{restored_agent_text}"
+    );
+    assert!(
+        restored_agent_text.contains("routed workflow was interrupted"),
+        "{restored_agent_text}"
+    );
+    let restored_process_text = restored
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(restored_process_text.contains("process restore seed"));
+    assert!(!restored_process_text.contains("durable restart projection"));
+    assert!(!restored_process_text.contains("routed workflow was interrupted"));
     let restored_metadata = transcript_store
         .load_agent_session_metadata(restored.session().id.as_str())
         .unwrap();

@@ -227,6 +227,12 @@ impl RuntimeSessionService {
                 ),
             )?;
             self.reload_agent_prompt_history_for_pane(&metadata.pane_id)?;
+            let presentation_entries =
+                store.inspect_presentation_replay_tail(&metadata.conversation_id, 200)?;
+            self.replay_agent_presentation_entries_to_terminal_buffer(
+                &metadata.pane_id,
+                &presentation_entries,
+            )?;
             if let Some(turn_id) = running_turn_id {
                 self.agent_turn_ledger_mut().start_turn(AgentTurnRecord {
                     turn_id: turn_id.clone(),
