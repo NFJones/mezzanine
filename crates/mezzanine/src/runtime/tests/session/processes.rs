@@ -396,6 +396,14 @@ fn runtime_pane_screen_configuration_and_cleanup_cover_both_surfaces() {
     service
         .ensure_agent_pane_screen("%1", &conversation_id, size)
         .unwrap();
+    service
+        .presentation
+        .seed_agent_presentation_state_for_tests("%1", &conversation_id, size);
+    assert!(
+        service
+            .presentation
+            .has_agent_presentation_state_for_tests("%1")
+    );
 
     service.configure_pane_screen_history(17, 3).unwrap();
     assert_eq!(
@@ -418,9 +426,60 @@ fn runtime_pane_screen_configuration_and_cleanup_cover_both_surfaces() {
         3
     );
 
-    service.cleanup_removed_pane_runtime_state("%1");
+    service.cleanup_removed_pane_runtime_state("%1").unwrap();
+    service.cleanup_removed_pane_runtime_state("%1").unwrap();
     assert!(service.process_pane_screen("%1").is_none());
     assert!(service.agent_pane_screen("%1").is_none());
+    assert!(
+        !service
+            .presentation
+            .has_agent_presentation_state_for_tests("%1")
+    );
+}
+
+/// Verifies closing a pane immediately removes its durable active-session
+/// metadata instead of waiting for a later checkpoint-triggering event.
+#[test]
+fn runtime_pane_close_immediately_checkpoints_remaining_agent_sessions() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("pane-close-agent-checkpoint"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%2")
+        .unwrap();
+    service.checkpoint_agent_session_metadata().unwrap();
+    assert_eq!(
+        transcript_store
+            .load_agent_session_metadata(service.session().id.as_str())
+            .unwrap()
+            .len(),
+        2
+    );
+
+    service
+        .execute_terminal_command(&primary, "kill-pane --force -t %2")
+        .unwrap();
+
+    let metadata = transcript_store
+        .load_agent_session_metadata(service.session().id.as_str())
+        .unwrap();
+    assert_eq!(metadata.len(), 1, "{metadata:#?}");
+    assert_eq!(metadata[0].pane_id, "%1");
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies terminal-generated response bytes are forwarded back to the pane.

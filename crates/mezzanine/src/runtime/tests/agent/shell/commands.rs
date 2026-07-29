@@ -2154,7 +2154,7 @@ fn runtime_agent_shell_sandbox_mutations_are_pane_local_by_default() {
     assert!(status.contains("Source | pane override"), "{status}");
     assert_eq!(service.session.config_generation, generation);
 
-    service.cleanup_removed_pane_runtime_state("%1");
+    service.cleanup_removed_pane_runtime_state("%1").unwrap();
     assert!(matches!(
         service.sandbox_config_for_pane("%1"),
         SandboxConfig::PolicyOnly
@@ -2382,7 +2382,7 @@ fn runtime_pane_permission_cleanup_isolated_to_removed_pane() {
     service.set_pane_approval_policy_override("%1", Some(ApprovalPolicy::FullAccess));
     service.set_pane_approval_policy_override("%2", Some(ApprovalPolicy::HostAccess));
 
-    service.cleanup_removed_pane_runtime_state("%2");
+    service.cleanup_removed_pane_runtime_state("%2").unwrap();
 
     assert_eq!(
         service.permission_policy_for_pane("%1").approval_policy,

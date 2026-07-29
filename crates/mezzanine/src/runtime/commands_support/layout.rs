@@ -442,7 +442,7 @@ pub(super) fn runtime_kill_pane_command(
         service.mark_pane_closing(pane_id.clone());
         let _ = service.stop_active_pane_pipe(pane.id.as_str());
         let terminated = usize::from(service.terminate_runtime_pane_process(&pane_id, force)?);
-        service.cleanup_removed_pane_runtime_state(&pane_id);
+        service.cleanup_removed_pane_runtime_state(&pane_id)?;
         terminated
     } else {
         0
@@ -505,7 +505,7 @@ pub(super) fn runtime_kill_window_command(
     service.stop_active_pane_pipes_for(removed_pane_id_refs.as_slice());
     let terminated = service.terminate_runtime_pane_processes(removed_pane_id_refs, force)?;
     for pane_id in &removed_pane_ids {
-        service.cleanup_removed_pane_runtime_state(pane_id);
+        service.cleanup_removed_pane_runtime_state(pane_id)?;
     }
     service.sync_pane_resize_effects(&transition.effects)?;
     let synced = transition.effects.len();
@@ -572,7 +572,7 @@ pub(super) fn runtime_kill_group_command(
     service.stop_active_pane_pipes_for(removed_pane_id_refs.as_slice());
     let terminated = service.terminate_runtime_pane_processes(removed_pane_id_refs, force)?;
     for pane_id in &removed_pane_ids {
-        service.cleanup_removed_pane_runtime_state(pane_id);
+        service.cleanup_removed_pane_runtime_state(pane_id)?;
     }
     service.sync_pane_resize_effects(&transition.effects)?;
     let synced = transition.effects.len();

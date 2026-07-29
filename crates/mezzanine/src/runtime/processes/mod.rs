@@ -2135,8 +2135,9 @@ impl RuntimeSessionService {
     /// model first, then call this helper to clear prompt, readiness, screen,
     /// deferred I/O, and subagent bookkeeping that would otherwise make a
     /// closed pane appear partially alive to later agent/session surfaces.
-    pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) {
+    pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) -> Result<()> {
         self.presentation.remove_completion_attention(pane_id);
+        self.presentation.remove_agent_presentation_state(pane_id);
         let removed_transaction_markers = self
             .process
             .running_shell_transactions
@@ -2256,6 +2257,16 @@ impl RuntimeSessionService {
             .map(|window| window.id.to_string())
             .collect::<BTreeSet<_>>();
         self.retain_live_subagent_windows(&live_windows);
+        let pane_is_live = self
+            .session
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .any(|pane| pane.id.as_str() == pane_id);
+        if !pane_is_live {
+            self.checkpoint_agent_session_metadata()?;
+        }
+        Ok(())
     }
 
     /// Runs the initial pane descriptor operation for this subsystem.

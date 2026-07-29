@@ -456,7 +456,7 @@ fn runtime_agent_shell_routing_policy_scopes_changes_and_preserves_subagents() {
         persisted_before_rejections
     );
 
-    service.cleanup_removed_pane_runtime_state("%1");
+    service.cleanup_removed_pane_runtime_state("%1").unwrap();
     assert_eq!(service.agent_root_routing_policy_override("%1"), None);
     let _ = fs::remove_dir_all(config_root);
 }

@@ -980,7 +980,7 @@ impl RuntimeSessionService {
             let removed_pane_id = pane.id.to_string();
             let _ = self.stop_active_pane_pipe(&removed_pane_id);
             let _ = self.terminate_runtime_pane_process(&removed_pane_id, true);
-            self.cleanup_removed_pane_runtime_state(&removed_pane_id);
+            let _ = self.cleanup_removed_pane_runtime_state(&removed_pane_id);
             let _ = self.sync_pane_resize_effects(&transition.effects);
         }
     }

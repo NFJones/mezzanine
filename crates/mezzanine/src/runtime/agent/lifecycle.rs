@@ -549,7 +549,7 @@ impl RuntimeSessionService {
         let Some(primary_client_id) = self.session.primary_client_id().cloned() else {
             for agent_id in descendants {
                 if let Some(pane_id) = runtime_agent_pane_id(&agent_id) {
-                    self.cleanup_removed_pane_runtime_state(pane_id.as_str());
+                    self.cleanup_removed_pane_runtime_state(pane_id.as_str())?;
                 }
             }
             return Ok(0);
@@ -580,7 +580,7 @@ impl RuntimeSessionService {
                     ),
                 )?;
             } else {
-                self.cleanup_removed_pane_runtime_state(&pane_id_string);
+                self.cleanup_removed_pane_runtime_state(&pane_id_string)?;
             }
         }
         Ok(closed)

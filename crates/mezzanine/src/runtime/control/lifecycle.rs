@@ -274,7 +274,7 @@ impl RuntimeSessionService {
         let terminated_panes =
             self.terminate_runtime_pane_processes(replaced_pane_id_refs.iter().copied(), true)?;
         for pane_id in &replaced_pane_ids {
-            self.cleanup_removed_pane_runtime_state(pane_id);
+            self.cleanup_removed_pane_runtime_state(pane_id)?;
         }
         self.active_copy_modes_mut().clear();
         self.clear_pane_screens();
@@ -336,7 +336,7 @@ impl RuntimeSessionService {
                 let _ = self
                     .terminate_runtime_pane_processes(restored_pane_id_refs.iter().copied(), true);
                 for pane_id in &restored_pane_ids {
-                    self.cleanup_removed_pane_runtime_state(pane_id);
+                    let _ = self.cleanup_removed_pane_runtime_state(pane_id);
                 }
                 self.session = previous_session;
                 self.session.replace_window_created_at_unix_seconds(

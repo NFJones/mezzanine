@@ -358,10 +358,10 @@ impl RuntimeSessionService {
                                     ),
                                 )?;
                             } else {
-                                self.cleanup_removed_pane_runtime_state(child_pane_id.as_str());
+                                self.cleanup_removed_pane_runtime_state(child_pane_id.as_str())?;
                             }
                         } else {
-                            self.cleanup_removed_pane_runtime_state(child_pane_id.as_str());
+                            self.cleanup_removed_pane_runtime_state(child_pane_id.as_str())?;
                         }
                     } else {
                         self.deregister_macro_managed_subagent(child_agent_id);
@@ -421,10 +421,10 @@ impl RuntimeSessionService {
                                     ),
                                 )?;
                             } else {
-                                self.cleanup_removed_pane_runtime_state(child_pane_id.as_str());
+                                self.cleanup_removed_pane_runtime_state(child_pane_id.as_str())?;
                             }
                         } else {
-                            self.cleanup_removed_pane_runtime_state(child_pane_id.as_str());
+                            self.cleanup_removed_pane_runtime_state(child_pane_id.as_str())?;
                         }
                     } else {
                         self.deregister_macro_managed_subagent(child_agent_id);

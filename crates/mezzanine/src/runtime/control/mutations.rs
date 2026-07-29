@@ -360,7 +360,7 @@ impl RuntimeSessionService {
             let pane_id = pane.id.to_string();
             let _ = self.stop_active_pane_pipe(pane.id.as_str());
             let terminated = usize::from(self.terminate_runtime_pane_process(&pane_id, force)?);
-            self.cleanup_removed_pane_runtime_state(&pane_id);
+            self.cleanup_removed_pane_runtime_state(&pane_id)?;
             terminated
         } else {
             0
@@ -433,7 +433,7 @@ impl RuntimeSessionService {
         self.stop_active_pane_pipes_for(pane_id_refs.as_slice());
         let terminated = self.terminate_runtime_pane_processes(pane_id_refs, force)?;
         for pane_id in &pane_ids {
-            self.cleanup_removed_pane_runtime_state(pane_id);
+            self.cleanup_removed_pane_runtime_state(pane_id)?;
         }
         self.sync_pane_resize_effects(&transition.effects)?;
         self.session

@@ -328,6 +328,49 @@ impl RuntimePresentationComponent {
         self.completion_attention_panes.remove(pane_id);
     }
 
+    /// Removes every pane-keyed agent presentation artifact during teardown.
+    pub(crate) fn remove_agent_presentation_state(&mut self, pane_id: &str) {
+        self.agent_prompt_inputs.remove(pane_id);
+        self.agent_shell_output_status_lines.remove(pane_id);
+        self.agent_presentation_replay_panes.remove(pane_id);
+        self.pending_agent_presentation_resize_sizes.remove(pane_id);
+        self.agent_presentation_projection_cache.remove(pane_id);
+    }
+
+    /// Seeds every pane-keyed agent presentation map for teardown regressions.
+    #[cfg(test)]
+    pub(crate) fn seed_agent_presentation_state_for_tests(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        size: Size,
+    ) {
+        self.agent_prompt_inputs
+            .insert(pane_id.to_string(), default_runtime_agent_prompt_input());
+        self.agent_shell_output_status_lines
+            .insert(pane_id.to_string(), vec!["pending status".to_string()]);
+        self.agent_presentation_replay_panes
+            .insert(pane_id.to_string());
+        self.pending_agent_presentation_resize_sizes
+            .insert(pane_id.to_string(), size);
+        self.agent_presentation_projection_cache
+            .insert(pane_id.to_string(), (conversation_id.to_string(), size));
+    }
+
+    /// Reports whether any pane-keyed agent presentation artifact remains.
+    #[cfg(test)]
+    pub(crate) fn has_agent_presentation_state_for_tests(&self, pane_id: &str) -> bool {
+        self.agent_prompt_inputs.contains_key(pane_id)
+            || self.agent_shell_output_status_lines.contains_key(pane_id)
+            || self.agent_presentation_replay_panes.contains(pane_id)
+            || self
+                .pending_agent_presentation_resize_sizes
+                .contains_key(pane_id)
+            || self
+                .agent_presentation_projection_cache
+                .contains_key(pane_id)
+    }
+
     /// Replaces validated presentation settings and synchronizes global width policy.
     pub(crate) fn apply_settings(&mut self, settings: RuntimePresentationSettings) {
         crate::host::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
