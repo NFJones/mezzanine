@@ -5,6 +5,7 @@
 //! execution, and agent-shell response application; deterministic overlay and
 //! selector state transitions remain in `mez_mux`.
 
+use super::paste::runtime_readline_paste_bytes;
 use super::{
     AgentTerminalPresentationStyle, AgentTurnState, DEFAULT_READLINE_HISTORY_LIMIT,
     ReadlineOutcome, ReadlinePromptKind, Result, RuntimeAgentShellDisplayOutput,
@@ -242,7 +243,7 @@ impl RuntimeSessionService {
             return self.apply_attached_agent_prompt_input_for_pane(
                 primary_client_id,
                 pane_id,
-                &super::runtime_readline_paste_bytes(&content),
+                &runtime_readline_paste_bytes(&content),
             );
         }
         if input == b"\x1b" {
