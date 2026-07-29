@@ -2400,6 +2400,16 @@ impl RuntimeSessionService {
         window: &mez_mux::layout::Window,
         pane_id: &str,
     ) -> Option<Size> {
+        let size = self.pane_presentation_size_for(window, pane_id)?;
+        Some(self.pane_process_size_after_agent_prompt_reservation(pane_id, size))
+    }
+
+    /// Returns the process terminal's unreserved presentation geometry.
+    pub(crate) fn pane_presentation_size_for(
+        &self,
+        window: &mez_mux::layout::Window,
+        pane_id: &str,
+    ) -> Option<Size> {
         let pane = window
             .panes()
             .iter()
@@ -2426,12 +2436,7 @@ impl RuntimeSessionService {
                 self.pane_frames_enabled(),
                 self.pane_frame_position(),
             );
-            return Some(
-                self.pane_process_size_after_agent_prompt_reservation(
-                    pane.id.as_str(),
-                    content_size,
-                ),
-            );
+            return Some(content_size);
         }
 
         let body_size = rendered_window_body_size(display_size, window_frame_visible);
@@ -2445,7 +2450,7 @@ impl RuntimeSessionService {
             self.pane_frames_enabled(),
             self.pane_frame_position(),
         );
-        Some(self.pane_process_size_after_agent_prompt_reservation(pane.id.as_str(), content_size))
+        Some(content_size)
     }
 
     /// Removes rows reserved for the pane-local agent prompt from the PTY size

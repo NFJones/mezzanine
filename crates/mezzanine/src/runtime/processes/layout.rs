@@ -669,6 +669,13 @@ impl RuntimeSessionService {
                 .find(|window| window.id == descriptor.window_id)
                 .and_then(|window| self.pane_process_size_for(window, pane_id))
                 .unwrap_or(effect.size);
+            let process_presentation_size = self
+                .session
+                .windows()
+                .iter()
+                .find(|window| window.id == descriptor.window_id)
+                .and_then(|window| self.pane_presentation_size_for(window, pane_id))
+                .unwrap_or(effect.size);
             if self.process.pane_processes.contains_pane(pane_id) {
                 self.process
                     .pane_processes
@@ -682,39 +689,34 @@ impl RuntimeSessionService {
                     },
                 );
             }
-            let pane_screen_width_changed = self
+            if let Some(screen) = self
                 .process
                 .process_pane_screens
-                .get(descriptor.pane_id.as_str())
+                .get_mut(descriptor.pane_id.as_str())
+            {
+                screen.resize(process_presentation_size);
+            }
+            let agent_screen_width_changed = self
+                .agent_pane_screen(pane_id)
                 .is_some_and(|screen| screen.size().columns != process_size.columns);
             let defer_agent_presentation =
-                pane_screen_width_changed && self.presentation.mouse_resize_drag_active();
+                agent_screen_width_changed && self.presentation.mouse_resize_drag_active();
             if defer_agent_presentation {
                 self.presentation
                     .defer_agent_presentation_resize(pane_id, process_size);
-                if let Some(screen) = self
-                    .process
-                    .process_pane_screens
-                    .get_mut(descriptor.pane_id.as_str())
-                {
+                if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
                     screen.resize(process_size);
                 }
-            } else if pane_screen_width_changed {
+            } else if agent_screen_width_changed {
                 self.presentation
                     .clear_deferred_agent_presentation_resize(pane_id);
                 if self.rebuild_agent_presentation_after_resize(pane_id, process_size)? {
                     // Source-backed agent output was atomically rebuilt at the new width.
-                } else if let Some(screen) = self
-                    .process
-                    .process_pane_screens
-                    .get_mut(descriptor.pane_id.as_str())
-                {
+                } else if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
                     screen.resize(process_size);
                 }
-            } else if let Some(screen) = self
-                .process
-                .process_pane_screens
-                .get_mut(descriptor.pane_id.as_str())
+            } else if self.presented_pane_surface(pane_id) == crate::runtime::PaneSurfaceKind::Agent
+                && let Some(screen) = self.agent_pane_screen_mut(pane_id)
             {
                 screen.resize(process_size);
             }

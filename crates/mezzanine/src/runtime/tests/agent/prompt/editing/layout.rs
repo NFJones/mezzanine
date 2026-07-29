@@ -349,7 +349,11 @@ fn runtime_agent_shell_toggle_syncs_process_size_with_reserved_prompt_rows() {
     assert_eq!(enter_report.mux_actions_applied, 1);
     assert_eq!(agent_size.columns, initial_size.columns);
     assert!(agent_size.rows < initial_size.rows);
-    assert_eq!(service.pane_screen("%1").unwrap().size(), agent_size);
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        initial_size
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap().size(), agent_size);
 
     let exit_report = service
         .apply_attached_terminal_step_plan(&primary, &step)
@@ -363,6 +367,10 @@ fn runtime_agent_shell_toggle_syncs_process_size_with_reserved_prompt_rows() {
 
     assert_eq!(exit_report.mux_actions_applied, 1);
     assert_eq!(restored_size, initial_size);
-    assert_eq!(service.pane_screen("%1").unwrap().size(), initial_size);
+    assert_eq!(
+        service.process_pane_screen("%1").unwrap().size(),
+        initial_size
+    );
+    assert_eq!(service.agent_pane_screen("%1").unwrap().size(), agent_size);
     service.terminate_all_pane_processes().unwrap();
 }
