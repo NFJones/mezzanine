@@ -220,6 +220,56 @@ fn runtime_background_completion_attention_projects_and_acknowledges_on_focus() 
     );
 }
 
+/// Verifies a background subagent completion does not flash a pane title pill.
+///
+/// Child turns report their result through their parent action, so highlighting
+/// their own pane would create completion noise without a user-owned turn
+/// reaching a terminal outcome.
+#[test]
+fn runtime_background_subagent_completion_does_not_register_attention() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let background_pane = service.active_pane_id().unwrap();
+    service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+
+    service
+        .start_agent_turn(mez_agent::AgentTurnRecord {
+            turn_id: "child-attention-turn".to_string(),
+            agent_id: format!("agent-{background_pane}"),
+            pane_id: background_pane.clone(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 200,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: Some("root-attention-turn".to_string()),
+            cooperation_mode: None,
+            state: mez_agent::AgentTurnState::Queued,
+            initial_capability: None,
+        })
+        .unwrap();
+    service
+        .finish_agent_turn(
+            &background_pane,
+            "child-attention-turn",
+            mez_agent::AgentTurnState::Completed,
+        )
+        .unwrap();
+
+    let pane_context = service.terminal_frame_context();
+    assert!(
+        pane_context
+            .panes
+            .get(&background_pane)
+            .is_some_and(|pane| !pane.completion_attention)
+    );
+    assert_eq!(pane_context.animation_tick_ms, 0);
+}
+
 /// Verifies that the pane renderer blocks shell prompt repaint bytes while an
 /// agent turn is running, even when no shell transaction is currently active.
 /// Provider iteration can leave the pane between command result handling and

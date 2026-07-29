@@ -131,10 +131,12 @@ impl RuntimeSessionService {
             .runtime_metrics_mut()
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut().finish_turn(turn_id, state)?;
-        if matches!(
-            state,
-            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) {
+        if turn.parent_turn_id.is_none()
+            && matches!(
+                state,
+                AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+            )
+        {
             let focused_pane_id = self.active_pane_id().ok().map(|id| id.to_string());
             self.presentation
                 .register_completion_attention(pane_id, focused_pane_id.as_deref());
@@ -226,10 +228,12 @@ impl RuntimeSessionService {
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut()
             .finish_turn(&turn.turn_id, state)?;
-        if matches!(
-            state,
-            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) {
+        if turn.parent_turn_id.is_none()
+            && matches!(
+                state,
+                AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+            )
+        {
             let focused_pane_id = self.active_pane_id().ok().map(|id| id.to_string());
             self.presentation
                 .register_completion_attention(&turn.pane_id, focused_pane_id.as_deref());
