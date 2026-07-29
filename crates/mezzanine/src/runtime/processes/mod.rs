@@ -681,7 +681,10 @@ impl RuntimeSessionService {
     }
 
     /// Replaces the authoritative process terminal screen for one pane.
-    #[allow(dead_code, reason = "explicit process-screen fixture API used by test targets")]
+    #[allow(
+        dead_code,
+        reason = "explicit process-screen fixture API used by test targets"
+    )]
     pub(crate) fn set_process_pane_screen(
         &mut self,
         pane_id: impl Into<String>,
@@ -818,7 +821,10 @@ impl RuntimeSessionService {
     }
 
     /// Replaces process state through the temporary compatibility API.
-    #[allow(dead_code, reason = "compatibility fixture API retained during screen migration")]
+    #[allow(
+        dead_code,
+        reason = "compatibility fixture API retained during screen migration"
+    )]
     pub(crate) fn set_pane_screen(&mut self, pane_id: impl Into<String>, screen: TerminalScreen) {
         self.set_process_pane_screen(pane_id, screen);
     }

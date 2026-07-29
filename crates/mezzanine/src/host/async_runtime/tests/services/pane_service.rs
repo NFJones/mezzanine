@@ -935,18 +935,6 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         assert_eq!(provider_report.accepted, 1);
         assert_eq!(provider_report.applied, 1);
 
-        let first_seen = wait_for_rendered_text(
-            &client_handle,
-            ClientViewRole::Primary,
-            "AGENT_ASYNC_FIRST_COMMAND",
-        )
-        .await
-        .unwrap();
-        assert!(
-            first_seen.contains("AGENT_ASYNC_FIRST_COMMAND"),
-            "{first_seen}"
-        );
-
         let mut next_task = None;
         for _ in 0..200 {
             if let Some(task) = client_handle

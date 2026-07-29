@@ -152,6 +152,7 @@ impl RuntimeSessionService {
             .session
             .active_window()
             .is_none_or(|window| window.active_pane().id.as_str() != descriptor.pane_id.as_str());
+        let render_mode = self.pane_output_render_mode(output.pane_id.as_str());
         let transaction_bytes =
             self.visible_pane_output_bytes(output.pane_id.as_str(), &output.bytes);
         let render_bytes =
@@ -161,46 +162,80 @@ impl RuntimeSessionService {
             .pane_transaction_osc_screens
             .get(output.pane_id.as_str())
             .is_some_and(TerminalScreen::alternate_screen_active);
-        let (osc_events, transaction_alternate_active, transaction_screen_switched) = self
-            .terminal_osc_events_for_pane_bytes(
-                output.pane_id.as_str(),
-                descriptor_size,
-                &transaction_bytes,
-            )?;
+        let (
+            osc_events,
+            transaction_alternate_active,
+            transaction_screen_switched,
+            terminal_response_bytes,
+        ) = self.terminal_protocol_observation_for_pane_bytes(
+            output.pane_id.as_str(),
+            descriptor_size,
+            &transaction_bytes,
+        )?;
         let (
             activity_events,
             bell_events,
             previous_render_alternate_active,
             render_alternate_active,
             render_screen_switched,
-            terminal_response_bytes,
-        ) = {
-            let screen = self
-                .process
-                .process_pane_screens
-                .entry(output.pane_id.clone())
-                .or_insert(TerminalScreen::new_with_history_config(
+        ) = match render_mode {
+            PaneOutputRenderMode::Normal => {
+                let screen = self
+                    .process
+                    .process_pane_screens
+                    .entry(output.pane_id.clone())
+                    .or_insert(TerminalScreen::new_with_history_config(
+                        descriptor_size,
+                        self.process.settings.terminal_history_limit,
+                        self.process.settings.terminal_history_rotate_lines,
+                    )?);
+                let previous_activity_events = screen.activity_events();
+                let previous_bell_events = screen.bell_events();
+                let previous_alternate_active = screen.alternate_screen_active();
+                let previous_alternate_generation = screen.alternate_screen_generation();
+                screen.feed(&render_bytes);
+                let _ = screen.drain_osc_events();
+                let _ = screen.drain_terminal_response_bytes();
+                (
+                    screen
+                        .activity_events()
+                        .saturating_sub(previous_activity_events),
+                    screen.bell_events().saturating_sub(previous_bell_events),
+                    previous_alternate_active,
+                    screen.alternate_screen_active(),
+                    screen.alternate_screen_generation() != previous_alternate_generation,
+                )
+            }
+            PaneOutputRenderMode::VerboseAgentAction | PaneOutputRenderMode::Trace => {
+                let conversation_id = self
+                    .agent_shell_store()
+                    .get(output.pane_id.as_str())
+                    .map(|session| session.session_id.clone())
+                    .ok_or_else(|| {
+                        MezError::invalid_state("agent PTY presentation target session not found")
+                    })?;
+                let screen = self.ensure_agent_pane_screen(
+                    output.pane_id.as_str(),
+                    &conversation_id,
                     descriptor_size,
-                    self.process.settings.terminal_history_limit,
-                    self.process.settings.terminal_history_rotate_lines,
-                )?);
-            let previous_activity_events = screen.activity_events();
-            let previous_bell_events = screen.bell_events();
-            let previous_alternate_active = screen.alternate_screen_active();
-            let previous_alternate_generation = screen.alternate_screen_generation();
-            screen.feed(&render_bytes);
-            let _ = screen.drain_osc_events();
-            let terminal_response_bytes = screen.drain_terminal_response_bytes();
-            (
-                screen
-                    .activity_events()
-                    .saturating_sub(previous_activity_events),
-                screen.bell_events().saturating_sub(previous_bell_events),
-                previous_alternate_active,
-                screen.alternate_screen_active(),
-                screen.alternate_screen_generation() != previous_alternate_generation,
-                terminal_response_bytes,
-            )
+                )?;
+                let previous_activity_events = screen.activity_events();
+                let previous_bell_events = screen.bell_events();
+                screen.feed(&render_bytes);
+                let _ = screen.drain_osc_events();
+                let _ = screen.drain_terminal_response_bytes();
+                (
+                    screen
+                        .activity_events()
+                        .saturating_sub(previous_activity_events),
+                    screen.bell_events().saturating_sub(previous_bell_events),
+                    false,
+                    false,
+                    false,
+                )
+            }
+            PaneOutputRenderMode::HiddenLiveAgentShell
+            | PaneOutputRenderMode::HiddenRetainedAgentShell => (0, 0, false, false, false),
         };
         if !terminal_response_bytes.is_empty() {
             self.write_runtime_pane_input_priority(
@@ -384,7 +419,14 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn pane_output_render_mode(&self, pane_id: &str) -> PaneOutputRenderMode {
-        if self.agent_trace_enabled(pane_id) {
+        if self.agent_trace_enabled(pane_id)
+            && self
+                .agent_shell_store()
+                .get(pane_id)
+                .is_some_and(|session| {
+                    session.visibility != crate::runtime::AgentShellVisibility::Hidden
+                })
+        {
             return PaneOutputRenderMode::Trace;
         }
         let shell_view_enabled = self.agent_shell_view_enabled(pane_id);
@@ -703,14 +745,27 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub(crate) fn terminal_osc_events_for_pane_bytes(
         &mut self,
         pane_id: &str,
         size: Size,
         bytes: &[u8],
     ) -> Result<(Vec<TerminalOscEvent>, bool, bool)> {
+        let (events, alternate_active, screen_switched, _) =
+            self.terminal_protocol_observation_for_pane_bytes(pane_id, size, bytes)?;
+        Ok((events, alternate_active, screen_switched))
+    }
+
+    /// Observes process-owned terminal protocol state without choosing a display surface.
+    fn terminal_protocol_observation_for_pane_bytes(
+        &mut self,
+        pane_id: &str,
+        size: Size,
+        bytes: &[u8],
+    ) -> Result<(Vec<TerminalOscEvent>, bool, bool, Vec<u8>)> {
         if bytes.is_empty() {
-            return Ok((Vec::new(), false, false));
+            return Ok((Vec::new(), false, false, Vec::new()));
         }
         if matches!(
             self.pane_output_render_mode(pane_id),
@@ -721,6 +776,7 @@ impl RuntimeSessionService {
                 self.hidden_agent_shell_osc_events_for_pane_bytes(pane_id, bytes),
                 false,
                 false,
+                Vec::new(),
             ));
         }
         let screen =
@@ -747,7 +803,7 @@ impl RuntimeSessionService {
         screen.feed(bytes);
         let alternate_screen_switched =
             screen.alternate_screen_generation() != previous_alternate_generation;
-        let _ = screen.drain_terminal_response_bytes();
+        let terminal_response_bytes = screen.drain_terminal_response_bytes();
         let events = screen
             .drain_osc_events()
             .into_iter()
@@ -762,6 +818,7 @@ impl RuntimeSessionService {
             events,
             screen.alternate_screen_active(),
             alternate_screen_switched,
+            terminal_response_bytes,
         ))
     }
 

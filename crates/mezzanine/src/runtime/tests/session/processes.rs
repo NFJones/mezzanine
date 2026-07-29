@@ -97,6 +97,181 @@ fn runtime_pane_screens_are_independent_and_conversation_bound() {
     );
 }
 
+/// Verifies pane output reaches exactly one retained display surface for
+/// verbose, trace, and ordinary post-agent process traffic.
+#[test]
+fn runtime_pane_output_routes_each_visible_class_to_one_surface() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let size = Size::new(80, 24).unwrap();
+    let mut process_screen = TerminalScreen::new(size, 100).unwrap();
+    process_screen.feed(b"process seed\r\n");
+    service.set_process_pane_screen("%1", process_screen);
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(size, 100).unwrap();
+    agent_screen.feed(b"agent seed\r\n");
+    service.set_agent_pane_screen("%1", &conversation_id, agent_screen);
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Verbose)
+        .unwrap();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "verbose-marker".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-verbose".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "shell-verbose".to_string(),
+            },
+            pane_id: "%1".to_string(),
+            command: "printf verbose".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid: 7,
+                bytes: b"verbose agent output\r\n".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Trace)
+        .unwrap();
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid: 7,
+                bytes: b"trace agent output\r\n".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+
+    let process_during_agent = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let agent_during_agent = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        process_during_agent.contains("process seed"),
+        "{process_during_agent}"
+    );
+    assert!(
+        !process_during_agent.contains("verbose agent output"),
+        "{process_during_agent}"
+    );
+    assert!(
+        !process_during_agent.contains("trace agent output"),
+        "{process_during_agent}"
+    );
+    assert!(
+        agent_during_agent.contains("agent seed"),
+        "{agent_during_agent}"
+    );
+    assert!(
+        agent_during_agent.contains("verbose agent output"),
+        "{agent_during_agent}"
+    );
+    assert!(
+        agent_during_agent.contains("trace agent output"),
+        "{agent_during_agent}"
+    );
+
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Normal)
+        .unwrap();
+    let observed_before_hidden = service
+        .running_shell_transactions_for_tests()
+        .get("verbose-marker")
+        .unwrap()
+        .observed_output_bytes;
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid: 7,
+                bytes: b"hidden agent output\r\n".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+    let process_after_hidden = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let agent_after_hidden = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let observed_after_hidden = service
+        .running_shell_transactions_for_tests()
+        .get("verbose-marker")
+        .unwrap()
+        .observed_output_bytes;
+    assert_eq!(process_after_hidden, process_during_agent);
+    assert_eq!(agent_after_hidden, agent_during_agent);
+    assert!(observed_after_hidden > observed_before_hidden);
+
+    service.running_shell_transactions_mut_for_tests().clear();
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    service.clear_shell_output_filters_for_foreground_input("%1");
+    service
+        .apply_pane_process_output(
+            mez_mux::process::PaneProcessOutput {
+                pane_id: "%1".to_string(),
+                primary_pid: 7,
+                bytes: b"process output after exit\r\n".to_vec(),
+            },
+            &mut std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+
+    let process_after_exit = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let agent_after_exit = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        process_after_exit.contains("process output after exit"),
+        "{process_after_exit}"
+    );
+    assert!(
+        !agent_after_exit.contains("process output after exit"),
+        "{agent_after_exit}"
+    );
+}
+
 /// Verifies terminal retention settings and pane cleanup apply to both screen
 /// stores without allowing one surface to outlive its pane.
 #[test]

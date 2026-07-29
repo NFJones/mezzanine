@@ -830,34 +830,6 @@ pub(super) fn test_supervised_service(
 ) -> AsyncRuntimeService {
     AsyncRuntimeService::new(name, async move { Ok(exit) })
 }
-/// Waits for rendered primary-client text to contain a target string and
-/// returns the most recent rendered text for assertions.
-pub(super) async fn wait_for_rendered_text(
-    handle: &super::AsyncRuntimeSessionHandle,
-    role: ClientViewRole,
-    needle: &str,
-) -> Result<String> {
-    let mut last_text = String::new();
-    for _ in 0..1000 {
-        if let Some(view) = handle
-            .render_client_view(
-                role,
-                Size::new(80, 24).unwrap(),
-                TerminalClientLoopConfig::default(),
-            )
-            .await?
-        {
-            last_text = view.lines.join("\n");
-            if last_text.contains(needle) {
-                return Ok(last_text);
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    Err(MezError::invalid_state(format!(
-        "timed out waiting for rendered text {needle:?}; last render: {last_text}"
-    )))
-}
 
 /// Reads one HTTP request from the local provider concurrency fixture.
 ///
