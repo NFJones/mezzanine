@@ -6350,9 +6350,11 @@ The baseline command capabilities are:
   MAY be truncated to the terminal width and MUST NOT wrap. `i` MUST show the
   selected session's complete readable transcript before resumption, and `Esc`
   from that view MUST return to the table. Enter MUST resume the selected UUID
-  through `/resume <uuid>`, and `d` MUST immediately delete
+  through `/resume <uuid>`, `c` MUST clear only the selected durable session
+  name and refresh the table while preserving that conversation, and `d` MUST immediately delete
   the selected durable transcript and name metadata before refreshing the
-  table. Deletion MUST be rejected while that conversation is bound to any live
+  table. Clearing an already unnamed row MUST be a safe no-op. Deletion MUST be
+  rejected while that conversation is bound to any live
   durable agent pane. The agent slash surface MUST NOT expose a separate
   `/list-sessions` alias; the unrelated multiplexer `list-sessions` command
   remains available.

@@ -293,6 +293,34 @@ impl RuntimeSessionService {
                 )));
             }
         }
+        if input == b"c"
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::SavedSessions)
+            )
+        {
+            let active_index =
+                record_browser_active_index(overlay, record_browser.browser.active_index());
+            let mut selected = record_browser.browser.clone();
+            selected.set_active_index(active_index);
+            let Some(record_id) = selected.active_record_id().map(str::to_string) else {
+                return Ok(Some(false));
+            };
+            let browser = self.clear_saved_session_name_from_browser(&record_id)?;
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(None);
+            };
+            record_browser.browser = browser;
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
+        }
         if input == b"d" && record_browser.browser.deletion_enabled() {
             let source = record_browser.source.clone().ok_or_else(|| {
                 MezError::invalid_state("deletable record browser is missing its backend source")

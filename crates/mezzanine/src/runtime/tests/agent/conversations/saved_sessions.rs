@@ -254,6 +254,89 @@ fn runtime_resume_browser_deletes_named_zero_entry_sessions() {
     );
 }
 
+/// Verifies the `/resume` browser `c` hotkey clears only the selected name,
+/// preserves its transcript, and keeps that conversation selected after the
+/// unnamed activity ordering moves it below a newer conversation.
+#[test]
+fn runtime_resume_browser_clear_name_hotkey_preserves_session_and_selection() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-clear-name"));
+    for (conversation_id, created_at, content) in [
+        ("named-old", 10, "named transcript"),
+        ("recent-unnamed", 20, "recent transcript"),
+    ] {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: 1,
+                created_at_unix_seconds: created_at,
+                role: TranscriptRole::User,
+                turn_id: format!("turn-{conversation_id}"),
+                agent_id: "agent-%9".to_string(),
+                pane_id: "%9".to_string(),
+                content: content.to_string(),
+            })
+            .unwrap();
+    }
+    transcript_store
+        .name_session("named-old", "Pinned work", 10, None)
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let response = service
+        .execute_agent_shell_command(&primary, "/resume")
+        .unwrap();
+    assert!(response.contains("`c` clear name"), "{response}");
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"c")
+        .unwrap();
+
+    assert!(
+        transcript_store
+            .named_session("named-old")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(transcript_store.inspect("named-old").unwrap().len(), 1);
+    let browser = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .expect("saved-session browser should remain open");
+    assert_eq!(browser.browser.active_record_id(), Some("named-old"));
+    assert_eq!(browser.browser.records()[0].id, "recent-unnamed");
+    assert_eq!(browser.browser.records()[1].id, "named-old");
+    assert!(
+        !browser
+            .browser
+            .render_page()
+            .raw_markdown
+            .contains("Pinned work")
+    );
+
+    service
+        .apply_primary_display_overlay_input(&primary, b"c")
+        .unwrap();
+    assert_eq!(transcript_store.inspect("named-old").unwrap().len(), 1);
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .and_then(|browser| browser.browser.active_record_id()),
+        Some("named-old")
+    );
+}
+
 /// Verifies the saved-session browser exposes every durable transcript entry
 /// through `i` before Enter resumes the focused conversation.
 ///

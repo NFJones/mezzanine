@@ -430,7 +430,7 @@ impl RuntimeSessionService {
         ]);
         browser.set_help(
             Some(
-                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `d` delete · `/` search"
+                "**Keys:** `↑`/`↓` focus conversation UUID · `Enter` resume · `i` details · `c` clear name · `d` delete · `/` search"
                     .to_string(),
             ),
             Some("**Keys:** `Esc` back · `d` delete · `/` search".to_string()),
