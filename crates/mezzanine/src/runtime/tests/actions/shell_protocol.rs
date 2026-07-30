@@ -949,6 +949,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         assert_eq!(completions[0].terminal_state, AgentTurnState::Completed);
     }
 
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
     service
         .write_input_to_pane(&primary, Some("%1"), b"case $- in *e*u*|*u*e*) printf 'STRICT_OPTIONS_STILL_SET\\n';; *) printf 'STRICT_OPTIONS_LOST:%s\\n' \"$-\";; esac\n")
         .unwrap();

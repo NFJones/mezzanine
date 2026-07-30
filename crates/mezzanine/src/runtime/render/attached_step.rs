@@ -118,6 +118,13 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
+        if self.presented_pane_surface(descriptor.pane_id.as_str())
+            != crate::runtime::PaneSurfaceKind::Process
+        {
+            return Err(MezError::forbidden(
+                "pane process input requires the process surface to be presented",
+            ));
+        }
         let primary_pid = self
             .primary_pid_for_live_pane_process(descriptor.pane_id.as_str())
             .ok_or_else(|| {

@@ -227,6 +227,52 @@ fn runtime_control_terminal_step_replays_completed_response_without_reapplying_i
     assert_eq!(service.control_idempotency().len(), 1);
 }
 
+/// Verifies user-directed pane input cannot reach a hidden process while an
+/// agent surface is visible or waiting for its running task to finish.
+#[test]
+fn runtime_user_input_requires_the_process_surface_to_be_presented() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let handed_off = service.take_running_pane_processes_for_adapter(1).unwrap();
+    assert_eq!(handed_off.len(), 1);
+    assert!(service.drain_pane_io_transition().side_effects.is_empty());
+
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let visible_error = service
+        .write_input_to_pane(&primary, Some("%1"), b"visible-agent")
+        .unwrap_err();
+    assert_eq!(visible_error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(service.drain_pane_io_transition().side_effects.is_empty());
+
+    service
+        .agent_shell_store_mut()
+        .request_hide_pending_task_completion("%1")
+        .unwrap();
+    let pending_error = service
+        .write_input_to_pane(&primary, Some("%1"), b"pending-agent")
+        .unwrap_err();
+    assert_eq!(pending_error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert!(service.drain_pane_io_transition().side_effects.is_empty());
+
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    let dispatch = service
+        .write_input_to_pane(&primary, Some("%1"), b"process-visible")
+        .unwrap();
+    assert_eq!(dispatch.bytes_written, b"process-visible".len());
+    let pane_inputs = service.drain_pane_io_transition().side_effects;
+    assert_eq!(pane_inputs.len(), 1);
+    assert_eq!(pane_inputs[0].pane_input_parts().0, "%1");
+    assert_eq!(pane_inputs[0].pane_input_parts().1, b"process-visible");
+}
+
 /// Verifies runtime keeps a lone escape key as pending prefix state until the
 /// next terminal action consumes it.
 ///

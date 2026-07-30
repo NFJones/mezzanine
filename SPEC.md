@@ -1279,6 +1279,12 @@ surface. They MUST NOT expose, copy, merge, clear, or append to the retained
 process screen. Hiding or exiting the agent shell MUST select the same process
 screen state that remained retained while agent mode was visible.
 
+User-directed process input, including paste-buffer, clipboard paste, mouse
+paste, and `send-prefix`, MUST be accepted only while the process surface is
+presented. Both `Visible` and `HidePendingTaskCompletion` agent visibility MUST
+prevent those input paths from reaching the hidden process PTY. Paste routed to
+an editable agent prompt remains agent-surface input rather than process input.
+
 The process screen MUST remain authoritative for PTY protocol state, including
 normal and alternate screens, cursor and terminal modes, application mouse and
 keypad modes, focus events, bracketed paste, terminal replies, and live pane

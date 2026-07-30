@@ -962,6 +962,11 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             }],
             "shell settlement must publish the provider continuation without fallback polling"
         );
+        let hidden = client_handle
+            .execute_terminal_command(primary.clone(), "agent-shell".to_string())
+            .await
+            .unwrap();
+        assert!(hidden.contains("visibility=hidden"), "{hidden}");
         let ready_again = client_handle
             .execute_terminal_command(
                 primary.clone(),
