@@ -62,6 +62,11 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Reports whether foreground input may be delivered to a pane process.
+    fn pane_process_input_is_allowed(&self, pane_id: &str) -> bool {
+        self.presented_pane_surface(pane_id) == crate::runtime::PaneSurfaceKind::Process
+    }
+
     /// Reports whether the focused pane is waiting for an agent turn to stop before exit.
     fn active_agent_shell_exit_pending(&self) -> Result<bool> {
         let pane_id = self.active_pane_id()?;
@@ -118,9 +123,7 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        if self.presented_pane_surface(descriptor.pane_id.as_str())
-            != crate::runtime::PaneSurfaceKind::Process
-        {
+        if !self.pane_process_input_is_allowed(descriptor.pane_id.as_str()) {
             return Err(MezError::forbidden(
                 "pane process input requires the process surface to be presented",
             ));
@@ -445,6 +448,10 @@ impl RuntimeSessionService {
                         if defer_pane_io {
                             let descriptors = self.active_window_input_descriptors()?;
                             for descriptor in descriptors {
+                                if !self.pane_process_input_is_allowed(descriptor.pane_id.as_str())
+                                {
+                                    continue;
+                                }
                                 self.clear_shell_output_filters_for_foreground_input(
                                     descriptor.pane_id.as_str(),
                                 );
