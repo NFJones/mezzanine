@@ -4,7 +4,8 @@ use super::construction::execute_snapshot_control_async_work;
 use super::{
     AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult, AsyncRenderedClientFrame,
     AsyncRuntimeRequest, AsyncRuntimeSessionActor, DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
-    decode_control_frame, delivery_batch_json, encode_control_body, encode_mmp_body,
+    RuntimeSessionService, decode_control_frame, delivery_batch_json, encode_control_body,
+    encode_mmp_body,
 };
 
 impl AsyncRuntimeSessionActor {
@@ -144,18 +145,24 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::HandleControlInputWithSnapshots {
                 input,
+                mut output_prefix,
+                consumed_prefix,
+                record_metrics,
                 max_content_length,
                 mut connection,
                 snapshots,
                 reply,
             } => {
-                self.record_terminal_control_request_metrics(&input, max_content_length);
-                if let Ok((body, consumed)) = decode_control_frame(&input, max_content_length)
-                    && consumed == input.len()
+                if record_metrics {
+                    self.record_terminal_control_request_metrics(&input, max_content_length);
+                }
+                if let Ok((body, frame_consumed)) = decode_control_frame(&input, max_content_length)
                     && let Some(prepared) = self
                         .service
                         .prepare_runtime_snapshot_control_async_work(&body, &connection)
                 {
+                    let remaining_input = input[frame_consumed..].to_vec();
+                    let consumed_prefix = consumed_prefix.saturating_add(frame_consumed);
                     match prepared {
                         Ok(work) => {
                             let sender = self.sender.clone();
@@ -164,7 +171,11 @@ impl AsyncRuntimeSessionActor {
                                     execute_snapshot_control_async_work(&snapshots, &work).await;
                                 let _ = sender
                                     .send(AsyncRuntimeRequest::CompleteSnapshotControlInput {
-                                        consumed,
+                                        consumed_prefix,
+                                        output_prefix,
+                                        remaining_input,
+                                        max_content_length,
+                                        snapshots,
                                         connection,
                                         work,
                                         outcome: Box::new(outcome),
@@ -176,47 +187,99 @@ impl AsyncRuntimeSessionActor {
                             return false;
                         }
                         Err(body) => {
-                            let result = Ok(AsyncControlInputResult {
-                                output: encode_control_body(&body),
-                                consumed,
-                                connection,
-                            });
-                            let _ = reply.send(result);
-                            self.notify_event_delivery();
+                            output_prefix.extend_from_slice(&encode_control_body(&body));
+                            if remaining_input.is_empty() {
+                                let _ = reply.send(Ok(AsyncControlInputResult {
+                                    output: output_prefix,
+                                    consumed: consumed_prefix,
+                                    connection,
+                                }));
+                                self.notify_event_delivery();
+                            } else {
+                                let sender = self.sender.clone();
+                                let join_handle =
+                                    tokio::spawn(async move {
+                                        let _ = sender
+                                        .send(AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                                            input: remaining_input,
+                                            output_prefix,
+                                            consumed_prefix,
+                                            record_metrics: false,
+                                            max_content_length,
+                                            connection,
+                                            snapshots,
+                                            reply,
+                                        })
+                                        .await;
+                                    });
+                                std::mem::drop(join_handle);
+                            }
                             return false;
                         }
                     }
                 }
                 let previous_lifecycle_state = self.service.lifecycle_state();
+                let frame_consumed = decode_control_frame(&input, max_content_length)
+                    .map(|(_, consumed)| consumed)
+                    .unwrap_or(input.len());
+                let remaining_input = input[frame_consumed..].to_vec();
                 let result = self
                     .service
                     .handle_control_input_for_connection_with_snapshots_transition(
-                        &input,
+                        &input[..frame_consumed],
                         max_content_length,
                         &mut connection,
                         &snapshots,
                     )
                     .await
                     .and_then(|(output, consumed, transition)| {
+                        output_prefix.extend_from_slice(&output);
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_pending_provider_dispatch_side_effects()?;
-                        Ok(AsyncControlInputResult {
-                            output,
-                            consumed,
-                            connection,
-                        })
+                        Ok(consumed)
                     });
-                let should_notify = result.as_ref().is_ok_and(|result| result.consumed > 0);
-                let _ = reply.send(result);
-                if should_notify {
-                    self.notify_event_delivery();
+                match result {
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                    }
+                    Ok(consumed) if remaining_input.is_empty() => {
+                        let _ = reply.send(Ok(AsyncControlInputResult {
+                            output: output_prefix,
+                            consumed: consumed_prefix.saturating_add(consumed),
+                            connection,
+                        }));
+                        self.notify_event_delivery();
+                    }
+                    Ok(consumed) => {
+                        let sender = self.sender.clone();
+                        let consumed_prefix = consumed_prefix.saturating_add(consumed);
+                        let join_handle = tokio::spawn(async move {
+                            let _ = sender
+                                .send(AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                                    input: remaining_input,
+                                    output_prefix,
+                                    consumed_prefix,
+                                    record_metrics: false,
+                                    max_content_length,
+                                    connection,
+                                    snapshots,
+                                    reply,
+                                })
+                                .await;
+                        });
+                        std::mem::drop(join_handle);
+                    }
                 }
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 false
             }
             AsyncRuntimeRequest::CompleteSnapshotControlInput {
-                consumed,
+                consumed_prefix,
+                mut output_prefix,
+                remaining_input,
+                max_content_length,
+                snapshots,
                 mut connection,
                 work,
                 outcome,
@@ -230,18 +293,36 @@ impl AsyncRuntimeSessionActor {
                         *outcome,
                         &mut connection,
                     );
-                let result = self
+                output_prefix.extend_from_slice(&encode_control_body(&body));
+                let queued = self
                     .queue_deferred_pane_io_side_effects_from_service()
-                    .and_then(|_| self.queue_runtime_side_effects(transition.side_effects))
-                    .map(|_| AsyncControlInputResult {
-                        output: encode_control_body(&body),
-                        consumed,
+                    .and_then(|_| self.queue_runtime_side_effects(transition.side_effects));
+                if let Err(error) = queued {
+                    let _ = reply.send(Err(error));
+                } else if remaining_input.is_empty() {
+                    let _ = reply.send(Ok(AsyncControlInputResult {
+                        output: output_prefix,
+                        consumed: consumed_prefix,
                         connection,
-                    });
-                let should_notify = result.is_ok();
-                let _ = reply.send(result);
-                if should_notify {
+                    }));
                     self.notify_event_delivery();
+                } else {
+                    let sender = self.sender.clone();
+                    let join_handle = tokio::spawn(async move {
+                        let _ = sender
+                            .send(AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                                input: remaining_input,
+                                output_prefix,
+                                consumed_prefix,
+                                record_metrics: false,
+                                max_content_length,
+                                connection,
+                                snapshots,
+                                reply,
+                            })
+                            .await;
+                    });
+                    std::mem::drop(join_handle);
                 }
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 false
@@ -383,7 +464,29 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             AsyncRuntimeRequest::RefreshProviderInfo { reply } => {
-                let result = self.service.refresh_provider_info_async().await;
+                match self.service.prepare_provider_info_refresh() {
+                    Ok(work) => {
+                        let sender = self.sender.clone();
+                        let join_handle = tokio::spawn(async move {
+                            let outcome =
+                                RuntimeSessionService::execute_provider_info_refresh(work).await;
+                            let _ = sender
+                                .send(AsyncRuntimeRequest::CompleteProviderInfoRefresh {
+                                    outcome,
+                                    reply,
+                                })
+                                .await;
+                        });
+                        std::mem::drop(join_handle);
+                    }
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                    }
+                }
+                false
+            }
+            AsyncRuntimeRequest::CompleteProviderInfoRefresh { outcome, reply } => {
+                let result = self.service.apply_provider_info_refresh(outcome);
                 let _ = reply.send(result);
                 false
             }
@@ -402,6 +505,61 @@ impl AsyncRuntimeSessionActor {
                 input,
                 reply,
             } => {
+                match self
+                    .service
+                    .prepare_agent_shell_provider_info_refresh(&primary_client_id, &input)
+                {
+                    Ok(Some(work)) => {
+                        let sender = self.sender.clone();
+                        let join_handle = tokio::spawn(async move {
+                            let outcome =
+                                RuntimeSessionService::execute_provider_info_refresh(work).await;
+                            let _ = sender
+                                .send(AsyncRuntimeRequest::CompleteAgentShellProviderInfoRefresh {
+                                    primary_client_id,
+                                    input,
+                                    outcome,
+                                    reply,
+                                })
+                                .await;
+                        });
+                        std::mem::drop(join_handle);
+                        return false;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return false;
+                    }
+                }
+                match self
+                    .service
+                    .prepare_agent_shell_mcp_discovery(&primary_client_id, &input)
+                {
+                    Ok(Some(work)) => {
+                        let sender = self.sender.clone();
+                        let join_handle = tokio::spawn(async move {
+                            let preparation =
+                                RuntimeSessionService::execute_agent_provider_preparation(work)
+                                    .await;
+                            let _ = sender
+                                .send(AsyncRuntimeRequest::CompleteAgentShellMcpDiscovery {
+                                    primary_client_id,
+                                    input,
+                                    preparation,
+                                    reply,
+                                })
+                                .await;
+                        });
+                        std::mem::drop(join_handle);
+                        return false;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return false;
+                    }
+                }
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let result = self
                     .service
@@ -411,6 +569,56 @@ impl AsyncRuntimeSessionActor {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_shell_transaction_timer_side_effects()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
+                        Ok(output)
+                    });
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                false
+            }
+            AsyncRuntimeRequest::CompleteAgentShellMcpDiscovery {
+                primary_client_id,
+                input,
+                preparation,
+                reply,
+            } => {
+                let previous_lifecycle_state = self.service.lifecycle_state();
+                let result = self
+                    .service
+                    .apply_agent_provider_preparation(preparation)
+                    .and_then(|_| {
+                        self.service
+                            .execute_agent_shell_command(&primary_client_id, &input)
+                    })
+                    .and_then(|output| {
+                        self.queue_deferred_pane_io_side_effects_from_service()?;
+                        self.queue_shell_transaction_timer_side_effects()?;
+                        self.queue_pending_provider_dispatch_side_effects()?;
+                        Ok(output)
+                    });
+                let should_notify = result.is_ok();
+                let _ = reply.send(result);
+                if should_notify {
+                    self.notify_event_delivery();
+                }
+                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                false
+            }
+            AsyncRuntimeRequest::CompleteAgentShellProviderInfoRefresh {
+                primary_client_id,
+                input,
+                outcome,
+                reply,
+            } => {
+                let previous_lifecycle_state = self.service.lifecycle_state();
+                let result = self
+                    .service
+                    .complete_agent_shell_provider_info_refresh(&primary_client_id, &input, outcome)
+                    .and_then(|output| {
+                        self.queue_deferred_pane_io_side_effects_from_service()?;
                         Ok(output)
                     });
                 let should_notify = result.is_ok();

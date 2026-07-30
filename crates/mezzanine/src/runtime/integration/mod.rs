@@ -250,6 +250,10 @@ impl RuntimeIntegrationComponent {
     }
 
     /// Borrows disjoint MCP transport and credential bindings for one execution.
+    #[allow(
+        dead_code,
+        reason = "retained for direct MCP service adapters outside actor workers"
+    )]
     pub(crate) fn mcp_execution_bindings(
         &mut self,
     ) -> (&mut RuntimeMcpTransportSet, Option<&AuthStore>) {

@@ -708,6 +708,7 @@ impl RuntimeSessionService {
             &model_profile,
             provider.provider_id(),
             execution,
+            false,
         )
         .await
     }

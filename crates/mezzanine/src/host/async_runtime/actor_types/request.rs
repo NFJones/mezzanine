@@ -9,8 +9,9 @@ use super::{
     RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome, RuntimeEventBatch,
     RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
-    RuntimeLifecycleState, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, Size, SnapshotRepository, TerminalClientLoopConfig, oneshot,
+    RuntimeLifecycleState, RuntimeProviderInfoRefreshOutcome, RuntimeSideEffect,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork, Size, SnapshotRepository,
+    TerminalClientLoopConfig, oneshot,
 };
 #[cfg(test)]
 use crate::runtime::PaneInputDispatch;
@@ -224,6 +225,12 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         input: Vec<u8>,
+        /// Encoded responses accumulated from earlier frames in this batch.
+        output_prefix: Vec<u8>,
+        /// Input bytes consumed by earlier frames in this batch.
+        consumed_prefix: usize,
+        /// Whether this continuation should record metrics for the full batch.
+        record_metrics: bool,
         /// Stores the max content length value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -250,11 +257,16 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     CompleteSnapshotControlInput {
-        /// Stores the consumed value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        consumed: usize,
+        /// Total input bytes consumed through the completed frame.
+        consumed_prefix: usize,
+        /// Encoded responses accumulated through earlier frames.
+        output_prefix: Vec<u8>,
+        /// Unprocessed framed input that follows the completed snapshot frame.
+        remaining_input: Vec<u8>,
+        /// Maximum accepted content length for subsequent frames.
+        max_content_length: usize,
+        /// Snapshot repository retained for subsequent frame continuations.
+        snapshots: SnapshotRepository,
         /// Stores the connection value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -448,6 +460,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<String>>,
     },
+    /// Applies provider catalog results after worker-owned HTTP completes.
+    CompleteProviderInfoRefresh {
+        /// Provider catalog worker outcome to install in actor-owned cache state.
+        outcome: RuntimeProviderInfoRefreshOutcome,
+        /// Original caller waiting for the rendered refresh report.
+        reply: oneshot::Sender<Result<String>>,
+    },
     /// Represents the Show Primary Display Overlay case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -507,6 +526,28 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         ///
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
+        reply: oneshot::Sender<Result<String>>,
+    },
+    /// Applies MCP discovery before completing an actor-owned `/list-mcp` command.
+    CompleteAgentShellMcpDiscovery {
+        /// Primary client that submitted the command.
+        primary_client_id: ClientId,
+        /// Original shell command input.
+        input: String,
+        /// MCP-only discovery result returned by the worker.
+        preparation: RuntimeAgentProviderPreparationOutcome,
+        /// Original caller waiting for the command response.
+        reply: oneshot::Sender<Result<String>>,
+    },
+    /// Applies provider catalog results before completing a shell refresh command.
+    CompleteAgentShellProviderInfoRefresh {
+        /// Primary client that submitted the command.
+        primary_client_id: ClientId,
+        /// Original shell command input.
+        input: String,
+        /// Provider catalog worker outcome.
+        outcome: RuntimeProviderInfoRefreshOutcome,
+        /// Original caller waiting for the command response.
         reply: oneshot::Sender<Result<String>>,
     },
     /// Represents the Pending Agent Provider Tasks case for this enumeration.

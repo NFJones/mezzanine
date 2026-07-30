@@ -41,9 +41,10 @@ use crate::runtime::{
     AttachedClientStepApplication, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
-    RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, authorize_unix_peer_raw_fd, current_effective_uid,
+    RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeLifecycleState,
+    RuntimeProviderInfoRefreshOutcome, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
+    authorize_unix_peer_raw_fd, current_effective_uid,
 };
 use mez_agent::AgentTurnLedger;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json};

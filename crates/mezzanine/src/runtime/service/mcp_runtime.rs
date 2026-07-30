@@ -31,6 +31,7 @@ impl RuntimeSessionService {
             environment,
             auth_store,
             provider_auth_refresh_leeway_seconds,
+            refresh_provider_credential,
             attempted_mcp_servers,
         } = work;
         let mut mcp = Vec::with_capacity(mcp_plans.len());
@@ -147,16 +148,17 @@ impl RuntimeSessionService {
             };
             mcp.push(RuntimeMcpDiscoveryOutcome { server_id, result });
         }
-        let provider_refresh_error = if let Some(auth_store) = auth_store {
-            auth_store
-                .refresh_openai_provider_credential_if_needed_with_leeway_async(
-                    provider_auth_refresh_leeway_seconds,
-                )
-                .await
-                .err()
-        } else {
-            None
-        };
+        let provider_refresh_error =
+            if refresh_provider_credential && let Some(auth_store) = auth_store {
+                auth_store
+                    .refresh_openai_provider_credential_if_needed_with_leeway_async(
+                        provider_auth_refresh_leeway_seconds,
+                    )
+                    .await
+                    .err()
+            } else {
+                None
+            };
         RuntimeAgentProviderPreparationOutcome {
             mcp,
             provider_refresh_error,
@@ -171,6 +173,21 @@ impl RuntimeSessionService {
     /// worker, while the actor remains available for lifecycle requests.
     pub(crate) fn prepare_agent_provider_work(
         &mut self,
+    ) -> Result<RuntimeAgentProviderPreparationWork> {
+        self.prepare_external_provider_work(true)
+    }
+
+    /// Extracts MCP-only discovery work for commands that do not need provider auth refresh.
+    pub(crate) fn prepare_runtime_mcp_discovery_work(
+        &mut self,
+    ) -> Result<RuntimeAgentProviderPreparationWork> {
+        self.prepare_external_provider_work(false)
+    }
+
+    /// Extracts one immutable external-preparation snapshot from actor state.
+    fn prepare_external_provider_work(
+        &mut self,
+        refresh_provider_credential: bool,
     ) -> Result<RuntimeAgentProviderPreparationWork> {
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let auth_store = self.integration.auth_store().cloned();
@@ -225,6 +242,7 @@ impl RuntimeSessionService {
                 environment,
                 auth_store,
                 provider_auth_refresh_leeway_seconds: leeway_seconds,
+                refresh_provider_credential,
                 attempted_mcp_servers: server_ids.len(),
             })
         })();

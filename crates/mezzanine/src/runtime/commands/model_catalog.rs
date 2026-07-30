@@ -20,13 +20,39 @@ use super::{
     resolve_provider_api, runtime_default_models_for_provider,
     runtime_recommended_model_for_provider,
 };
+use futures_util::StreamExt;
+
+/// Immutable provider catalog inputs moved out of the serialized runtime actor.
+pub(crate) struct RuntimeProviderInfoRefreshWork {
+    entries: Vec<RuntimeProviderInfoRefreshEntry>,
+    auth_store: Option<crate::security::auth::AuthStore>,
+}
+
+/// One configured provider and its actor-computed fallback catalog.
+struct RuntimeProviderInfoRefreshEntry {
+    provider_id: String,
+    provider_config: crate::runtime::RuntimeProviderConfig,
+    fallback: RuntimeModelCatalog,
+}
+
+/// Provider catalog results returned to actor-owned cache state.
+pub(crate) struct RuntimeProviderInfoRefreshOutcome {
+    entries: Vec<RuntimeProviderInfoRefreshEntryOutcome>,
+}
+
+/// One provider worker result plus its credential-audit classification.
+struct RuntimeProviderInfoRefreshEntryOutcome {
+    entry: RuntimeProviderInfoRefreshEntry,
+    result: Result<RuntimeModelCatalog>,
+    credential_outcome: Option<&'static str>,
+}
 
 impl RuntimeSessionService {
-    /// Executes `/refresh-provider-info` through the live provider catalog refresh path.
-    pub(super) async fn execute_agent_shell_refresh_provider_info_command(
-        &mut self,
+    /// Validates one `/refresh-provider-info` command before refresh work starts.
+    pub(super) fn validate_agent_shell_refresh_provider_info_command(
+        &self,
         input: &str,
-    ) -> Result<AgentShellCommandOutcome> {
+    ) -> Result<()> {
         let slash = parse_slash_command(input)?.ok_or_else(|| {
             MezError::invalid_args("refresh-provider-info command must be a slash command")
         })?;
@@ -35,6 +61,15 @@ impl RuntimeSessionService {
                 "refresh-provider-info does not accept arguments",
             ));
         }
+        Ok(())
+    }
+
+    /// Executes `/refresh-provider-info` without actor orchestration.
+    pub(super) async fn execute_agent_shell_refresh_provider_info_command(
+        &mut self,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        self.validate_agent_shell_refresh_provider_info_command(input)?;
         Ok(AgentShellCommandOutcome::Display {
             command: "refresh-provider-info".to_string(),
             body: self.refresh_provider_info_async().await?,
@@ -68,6 +103,10 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[allow(
+        dead_code,
+        reason = "retained for direct service adapters outside the serialized actor"
+    )]
     async fn runtime_model_catalog_for_provider_async(
         &mut self,
         provider_id: &str,
@@ -105,26 +144,88 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Refreshes cached provider information for every configured provider.
-    pub(crate) async fn refresh_provider_info_async(&mut self) -> Result<String> {
-        let provider_ids = self
-            .provider_registry()
-            .providers()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
+    /// Captures configured provider catalog inputs before external worker I/O.
+    pub(crate) fn prepare_provider_info_refresh(
+        &mut self,
+    ) -> Result<RuntimeProviderInfoRefreshWork> {
+        let registry = self.provider_registry().clone();
+        let mut entries = Vec::with_capacity(registry.providers().len());
+        for (provider_id, provider_config) in registry.providers() {
+            let fallback =
+                runtime_configured_model_catalog(provider_id, provider_config, &registry);
+            if matches!(
+                resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?,
+                ProviderApiCompatibility::OpenAiResponses
+                    | ProviderApiCompatibility::OpenAiChatCompletions
+                    | ProviderApiCompatibility::DeepSeekChatCompletions
+            ) {
+                self.append_credential_access_audit(
+                    provider_id,
+                    &provider_config.auth_profile,
+                    "provider_model_list",
+                    "requested",
+                )?;
+            }
+            entries.push(RuntimeProviderInfoRefreshEntry {
+                provider_id: provider_id.clone(),
+                provider_config: provider_config.clone(),
+                fallback,
+            });
+        }
+        Ok(RuntimeProviderInfoRefreshWork {
+            entries,
+            auth_store: self.integration.auth_store().cloned(),
+        })
+    }
+
+    /// Fetches configured provider catalogs concurrently outside the actor.
+    pub(crate) async fn execute_provider_info_refresh(
+        work: RuntimeProviderInfoRefreshWork,
+    ) -> RuntimeProviderInfoRefreshOutcome {
+        let auth_store = work.auth_store;
+        let entries = futures_util::stream::iter(work.entries.into_iter().map(|entry| {
+            let auth_store = auth_store.clone();
+            async move { execute_provider_info_refresh_entry(entry, auth_store.as_ref()).await }
+        }))
+        .buffer_unordered(4)
+        .collect()
+        .await;
+        RuntimeProviderInfoRefreshOutcome { entries }
+    }
+
+    /// Applies worker results to the current provider cache and renders status.
+    pub(crate) fn apply_provider_info_refresh(
+        &mut self,
+        outcome: RuntimeProviderInfoRefreshOutcome,
+    ) -> Result<String> {
+        let provider_count = outcome.entries.len();
         let mut refreshed = 0usize;
         let mut failed = 0usize;
         let mut lines = Vec::new();
-        for provider_id in &provider_ids {
-            self.remove_cached_provider_model_catalog(provider_id);
-            match self
-                .runtime_model_catalog_for_provider_async(provider_id)
-                .await
-            {
+        for entry_outcome in outcome.entries {
+            let provider_id = entry_outcome.entry.provider_id;
+            let provider_config = entry_outcome.entry.provider_config;
+            if self.provider_registry().provider(&provider_id) != Some(&provider_config) {
+                failed = failed.saturating_add(1);
+                lines.push(format!(
+                    "{} refresh=stale error=provider configuration changed during refresh",
+                    json_escape(&provider_id)
+                ));
+                continue;
+            }
+            if let Some(credential_outcome) = entry_outcome.credential_outcome {
+                self.append_credential_access_audit(
+                    &provider_id,
+                    &provider_config.auth_profile,
+                    "provider_model_list",
+                    credential_outcome,
+                )?;
+            }
+            self.remove_cached_provider_model_catalog(&provider_id);
+            match entry_outcome.result {
                 Ok(catalog) => {
                     refreshed = refreshed.saturating_add(1);
-                    self.cache_provider_model_catalog(provider_id, catalog.clone());
+                    self.cache_provider_model_catalog(&provider_id, catalog.clone());
                     let provider_error = catalog
                         .provider_error
                         .as_deref()
@@ -132,7 +233,7 @@ impl RuntimeSessionService {
                         .unwrap_or_else(|| "none".to_string());
                     lines.push(format!(
                         "{} source={} models={} reasoning_levels={} quota_entries={} provider_error={}",
-                        json_escape(provider_id),
+                        json_escape(&provider_id),
                         json_escape(&catalog.source),
                         catalog.catalog.entries().len(),
                         catalog.catalog.reasoning_levels().len(),
@@ -144,7 +245,7 @@ impl RuntimeSessionService {
                     failed = failed.saturating_add(1);
                     lines.push(format!(
                         "{} refresh=failed error={}",
-                        json_escape(provider_id),
+                        json_escape(&provider_id),
                         json_escape(error.message())
                     ));
                 }
@@ -152,15 +253,20 @@ impl RuntimeSessionService {
         }
         let mut body = format!(
             "providers={} refreshed={} failed={}",
-            provider_ids.len(),
-            refreshed,
-            failed
+            provider_count, refreshed, failed
         );
         if !lines.is_empty() {
             body.push('\n');
             body.push_str(&lines.join("\n"));
         }
         Ok(body)
+    }
+
+    /// Refreshes provider information without requiring actor orchestration.
+    pub(crate) async fn refresh_provider_info_async(&mut self) -> Result<String> {
+        let work = self.prepare_provider_info_refresh()?;
+        let outcome = Self::execute_provider_info_refresh(work).await;
+        self.apply_provider_info_refresh(outcome)
     }
 
     /// Seeds the live model catalog cache for focused runtime tests.
@@ -188,6 +294,10 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[allow(
+        dead_code,
+        reason = "retained for direct service adapters outside the serialized actor"
+    )]
     async fn runtime_api_model_catalog_async(
         &mut self,
         provider_id: &str,
@@ -291,6 +401,120 @@ impl RuntimeSessionService {
             }
         };
         provider.list_models_async().await
+    }
+}
+
+/// Fetches one provider catalog without borrowing actor-owned runtime state.
+async fn execute_provider_info_refresh_entry(
+    entry: RuntimeProviderInfoRefreshEntry,
+    auth_store: Option<&crate::security::auth::AuthStore>,
+) -> RuntimeProviderInfoRefreshEntryOutcome {
+    let api = match resolve_provider_api(
+        &entry.provider_config.kind,
+        entry.provider_config.api.as_deref(),
+    ) {
+        Ok(api) => api,
+        Err(error) => {
+            return RuntimeProviderInfoRefreshEntryOutcome {
+                entry,
+                result: Err(MezError::from(error)),
+                credential_outcome: None,
+            };
+        }
+    };
+    if api == ProviderApiCompatibility::AnthropicMessages {
+        let fallback = entry.fallback.clone();
+        return RuntimeProviderInfoRefreshEntryOutcome {
+            entry,
+            result: Ok(fallback),
+            credential_outcome: None,
+        };
+    }
+    let Some(auth_store) = auth_store else {
+        let fallback = entry.fallback.clone();
+        return RuntimeProviderInfoRefreshEntryOutcome {
+            entry,
+            result: Ok(fallback),
+            credential_outcome: Some("denied"),
+        };
+    };
+    let metadata = match auth_store.read_metadata_for_provider(&entry.provider_id) {
+        Ok(Some(metadata)) => metadata,
+        Ok(None) | Err(_) => {
+            let fallback = entry.fallback.clone();
+            return RuntimeProviderInfoRefreshEntryOutcome {
+                entry,
+                result: Ok(fallback),
+                credential_outcome: Some("denied"),
+            };
+        }
+    };
+    if metadata.credential_kind == AuthCredentialKind::ChatGpt {
+        let fallback = entry.fallback.clone();
+        return RuntimeProviderInfoRefreshEntryOutcome {
+            entry,
+            result: Ok(fallback),
+            credential_outcome: Some("unsupported"),
+        };
+    }
+    let endpoint_override = entry
+        .provider_config
+        .base_url
+        .as_deref()
+        .filter(|endpoint| !endpoint.is_empty());
+    let provider: Result<Box<dyn AsyncModelProvider>> = match api {
+        ProviderApiCompatibility::OpenAiResponses => {
+            openai_responses_provider_from_auth_store_with_provider_options(
+                auth_store,
+                &entry.provider_id,
+                endpoint_override,
+                &entry.provider_config.options,
+                DEFAULT_PROVIDER_TIMEOUT_MS,
+                ReqwestProviderHttpTransport,
+            )
+            .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+        }
+        ProviderApiCompatibility::OpenAiChatCompletions => {
+            openai_compatible_provider_from_auth_store_with_provider_options(
+                auth_store,
+                &entry.provider_id,
+                endpoint_override,
+                &entry.provider_config.options,
+                DEFAULT_PROVIDER_TIMEOUT_MS,
+                ReqwestProviderHttpTransport,
+            )
+            .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+        }
+        ProviderApiCompatibility::DeepSeekChatCompletions => {
+            deepseek_chat_completions_provider_from_auth_store_with_provider_options(
+                auth_store,
+                &entry.provider_id,
+                endpoint_override,
+                DEFAULT_PROVIDER_TIMEOUT_MS,
+                ReqwestProviderHttpTransport,
+            )
+            .map(|provider| Box::new(provider) as Box<dyn AsyncModelProvider>)
+        }
+        ProviderApiCompatibility::AnthropicMessages => unreachable!(),
+    };
+    let Ok(provider) = provider else {
+        let fallback = entry.fallback.clone();
+        return RuntimeProviderInfoRefreshEntryOutcome {
+            entry,
+            result: Ok(fallback),
+            credential_outcome: Some("denied"),
+        };
+    };
+    let fallback = entry.fallback.clone();
+    let result = provider
+        .list_models_async()
+        .await
+        .map(RuntimeModelCatalog::from_provider)
+        .or(Ok(fallback));
+    RuntimeProviderInfoRefreshEntryOutcome {
+        entry,
+        result,
+        credential_outcome: Some("granted"),
     }
 }
 

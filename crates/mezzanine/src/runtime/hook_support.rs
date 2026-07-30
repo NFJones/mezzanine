@@ -156,6 +156,10 @@ pub(super) struct RuntimeFocusedShellPaneExecutor<'a> {
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
+#[allow(
+    dead_code,
+    reason = "retained for direct synchronous and async MCP service adapters"
+)]
 pub(super) struct RuntimeMcpActionExecutor<'a> {
     /// Product-owned MCP transport connections.
     pub(super) transports: &'a mut RuntimeMcpTransportSet,

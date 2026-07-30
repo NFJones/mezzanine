@@ -184,6 +184,9 @@ impl AsyncRuntimeSessionHandle {
         self.request(
             |reply| AsyncRuntimeRequest::HandleControlInputWithSnapshots {
                 input,
+                output_prefix: Vec::new(),
+                consumed_prefix: 0,
+                record_metrics: true,
                 max_content_length,
                 connection,
                 snapshots,

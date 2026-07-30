@@ -168,6 +168,10 @@ pub fn execute_mcp_action_through_runtime(
 ///
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
+#[allow(
+    dead_code,
+    reason = "retained as the provider-independent async MCP execution adapter"
+)]
 pub async fn execute_mcp_action_through_runtime_async(
     turn: &AgentTurnRecord,
     action: &AgentAction,

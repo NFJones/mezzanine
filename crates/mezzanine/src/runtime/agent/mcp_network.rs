@@ -23,6 +23,141 @@ use super::{
 use mez_agent::McpExecutionRequest;
 
 impl RuntimeSessionService {
+    /// Queues immediately runnable MCP calls for worker execution.
+    ///
+    /// Registry lookup and approval classification remain actor-owned. The
+    /// live transport is leased only when the side-effect worker claims the
+    /// queued action, so provider completion never awaits a tool call.
+    pub(super) fn queue_running_mcp_actions_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+    ) -> Result<usize> {
+        if execution.terminal_state != AgentTurnState::Running {
+            return Ok(0);
+        }
+        let Some(batch) = execution.response.action_batch.clone() else {
+            return Ok(0);
+        };
+        let permission_policy = self.permission_policy_for_turn(turn);
+        let mut queued = 0usize;
+        for index in 0..execution.action_results.len() {
+            if execution.action_results[index].status != ActionStatus::Running
+                || execution.action_results[index].action_type != "mcp_call"
+            {
+                continue;
+            }
+            let action = batch
+                .actions
+                .iter()
+                .find(|action| action.id == execution.action_results[index].action_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("running MCP result does not match an action")
+                })?;
+            let AgentActionPayload::McpCall {
+                server,
+                tool,
+                arguments_json: _,
+            } = &action.payload
+            else {
+                return Err(MezError::invalid_state(
+                    "running MCP result has a non-MCP action payload",
+                ));
+            };
+            let auto_allowed = permission_policy.approval_policy
+                == mez_agent::ApprovalPolicy::AutoAllow
+                && mez_agent::action_supports_auto_allow(
+                    &action,
+                    mez_agent::ActionPlanningInput::default(),
+                );
+            let policy_allowed = permission_policy.approval_policy.bypasses_prompts();
+            let request = McpToolCallRequest {
+                server_id: server.clone(),
+                tool_name: tool.clone(),
+                arguments_json: match &action.payload {
+                    AgentActionPayload::McpCall { arguments_json, .. } => arguments_json.clone(),
+                    _ => unreachable!("MCP payload was matched above"),
+                },
+                timeout_ms: None,
+                approval_bypass: permission_policy.approval_bypass(),
+            };
+            let plan = self.mcp_registry().plan_tool_call(&request)?;
+            if plan.approval_required
+                && !auto_allowed
+                && !policy_allowed
+                && !permission_policy.approval_bypass()
+            {
+                execution.action_results[index] = ActionResult::blocked(
+                    turn,
+                    &action,
+                    vec!["approval required before executing MCP tool call".to_string()],
+                    format!(
+                        r#"{{"approval":{{"state":"pending","kind":"mcp_call","action_id":"{}","server":"{}","tool":"{}"}}}}"#,
+                        json_escape(&action.id),
+                        json_escape(server),
+                        json_escape(tool)
+                    ),
+                );
+                continue;
+            }
+            self.agent
+                .pending_approved_external_actions
+                .insert((turn.turn_id.clone(), action.id.clone()));
+            queued = queued.saturating_add(1);
+        }
+        execution.terminal_state = runtime_agent_turn_state_from_action_results(
+            &execution.action_results,
+            execution.final_turn,
+        );
+        Ok(queued)
+    }
+
+    /// Queues immediately runnable web actions for worker execution.
+    ///
+    /// Already-settled provider-worker results are still recorded in actor
+    /// state, while unresolved requests are claimed by the external-action
+    /// worker after this completion transition returns.
+    pub(super) fn queue_running_network_actions_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+    ) -> Result<usize> {
+        let Some(batch) = execution.response.action_batch.clone() else {
+            return Ok(0);
+        };
+        let can_queue_running_actions = execution.terminal_state == AgentTurnState::Running;
+        let mut queued = 0usize;
+        let mut preexecuted = 0usize;
+        for result in &execution.action_results {
+            if !matches!(result.action_type, "web_search" | "fetch_url") {
+                continue;
+            }
+            let action = batch
+                .actions
+                .iter()
+                .find(|action| action.id == result.action_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("network result does not match an action")
+                })?;
+            match result.status {
+                ActionStatus::Running if can_queue_running_actions => {
+                    self.agent
+                        .pending_approved_external_actions
+                        .insert((turn.turn_id.clone(), action.id.clone()));
+                    queued = queued.saturating_add(1);
+                }
+                ActionStatus::Succeeded | ActionStatus::Failed => {
+                    self.record_preexecuted_network_action_result(turn, &action, result)?;
+                    preexecuted = preexecuted.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+        Ok(queued.saturating_add(preexecuted))
+    }
+
     /// Returns approved external actions that are ready for worker dispatch.
     pub(crate) fn pending_approved_external_actions(&self) -> Vec<(String, String)> {
         self.agent
@@ -55,6 +190,14 @@ impl RuntimeSessionService {
         action_id: &str,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
         let identity = (turn_id.to_string(), action_id.to_string());
+        if self
+            .agent
+            .claimed_approved_external_actions
+            .iter()
+            .any(|(claimed_turn_id, _)| claimed_turn_id == turn_id)
+        {
+            return Ok(None);
+        }
         if !self
             .agent
             .pending_approved_external_actions
@@ -492,6 +635,10 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[allow(
+        dead_code,
+        reason = "retained for direct service adapters outside the serialized actor"
+    )]
     pub(super) async fn execute_running_mcp_actions_for_turn_async(
         &mut self,
         turn: &AgentTurnRecord,
@@ -561,6 +708,10 @@ impl RuntimeSessionService {
         Ok(executed)
     }
 
+    #[allow(
+        dead_code,
+        reason = "retained for direct service adapters outside the serialized actor"
+    )]
     pub(super) async fn execute_running_network_actions_for_turn_async(
         &mut self,
         turn: &AgentTurnRecord,
@@ -863,6 +1014,10 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[allow(
+        dead_code,
+        reason = "retained for direct service adapters outside the serialized actor"
+    )]
     pub(super) async fn execute_mcp_action_for_turn_async(
         &mut self,
         turn: &AgentTurnRecord,

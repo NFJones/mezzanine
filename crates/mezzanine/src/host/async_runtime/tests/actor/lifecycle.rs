@@ -910,6 +910,70 @@ async fn async_actor_handles_control_requests_with_snapshot_repository() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies mixed control batches preserve response order while snapshot I/O
+/// is handed off one frame at a time. A non-snapshot frame before and after a
+/// snapshot request must not force the repository operation back into the
+/// serialized actor or reorder the connection's responses.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_orders_mixed_snapshot_control_batches() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use crate::storage::snapshot::SnapshotRepository;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-control-snapshot-batch-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 10)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut input = encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"session-before","method":"session/get","params":{}}"#,
+        );
+        input.extend_from_slice(&encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"snapshot-middle","method":"snapshot/list","params":{}}"#,
+        ));
+        input.extend_from_slice(&encode_control_body(
+            r#"{"jsonrpc":"2.0","id":"session-after","method":"session/get","params":{}}"#,
+        ));
+        let result = handle
+            .handle_control_input_for_connection_with_snapshots(
+                input.clone(),
+                4096,
+                ControlConnectionState::trusted_existing_client(primary),
+                snapshots,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.consumed, input.len());
+
+        let mut offset = 0usize;
+        let mut ids = Vec::new();
+        while offset < result.output.len() {
+            let (body, consumed) = decode_control_frame(&result.output[offset..], 4096).unwrap();
+            let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+            ids.push(response["id"].as_str().unwrap().to_string());
+            offset = offset.saturating_add(consumed);
+        }
+        assert_eq!(ids, ["session-before", "snapshot-middle", "session-after"]);
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Builds an actor fixture whose pane process was recreated from a layout.
 ///
 /// Restored pane processes must use the same event-driven readiness path as

@@ -942,6 +942,110 @@ impl RuntimeSessionService {
         Ok(response)
     }
 
+    /// Prepares lazy MCP discovery before an actor-owned `/list-mcp` command.
+    ///
+    /// Authorization and visible-shell checks remain serialized. Only the
+    /// transport startup work crosses to the worker, and other commands return
+    /// `None` so they continue through the ordinary command path.
+    pub(crate) fn prepare_agent_shell_mcp_discovery(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        input: &str,
+    ) -> Result<Option<crate::runtime::RuntimeAgentProviderPreparationWork>> {
+        if agent_shell_command_plan(input)
+            != AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::ListMcp)
+        {
+            return Ok(None);
+        }
+        self.require_live()?;
+        if self.session.primary_client_id() != Some(primary_client_id) {
+            return Err(MezError::forbidden("operation requires the primary client"));
+        }
+        let pane_id = self.active_pane_id()?;
+        let visible = self
+            .agent_shell_store()
+            .get(&pane_id)
+            .is_some_and(|session| session.visibility == AgentShellVisibility::Visible);
+        if !visible {
+            return Err(MezError::invalid_state(
+                "agent shell prompt requires a visible agent shell session",
+            ));
+        }
+        self.prepare_runtime_mcp_discovery_work().map(Some)
+    }
+
+    /// Prepares provider catalog refresh before an actor-owned shell command.
+    pub(crate) fn prepare_agent_shell_provider_info_refresh(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        input: &str,
+    ) -> Result<Option<crate::runtime::RuntimeProviderInfoRefreshWork>> {
+        if agent_shell_command_plan(input)
+            != AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::RefreshProviderInfo)
+        {
+            return Ok(None);
+        }
+        self.require_live()?;
+        if self.session.primary_client_id() != Some(primary_client_id) {
+            return Err(MezError::forbidden("operation requires the primary client"));
+        }
+        let pane_id = self.active_pane_id()?;
+        if self
+            .agent_shell_store()
+            .get(&pane_id)
+            .is_none_or(|session| session.visibility != AgentShellVisibility::Visible)
+        {
+            return Err(MezError::invalid_state(
+                "agent shell prompt requires a visible agent shell session",
+            ));
+        }
+        self.validate_agent_shell_refresh_provider_info_command(input)?;
+        self.prepare_provider_info_refresh().map(Some)
+    }
+
+    /// Completes an actor-owned provider refresh shell command.
+    pub(crate) fn complete_agent_shell_provider_info_refresh(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        input: &str,
+        outcome: crate::runtime::RuntimeProviderInfoRefreshOutcome,
+    ) -> Result<String> {
+        self.require_live()?;
+        if self.session.primary_client_id() != Some(primary_client_id) {
+            return Err(MezError::forbidden("operation requires the primary client"));
+        }
+        let pane_id = self.active_pane_id()?;
+        if self
+            .agent_shell_store()
+            .get(&pane_id)
+            .is_none_or(|session| session.visibility != AgentShellVisibility::Visible)
+        {
+            return Err(MezError::invalid_state(
+                "agent shell prompt requires a visible agent shell session",
+            ));
+        }
+        self.persist_agent_prompt_history_entry(&pane_id, input, true)?;
+        let body = self.apply_provider_info_refresh(outcome)?;
+        let command_outcome = AgentShellCommandOutcome::Display {
+            command: "refresh-provider-info".to_string(),
+            body,
+        };
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","agent_shell_command":"{}"}}"#,
+                json_escape(&pane_id),
+                json_escape(input)
+            ),
+        )?;
+        self.checkpoint_agent_session_metadata()?;
+        Ok(runtime_agent_shell_command_response_json(
+            &pane_id,
+            input,
+            Some(&command_outcome),
+        ))
+    }
+
     /// Starts the configured shell as a child shell for an agent-mode pane.
     ///
     /// The child shell inherits the pane's current directory. Shell commands

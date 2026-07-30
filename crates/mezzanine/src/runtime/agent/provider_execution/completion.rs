@@ -217,7 +217,13 @@ impl RuntimeSessionService {
         )?;
         let provider_id = execution.response.provider.clone();
         if let Err(error) = self
-            .apply_agent_provider_execution_async(&turn, &model_profile, &provider_id, execution)
+            .apply_agent_provider_execution_async(
+                &turn,
+                &model_profile,
+                &provider_id,
+                execution,
+                true,
+            )
             .await
         {
             self.fail_agent_turn_after_provider_completion_application_error(

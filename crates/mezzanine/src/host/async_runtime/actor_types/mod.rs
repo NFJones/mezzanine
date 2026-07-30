@@ -18,9 +18,10 @@ use super::{
     RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
     RuntimeApprovedExternalActionOutcome, RuntimeEvent, RuntimeEventBatch,
     RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
-    RuntimeLifecycleState, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, Size, StreamExt, TerminalClientLoopConfig, TerminalStyleSpan,
-    UnixListener, UnixStream, authorize_unix_peer_raw_fd, encode_frame, oneshot,
+    RuntimeLifecycleState, RuntimeProviderInfoRefreshOutcome, RuntimeSideEffect,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork, Size, StreamExt,
+    TerminalClientLoopConfig, TerminalStyleSpan, UnixListener, UnixStream,
+    authorize_unix_peer_raw_fd, encode_frame, oneshot,
 };
 use crate::runtime::PaneResizeUpdate;
 use crate::storage::snapshot::SnapshotRepository;

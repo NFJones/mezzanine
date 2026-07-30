@@ -20,6 +20,7 @@ impl RuntimeSessionService {
         model_profile: &ModelProfile,
         provider_id: &str,
         mut execution: AgentTurnExecution,
+        defer_external_actions: bool,
     ) -> Result<AgentTurnExecution> {
         let turn_id = turn.turn_id.as_str();
         if self
@@ -94,13 +95,19 @@ impl RuntimeSessionService {
         let message_actions_executed =
             self.execute_running_message_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
-        let network_actions_executed = self
-            .execute_running_network_actions_for_turn_async(turn, &mut execution)
-            .await?;
+        let network_actions_executed = if defer_external_actions {
+            self.queue_running_network_actions_for_turn(turn, &mut execution)?
+        } else {
+            self.execute_running_network_actions_for_turn_async(turn, &mut execution)
+                .await?
+        };
         terminal_observations.observe(&execution);
-        let mcp_actions_executed = self
-            .execute_running_mcp_actions_for_turn_async(turn, &mut execution)
-            .await?;
+        let mcp_actions_executed = if defer_external_actions {
+            self.queue_running_mcp_actions_for_turn(turn, &mut execution)?
+        } else {
+            self.execute_running_mcp_actions_for_turn_async(turn, &mut execution)
+                .await?
+        };
         terminal_observations.observe(&execution);
         let spawn_actions_executed =
             self.execute_running_spawn_actions_for_turn(turn, &mut execution)?;

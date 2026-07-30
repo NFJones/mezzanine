@@ -2,6 +2,101 @@
 
 use super::*;
 
+/// Verifies unresolved network actions are queued for an external worker when
+/// provider completion enters the actor. The completion transition must return
+/// with the action still running rather than issuing HTTP while serialized
+/// lifecycle requests wait behind it.
+#[tokio::test]
+async fn runtime_provider_completion_queues_network_action_for_worker() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"queue-network-worker","input":"fetch one document"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "fetch-worker".to_string(),
+        rationale: "fetch outside the runtime actor".to_string(),
+        payload: mez_agent::AgentActionPayload::FetchUrl {
+            url: "https://example.test/pending".to_string(),
+            format: None,
+            max_bytes: None,
+        },
+    };
+    let mut request = runtime_model_request_fixture(&turn.turn_id);
+    request.agent_id = turn.agent_id.clone();
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::NetworkFetch);
+    let execution = mez_agent::AgentTurnExecution {
+        request,
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "fetch pending document".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "fetch one source".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["network action accepted for worker execution".to_string()],
+            None,
+        )],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    let applied = service
+        .apply_agent_provider_completed_event(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+            execution,
+        )
+        .await
+        .unwrap();
+
+    assert!(applied);
+    assert_eq!(
+        service.pending_approved_external_actions(),
+        vec![(turn.turn_id.clone(), action.id.clone())]
+    );
+    assert_eq!(
+        service.agent_turn_executions()[&turn.turn_id].action_results[0].status,
+        ActionStatus::Running
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies provider execution identity is idempotent for exact replay while
 /// preserving textually identical responses reached from different requests.
 ///
