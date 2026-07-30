@@ -2139,6 +2139,115 @@ fn runtime_routed_worker_provider_failure_uses_configured_fallback_profile() {
     );
 }
 
+/// Verifies resumed shell dispatch presents a routed worker failure before
+/// terminal settlement removes the worker pane.
+///
+/// Bubblewrap capability completion and other asynchronous preparation paths
+/// resume through the stored-dispatch entry point. If dispatch fails, routed
+/// settlement immediately closes the ephemeral worker pane. The result must
+/// therefore reach the worker's agent presentation buffer before that close;
+/// attempting presentation afterward used to escape as a fatal missing-pane
+/// service error instead of releasing the parent for bounded explanation.
+#[test]
+fn runtime_routed_worker_stored_dispatch_failure_presents_before_pane_close() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 recover resumed shell dispatch");
+    service.remove_pending_agent_provider_task(&worker_turn.turn_id);
+    mark_test_pane_ready(&mut service, &worker_turn.pane_id);
+
+    let action = mez_agent::AgentAction {
+        id: "resumed-shell-dispatch".to_string(),
+        rationale: "inspect the worker directory".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Inspect the worker directory.".to_string(),
+            command: "pwd".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let retained_evaluation = service
+        .permission_policy_for_turn(&worker_turn)
+        .evaluate_shell_command_structured("pwd");
+    service.permission_policy_mut().add_rule(
+        mez_agent::permissions::CommandRule::new(["pwd"], RuleDecision::Forbid, RuleMatch::Exact)
+            .unwrap(),
+    );
+    let mut result = mez_agent::ActionResult::running(
+        &worker_turn,
+        &action,
+        vec!["shell action retained for asynchronous dispatch".to_string()],
+        None,
+    );
+    result.permission_evaluation = Some(Box::new(retained_evaluation));
+    service.agent_turn_executions_mut().insert(
+        worker_turn.turn_id.clone(),
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(
+                &worker_turn.turn_id,
+                &worker_turn.agent_id,
+            ),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "run pwd".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "exercise stored shell dispatch settlement".to_string(),
+                    thought: None,
+                    turn_id: worker_turn.turn_id.clone(),
+                    agent_id: worker_turn.agent_id.clone(),
+                    actions: vec![action],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![result],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        },
+    );
+
+    let execution = service
+        .dispatch_stored_running_shell_actions(&worker_turn.turn_id)
+        .expect("stored dispatch failure should settle without targeting a removed pane")
+        .expect("stored dispatch should return its terminal execution");
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+    assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
+    assert_eq!(
+        execution.action_results[0]
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("forbidden")
+    );
+    assert!(service.find_pane_descriptor(&worker_turn.pane_id).is_none());
+    assert!(
+        service
+            .agent_shell_store()
+            .get(&worker_turn.pane_id)
+            .is_none()
+    );
+    assert_eq!(
+        service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation)
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent_turn_id)
+    );
+}
+
 /// Verifies a routed worker whose shell action is denied after a persistent
 /// foreground-process block releases its parent for bounded error explanation.
 #[test]

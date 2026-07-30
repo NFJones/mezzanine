@@ -314,6 +314,11 @@ impl RuntimeSessionService {
         )?;
         let dispatched = self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?;
         self.record_runtime_agent_patch_results_for_turn(&turn, &execution);
+        // Routed workers own ephemeral presentation panes. A terminal dispatch
+        // result settles the routed workflow and closes that pane below, so
+        // action outcomes must be rendered while the worker still owns its
+        // presentation target.
+        self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         let mut terminal_state = execution.terminal_state;
         let mut transcript_entries = 0usize;
         if terminal_state == AgentTurnState::Blocked {
@@ -377,7 +382,6 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
-        self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
