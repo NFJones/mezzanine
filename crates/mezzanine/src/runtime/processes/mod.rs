@@ -723,8 +723,10 @@ impl RuntimeSessionService {
         conversation_id: impl Into<String>,
         screen: TerminalScreen,
     ) {
+        let pane_id = pane_id.into();
+        self.clear_interaction_state_for_surface(&pane_id, PaneSurfaceKind::Agent);
         self.process.agent_pane_screens.insert(
-            pane_id.into(),
+            pane_id,
             AgentPaneScreen {
                 conversation_id: conversation_id.into(),
                 screen,
@@ -734,6 +736,7 @@ impl RuntimeSessionService {
 
     /// Removes one pane's retained agent screen during replacement rollback.
     pub(crate) fn remove_agent_pane_screen(&mut self, pane_id: &str) {
+        self.clear_interaction_state_for_surface(pane_id, PaneSurfaceKind::Agent);
         self.process.agent_pane_screens.remove(pane_id);
     }
 
@@ -759,6 +762,7 @@ impl RuntimeSessionService {
                 self.process.settings.terminal_history_limit,
                 self.process.settings.terminal_history_rotate_lines,
             )?;
+            self.clear_interaction_state_for_surface(pane_id, PaneSurfaceKind::Agent);
             self.process.agent_pane_screens.insert(
                 pane_id.to_string(),
                 AgentPaneScreen {
@@ -805,7 +809,14 @@ impl RuntimeSessionService {
     ) -> Option<&mut TerminalScreen> {
         match self.presented_pane_surface(pane_id) {
             PaneSurfaceKind::Process => self.process_pane_screen_mut(pane_id),
-            PaneSurfaceKind::Agent => self.agent_pane_screen_mut(pane_id),
+            PaneSurfaceKind::Agent => {
+                let conversation_id = self.agent_shell_store().get(pane_id)?.session_id.clone();
+                let screen = self.process.agent_pane_screens.get_mut(pane_id)?;
+                if screen.conversation_id() != conversation_id {
+                    return None;
+                }
+                Some(screen.screen_mut())
+            }
         }
     }
 

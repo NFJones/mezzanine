@@ -151,11 +151,12 @@ fn runtime_pane_capture_uses_only_the_presented_conversation_bound_surface() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.set_agent_pane_screen(
-        "%1",
-        "stale-conversation",
-        TerminalScreen::new(size, 100).unwrap(),
-    );
+    service.set_agent_pane_screen("%1", "stale-conversation", {
+        let mut screen = TerminalScreen::new(Size::new(80, 2).unwrap(), 100).unwrap();
+        screen.feed(b"stale one\r\nstale two\r\nstale three\r\n");
+        screen
+    });
+    let stale_history_before = service.agent_pane_screen("%1").unwrap().history().len();
     let stale_capture = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"capture-stale","method":"pane/capture","params":{"target":{"pane_id":"%1"},"range":{"origin":"visible","start":"start","end":"end"}}}"#,
         &primary,
@@ -163,6 +164,17 @@ fn runtime_pane_capture_uses_only_the_presented_conversation_bound_surface() {
     assert!(
         !stale_capture.contains("process-capture-only"),
         "stale agent ownership must not fall back to hidden process content: {stale_capture}"
+    );
+    let stale_clear = service
+        .execute_terminal_command(&primary, "clear-history --confirm")
+        .unwrap();
+    assert!(
+        stale_clear.contains("cleared=false:reason=terminal-screen-unavailable"),
+        "{stale_clear}"
+    );
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap().history().len(),
+        stale_history_before
     );
 }
 

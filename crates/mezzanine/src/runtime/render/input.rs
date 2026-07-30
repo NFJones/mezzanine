@@ -74,11 +74,8 @@ impl RuntimeSessionService {
         if input == b"\x0c" {
             if self.presentation.primary_prompt_input.is_some() {
                 let pane_id = self.active_pane_id()?;
-                self.clear_copy_state_for_surface(
-                    &pane_id,
-                    crate::runtime::PaneSurfaceKind::Process,
-                );
-                if let Some(screen) = self.process_pane_screen_mut(&pane_id) {
+                self.clear_copy_state_for_presented_surface(&pane_id);
+                if let Some(screen) = self.presented_pane_screen_mut(&pane_id) {
                     screen.clear_visible_into_history();
                 }
                 return Ok(true);

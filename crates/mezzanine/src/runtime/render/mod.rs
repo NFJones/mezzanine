@@ -268,7 +268,8 @@ pub(crate) struct RuntimePresentationComponent {
     /// Last pane-content click retained for double-click classification.
     last_mouse_click_state: Option<RuntimeMouseClickState>,
     /// Deferred copied-word highlight cleanup.
-    deferred_word_copy_cleanup: std::cell::RefCell<Option<(String, CopyMode, u64)>>,
+    deferred_word_copy_cleanup:
+        std::cell::RefCell<Option<(String, PaneSurfaceKind, CopyMode, u64)>>,
     /// Window-frame action pressed until a matching mouse release.
     pressed_window_action: Option<WindowFrameAction>,
     /// Transient primary-client error status.
@@ -795,6 +796,67 @@ impl RuntimeSessionService {
             .copy
             .scrollback_copy_mode_panes
             .retain(|(candidate, _)| candidate != pane_id);
+        if self
+            .presentation
+            .mouse_selection_drag_state
+            .as_ref()
+            .is_some_and(|state| state.pane_id == pane_id)
+        {
+            self.presentation.mouse_selection_drag_state = None;
+        }
+        if self
+            .presentation
+            .last_mouse_click_state
+            .as_ref()
+            .is_some_and(|state| state.pane_id == pane_id)
+        {
+            self.presentation.last_mouse_click_state = None;
+        }
+        if self
+            .presentation
+            .deferred_word_copy_cleanup
+            .borrow()
+            .as_ref()
+            .is_some_and(|(candidate, _, _, _)| candidate == pane_id)
+        {
+            self.presentation.deferred_word_copy_cleanup.replace(None);
+        }
+    }
+
+    /// Clears copy and transient mouse state owned by one retained pane surface.
+    pub(crate) fn clear_interaction_state_for_surface(
+        &mut self,
+        pane_id: &str,
+        surface: PaneSurfaceKind,
+    ) {
+        self.clear_copy_state_for_surface(pane_id, surface);
+        if self
+            .presentation
+            .mouse_selection_drag_state
+            .as_ref()
+            .is_some_and(|state| state.pane_id == pane_id && state.surface == surface)
+        {
+            self.presentation.mouse_selection_drag_state = None;
+        }
+        if self
+            .presentation
+            .last_mouse_click_state
+            .as_ref()
+            .is_some_and(|state| state.pane_id == pane_id && state.surface == surface)
+        {
+            self.presentation.last_mouse_click_state = None;
+        }
+        if self
+            .presentation
+            .deferred_word_copy_cleanup
+            .borrow()
+            .as_ref()
+            .is_some_and(|(candidate, candidate_surface, _, _)| {
+                candidate == pane_id && *candidate_surface == surface
+            })
+        {
+            self.presentation.deferred_word_copy_cleanup.replace(None);
+        }
     }
 
     /// Replaces the desktop clipboard adapter after configuration changes.
@@ -906,7 +968,7 @@ impl RuntimeSessionService {
     /// Returns deferred copied-word cleanup state for product integration tests.
     pub(crate) fn deferred_word_copy_cleanup(
         &self,
-    ) -> &std::cell::RefCell<Option<(String, CopyMode, u64)>> {
+    ) -> &std::cell::RefCell<Option<(String, PaneSurfaceKind, CopyMode, u64)>> {
         &self.presentation.deferred_word_copy_cleanup
     }
 }

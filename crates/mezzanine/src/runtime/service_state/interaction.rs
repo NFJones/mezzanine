@@ -15,6 +15,8 @@ pub(crate) struct MouseSelectionDragState {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub pane_id: String,
+    /// Retained pane surface that owned the selection when the drag began.
+    pub surface: crate::runtime::PaneSurfaceKind,
     /// Stores the position value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -37,6 +39,8 @@ pub(crate) struct MouseSelectionDragState {
 pub(crate) struct RuntimeMouseClickState {
     /// Pane whose content received the click.
     pub pane_id: String,
+    /// Retained pane surface whose content received the click.
+    pub surface: crate::runtime::PaneSurfaceKind,
     /// Pane-local terminal cell clicked by the user.
     pub position: CopyPosition,
     /// Monotonic-enough wall-clock timestamp used for a small double-click window.

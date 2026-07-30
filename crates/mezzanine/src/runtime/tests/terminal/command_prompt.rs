@@ -89,6 +89,65 @@ fn runtime_double_click_copies_readline_word_under_pointer() {
     );
 }
 
+/// Verifies clicks on different retained pane surfaces cannot combine into a
+/// double-click word selection even when pane id and cell coordinates match.
+#[test]
+fn runtime_double_click_state_is_scoped_to_presented_surface() {
+    let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
+    TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
+    let mut service = test_runtime_service();
+    *service.host_clipboard_mut_for_tests() =
+        HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let size = Size::new(20, 4).unwrap();
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(size, 10).unwrap();
+    agent_screen.feed(b"gamma delta --flag");
+    service.set_agent_pane_screen("%1", &conversation_id, agent_screen);
+    service.agent_shell_store_mut().request_exit("%1").unwrap();
+    let mut process_screen = TerminalScreen::new(size, 10).unwrap();
+    process_screen.feed(b"alpha beta --flag");
+    service.set_process_pane_screen("%1", process_screen);
+    let click = AttachedTerminalClientStepPlan {
+        actions: vec![TerminalClientLoopAction::HandleMouse(
+            MouseAction::FocusPane(CopyPosition { line: 0, column: 7 }),
+        )],
+        output_lines: Vec::new(),
+        output_line_style_spans: Vec::new(),
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+
+    service
+        .apply_attached_terminal_step_plan(&primary, &click)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .apply_attached_terminal_step_plan(&primary, &click)
+        .unwrap();
+    assert!(service.paste_buffers().get("mouse").is_none());
+
+    service
+        .apply_attached_terminal_step_plan(&primary, &click)
+        .unwrap();
+    assert_eq!(service.paste_buffers().get("mouse"), Some("delta"));
+    assert_eq!(
+        TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().as_slice(),
+        ["delta"]
+    );
+}
+
 /// Verifies that runtime `terminal/command` accepts only the spec-defined
 /// `input` field. The legacy `command` alias is rejected at the params schema
 /// boundary so clients cannot depend on a non-normative request shape.

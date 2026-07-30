@@ -145,6 +145,66 @@ fn runtime_primary_command_prompt_ctrl_l_clears_and_escape_exits() {
     assert!(service.primary_prompt_input().is_none());
 }
 
+/// Verifies a command-prompt Ctrl+L clears only the currently presented agent
+/// surface while leaving the pane's retained process viewport unchanged.
+#[test]
+fn runtime_primary_command_prompt_ctrl_l_targets_presented_agent_surface() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(50, 8).unwrap(), 120)
+        .unwrap();
+    let size = Size::new(50, 8).unwrap();
+    let mut process_screen = TerminalScreen::new(size, 120).unwrap();
+    process_screen.feed(b"retained process output");
+    service.set_process_pane_screen("%1", process_screen);
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(size, 120).unwrap();
+    agent_screen.feed(b"visible agent output");
+    service.set_agent_pane_screen("%1", &conversation_id, agent_screen);
+
+    service.enter_primary_command_prompt("li").unwrap();
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x0c".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let agent = service.agent_pane_screen("%1").unwrap();
+    assert!(
+        !agent
+            .visible_lines()
+            .join("\n")
+            .contains("visible agent output")
+    );
+    assert!(
+        agent
+            .normal_content_lines()
+            .join("\n")
+            .contains("visible agent output")
+    );
+    assert!(
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .visible_lines()
+            .join("\n")
+            .contains("retained process output")
+    );
+}
+
 /// Verifies that immediate terminal commands submitted through the command
 /// prompt take effect without opening a modal display overlay. Commands like
 /// `send-prefix` already have an observable pane effect, so users should not

@@ -408,6 +408,7 @@ impl RuntimeSessionService {
                 self.session
                     .select_pane_global(primary_client_id, pane_id.as_str())?;
                 self.acknowledge_focused_pane_completion();
+                let surface = self.presented_pane_surface(pane_id.as_str());
                 if self.execute_agent_command_link_at_pane_position(
                     primary_client_id,
                     pane_id.as_str(),
@@ -424,6 +425,7 @@ impl RuntimeSessionService {
                     .as_ref()
                     .is_some_and(|click| {
                         click.pane_id == pane_id
+                            && click.surface == surface
                             && click.position == target.position
                             && now.saturating_sub(click.clicked_at_unix_ms)
                                 <= DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS
@@ -440,11 +442,13 @@ impl RuntimeSessionService {
                 }
                 self.presentation.last_mouse_click_state = Some(RuntimeMouseClickState {
                     pane_id: pane_id.clone(),
+                    surface,
                     position: target.position,
                     clicked_at_unix_ms: now,
                 });
                 self.presentation.mouse_selection_drag_state = Some(MouseSelectionDragState {
                     pane_id,
+                    surface,
                     position: target.position,
                     origin_position: position,
                     autoscroll_position: None,
@@ -552,8 +556,10 @@ impl RuntimeSessionService {
                     .select_pane_global(primary_client_id, target.pane_id.as_str())?;
                 self.acknowledge_focused_pane_completion();
                 let pane_id = target.pane_id;
+                let surface = self.presented_pane_surface(pane_id.as_str());
                 self.presentation.mouse_selection_drag_state = Some(MouseSelectionDragState {
                     pane_id: pane_id.clone(),
+                    surface,
                     position: target.position,
                     origin_position: position,
                     autoscroll_position: None,
@@ -1021,18 +1027,19 @@ impl RuntimeSessionService {
             .select_pane_global(primary_client_id, target.pane_id.as_str())?;
         self.acknowledge_focused_pane_completion();
         let pane_id = target.pane_id;
+        let surface = self.presented_pane_surface(pane_id.as_str());
         let anchor = self
             .presentation
             .mouse_selection_drag_state
             .as_ref()
-            .filter(|state| state.pane_id == pane_id)
+            .filter(|state| state.pane_id == pane_id && state.surface == surface)
             .map(|state| state.position)
             .unwrap_or(target.position);
         let origin = self
             .presentation
             .mouse_selection_drag_state
             .as_ref()
-            .filter(|state| state.pane_id == pane_id)
+            .filter(|state| state.pane_id == pane_id && state.surface == surface)
             .map(|state| state.origin_position)
             .unwrap_or(position);
         if finish
@@ -1069,6 +1076,7 @@ impl RuntimeSessionService {
         } else {
             self.presentation.mouse_selection_drag_state = Some(MouseSelectionDragState {
                 pane_id,
+                surface,
                 position: anchor,
                 origin_position: origin,
                 autoscroll_position: target.edge.map(|_| position),
@@ -1135,8 +1143,10 @@ impl RuntimeSessionService {
         };
         self.presentation.mouse_selection_drag_state = None;
         self.remove_presented_surface_scrollback_copy_mode(pane_id);
+        let surface = self.presented_pane_surface(pane_id);
         self.presentation.deferred_word_copy_cleanup.replace(Some((
             pane_id.to_string(),
+            surface,
             copy_mode,
             current_unix_millis().saturating_add(DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS),
         )));

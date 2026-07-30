@@ -193,7 +193,7 @@ fn runtime_double_click_highlight_persists_until_cleanup_deadline() {
     assert!(!view.line_style_spans.iter().all(|spans| spans.is_empty()));
     assert!(service.deferred_word_copy_cleanup().borrow().is_some());
 
-    if let Some((pane_id, copy_mode, cleanup_at_unix_ms)) =
+    if let Some((pane_id, _surface, copy_mode, cleanup_at_unix_ms)) =
         service.deferred_word_copy_cleanup().borrow_mut().as_mut()
     {
         *pane_id = "%1".to_string();

@@ -1772,6 +1772,11 @@ surfaces without clearing, merging, copying, or transferring rows, history,
 cursor state, viewport state, or terminal modes. The agent surface MUST remain
 selected while visibility is `Visible` or `HidePendingTaskCompletion`; the
 process surface MUST be selected only when visibility becomes `Hidden`.
+Mutable buffer operations and transient mouse interaction state, including
+drag selection, double-click recognition, and copied-word highlights, MUST be
+qualified by the presented surface. A surface switch or conversation rebind
+MUST NOT apply retained interaction state to the other surface, and mutable
+agent-screen access MUST validate the active conversation binding.
 Reentering the same in-memory conversation MUST restore its exact retained
 agent screen and interaction state. Starting, resuming, forking, or otherwise
 rebinding a different conversation MUST bind a blank or reconstructed agent

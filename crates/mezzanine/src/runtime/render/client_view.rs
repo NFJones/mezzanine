@@ -455,7 +455,8 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let mut deferred_cleanup = self.presentation.deferred_word_copy_cleanup.borrow_mut();
         let mut clear_deferred_cleanup = false;
-        if let Some((pane_id, copy_mode, cleanup_at_unix_ms)) = deferred_cleanup.as_ref()
+        if let Some((pane_id, surface, copy_mode, cleanup_at_unix_ms)) = deferred_cleanup.as_ref()
+            && self.presented_pane_surface(pane_id) == *surface
             && let Some(pane_index) = window
                 .panes()
                 .iter()
