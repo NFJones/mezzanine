@@ -207,6 +207,7 @@ impl RuntimeSessionService {
                         "saved session was already deleted",
                     ));
                 }
+                self.invalidate_agent_prompt_selector_extra_candidates();
                 self.refresh_record_browser_overlay_source(source)?
             }
             RuntimeRecordBrowserOverlaySource::Personalities { .. } => {
@@ -259,6 +260,7 @@ impl RuntimeSessionService {
                         "issue browser record was already deleted",
                     ));
                 }
+                self.invalidate_agent_prompt_selector_extra_candidates();
                 self.refresh_record_browser_overlay_source(source)?
             }
             RuntimeRecordBrowserOverlaySource::Memories { .. } => {
@@ -296,6 +298,7 @@ impl RuntimeSessionService {
             .cloned_transcript_store()
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
         store.clear_session_name(record_id)?;
+        self.invalidate_agent_prompt_selector_extra_candidates();
         let mut browser = self.saved_sessions_record_browser()?;
         browser.set_active_record_id(record_id);
         Ok(browser)

@@ -126,6 +126,7 @@ impl RuntimeSessionService {
                 match result {
                     Ok(record) => {
                         self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
+                        self.invalidate_agent_prompt_selector_extra_candidates();
                         Ok(issue_record_action_result(turn, action, "added", &record))
                     }
                     Err(error) => Ok(ActionResult::failed(
@@ -175,6 +176,7 @@ impl RuntimeSessionService {
                     Ok(result) => {
                         if result.updated {
                             self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
+                            self.invalidate_agent_prompt_selector_extra_candidates();
                         }
                         Ok(issue_update_action_result(turn, action, &result))
                     }
@@ -249,6 +251,7 @@ impl RuntimeSessionService {
                 Ok(result) => {
                     if result.deleted {
                         self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
+                        self.invalidate_agent_prompt_selector_extra_candidates();
                     }
                     Ok(issue_delete_action_result(turn, action, &result))
                 }

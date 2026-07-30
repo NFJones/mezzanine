@@ -247,7 +247,13 @@ impl RuntimeSessionService {
         if input != b"\x03" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
         }
-        let selector_extra_candidates = self.runtime_agent_selector_extra_candidates();
+        let selector_candidates_need_loading = self
+            .presentation
+            .agent_prompt_inputs
+            .get(pane_id)
+            .is_none_or(|state| !state.selector_extra_candidates_loaded);
+        let selector_extra_candidates = selector_candidates_need_loading
+            .then(|| self.runtime_agent_selector_extra_candidates(pane_id));
         let selector_working_directory = self.pane_current_working_directory(pane_id);
         let prompt_body_columns = self
             .agent_prompt_editable_body_width(pane_id)
@@ -284,9 +290,12 @@ impl RuntimeSessionService {
                 .entry(pane_id.to_string())
                 .or_insert_with(default_runtime_agent_prompt_input);
             state.prompt.set_prompt_body_columns(prompt_body_columns);
-            state
-                .prompt
-                .set_selector_extra_candidates(selector_extra_candidates);
+            if let Some(selector_extra_candidates) = selector_extra_candidates {
+                state
+                    .prompt
+                    .set_selector_extra_candidates(selector_extra_candidates);
+                state.selector_extra_candidates_loaded = true;
+            }
             state
                 .prompt
                 .set_selector_working_directory(selector_working_directory);
@@ -509,7 +518,10 @@ impl RuntimeSessionService {
     }
 
     /// Builds dynamic agent prompt selector candidates from saved transcripts.
-    fn runtime_agent_selector_extra_candidates(&self) -> Vec<SelectorExtraCandidate> {
+    fn runtime_agent_selector_extra_candidates(
+        &self,
+        pane_id: &str,
+    ) -> Vec<SelectorExtraCandidate> {
         let mut candidates = self
             .integration
             .agent_personality_profiles()
@@ -563,43 +575,41 @@ impl RuntimeSessionService {
                     ]
                 }),
         );
-        if let Ok(pane_id) = self.active_pane_id() {
-            let catalog = self.effective_skill_catalog_for_pane(&pane_id);
-            candidates.extend(catalog.skills.into_iter().map(|skill| {
-                SelectorExtraCandidate::new(
-                    SelectorSurface::AgentCommand,
-                    "$",
-                    SelectorCandidate::new(
-                        format!("${}", skill.name),
-                        SelectorCandidateKind::Value,
-                        true,
-                    )
-                    .with_detail(format!(
-                        "{} ({})",
-                        skill.description,
-                        skill.source.as_str()
-                    )),
+        let catalog = self.effective_skill_catalog_for_pane(pane_id);
+        candidates.extend(catalog.skills.into_iter().map(|skill| {
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "$",
+                SelectorCandidate::new(
+                    format!("${}", skill.name),
+                    SelectorCandidateKind::Value,
+                    true,
                 )
-            }));
-            let macro_catalog = self.effective_macro_catalog_for_pane(&pane_id);
-            candidates.extend(macro_catalog.macros.into_iter().map(|macro_summary| {
-                SelectorExtraCandidate::new(
-                    SelectorSurface::AgentCommand,
-                    "#",
-                    SelectorCandidate::new(
-                        format!("#{}", macro_summary.name),
-                        SelectorCandidateKind::Value,
-                        true,
-                    )
-                    .with_detail(format!(
-                        "{} ({}; {} steps)",
-                        macro_summary.description,
-                        macro_summary.source.as_str(),
-                        macro_summary.step_count
-                    )),
+                .with_detail(format!(
+                    "{} ({})",
+                    skill.description,
+                    skill.source.as_str()
+                )),
+            )
+        }));
+        let macro_catalog = self.effective_macro_catalog_for_pane(pane_id);
+        candidates.extend(macro_catalog.macros.into_iter().map(|macro_summary| {
+            SelectorExtraCandidate::new(
+                SelectorSurface::AgentCommand,
+                "#",
+                SelectorCandidate::new(
+                    format!("#{}", macro_summary.name),
+                    SelectorCandidateKind::Value,
+                    true,
                 )
-            }));
-        }
+                .with_detail(format!(
+                    "{} ({}; {} steps)",
+                    macro_summary.description,
+                    macro_summary.source.as_str(),
+                    macro_summary.step_count
+                )),
+            )
+        }));
         if crate::runtime::commands::runtime_issues_enabled(self)
             && let Some(config_root) = self.integration.config_root()
         {

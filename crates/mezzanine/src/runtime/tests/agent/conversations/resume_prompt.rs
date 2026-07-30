@@ -59,6 +59,77 @@ fn runtime_agent_prompt_resume_autocompletes_saved_session_uuid() {
     );
 }
 
+/// Verifies later prompt input retains selector candidates loaded by the first
+/// keystroke instead of rereading saved transcripts on every input batch.
+#[test]
+fn runtime_agent_prompt_resume_completion_uses_cached_saved_sessions() {
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("runtime-agent-resume-complete-cache");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "018f6b3a-1b2c-7000-9000-cafebabefeed".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-saved".to_string(),
+            agent_id: "agent-%9".to_string(),
+            pane_id: "%9".to_string(),
+            content: "saved prompt".to_string(),
+        })
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(
+                    b"/resume 018f".to_vec(),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    std::fs::remove_dir_all(&transcript_root).unwrap();
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\t".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .line(),
+        "/resume 018f6b3a-1b2c-7000-9000-cafebabefeed "
+    );
+}
+
 /// Verifies `/resume <session>` replays saved transcript context into the pane
 /// buffer after rebinding the pane-local agent shell. A resumed task should
 /// show enough prior conversation content for the user to continue without

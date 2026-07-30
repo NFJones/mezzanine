@@ -138,6 +138,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn set_agent_transcript_store(&mut self, store: AgentTranscriptStore) {
         self.persistence.set_transcript_store(store);
+        self.invalidate_agent_prompt_selector_extra_candidates();
     }
 
     /// Restores pane-scoped active agent shell metadata for this live session.
@@ -345,6 +346,7 @@ impl RuntimeSessionService {
                         pane_id: pane_id.clone(),
                         content: diagnostic.to_string(),
                     })?;
+                    self.invalidate_agent_prompt_selector_extra_candidates();
                 }
                 if let Some(diagnostic) = diagnostic
                     && !diagnostic_already_presented

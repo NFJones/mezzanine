@@ -59,6 +59,7 @@ pub(crate) fn default_runtime_agent_prompt_input() -> RuntimeAgentPromptInput {
         decoder: ReadlineInputDecoder::new(),
         display_lines: Vec::new(),
         pending_ctrl_c_exit_at_unix_ms: None,
+        selector_extra_candidates_loaded: false,
     }
 }
 

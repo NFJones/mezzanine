@@ -59,6 +59,7 @@ pub(super) fn execute_agent_shell_issue_command(
                 },
                 current_unix_seconds(),
             )?;
+            service.invalidate_agent_prompt_selector_extra_candidates();
             Ok(AgentShellCommandOutcome::Mutated {
                 command: "issue".to_string(),
                 body: format!(
@@ -80,6 +81,9 @@ pub(super) fn execute_agent_shell_issue_command(
         }
         RuntimeIssueArgs::Update { id, update } => {
             let result = store.update_issue(project, id, update, current_unix_seconds())?;
+            if result.updated {
+                service.invalidate_agent_prompt_selector_extra_candidates();
+            }
             Ok(AgentShellCommandOutcome::Mutated {
                 command: "issue".to_string(),
                 body: format!(
@@ -112,6 +116,9 @@ pub(super) fn execute_agent_shell_issue_command(
         }
         RuntimeIssueArgs::Delete { id } => {
             let result = store.delete_issue(project, id)?;
+            if result.deleted {
+                service.invalidate_agent_prompt_selector_extra_candidates();
+            }
             Ok(AgentShellCommandOutcome::Mutated {
                 command: "issue".to_string(),
                 body: format!(

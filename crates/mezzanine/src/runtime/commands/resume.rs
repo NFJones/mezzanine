@@ -136,6 +136,9 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("transcript persistence is unavailable"))?;
         if name == "--clear" {
             let cleared = store.clear_session_name(&conversation_id)?;
+            if cleared {
+                self.invalidate_agent_prompt_selector_extra_candidates();
+            }
             return Ok(AgentShellCommandOutcome::Mutated {
                 command: "name-session".to_string(),
                 body: format!(
@@ -147,6 +150,7 @@ impl RuntimeSessionService {
         }
         let named =
             store.name_session(&conversation_id, name, current_unix_seconds(), directory)?;
+        self.invalidate_agent_prompt_selector_extra_candidates();
         Ok(AgentShellCommandOutcome::Mutated {
             command: "name-session".to_string(),
             body: format!(

@@ -979,6 +979,16 @@ impl RuntimeSessionService {
         self.presentation.agent_prompt_inputs.get_mut(pane_id)
     }
 
+    /// Marks runtime-provided agent selector candidates stale for every prompt.
+    ///
+    /// The next input batch refreshes each prompt snapshot after the durable
+    /// source backing completions has changed.
+    pub(crate) fn invalidate_agent_prompt_selector_extra_candidates(&mut self) {
+        for prompt in self.presentation.agent_prompt_inputs.values_mut() {
+            prompt.selector_extra_candidates_loaded = false;
+        }
+    }
+
     /// Clears every active agent prompt editor during lifecycle teardown.
     pub(crate) fn clear_agent_prompt_inputs(&mut self) {
         self.presentation.agent_prompt_inputs.clear();

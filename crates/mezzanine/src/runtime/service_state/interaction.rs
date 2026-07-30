@@ -381,6 +381,12 @@ pub(crate) struct RuntimeAgentPromptInput {
     /// exit therefore requires a second Ctrl+C within a short window while
     /// active turns still use Ctrl+C as an immediate interrupt.
     pub(crate) pending_ctrl_c_exit_at_unix_ms: Option<u64>,
+    /// Whether the prompt owns a current snapshot of runtime selector candidates.
+    ///
+    /// Building those candidates may inspect durable transcript and issue stores,
+    /// so the runtime initializes them when the prompt first receives input
+    /// rather than performing storage I/O for every keystroke.
+    pub(crate) selector_extra_candidates_loaded: bool,
 }
 
 /// Runtime-local editable prompt state for the primary command surface.
