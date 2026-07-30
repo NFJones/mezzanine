@@ -49,6 +49,23 @@ pub struct HistoryBuffer {
 }
 
 impl HistoryBuffer {
+    /// Builds an empty buffer with the same retention and rotation policy.
+    ///
+    /// Terminal protocol parsing uses this when retained history must be moved
+    /// aside temporarily. Constructing the placeholder directly preserves
+    /// already-validated policy values without introducing a fallible runtime
+    /// path.
+    pub(crate) fn empty_with_same_policy(&self) -> Self {
+        Self {
+            limit: self.limit,
+            rotate_lines: self.rotate_lines,
+            lines: VecDeque::new(),
+            line_style_spans: VecDeque::new(),
+            line_copy_texts: VecDeque::new(),
+            line_wraps: VecDeque::new(),
+        }
+    }
+
     /// Builds a history buffer with the default overflow rotation batch.
     pub fn new(limit: usize) -> Result<Self, HistoryConfigError> {
         Self::new_with_rotation(limit, DEFAULT_HISTORY_ROTATE_LINES)

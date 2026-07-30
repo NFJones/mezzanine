@@ -142,6 +142,32 @@ impl RuntimeSessionService {
                 .register_completion_attention(pane_id, focused_pane_id.as_deref());
         }
         self.append_agent_trace_turn_transition(&turn, previous_state, state, "finish_agent_turn")?;
+        self.clear_terminal_agent_turn_runtime_state(turn_id);
+        let finished = self
+            .agent_shell_store_mut()
+            .finish_turn(pane_id, turn_id)?
+            .clone();
+        if finished.visibility == AgentShellVisibility::Hidden {
+            self.advance_pane_shell_prompt_after_agent_exit(pane_id)?;
+        }
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            self.close_terminal_subagent_pane_if_pending(&turn)?;
+        }
+        self.start_ready_agent_turns()?;
+        self.checkpoint_agent_session_metadata()?;
+        Ok(finished)
+    }
+
+    /// Clears non-ledger runtime ownership after one agent turn reaches a
+    /// terminal state.
+    ///
+    /// Normal completion, queued-turn cancellation, and missing-pane cleanup
+    /// share this operation so provider claims, approvals, action bookkeeping,
+    /// and retained execution context cannot outlive any terminal ledger path.
+    fn clear_terminal_agent_turn_runtime_state(&mut self, turn_id: &str) {
         self.agent_turn_contexts_mut().remove(turn_id);
         self.agent_turn_executions_mut().remove(turn_id);
         self.agent.sandbox_failure_assessments.remove(turn_id);
@@ -167,22 +193,6 @@ impl RuntimeSessionService {
             .retain(|(claimed_turn_id, _)| claimed_turn_id != turn_id);
         self.clear_agent_provider_retry_attempt(turn_id);
         self.clear_blocked_agent_approvals_for_turn(turn_id);
-        let finished = self
-            .agent_shell_store_mut()
-            .finish_turn(pane_id, turn_id)?
-            .clone();
-        if finished.visibility == AgentShellVisibility::Hidden {
-            self.advance_pane_shell_prompt_after_agent_exit(pane_id)?;
-        }
-        if matches!(
-            state,
-            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) {
-            self.close_terminal_subagent_pane_if_pending(&turn)?;
-        }
-        self.start_ready_agent_turns()?;
-        self.checkpoint_agent_session_metadata()?;
-        Ok(finished)
     }
 
     /// Cleans up a queued or blocked turn that is not currently bound as the
@@ -257,39 +267,7 @@ impl RuntimeSessionService {
             state,
             "finish_agent_turn_without_shell_session",
         )?;
-        self.agent_turn_contexts_mut().remove(&turn.turn_id);
-        self.agent_turn_executions_mut().remove(&turn.turn_id);
-        self.agent.sandbox_failure_assessments.remove(&turn.turn_id);
-        self.clear_agent_failure_feedback_attempts_for_turn(&turn.turn_id);
-        self.clear_agent_execution_group_ownership_for_turn(&turn.turn_id);
-        self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
-        self.agent
-            .agent_turn_shell_dispatch_history
-            .remove(&turn.turn_id);
-        self.clear_pending_shell_dispatch_blocked_recovery_attempts_for_turn(&turn.turn_id);
-        self.agent
-            .agent_turn_network_action_history
-            .remove(&turn.turn_id);
-        self.agent
-            .agent_turn_config_change_successes
-            .remove(&turn.turn_id);
-        self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
-        self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-        self.remove_agent_turn_model_profile(&turn.turn_id);
-        self.agent
-            .pending_agent_provider_tasks
-            .remove(&turn.turn_id);
-        self.agent
-            .claimed_agent_provider_tasks
-            .remove(&turn.turn_id);
-        self.agent
-            .pending_approved_external_actions
-            .retain(|(pending_turn_id, _)| pending_turn_id != &turn.turn_id);
-        self.agent
-            .claimed_approved_external_actions
-            .retain(|(claimed_turn_id, _)| claimed_turn_id != &turn.turn_id);
-        self.clear_agent_provider_retry_attempt(&turn.turn_id);
-        self.clear_blocked_agent_approvals_for_turn(&turn.turn_id);
+        self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
         let session = self
             .agent_shell_store_mut()
             .ensure_session(&turn.pane_id)?
@@ -501,15 +479,19 @@ impl RuntimeSessionService {
         for turn in turns {
             let _ = self.agent.agent_scheduler.cancel(&turn.turn_id);
             self.cancel_live_shell_transactions_for_turn(&turn.turn_id)?;
+            let pane_present = self.find_pane_descriptor(&turn.pane_id).is_some();
             let running_in_shell = self
                 .agent_shell_store()
                 .get(&turn.pane_id)
                 .and_then(|session| session.running_turn_id.as_deref())
                 == Some(turn.turn_id.as_str());
-            if running_in_shell {
+            if pane_present && running_in_shell {
                 self.finish_agent_turn(&turn.pane_id, &turn.turn_id, AgentTurnState::Failed)?;
             } else {
                 self.emit_subagent_task_result_for_state(&turn, AgentTurnState::Failed)?;
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_agent_turn_finished(AgentTurnState::Failed);
                 self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 self.append_agent_trace_turn_transition(
@@ -518,28 +500,10 @@ impl RuntimeSessionService {
                     AgentTurnState::Failed,
                     "pane_shutdown_without_shell_session",
                 )?;
-                self.agent_turn_contexts_mut().remove(&turn.turn_id);
-                self.agent_turn_executions_mut().remove(&turn.turn_id);
-                self.clear_agent_execution_group_ownership_for_turn(&turn.turn_id);
-                self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
-                self.agent
-                    .agent_turn_shell_dispatch_history
-                    .remove(&turn.turn_id);
-                self.clear_pending_shell_dispatch_blocked_recovery_attempts_for_turn(&turn.turn_id);
-                self.agent
-                    .agent_turn_network_action_history
-                    .remove(&turn.turn_id);
-                self.agent
-                    .agent_turn_config_change_successes
-                    .remove(&turn.turn_id);
-                self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
-                self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-                self.remove_agent_turn_model_profile(&turn.turn_id);
-                self.agent
-                    .pending_agent_provider_tasks
-                    .remove(&turn.turn_id);
-                self.clear_agent_provider_retry_attempt(&turn.turn_id);
-                self.clear_blocked_agent_approvals_for_turn(&turn.turn_id);
+                self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
+                if !pane_present {
+                    self.agent_shell_store_mut().remove_session(&turn.pane_id);
+                }
             }
             self.append_lifecycle_event(
                 EventKind::AgentStatus,

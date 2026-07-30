@@ -112,6 +112,31 @@ fn terminal_screen_reports_terminal_owned_history_configuration_errors() {
     );
 }
 
+/// Verifies hidden protocol parsing preserves the allocation that owns retained
+/// scrollback instead of cloning history for every incoming PTY chunk.
+///
+/// Input and pane output share one runtime actor in the product. A hidden feed
+/// whose work scales with retained history can therefore stall unrelated
+/// keystrokes. Moving the retained history out of the parser and restoring it
+/// keeps both its contents and backing storage stable across the operation.
+#[test]
+fn protocol_preserving_feed_reuses_retained_history_storage() {
+    let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 100).unwrap();
+    screen.feed(b"one\r\ntwo\r\nthree\r\n");
+    let history_line_before = screen.history().lines().next().unwrap();
+    let history_text_before = history_line_before.to_string();
+    let history_storage_before = history_line_before.as_ptr();
+
+    screen.feed_protocol_preserving_content(b"hidden\r\n\x1b[?2004h\x1b[3;5H");
+
+    let history_line_after = screen.history().lines().next().unwrap();
+    assert_eq!(history_line_after, history_text_before);
+    assert_eq!(history_line_after.as_ptr(), history_storage_before);
+    assert!(screen.bracketed_paste_enabled());
+    assert_eq!(screen.cursor_state().row, 1);
+    assert_eq!(screen.cursor_state().column, 4);
+}
+
 /// Verifies default history limit matches spec.
 ///
 /// This regression scenario documents the behavior being protected so a

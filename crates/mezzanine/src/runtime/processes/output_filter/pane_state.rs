@@ -54,6 +54,13 @@ impl RuntimeSessionService {
             )
         })?;
         let descriptor_size = descriptor.size;
+        let process_presentation_size = self
+            .session
+            .windows()
+            .iter()
+            .find(|window| window.id == descriptor.window_id)
+            .and_then(|window| self.pane_presentation_size_for(window, descriptor.pane_id.as_str()))
+            .unwrap_or(descriptor_size);
         let descriptor_window_id = descriptor.window_id.to_string();
         let background = self
             .session
@@ -99,11 +106,11 @@ impl RuntimeSessionService {
             .process_pane_screens
             .entry(output.pane_id.clone())
             .or_insert(TerminalScreen::new_with_history_config(
-                descriptor_size,
+                process_presentation_size,
                 self.process.settings.terminal_history_limit,
                 self.process.settings.terminal_history_rotate_lines,
             )?);
-        process_screen.resize(descriptor_size);
+        process_screen.resize(process_presentation_size);
         if render_mode == PaneOutputRenderMode::Normal {
             process_screen.feed(&protocol_bytes);
         } else {

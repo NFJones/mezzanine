@@ -6,6 +6,155 @@
 
 use super::*;
 
+/// Retained display storage moved aside during a hidden protocol feed.
+///
+/// Moving these buffers keeps hidden-output work independent of retained
+/// scrollback size while the parser operates on bounded blank placeholders.
+struct RetainedScreenContent {
+    cells: Vec<Vec<TerminalScreenCell>>,
+    renditions: Vec<Vec<GraphicRendition>>,
+    line_wraps: Vec<bool>,
+    line_copy_texts: Vec<Option<String>>,
+    normal_viewport_detached_from_history: bool,
+}
+
+impl RetainedScreenContent {
+    /// Replaces the active display with bounded blank storage and returns the
+    /// retained content without cloning it.
+    fn take_current(screen: &mut TerminalScreen) -> Self {
+        let size = screen.size;
+        Self {
+            cells: std::mem::replace(&mut screen.cells, blank_cells(size)),
+            renditions: std::mem::replace(
+                &mut screen.renditions,
+                blank_renditions(size, GraphicRendition::default()),
+            ),
+            line_wraps: std::mem::replace(
+                &mut screen.line_wraps,
+                vec![false; usize::from(size.rows)],
+            ),
+            line_copy_texts: std::mem::replace(
+                &mut screen.line_copy_texts,
+                vec![None; usize::from(size.rows)],
+            ),
+            normal_viewport_detached_from_history: std::mem::replace(
+                &mut screen.normal_viewport_detached_from_history,
+                false,
+            ),
+        }
+    }
+
+    /// Replaces a saved normal display with bounded blank storage and returns
+    /// its retained content without cloning it.
+    fn take_saved(screen: &mut SavedNormalScreenState) -> Self {
+        let size = screen.size;
+        Self {
+            cells: std::mem::replace(&mut screen.cells, blank_cells(size)),
+            renditions: std::mem::replace(
+                &mut screen.renditions,
+                blank_renditions(size, GraphicRendition::default()),
+            ),
+            line_wraps: std::mem::replace(
+                &mut screen.line_wraps,
+                vec![false; usize::from(size.rows)],
+            ),
+            line_copy_texts: std::mem::replace(
+                &mut screen.line_copy_texts,
+                vec![None; usize::from(size.rows)],
+            ),
+            normal_viewport_detached_from_history: std::mem::replace(
+                &mut screen.normal_viewport_detached_from_history,
+                false,
+            ),
+        }
+    }
+
+    /// Restores retained content to the active display.
+    fn restore_current(self, screen: &mut TerminalScreen) {
+        screen.cells = self.cells;
+        screen.renditions = self.renditions;
+        screen.line_wraps = self.line_wraps;
+        screen.line_copy_texts = self.line_copy_texts;
+        screen.normal_viewport_detached_from_history = self.normal_viewport_detached_from_history;
+    }
+
+    /// Restores retained content to a saved normal display.
+    fn restore_saved(self, screen: &mut SavedNormalScreenState) {
+        screen.cells = self.cells;
+        screen.renditions = self.renditions;
+        screen.line_wraps = self.line_wraps;
+        screen.line_copy_texts = self.line_copy_texts;
+        screen.normal_viewport_detached_from_history = self.normal_viewport_detached_from_history;
+    }
+}
+
+/// Non-content fields retained for a saved normal screen while hidden protocol
+/// bytes may leave and re-enter alternate-screen mode.
+#[derive(Clone, Copy)]
+struct SavedNormalScreenMetadata {
+    cursor: Cursor,
+    cursor_visible: bool,
+    wrap_pending: bool,
+    saved_cursor: Option<Cursor>,
+    graphic_rendition: GraphicRendition,
+    size: Size,
+    autowrap_enabled: bool,
+    origin_mode_enabled: bool,
+    scroll_region: Option<(usize, usize)>,
+}
+
+impl SavedNormalScreenMetadata {
+    /// Captures the scalar protocol state of one saved normal screen.
+    fn capture(screen: &SavedNormalScreenState) -> Self {
+        Self {
+            cursor: screen.cursor,
+            cursor_visible: screen.cursor_visible,
+            wrap_pending: screen.wrap_pending,
+            saved_cursor: screen.saved_cursor,
+            graphic_rendition: screen.graphic_rendition,
+            size: screen.size,
+            autowrap_enabled: screen.autowrap_enabled,
+            origin_mode_enabled: screen.origin_mode_enabled,
+            scroll_region: screen.scroll_region,
+        }
+    }
+
+    /// Restores saved normal-screen protocol state after a net alternate-to-
+    /// alternate hidden feed.
+    fn restore(self, screen: &mut SavedNormalScreenState) {
+        screen.cursor = self.cursor;
+        screen.cursor_visible = self.cursor_visible;
+        screen.wrap_pending = self.wrap_pending;
+        screen.saved_cursor = self.saved_cursor;
+        screen.graphic_rendition = self.graphic_rendition;
+        screen.size = self.size;
+        screen.autowrap_enabled = self.autowrap_enabled;
+        screen.origin_mode_enabled = self.origin_mode_enabled;
+        screen.scroll_region = self.scroll_region;
+    }
+
+    /// Reconstructs a saved normal screen when a net alternate-to-alternate
+    /// feed temporarily removed the parser-owned record.
+    fn into_state(self, content: RetainedScreenContent) -> SavedNormalScreenState {
+        SavedNormalScreenState {
+            cells: content.cells,
+            renditions: content.renditions,
+            line_wraps: content.line_wraps,
+            line_copy_texts: content.line_copy_texts,
+            cursor: self.cursor,
+            cursor_visible: self.cursor_visible,
+            wrap_pending: self.wrap_pending,
+            saved_cursor: self.saved_cursor,
+            graphic_rendition: self.graphic_rendition,
+            normal_viewport_detached_from_history: content.normal_viewport_detached_from_history,
+            size: self.size,
+            autowrap_enabled: self.autowrap_enabled,
+            origin_mode_enabled: self.origin_mode_enabled,
+            scroll_region: self.scroll_region,
+        }
+    }
+}
+
 impl TerminalScreen {
     /// Runs the new operation for this subsystem.
     ///
@@ -148,59 +297,53 @@ impl TerminalScreen {
         if input.is_empty() {
             return;
         }
-        let previous_cells = self.cells.clone();
-        let previous_renditions = self.renditions.clone();
-        let previous_line_wraps = self.line_wraps.clone();
-        let previous_line_copy_texts = self.line_copy_texts.clone();
-        let previous_history = self.history.clone();
-        let previous_viewport_detached = self.normal_viewport_detached_from_history;
-        let previous_alternate = self.alternate.clone();
+        let was_alternate = self.alternate.active();
+        let previous_content = RetainedScreenContent::take_current(self);
+        let previous_saved_normal_metadata = self
+            .alternate
+            .saved_normal_screen
+            .as_ref()
+            .map(SavedNormalScreenMetadata::capture);
+        let previous_saved_normal_content = self
+            .alternate
+            .saved_normal_screen
+            .as_mut()
+            .map(RetainedScreenContent::take_saved);
+        let empty_history = self.history.empty_with_same_policy();
+        let previous_history = std::mem::replace(&mut self.history, empty_history);
         let previous_activity_events = self.activity_events;
         let previous_bell_events = self.bell_events;
 
         self.feed(input);
 
-        let was_alternate = previous_alternate.active();
         let is_alternate = self.alternate.active();
-        if is_alternate && !was_alternate {
+        if !was_alternate && !is_alternate {
+            previous_content.restore_current(self);
+        } else if !was_alternate && is_alternate {
             if let Some(saved) = self.alternate.saved_normal_screen.as_mut() {
-                saved.cells = previous_cells.clone();
-                saved.renditions = previous_renditions.clone();
-                saved.line_wraps = previous_line_wraps.clone();
-                saved.line_copy_texts = previous_line_copy_texts.clone();
-                saved.normal_viewport_detached_from_history = previous_viewport_detached;
+                previous_content.restore_saved(saved);
             }
             self.cells = blank_cells(self.size);
             self.renditions = blank_renditions(self.size, GraphicRendition::default());
             self.line_wraps = vec![false; usize::from(self.size.rows)];
             self.line_copy_texts = vec![None; usize::from(self.size.rows)];
-        } else if is_alternate {
-            self.cells = previous_cells;
-            self.renditions = previous_renditions;
-            self.line_wraps = previous_line_wraps;
-            self.line_copy_texts = previous_line_copy_texts;
-            self.alternate.saved_normal_screen = previous_alternate.saved_normal_screen;
-        } else if was_alternate {
-            if let Some(saved) = previous_alternate.saved_normal_screen {
-                self.cells = saved.cells;
-                self.renditions = saved.renditions;
-                self.line_wraps = saved.line_wraps;
-                self.line_copy_texts = saved.line_copy_texts;
-                self.normal_viewport_detached_from_history =
-                    saved.normal_viewport_detached_from_history;
-            } else {
-                self.cells = previous_cells;
-                self.renditions = previous_renditions;
-                self.line_wraps = previous_line_wraps;
-                self.line_copy_texts = previous_line_copy_texts;
-                self.normal_viewport_detached_from_history = previous_viewport_detached;
+        } else if was_alternate && is_alternate {
+            previous_content.restore_current(self);
+            if let (Some(metadata), Some(content)) = (
+                previous_saved_normal_metadata,
+                previous_saved_normal_content,
+            ) {
+                if let Some(saved) = self.alternate.saved_normal_screen.as_mut() {
+                    metadata.restore(saved);
+                    content.restore_saved(saved);
+                } else {
+                    self.alternate.saved_normal_screen = Some(metadata.into_state(content));
+                }
             }
         } else {
-            self.cells = previous_cells;
-            self.renditions = previous_renditions;
-            self.line_wraps = previous_line_wraps;
-            self.line_copy_texts = previous_line_copy_texts;
-            self.normal_viewport_detached_from_history = previous_viewport_detached;
+            previous_saved_normal_content
+                .unwrap_or(previous_content)
+                .restore_current(self);
         }
         self.history = previous_history;
         self.activity_events = previous_activity_events;

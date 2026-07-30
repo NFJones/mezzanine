@@ -228,6 +228,25 @@ impl RuntimeSessionService {
             else {
                 continue;
             };
+            if self.find_pane_descriptor(&turn.pane_id).is_none() {
+                let removed_pane_turns = self
+                    .agent_turn_ledger()
+                    .turns()
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.pane_id == turn.pane_id
+                            && matches!(
+                                candidate.state,
+                                AgentTurnState::Queued
+                                    | AgentTurnState::Running
+                                    | AgentTurnState::Blocked
+                            )
+                    })
+                    .count();
+                self.cleanup_removed_pane_runtime_state(&turn.pane_id)?;
+                failed = failed.saturating_add(removed_pane_turns);
+                continue;
+            }
             self.append_agent_status_text_to_terminal_buffer(
                 &turn.pane_id,
                 "agent: runtime found no remaining progress path; failing turn",

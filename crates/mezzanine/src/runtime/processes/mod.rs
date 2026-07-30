@@ -2152,6 +2152,19 @@ impl RuntimeSessionService {
     /// deferred I/O, and subagent bookkeeping that would otherwise make a
     /// closed pane appear partially alive to later agent/session surfaces.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) -> Result<()> {
+        let has_live_agent_turn = self.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.pane_id == pane_id
+                && matches!(
+                    turn.state,
+                    AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+                )
+        });
+        if has_live_agent_turn {
+            self.fail_agent_turns_for_pane_shutdown(
+                &[pane_id.to_string()],
+                "pane removed from session layout",
+            )?;
+        }
         self.presentation.remove_completion_attention(pane_id);
         self.presentation.remove_agent_presentation_state(pane_id);
         self.discard_agent_loop_parent_projections_for_pane(pane_id);

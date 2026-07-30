@@ -2,6 +2,38 @@
 
 use super::*;
 
+/// Builds a running agent turn in a secondary pane that can be removed without
+/// terminating the complete test session.
+///
+/// The fixture removes provider ownership so reconciliation must either settle
+/// the pane-owned turn or identify it as unreachable. Both pane-removal
+/// regressions use the same illegal interleaving that previously reached the
+/// async pane supervisor.
+fn removable_pane_running_turn_fixture() -> (RuntimeSessionService, String, String) {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
+        .unwrap();
+    let pane_id = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap()
+        .to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen(pane_id.clone(), screen);
+    let turn_id = service
+        .start_agent_prompt_turn(&pane_id, "finish after pane removal")
+        .unwrap()
+        .turn_id;
+    service.remove_pending_agent_provider_task(&turn_id);
+    (service, pane_id, turn_id)
+}
+
 /// Verifies shell-history bookkeeping never enters durable or prepared model context.
 ///
 /// Exact dispatch history remains controller-owned for loop detection; repeated
@@ -155,6 +187,79 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
             .agent_turn_executions()
             .contains_key(&parent.turn_id)
     );
+}
+
+/// Verifies removed-pane cleanup terminalizes pane-owned agent work before it
+/// deletes the shell session and independent presentation screens.
+///
+/// Layout rollback and best-effort subagent cleanup can reach this helper after
+/// the pane is already absent. Leaving the ledger turn running would make the
+/// next actor event attempt to present a recovery diagnostic to that missing
+/// pane and fail the pane-process supervisor.
+#[test]
+fn runtime_removed_pane_cleanup_terminalizes_running_turn() {
+    let (mut service, pane_id, turn_id) = removable_pane_running_turn_fixture();
+    service
+        .session
+        .kill_pane_session_owned(Some(&pane_id), true)
+        .unwrap();
+
+    service
+        .cleanup_removed_pane_runtime_state(&pane_id)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(service.agent_shell_store().get(&pane_id).is_none());
+    assert_eq!(
+        service
+            .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+/// Verifies reconciliation treats a missing layout pane as a fenced late owner
+/// instead of attempting an agent-status presentation against it.
+///
+/// This defensive path covers a pane-removal event that reaches the actor
+/// before normal runtime cleanup. Reconciliation must settle the stale turn,
+/// clear its pane state, and remain a successful runtime event application.
+#[test]
+fn runtime_unreachable_turn_reconciliation_fences_missing_pane() {
+    let (mut service, pane_id, turn_id) = removable_pane_running_turn_fixture();
+    service
+        .session
+        .kill_pane_session_owned(Some(&pane_id), true)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(service.agent_shell_store().get(&pane_id).is_none());
 }
 
 /// Verifies unrecovered failures explain when recovery is unavailable because

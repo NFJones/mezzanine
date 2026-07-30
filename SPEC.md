@@ -1298,6 +1298,14 @@ PTY. Suppression MUST prevent those bytes from appending to either retained
 presentation surface, and hidden process modes MUST NOT capture or transform
 agent-surface input or outer-terminal interaction.
 
+Hidden protocol parsing MUST NOT clone, reflow, or otherwise perform work
+proportional to retained process scrollback for each PTY output chunk. The
+runtime MAY use work bounded by the current viewport and incoming bytes to
+preserve display contents while advancing protocol state. Process output
+ingestion MUST retain the process screen at its full unreserved presentation
+geometry; prompt-reserved interaction geometry applies to the PTY and agent
+screen and MUST NOT resize the retained process screen.
+
 While a native-mode agent shell is visible, `Ctrl+V` MUST read the host
 clipboard and deliver it to the editable agent prompt as one bracketed-paste
 operation. The operation MUST preserve embedded line endings, blank lines,
@@ -1859,6 +1867,14 @@ neither display surface, while readiness, transaction capture, audit,
 observation, and process terminal protocol parsing continue independently.
 Verbose agent-action and trace PTY output MAY be displayed, but MUST append
 only to the active conversation's agent log.
+
+Removing a pane MUST cancel and terminalize every queued, running, or blocked
+agent turn owned by that pane before deleting its shell session and
+presentation state. Cleanup that observes an already-removed pane MUST settle
+any remaining pane-owned turn without recreating the session or attempting
+presentation against the missing target. Late runtime events for that owner
+MUST be fenced, and an unavailable diagnostic presentation target MUST NOT fail
+the runtime actor or the pane-process supervisor.
 
 By default, shell commands selected by the model MUST be rendered into the
 agent log as bounded command previews before dispatch, while their resulting

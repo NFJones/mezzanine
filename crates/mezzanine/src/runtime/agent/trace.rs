@@ -64,6 +64,9 @@ impl RuntimeSessionService {
             runtime_agent_terminal_preview(&runtime_humanize_agent_diagnostic(reason))
         );
         self.record_agent_pane_trace_log_text(&turn.pane_id, &trace_line);
+        if self.find_pane_descriptor(&turn.pane_id).is_none() {
+            return Ok(());
+        }
         let Some(label) = self.agent_diagnostic_label(&turn.pane_id) else {
             return Ok(());
         };

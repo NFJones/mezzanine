@@ -776,6 +776,69 @@ fn runtime_hidden_encoded_agent_action_updates_authoritative_process_protocol() 
     assert_eq!(deferred[0].pane_input_parts().1, b"\x1b[3;5R");
 }
 
+/// Verifies hidden PTY output retains the process screen's unreserved
+/// presentation geometry while the PTY and agent screen use prompt-reserved
+/// interaction geometry.
+///
+/// Output ingestion must not undo the independent sizing contract established
+/// by layout synchronization. Shrinking the retained process screen on every
+/// hidden chunk causes repeated row movement and history work when later layout
+/// or prompt updates restore the presentation size.
+#[test]
+fn runtime_hidden_output_preserves_process_presentation_geometry() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    service
+        .reload_agent_prompt_history_for_pane(&pane_id)
+        .unwrap();
+    service.sync_tracked_pty_sizes().unwrap();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "hidden-geometry-marker".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-hidden-geometry".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "shell-hidden-geometry".to_string(),
+            },
+            pane_id: pane_id.clone(),
+            command: "printf hidden".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    let window = service.session().active_window().unwrap();
+    let presentation_size = service
+        .pane_presentation_size_for(window, &pane_id)
+        .unwrap();
+    let interaction_size = service.pane_process_size_for(window, &pane_id).unwrap();
+    assert_ne!(presentation_size, interaction_size);
+    assert_eq!(
+        service.process_pane_screen(&pane_id).unwrap().size(),
+        presentation_size
+    );
+
+    service
+        .apply_pane_output_bytes(pane_id.clone(), b"hidden output\r\n".to_vec())
+        .unwrap();
+
+    assert_eq!(
+        service.process_pane_screen(&pane_id).unwrap().size(),
+        presentation_size
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that runtime frame context sources `pane.process_name` from the
 /// live host process metadata instead of only echoing the configured shell path.
 #[cfg(target_os = "linux")]
