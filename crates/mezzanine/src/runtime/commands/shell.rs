@@ -781,7 +781,7 @@ impl RuntimeSessionService {
         {
             self.advance_pane_shell_prompt_after_agent_exit(&pane_id)?;
         }
-        if outcome.is_some() {
+        if outcome.is_some() && !exit_requires_runtime {
             self.append_lifecycle_event(
                 EventKind::AgentStatus,
                 format!(

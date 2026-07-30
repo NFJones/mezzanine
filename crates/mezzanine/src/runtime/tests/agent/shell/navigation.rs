@@ -366,7 +366,14 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
 /// control API.
 #[test]
 fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
-    let mut service = test_runtime_service();
+    let mut service = RuntimeSessionService::with_event_log(
+        test_session(),
+        PathBuf::from("/tmp/mez-agent-shell-exit.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -400,12 +407,24 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
             .join("\n")
             .contains("slash exit visible text")
     );
+    let last_event_id = service.event_log().unwrap().latest_event_id();
 
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-exit","method":"agent/shell/command","params":{"idempotency_key":"agent-exit","input":"/exit"}}"#,
         &primary,
     );
     assert!(response.contains(r#""visibility":"hidden""#), "{response}");
+    let exit_events =
+        service
+            .event_log()
+            .unwrap()
+            .replay_after_for(&EventAudience::Primary, last_event_id, 10);
+    assert!(
+        exit_events
+            .iter()
+            .all(|event| !event.payload.contains(r#""agent_shell_command":"/exit""#)),
+        "{exit_events:?}"
+    );
     let exit_effects = service.drain_pane_io_transition().side_effects;
     let exit_inputs = pane_input_effects(&exit_effects);
     assert_eq!(exit_inputs.len(), 1);
