@@ -548,6 +548,9 @@ impl RuntimeSessionService {
         if session.visibility != AgentShellVisibility::Visible {
             return Ok(false);
         }
+        if session.ephemeral {
+            return Ok(false);
+        }
         let session_id = session.session_id.clone();
         if self
             .presentation

@@ -430,6 +430,41 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
             .iter()
             .all(|session| session.summary.conversation_id != child_conversation_id)
     );
+    assert_ne!(child_conversation_id, "routed-turn-1-worker");
+    transcript_store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id: child_conversation_id,
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            pane_id: "%2".to_string(),
+            turn_id: None,
+            terminal_width: 20,
+            style_names: vec!["assistant".to_string()],
+            display_lines: vec!["stale routed worker sentinel".to_string()],
+            copy_lines: vec!["stale routed worker sentinel".to_string()],
+            ansi_text: None,
+            source_text: Some("stale routed worker sentinel".to_string()),
+            source_content_type: Some(mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string()),
+        })
+        .unwrap();
+    assert!(
+        !service
+            .rebuild_agent_presentation_after_resize("%2", Size::new(20, 4).unwrap())
+            .unwrap()
+    );
+    let child_after_resize = service
+        .pane_screen("%2")
+        .expect("routed child screen should remain in place")
+        .visible_lines()
+        .join("\n");
+    assert!(
+        child_after_resize.contains("parent> implement routed logging"),
+        "{child_after_resize}"
+    );
+    assert!(
+        !child_after_resize.contains("stale routed worker sentinel"),
+        "{child_after_resize}"
+    );
     assert_eq!(
         service
             .routed_workflow_for_tests("turn-1")

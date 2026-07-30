@@ -300,7 +300,8 @@ impl RuntimeSessionService {
                     "routed worker idle spawn unexpectedly created a turn",
                 ));
             }
-            let child_conversation_id = format!("routed-{turn_id}-worker");
+            let child_conversation_id =
+                format!("routed-{}-{turn_id}-worker", parent_session.session_id);
             self.agent_shell_store_mut()
                 .bind_ephemeral_conversation_with_lineage_and_transcript_source(
                     &child_pane_id,
