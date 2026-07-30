@@ -15,6 +15,7 @@ use super::{
 #[cfg(test)]
 use crate::runtime::PaneInputDispatch;
 use crate::runtime::PaneProcessInstance;
+use crate::runtime::{RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork};
 
 /// Carries Async Runtime Request state for this subsystem.
 ///
@@ -558,6 +559,14 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Returns immutable external preparation work before a provider task is claimed.
+    ///
+    /// Credential refresh and MCP discovery run outside the serialized actor.
+    /// The later claim request applies the outcome and revalidates turn state.
+    PrepareConfiguredAgentProviderTask {
+        /// Returns the immutable preparation inputs extracted from actor state.
+        reply: oneshot::Sender<Result<RuntimeAgentProviderPreparationWork>>,
+    },
     /// Represents the Claim Configured Agent Provider Task case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -573,6 +582,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         turn_id: String,
+        /// External preparation outcome to apply before claiming the turn.
+        preparation: RuntimeAgentProviderPreparationOutcome,
         /// Stores the reply value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module

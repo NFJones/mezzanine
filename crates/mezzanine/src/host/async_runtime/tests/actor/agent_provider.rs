@@ -2,6 +2,112 @@
 
 use super::super::*;
 
+/// Verifies slow provider preparation does not block pane, window, or group
+/// lifecycle mutation in the serialized runtime actor. The MCP fixture holds
+/// initialization pending until the test releases it; a new-window command
+/// must still complete while the provider claim waits outside actor ownership.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_processes_lifecycle_commands_while_provider_preparation_is_pending() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-provider-preparation-responsiveness-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let started_path = root.join("started");
+    let release_path = root.join("release");
+    let script = format!(
+        r#"printf started > '{}'
+while [ ! -e '{}' ]; do sleep 0.01; done
+while IFS= read -r line; do
+case "$line" in
+  *'"method":"initialize"'*)
+printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"2025-11-25","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"fixture","version":"1.0.0"}}}}}}'
+;;
+  *'"method":"notifications/initialized"'*)
+;;
+  *'"method":"tools/list"'*)
+printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"tools":[]}}}}'
+;;
+esac
+done"#,
+        started_path.display(),
+        release_path.display()
+    );
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "slow-provider-preparation".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: format!(
+                "[mcp_servers.fixture]\ncommand = \"/bin/sh\"\nargs = [\"-c\", {}]\nstartup_timeout_ms = 5000\napproval = \"allow\"\n",
+                serde_json::to_string(&script).unwrap()
+            ),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "exercise slow provider preparation")
+        .unwrap();
+    let task = service.pending_agent_provider_tasks()[0].clone();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let claim_handle = handle.clone();
+        let claim = tokio::spawn(async move {
+            claim_handle
+                .claim_configured_agent_provider_task(
+                    AgentId::opaque(task.agent_id).unwrap(),
+                    task.turn_id,
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !started_path.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("MCP preparation should reach the gated fixture");
+
+        let output = tokio::time::timeout(
+            Duration::from_millis(250),
+            handle.execute_terminal_command(primary, "new-window responsive".to_string()),
+        )
+        .await
+        .expect("new-window must not queue behind provider preparation")
+        .unwrap();
+        assert!(output.contains("window"), "{output}");
+
+        std::fs::write(&release_path, b"release").unwrap();
+        let _ = claim.await.unwrap();
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.service.session().windows().len(), 2);
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that async provider worker failures can finish the active agent
 /// turn through typed runtime event ingress. The failed event has enough
 /// identity and error information to reuse the configured provider failure

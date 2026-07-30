@@ -401,6 +401,10 @@ use service_state::{
     JoinedSubagentDependency, RuntimeAgentCopyOutput, RuntimeAgentModifiedFileSummary,
     RuntimeAgentPromptInput, RuntimeCommandBinding, RuntimeSubagentLineage,
 };
+pub(crate) use service_state::{
+    RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
+    RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess,
+};
 pub use sockets::{
     apply_registry_update, apply_registry_update_async, authorize_unix_peer_raw_fd,
     auxiliary_socket_path_for_control_socket, bind_control_socket, current_effective_uid,

@@ -438,37 +438,24 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
+            AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask { reply } => {
+                let result = self.service.prepare_agent_provider_work();
+                let _ = reply.send(result);
+                false
+            }
             AsyncRuntimeRequest::ClaimConfiguredAgentProviderTask {
                 agent_id,
                 turn_id,
+                preparation,
                 reply,
             } => {
                 let result = self
                     .service
-                    .ensure_runtime_mcp_transports_discovered_async()
-                    .await;
-                let result = match result {
-                    Ok(_) => {
-                        let refresh_result =
-                            if let Some(auth_store) = self.service.auth_store().cloned() {
-                                let leeway_seconds =
-                                    self.service.provider_auth_refresh_leeway_seconds();
-                                auth_store
-                                    .refresh_openai_provider_credential_if_needed_with_leeway_async(
-                                        leeway_seconds,
-                                    )
-                                    .await
-                                    .map(|_| ())
-                            } else {
-                                Ok(())
-                            };
-                        refresh_result.and_then(|_| {
-                            self.service
-                                .claim_configured_agent_provider_task(&agent_id, &turn_id)
-                        })
-                    }
-                    Err(error) => Err(error),
-                };
+                    .apply_agent_provider_preparation(preparation)
+                    .and_then(|_| {
+                        self.service
+                            .claim_configured_agent_provider_task(&agent_id, &turn_id)
+                    });
                 let result = result.and_then(|dispatch| {
                     if let Some(dispatch) = dispatch {
                         self.timers.next_provider_claim_generation =

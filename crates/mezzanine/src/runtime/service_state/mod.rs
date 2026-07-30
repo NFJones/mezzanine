@@ -49,8 +49,9 @@ pub(crate) use lifecycle::{
     RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
 };
 pub(crate) use mcp_transport::{
-    RuntimeHookPipelineBlock, RuntimeHttpMcpTransportState, RuntimeMcpRetryReport,
-    RuntimeMcpTransport, RuntimeMcpTransportSet,
+    RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
+    RuntimeHookPipelineBlock, RuntimeHttpMcpTransportState, RuntimeMcpDiscoveryOutcome,
+    RuntimeMcpDiscoverySuccess, RuntimeMcpRetryReport, RuntimeMcpTransport, RuntimeMcpTransportSet,
 };
 pub use metrics::{
     DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,

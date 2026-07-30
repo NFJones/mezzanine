@@ -9,6 +9,52 @@ use crate::error::MezErrorKind;
 use secrecy::ExposeSecret;
 use std::collections::BTreeMap;
 
+/// Immutable external I/O needed before an agent provider task can be claimed.
+///
+/// The runtime actor prepares this value from serialized state, then an async
+/// worker performs credential refresh and MCP discovery without holding the
+/// actor. The resulting outcome returns every live transport to actor ownership.
+pub(crate) struct RuntimeAgentProviderPreparationWork {
+    /// Configured MCP startup plans that still require discovery.
+    pub(crate) mcp_plans: Vec<McpStartupPlan>,
+    /// Environment used to resolve configured MCP transport inputs.
+    pub(crate) environment: BTreeMap<String, String>,
+    /// Optional credential store shared by provider and authenticated MCP setup.
+    pub(crate) auth_store: Option<AuthStore>,
+    /// Proactive OpenAI credential refresh leeway.
+    pub(crate) provider_auth_refresh_leeway_seconds: u64,
+    /// Number of MCP servers considered by this preparation pass.
+    pub(crate) attempted_mcp_servers: usize,
+}
+
+/// External preparation result returned to the serialized runtime actor.
+pub(crate) struct RuntimeAgentProviderPreparationOutcome {
+    /// Per-server MCP discovery results, including successful live transports.
+    pub(crate) mcp: Vec<RuntimeMcpDiscoveryOutcome>,
+    /// Provider credential refresh failure, if refresh could not complete.
+    pub(crate) provider_refresh_error: Option<MezError>,
+    /// Number of MCP servers considered by this preparation pass.
+    pub(crate) attempted_mcp_servers: usize,
+}
+
+/// Result of discovering one configured MCP server outside the runtime actor.
+pub(crate) struct RuntimeMcpDiscoveryOutcome {
+    /// Stable configured server identity.
+    pub(crate) server_id: String,
+    /// Successful discovered tools and transport, or the discovery failure.
+    pub(crate) result: Result<RuntimeMcpDiscoverySuccess>,
+}
+
+/// Successful MCP discovery state ready to return to actor ownership.
+pub(crate) struct RuntimeMcpDiscoverySuccess {
+    /// Tools advertised by the server during initialization.
+    pub(crate) tools: Vec<mez_agent::mcp::McpDiscoveredTool>,
+    /// Optional model-safe server guidance returned during initialization.
+    pub(crate) instructions: Option<String>,
+    /// Live transport retained for subsequent actor-approved MCP calls.
+    pub(crate) transport: RuntimeMcpTransport,
+}
+
 /// Carries Runtime Mcp Transport Set state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
