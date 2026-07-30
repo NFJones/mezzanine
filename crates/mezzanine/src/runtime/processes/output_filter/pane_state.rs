@@ -62,57 +62,72 @@ impl RuntimeSessionService {
         let render_mode = self.pane_output_render_mode(output.pane_id.as_str());
         let transaction_bytes =
             self.visible_pane_output_bytes(output.pane_id.as_str(), &output.bytes);
-        let render_bytes =
-            self.renderable_pane_output_bytes(output.pane_id.as_str(), &transaction_bytes);
-        let previous_transaction_alternate_active = self
-            .process
-            .pane_transaction_osc_screens
-            .get(output.pane_id.as_str())
-            .is_some_and(TerminalScreen::alternate_screen_active);
-        let (
-            osc_events,
-            transaction_alternate_active,
-            transaction_screen_switched,
-            terminal_response_bytes,
-        ) = self.terminal_protocol_observation_for_pane_bytes(
+        let protocol_bytes =
+            self.decoded_pane_output_bytes(output.pane_id.as_str(), &transaction_bytes);
+        let render_bytes = self.renderable_decoded_pane_output_bytes(
+            output.pane_id.as_str(),
+            render_mode,
+            &protocol_bytes,
+        );
+        let (mut osc_events, _, _, _) = self.terminal_protocol_observation_for_pane_bytes(
             output.pane_id.as_str(),
             descriptor_size,
             &transaction_bytes,
         )?;
-        let (
-            activity_events,
-            bell_events,
-            previous_render_alternate_active,
-            render_alternate_active,
-            render_screen_switched,
-        ) = match render_mode {
-            PaneOutputRenderMode::Normal => {
-                let screen = self
-                    .process
-                    .process_pane_screens
-                    .entry(output.pane_id.clone())
-                    .or_insert(TerminalScreen::new_with_history_config(
-                        descriptor_size,
-                        self.process.settings.terminal_history_limit,
-                        self.process.settings.terminal_history_rotate_lines,
-                    )?);
-                let previous_activity_events = screen.activity_events();
-                let previous_bell_events = screen.bell_events();
-                let previous_alternate_active = screen.alternate_screen_active();
-                let previous_alternate_generation = screen.alternate_screen_generation();
-                screen.feed(&render_bytes);
-                let _ = screen.drain_osc_events();
-                let _ = screen.drain_terminal_response_bytes();
-                (
-                    screen
-                        .activity_events()
-                        .saturating_sub(previous_activity_events),
-                    screen.bell_events().saturating_sub(previous_bell_events),
-                    previous_alternate_active,
-                    screen.alternate_screen_active(),
-                    screen.alternate_screen_generation() != previous_alternate_generation,
-                )
-            }
+        let previous_process_alternate_active = self
+            .process
+            .process_pane_screens
+            .get(output.pane_id.as_str())
+            .is_some_and(TerminalScreen::alternate_screen_active);
+        let previous_process_alternate_generation = self
+            .process
+            .process_pane_screens
+            .get(output.pane_id.as_str())
+            .map_or(0, TerminalScreen::alternate_screen_generation);
+        let previous_process_activity_events = self
+            .process
+            .process_pane_screens
+            .get(output.pane_id.as_str())
+            .map_or(0, TerminalScreen::activity_events);
+        let previous_process_bell_events = self
+            .process
+            .process_pane_screens
+            .get(output.pane_id.as_str())
+            .map_or(0, TerminalScreen::bell_events);
+        let process_screen = self
+            .process
+            .process_pane_screens
+            .entry(output.pane_id.clone())
+            .or_insert(TerminalScreen::new_with_history_config(
+                descriptor_size,
+                self.process.settings.terminal_history_limit,
+                self.process.settings.terminal_history_rotate_lines,
+            )?);
+        process_screen.resize(descriptor_size);
+        if render_mode == PaneOutputRenderMode::Normal {
+            process_screen.feed(&protocol_bytes);
+        } else {
+            process_screen.feed_protocol_preserving_content(&protocol_bytes);
+        }
+        let terminal_response_bytes = process_screen.drain_terminal_response_bytes();
+        osc_events.extend(
+            process_screen
+                .drain_osc_events()
+                .into_iter()
+                .filter(|event| !matches!(event, TerminalOscEvent::ShellIntegration { .. })),
+        );
+        let process_alternate_active = process_screen.alternate_screen_active();
+        let process_screen_switched =
+            process_screen.alternate_screen_generation() != previous_process_alternate_generation;
+        let (activity_events, bell_events) = match render_mode {
+            PaneOutputRenderMode::Normal => (
+                process_screen
+                    .activity_events()
+                    .saturating_sub(previous_process_activity_events),
+                process_screen
+                    .bell_events()
+                    .saturating_sub(previous_process_bell_events),
+            ),
             PaneOutputRenderMode::VerboseAgentAction | PaneOutputRenderMode::Trace => {
                 let (previous_activity_events, previous_bell_events) = self
                     .agent_pane_screen(output.pane_id.as_str())
@@ -132,13 +147,10 @@ impl RuntimeSessionService {
                         .activity_events()
                         .saturating_sub(previous_activity_events),
                     screen.bell_events().saturating_sub(previous_bell_events),
-                    false,
-                    false,
-                    false,
                 )
             }
             PaneOutputRenderMode::HiddenLiveAgentShell
-            | PaneOutputRenderMode::HiddenRetainedAgentShell => (0, 0, false, false, false),
+            | PaneOutputRenderMode::HiddenRetainedAgentShell => (0, 0),
         };
         if !terminal_response_bytes.is_empty() {
             self.write_runtime_pane_input_priority(
@@ -146,11 +158,10 @@ impl RuntimeSessionService {
                 &terminal_response_bytes,
             )?;
         }
-        let previous_alternate_active =
-            previous_transaction_alternate_active || previous_render_alternate_active;
-        let alternate_active = transaction_alternate_active || render_alternate_active;
+        let previous_alternate_active = previous_process_alternate_active;
+        let alternate_active = process_alternate_active;
         let alternate_screen_exited = previous_alternate_active && !alternate_active;
-        let alternate_screen_switched = transaction_screen_switched || render_screen_switched;
+        let alternate_screen_switched = process_screen_switched;
         let terminal_title = osc_events.iter().rev().find_map(|event| match event {
             TerminalOscEvent::TitleChanged { title } => Some(title.clone()),
             _ => None,
@@ -379,55 +390,70 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub(crate) fn renderable_pane_output_bytes(
         &mut self,
         pane_id: &str,
         transaction_bytes: &[u8],
     ) -> Vec<u8> {
-        match self.pane_output_render_mode(pane_id) {
+        let render_mode = self.pane_output_render_mode(pane_id);
+        let decoded = self.decoded_pane_output_bytes(pane_id, transaction_bytes);
+        self.renderable_decoded_pane_output_bytes(pane_id, render_mode, &decoded)
+    }
+
+    /// Decodes private shell-output frames independently of display visibility.
+    fn decoded_pane_output_bytes(&mut self, pane_id: &str, transaction_bytes: &[u8]) -> Vec<u8> {
+        let begin = SHELL_OUTPUT_BASE64_BEGIN_MARKER.as_bytes();
+        let end = SHELL_OUTPUT_BASE64_END_MARKER.as_bytes();
+        let mut pending = self
+            .process
+            .pane_shell_output_render_pending
+            .remove(pane_id)
+            .unwrap_or_default();
+        pending.extend_from_slice(transaction_bytes);
+
+        if let Some(begin_index) = find_byte_subsequence(&pending, begin) {
+            let before = renderable_shell_transaction_bytes(&pending[..begin_index]);
+            if find_byte_subsequence(&pending[begin_index + begin.len()..], end).is_some() {
+                let mut decoded = before;
+                decoded.extend(renderable_shell_transaction_bytes(&pending[begin_index..]));
+                return decoded;
+            }
+            if pending.len() <= SHELL_OUTPUT_BASE64_MAX_RAW_BYTES.saturating_mul(2) {
+                self.process
+                    .pane_shell_output_render_pending
+                    .insert(pane_id.to_string(), pending[begin_index..].to_vec());
+            }
+            return before;
+        }
+
+        let partial_len = (1..begin.len().min(pending.len() + 1))
+            .rev()
+            .find(|length| pending.ends_with(&begin[..*length]))
+            .unwrap_or(0);
+        let decode_end = pending.len().saturating_sub(partial_len);
+        let decoded = renderable_shell_transaction_bytes(&pending[..decode_end]);
+        if partial_len > 0 {
+            self.process
+                .pane_shell_output_render_pending
+                .insert(pane_id.to_string(), pending[decode_end..].to_vec());
+        }
+        decoded
+    }
+
+    /// Applies display visibility policy to already-decoded process output.
+    fn renderable_decoded_pane_output_bytes(
+        &mut self,
+        pane_id: &str,
+        render_mode: PaneOutputRenderMode,
+        decoded: &[u8],
+    ) -> Vec<u8> {
+        match render_mode {
             PaneOutputRenderMode::Normal
             | PaneOutputRenderMode::VerboseAgentAction
-            | PaneOutputRenderMode::Trace => {
-                let begin = SHELL_OUTPUT_BASE64_BEGIN_MARKER.as_bytes();
-                let end = SHELL_OUTPUT_BASE64_END_MARKER.as_bytes();
-                let mut pending = self
-                    .process
-                    .pane_shell_output_render_pending
-                    .remove(pane_id)
-                    .unwrap_or_default();
-                pending.extend_from_slice(transaction_bytes);
-
-                if let Some(begin_index) = find_byte_subsequence(&pending, begin) {
-                    let before = renderable_shell_transaction_bytes(&pending[..begin_index]);
-                    if find_byte_subsequence(&pending[begin_index + begin.len()..], end).is_some() {
-                        let mut rendered = before;
-                        rendered
-                            .extend(renderable_shell_transaction_bytes(&pending[begin_index..]));
-                        return rendered;
-                    }
-                    if pending.len() <= SHELL_OUTPUT_BASE64_MAX_RAW_BYTES.saturating_mul(2) {
-                        self.process
-                            .pane_shell_output_render_pending
-                            .insert(pane_id.to_string(), pending[begin_index..].to_vec());
-                    }
-                    return before;
-                }
-
-                let partial_len = (1..begin.len().min(pending.len() + 1))
-                    .rev()
-                    .find(|length| pending.ends_with(&begin[..*length]))
-                    .unwrap_or(0);
-                let render_end = pending.len().saturating_sub(partial_len);
-                let rendered = renderable_shell_transaction_bytes(&pending[..render_end]);
-                if partial_len > 0 {
-                    self.process
-                        .pane_shell_output_render_pending
-                        .insert(pane_id.to_string(), pending[render_end..].to_vec());
-                }
-                rendered
-            }
+            | PaneOutputRenderMode::Trace => decoded.to_vec(),
             PaneOutputRenderMode::HiddenLiveAgentShell => {
-                if !transaction_bytes.is_empty() {
+                if !decoded.is_empty() {
                     self.remember_hidden_shell_render_suppression(pane_id);
                 }
                 Vec::new()
@@ -701,7 +727,7 @@ impl RuntimeSessionService {
                 TerminalOscEvent::ShellIntegration { payload } => {
                     parse_mez_shell_transaction_osc(&format!("133;{payload}"))
                 }
-                event => Some(event),
+                _ => None,
             })
             .collect();
         Ok((

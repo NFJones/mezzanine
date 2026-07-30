@@ -138,6 +138,75 @@ impl TerminalScreen {
         }
     }
 
+    /// Applies terminal protocol bytes while preserving user-visible content.
+    ///
+    /// Hidden process traffic still owns parser, cursor, mode, alternate-screen,
+    /// OSC, and terminal-reply state, but its printable rows must not enter the
+    /// retained process buffer. This method advances the complete incremental
+    /// parser and then restores the prior normal or alternate display content.
+    pub fn feed_protocol_preserving_content(&mut self, input: &[u8]) {
+        if input.is_empty() {
+            return;
+        }
+        let previous_cells = self.cells.clone();
+        let previous_renditions = self.renditions.clone();
+        let previous_line_wraps = self.line_wraps.clone();
+        let previous_line_copy_texts = self.line_copy_texts.clone();
+        let previous_history = self.history.clone();
+        let previous_viewport_detached = self.normal_viewport_detached_from_history;
+        let previous_alternate = self.alternate.clone();
+        let previous_activity_events = self.activity_events;
+        let previous_bell_events = self.bell_events;
+
+        self.feed(input);
+
+        let was_alternate = previous_alternate.active();
+        let is_alternate = self.alternate.active();
+        if is_alternate && !was_alternate {
+            if let Some(saved) = self.alternate.saved_normal_screen.as_mut() {
+                saved.cells = previous_cells.clone();
+                saved.renditions = previous_renditions.clone();
+                saved.line_wraps = previous_line_wraps.clone();
+                saved.line_copy_texts = previous_line_copy_texts.clone();
+                saved.normal_viewport_detached_from_history = previous_viewport_detached;
+            }
+            self.cells = blank_cells(self.size);
+            self.renditions = blank_renditions(self.size, GraphicRendition::default());
+            self.line_wraps = vec![false; usize::from(self.size.rows)];
+            self.line_copy_texts = vec![None; usize::from(self.size.rows)];
+        } else if is_alternate {
+            self.cells = previous_cells;
+            self.renditions = previous_renditions;
+            self.line_wraps = previous_line_wraps;
+            self.line_copy_texts = previous_line_copy_texts;
+            self.alternate.saved_normal_screen = previous_alternate.saved_normal_screen;
+        } else if was_alternate {
+            if let Some(saved) = previous_alternate.saved_normal_screen {
+                self.cells = saved.cells;
+                self.renditions = saved.renditions;
+                self.line_wraps = saved.line_wraps;
+                self.line_copy_texts = saved.line_copy_texts;
+                self.normal_viewport_detached_from_history =
+                    saved.normal_viewport_detached_from_history;
+            } else {
+                self.cells = previous_cells;
+                self.renditions = previous_renditions;
+                self.line_wraps = previous_line_wraps;
+                self.line_copy_texts = previous_line_copy_texts;
+                self.normal_viewport_detached_from_history = previous_viewport_detached;
+            }
+        } else {
+            self.cells = previous_cells;
+            self.renditions = previous_renditions;
+            self.line_wraps = previous_line_wraps;
+            self.line_copy_texts = previous_line_copy_texts;
+            self.normal_viewport_detached_from_history = previous_viewport_detached;
+        }
+        self.history = previous_history;
+        self.activity_events = previous_activity_events;
+        self.bell_events = previous_bell_events;
+    }
+
     /// Runs the resize operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

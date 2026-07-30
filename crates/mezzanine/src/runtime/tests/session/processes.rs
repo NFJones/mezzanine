@@ -686,6 +686,96 @@ fn runtime_hidden_agent_action_output_preserves_terminal_protocol() {
     assert_eq!(deferred[0].pane_input_parts().1, b"\x1b[3;5R");
 }
 
+/// Verifies fragmented private shell-output frames are decoded before hidden
+/// terminal protocol state is applied to the authoritative process screen.
+#[test]
+fn runtime_hidden_encoded_agent_action_updates_authoritative_process_protocol() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let _process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service
+        .process_pane_screen_mut(&pane_id)
+        .unwrap()
+        .feed(b"process-visible");
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    service
+        .ensure_agent_pane_screen(&pane_id, &conversation_id, Size::new(80, 24).unwrap())
+        .unwrap()
+        .feed(b"agent-visible");
+    service.running_shell_transactions_mut_for_tests().insert(
+        "encoded-action-marker".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-encoded-action".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "shell-encoded-action".to_string(),
+            },
+            pane_id: pane_id.clone(),
+            command: "printf encoded".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    let framed = b"__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nG1s/MTAwMGgbWz8xMDA2aBtbPzIwMDRoG1s/MTAwNGgbPRtbMzs1SBtbNm4bWz8xMDQ5aGhpZGRlbhtbPzEwNDls\n__MEZ_SHELL_OUTPUT_BASE64_END__\n";
+    for fragment in [&framed[..23], &framed[23..79], &framed[79..]] {
+        service
+            .apply_pane_output_bytes(pane_id.clone(), fragment.to_vec())
+            .unwrap();
+    }
+
+    let process_screen = service.process_pane_screen(&pane_id).unwrap();
+    assert!(process_screen.application_mouse_enabled());
+    assert!(process_screen.application_sgr_mouse_enabled());
+    assert!(process_screen.bracketed_paste_enabled());
+    assert!(process_screen.focus_events_enabled());
+    assert!(process_screen.application_keypad_enabled());
+    assert!(!process_screen.alternate_screen_active());
+    assert_eq!(process_screen.cursor_state().row, 2);
+    assert_eq!(process_screen.cursor_state().column, 4);
+    assert_eq!(
+        process_screen
+            .normal_content_lines()
+            .join("\n")
+            .matches("process-visible")
+            .count(),
+        1
+    );
+    assert!(
+        !process_screen
+            .normal_content_lines()
+            .join("\n")
+            .contains("hidden")
+    );
+    assert_eq!(
+        service
+            .agent_pane_screen(&pane_id)
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .matches("agent-visible")
+            .count(),
+        1
+    );
+    let deferred = service.drain_pane_io_transition().side_effects;
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0].pane_input_parts().0, pane_id);
+    assert_eq!(deferred[0].pane_input_parts().1, b"\x1b[3;5R");
+}
+
 /// Verifies that runtime frame context sources `pane.process_name` from the
 /// live host process metadata instead of only echoing the configured shell path.
 #[cfg(target_os = "linux")]
