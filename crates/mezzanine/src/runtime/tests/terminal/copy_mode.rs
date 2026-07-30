@@ -89,6 +89,102 @@ fn runtime_copy_mode_state_is_retained_per_pane_surface() {
     );
 }
 
+/// Verifies destructive history clearing invalidates only the copy snapshot
+/// owned by the currently presented surface.
+#[test]
+fn runtime_clear_history_invalidates_only_presented_surface_copy_state() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    service.set_frame_visibility_for_tests(false, false);
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let size = Size::new(20, 4).unwrap();
+    let mut process_screen = TerminalScreen::new(size, 20).unwrap();
+    process_screen
+        .feed(b"deleted one\r\ndeleted two\r\ndeleted three\r\ndeleted four\r\nprocess live");
+    service.set_process_pane_screen(&pane_id, process_screen);
+    service.ensure_active_copy_mode(&pane_id).unwrap();
+    let process_key = service.copy_mode_key(&pane_id, PaneSurfaceKind::Process);
+
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(size, 20).unwrap();
+    agent_screen.feed(b"agent retained one\r\nagent retained two");
+    service.set_agent_pane_screen(&pane_id, &conversation_id, agent_screen);
+    service.ensure_active_copy_mode(&pane_id).unwrap();
+    let agent_key = service.copy_mode_key(&pane_id, PaneSurfaceKind::Agent);
+
+    service
+        .agent_shell_store_mut()
+        .request_exit(&pane_id)
+        .unwrap();
+    let response = service
+        .execute_terminal_command(&primary, "clear-history --confirm")
+        .unwrap();
+    assert!(response.contains("cleared=true"), "{response}");
+    assert!(!service.active_copy_modes().contains_key(&process_key));
+    assert!(service.active_copy_modes().contains_key(&agent_key));
+}
+
+/// Verifies retained process and agent copy viewports adopt their resized
+/// screen geometry after the screens themselves are synchronized.
+#[test]
+fn runtime_resize_refreshes_copy_geometry_for_both_surfaces() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    service.set_frame_visibility_for_tests(false, false);
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let size = Size::new(20, 4).unwrap();
+    let content = b"one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\nseven\r\neight\r\nnine\r\nten";
+    let mut process_screen = TerminalScreen::new(size, 20).unwrap();
+    process_screen.feed(content);
+    service.set_process_pane_screen(&pane_id, process_screen);
+    service.ensure_active_copy_mode(&pane_id).unwrap();
+    let process_key = service.copy_mode_key(&pane_id, PaneSurfaceKind::Process);
+
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(size, 20).unwrap();
+    agent_screen.feed(content);
+    service.set_agent_pane_screen(&pane_id, &conversation_id, agent_screen);
+    service.ensure_active_copy_mode(&pane_id).unwrap();
+    let agent_key = service.copy_mode_key(&pane_id, PaneSurfaceKind::Agent);
+    service
+        .agent_shell_store_mut()
+        .request_exit(&pane_id)
+        .unwrap();
+
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(20, 8).unwrap())
+        .unwrap();
+
+    let process_rows = usize::from(service.process_pane_screen(&pane_id).unwrap().size().rows);
+    let agent_rows = usize::from(service.agent_pane_screen(&pane_id).unwrap().size().rows);
+    assert_eq!(
+        service.active_copy_modes()[&process_key]
+            .visible_lines()
+            .len(),
+        process_rows
+    );
+    assert_eq!(
+        service.active_copy_modes()[&agent_key]
+            .visible_lines()
+            .len(),
+        agent_rows
+    );
+}
+
 /// Verifies mouse-wheel history scrolling updates the pane through a diff
 /// refresh. Scrollback movement changes the copy-mode viewport but not the
 /// terminal geometry, so preserving the retained output frame avoids visible

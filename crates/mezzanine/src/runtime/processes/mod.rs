@@ -857,15 +857,31 @@ impl RuntimeSessionService {
         history_limit: usize,
         rotate_lines: usize,
     ) -> Result<()> {
-        for screen in self.process.process_pane_screens.values_mut() {
+        let mut process_copy_invalidations = Vec::new();
+        for (pane_id, screen) in &mut self.process.process_pane_screens {
+            let previous_history_len = screen.history().len();
             screen.set_history_limit(history_limit)?;
             screen.set_history_rotate_lines(rotate_lines)?;
+            if screen.history().len() != previous_history_len {
+                process_copy_invalidations.push(pane_id.clone());
+            }
         }
-        for agent_screen in self.process.agent_pane_screens.values_mut() {
+        let mut agent_copy_invalidations = Vec::new();
+        for (pane_id, agent_screen) in &mut self.process.agent_pane_screens {
+            let previous_history_len = agent_screen.screen().history().len();
             agent_screen.screen_mut().set_history_limit(history_limit)?;
             agent_screen
                 .screen_mut()
                 .set_history_rotate_lines(rotate_lines)?;
+            if agent_screen.screen().history().len() != previous_history_len {
+                agent_copy_invalidations.push(pane_id.clone());
+            }
+        }
+        for pane_id in process_copy_invalidations {
+            self.clear_copy_state_for_surface(&pane_id, PaneSurfaceKind::Process);
+        }
+        for pane_id in agent_copy_invalidations {
+            self.clear_copy_state_for_surface(&pane_id, PaneSurfaceKind::Agent);
         }
         Ok(())
     }

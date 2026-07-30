@@ -570,18 +570,23 @@ pub(super) fn execute_runtime_live_terminal_command(
                     ),
                 }));
             }
-            let Some(screen) = service.presented_pane_screen_mut(descriptor.pane_id.as_str())
-            else {
-                return Ok(Some(CommandOutcome::Display {
-                    command: invocation.name.clone(),
-                    body: format!(
-                        "target={}:cleared=false:reason=terminal-screen-unavailable",
-                        descriptor.pane_id
-                    ),
-                }));
+            let surface = service.presented_pane_surface(descriptor.pane_id.as_str());
+            let cleared = {
+                let Some(screen) = service.presented_pane_screen_mut(descriptor.pane_id.as_str())
+                else {
+                    return Ok(Some(CommandOutcome::Display {
+                        command: invocation.name.clone(),
+                        body: format!(
+                            "target={}:cleared=false:reason=terminal-screen-unavailable",
+                            descriptor.pane_id
+                        ),
+                    }));
+                };
+                let cleared = screen.history().len();
+                screen.clear_history();
+                cleared
             };
-            let cleared = screen.history().len();
-            screen.clear_history();
+            service.clear_copy_state_for_surface(descriptor.pane_id.as_str(), surface);
             Ok(Some(CommandOutcome::Display {
                 command: invocation.name.clone(),
                 body: format!(
