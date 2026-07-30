@@ -3,7 +3,7 @@
 use super::*;
 
 /// Verifies primary and observer frames render the visibility-selected screen
-/// while PTY application modes remain sourced from the hidden process screen.
+/// without allowing hidden process application modes to affect agent input.
 #[test]
 fn runtime_render_uses_selected_surface_and_process_protocol_state() {
     let mut service = test_runtime_service();
@@ -13,7 +13,7 @@ fn runtime_render_uses_selected_surface_and_process_protocol_state() {
     let size = Size::new(80, 24).unwrap();
     let mut process_screen = TerminalScreen::new(size, 120).unwrap();
     process_screen.feed(
-        b"process-only\r\n\x1b[?1004h\x1b[?2004h\x1b=\x1b[?1049h\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\nprocess-alternate",
+        b"process-only\r\n\x1b[?1h\x1b[?1004h\x1b[?2004h\x1b=\x1b[?1049h\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\nprocess-alternate",
     );
     service.set_process_pane_screen("%1", process_screen);
     let conversation_id = service
@@ -33,6 +33,14 @@ fn runtime_render_uses_selected_surface_and_process_protocol_state() {
         pane_frames_enabled: false,
         ..TerminalClientLoopConfig::default()
     };
+    let agent_config = service.terminal_client_loop_config(config.clone()).unwrap();
+    assert!(!agent_config.mouse_policy.pane_application_cursor_mode);
+    assert!(!agent_config.mouse_policy.pane_application_keypad_mode);
+    assert!(agent_config.pane_bracketed_paste_mode);
+    assert_eq!(
+        crate::host::terminal::route_client_input(b"\x1b[A", &agent_config).unwrap(),
+        TerminalClientLoopAction::ForwardToPane(b"\x1b[A".to_vec())
+    );
 
     for role in [ClientViewRole::Primary, ClientViewRole::Observer] {
         let view = service
@@ -43,13 +51,21 @@ fn runtime_render_uses_selected_surface_and_process_protocol_state() {
         assert!(text.contains("agent-only"), "{role:?}: {text}");
         assert!(!text.contains("process-only"), "{role:?}: {text}");
         assert!(!text.contains("process-alternate"), "{role:?}: {text}");
-        assert!(view.focus_events, "{role:?}");
-        assert!(view.alternate_screen, "{role:?}");
-        assert!(view.application_keypad, "{role:?}");
+        assert!(!view.focus_events, "{role:?}");
+        assert!(!view.alternate_screen, "{role:?}");
+        assert!(!view.application_keypad, "{role:?}");
         assert!(view.bracketed_paste, "{role:?}");
     }
 
     service.agent_shell_store_mut().request_exit("%1").unwrap();
+    let process_config = service.terminal_client_loop_config(config.clone()).unwrap();
+    assert!(process_config.mouse_policy.pane_application_cursor_mode);
+    assert!(process_config.mouse_policy.pane_application_keypad_mode);
+    assert!(process_config.pane_bracketed_paste_mode);
+    assert_eq!(
+        crate::host::terminal::route_client_input(b"\x1b[A", &process_config).unwrap(),
+        TerminalClientLoopAction::ForwardToPane(b"\x1bOA".to_vec())
+    );
     let process_view = service
         .render_client_view(ClientViewRole::Primary, size, &config)
         .unwrap()
@@ -57,6 +73,10 @@ fn runtime_render_uses_selected_surface_and_process_protocol_state() {
     let process_text = process_view.lines.join("\n");
     assert!(process_text.contains("process-alternate"), "{process_text}");
     assert!(!process_text.contains("agent-only"), "{process_text}");
+    assert!(process_view.focus_events);
+    assert!(process_view.alternate_screen);
+    assert!(process_view.application_keypad);
+    assert!(process_view.bracketed_paste);
 }
 
 /// Verifies that frame-context animation stays static when no live agent footer

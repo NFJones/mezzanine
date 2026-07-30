@@ -782,19 +782,20 @@ impl RuntimeSessionService {
                 && self
                     .process_pane_screen(pane_id.as_str())
                     .is_some_and(TerminalScreen::application_sgr_mouse_enabled);
-            config.mouse_policy.pane_application_cursor_mode = self
-                .process_pane_screen(pane_id.as_str())
-                .is_some_and(TerminalScreen::application_cursor_enabled);
-            config.mouse_policy.pane_application_keypad_mode = self
-                .process_pane_screen(pane_id.as_str())
-                .is_some_and(TerminalScreen::application_keypad_enabled);
-            config.pane_bracketed_paste_mode = self
-                .agent_shell_store()
-                .get(pane_id.as_str())
-                .is_some_and(|session| session.visibility == AgentShellVisibility::Visible)
-                || self
+            config.mouse_policy.pane_application_cursor_mode = process_surface_presented
+                && self
                     .process_pane_screen(pane_id.as_str())
-                    .is_some_and(TerminalScreen::bracketed_paste_enabled);
+                    .is_some_and(TerminalScreen::application_cursor_enabled);
+            config.mouse_policy.pane_application_keypad_mode = process_surface_presented
+                && self
+                    .process_pane_screen(pane_id.as_str())
+                    .is_some_and(TerminalScreen::application_keypad_enabled);
+            config.pane_bracketed_paste_mode = if process_surface_presented {
+                self.process_pane_screen(pane_id.as_str())
+                    .is_some_and(TerminalScreen::bracketed_paste_enabled)
+            } else {
+                true
+            };
         }
         Ok(config)
     }

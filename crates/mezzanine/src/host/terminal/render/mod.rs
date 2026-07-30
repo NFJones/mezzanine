@@ -236,12 +236,12 @@ pub fn render_attached_client_view(
     )
 }
 
-/// Renders selected pane surfaces while sourcing PTY protocol flags separately.
+/// Renders selected pane surfaces while retaining process screens separately.
 pub fn render_attached_client_view_with_screen_resolvers<'a>(
     role: ClientViewRole,
     window: &Window,
     visual_screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen> + Copy,
-    process_screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen> + Copy,
+    _process_screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen> + Copy,
     config: &TerminalClientLoopConfig,
     client_size: Size,
 ) -> Result<Option<RenderedClientView>> {
@@ -275,7 +275,7 @@ pub fn render_attached_client_view_with_screen_resolvers<'a>(
             .get(window.active_pane_index())
             .and_then(|active_pane| {
                 let pane_id = active_pane.id.to_string();
-                process_screen_for_pane(&pane_id)
+                visual_screen_for_pane(&pane_id)
             });
     Ok(Some(RenderedClientView {
         role,
