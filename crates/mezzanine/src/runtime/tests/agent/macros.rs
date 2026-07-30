@@ -357,6 +357,13 @@ fn runtime_agent_macro_routed_loop_resolves_after_in_place_execution() {
         .expect("terminal in-place execution should settle the macro step");
     assert!(task_result.success);
     assert!(task_result.output.contains("release notes inspected"));
+    assert!(service.has_macro_managed_subagent(&routed_parent_turn.agent_id));
+    assert!(!service.has_pending_terminal_subagent_pane_close(&routed_parent_turn.pane_id));
+    assert!(
+        service
+            .find_pane_descriptor(&routed_parent_turn.pane_id)
+            .is_some()
+    );
     service
         .emit_subagent_task_result_for_execution(&routed_parent_turn, &completion)
         .unwrap();

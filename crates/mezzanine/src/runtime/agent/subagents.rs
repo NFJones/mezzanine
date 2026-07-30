@@ -849,7 +849,11 @@ impl RuntimeSessionService {
                 Ok(())
             }
         };
-        let is_persistent_macro_step = turn.cooperation_mode.as_deref() == Some("macro-step");
+        let is_persistent_macro_step = turn.cooperation_mode.as_deref() == Some("macro-step")
+            || self
+                .agent
+                .macro_managed_subagent_agents
+                .contains_key(&turn.agent_id);
         let settlement_error = if let Some(dependency) = dependency.as_ref() {
             self.resolve_joined_subagent_dependency_record(
                 turn,
