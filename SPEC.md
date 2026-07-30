@@ -1291,6 +1291,13 @@ keypad modes, focus events, bracketed paste, terminal replies, and live pane
 snapshots. Displaying the agent log MUST NOT derive or overwrite those states
 from agent presentation rows.
 
+PTY output suppressed while an agent action owns the pane MUST still be fed
+incrementally through the process terminal protocol parser, including across
+fragmented escape sequences, and required terminal replies MUST still reach the
+PTY. Suppression MUST prevent those bytes from appending to either retained
+presentation surface, and hidden process modes MUST NOT capture or transform
+agent-surface input or outer-terminal interaction.
+
 While a native-mode agent shell is visible, `Ctrl+V` MUST read the host
 clipboard and deliver it to the editable agent prompt as one bracketed-paste
 operation. The operation MUST preserve embedded line endings, blank lines,

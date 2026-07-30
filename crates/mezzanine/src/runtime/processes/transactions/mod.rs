@@ -63,10 +63,6 @@ pub(super) const RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS: usize = 4096;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS: usize = 32;
-/// Prefix for the bounded OSC 133 markers Mezzanine owns.
-pub(super) const RUNTIME_MEZ_OSC_PREFIX: &[u8] = b"\x1b]133;";
-/// Maximum OSC payload bytes scanned for a Mezzanine-owned transaction marker.
-pub(super) const RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES: usize = 4096;
 
 /// Classifies semantic local-action failures by the failed boundary instead of
 /// conflating every non-zero write transaction with an ordinary shell exit.

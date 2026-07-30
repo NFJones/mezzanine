@@ -3206,13 +3206,10 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
-/// Verifies that hidden agent-shell output uses a bounded Mezzanine-marker
-/// scanner instead of feeding arbitrary command output into a terminal screen.
-/// Long shell-command bodies can contain megabytes of plain text or embedded
-/// terminal escapes; those bytes are model data and must not monopolize the UI
-/// parser while the runtime waits for its own transaction marker.
+/// Verifies hidden agent-shell output retains transaction markers while the
+/// incremental protocol observer processes a large command-output chunk.
 #[test]
-fn runtime_hidden_agent_shell_osc_parser_skips_large_command_bodies() {
+fn runtime_hidden_agent_shell_protocol_parser_handles_large_command_bodies() {
     let mut service = test_runtime_service();
     let size = Size::new(80, 24).unwrap();
     service
@@ -3245,7 +3242,7 @@ fn runtime_hidden_agent_shell_osc_parser_skips_large_command_bodies() {
         .terminal_osc_events_for_pane_bytes("%1", size, &output)
         .unwrap();
 
-    assert!(!alternate_active);
+    assert!(alternate_active);
     assert_eq!(
         events,
         vec![TerminalOscEvent::ShellTransactionEnd {
@@ -3257,24 +3254,17 @@ fn runtime_hidden_agent_shell_osc_parser_skips_large_command_bodies() {
         }]
     );
     assert!(
-        !service
+        service
             .pane_transaction_osc_screens_for_tests()
             .contains_key("%1"),
-        "hidden agent shell output should not allocate or feed the full terminal parser"
-    );
-    assert!(
-        !service
-            .pane_transaction_osc_pending_for_tests()
-            .contains_key("%1")
+        "hidden agent shell output should retain the incremental protocol parser"
     );
 }
 
-/// Verifies the bounded hidden-output marker scanner still preserves
-/// transaction markers split across PTY reads. This keeps the lightweight path
-/// compatible with the real-world fragmentation that the full terminal parser
-/// handled before hidden agent-shell output was bypassed.
+/// Verifies the hidden-output protocol parser preserves transaction markers
+/// split across PTY reads.
 #[test]
-fn runtime_hidden_agent_shell_osc_parser_preserves_fragmented_markers() {
+fn runtime_hidden_agent_shell_protocol_parser_preserves_fragmented_markers() {
     let mut service = test_runtime_service();
     let size = Size::new(80, 24).unwrap();
     service
@@ -3321,8 +3311,8 @@ fn runtime_hidden_agent_shell_osc_parser_preserves_fragmented_markers() {
         }]
     );
     assert!(
-        !service
-            .pane_transaction_osc_pending_for_tests()
+        service
+            .pane_transaction_osc_screens_for_tests()
             .contains_key("%1")
     );
 }

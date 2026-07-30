@@ -62,8 +62,7 @@ use mez_terminal::TerminalStyledLine;
 
 pub(crate) use transactions::RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES;
 use transactions::{
-    RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS, RUNTIME_MEZ_OSC_PREFIX,
-    RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES, RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT,
+    RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS, RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT,
     RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS, runtime_running_shell_transaction_kind_name,
 };
 
@@ -386,8 +385,6 @@ pub(crate) struct RuntimeProcessComponent {
     program_owned_pane_titles: std::collections::BTreeMap<String, ProgramOwnedPaneTitle>,
     /// Full terminal parsers retained for visible shell transaction streams.
     pane_transaction_osc_screens: std::collections::BTreeMap<String, TerminalScreen>,
-    /// Bounded hidden-shell OSC marker fragments keyed by pane id.
-    pane_transaction_osc_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Incomplete private shell-output frames retained across visible PTY reads.
     pane_shell_output_render_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Partial wrapper-filter bytes keyed by pane id.
@@ -990,7 +987,6 @@ impl RuntimeSessionService {
     /// Clears visible and hidden shell transaction parser state on shutdown.
     pub(crate) fn clear_pane_transaction_parsers(&mut self) {
         self.process.pane_transaction_osc_screens.clear();
-        self.process.pane_transaction_osc_pending.clear();
         self.process.pane_shell_output_render_pending.clear();
     }
 
@@ -1133,13 +1129,6 @@ impl RuntimeSessionService {
         &self,
     ) -> &std::collections::BTreeMap<String, TerminalScreen> {
         &self.process.pane_transaction_osc_screens
-    }
-
-    /// Returns hidden transaction fragments for process integration tests.
-    pub(crate) fn pane_transaction_osc_pending_for_tests(
-        &self,
-    ) -> &std::collections::BTreeMap<String, Vec<u8>> {
-        &self.process.pane_transaction_osc_pending
     }
 
     /// Requires the next test pane write to observe registered transaction ownership.
@@ -2173,7 +2162,6 @@ impl RuntimeSessionService {
         self.process.process_pane_screens.remove(pane_id);
         self.process.agent_pane_screens.remove(pane_id);
         self.process.pane_transaction_osc_screens.remove(pane_id);
-        self.process.pane_transaction_osc_pending.remove(pane_id);
         self.process
             .pane_shell_output_render_pending
             .remove(pane_id);

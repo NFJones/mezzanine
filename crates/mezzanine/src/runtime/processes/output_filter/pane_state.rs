@@ -36,99 +36,6 @@ pub(super) enum PaneOutputRenderMode {
     Trace,
 }
 
-/// Scans bytes for bounded Mezzanine-owned OSC 133 transaction events.
-///
-/// # Parameters
-/// - `bytes`: The hidden agent-shell bytes plus any retained fragment from the
-///   previous PTY read.
-pub(super) fn scan_mezzanine_osc_transaction_events(
-    bytes: &[u8],
-) -> (Vec<TerminalOscEvent>, Vec<u8>) {
-    let mut events = Vec::new();
-    let mut cursor = 0usize;
-    let mut retained_start = None;
-    while let Some(relative_start) = find_byte_subsequence(&bytes[cursor..], RUNTIME_MEZ_OSC_PREFIX)
-    {
-        let osc_start = cursor + relative_start;
-        let payload_start = osc_start + 2;
-        match find_bounded_osc_terminator(bytes, payload_start) {
-            Some((payload_end, terminator_end)) => {
-                if let Ok(payload) = std::str::from_utf8(&bytes[payload_start..payload_end])
-                    && let Some(event) = parse_mez_shell_transaction_osc(payload)
-                {
-                    events.push(event);
-                }
-                cursor = terminator_end;
-            }
-            None => {
-                if bytes.len().saturating_sub(payload_start) >= RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES {
-                    cursor = osc_start.saturating_add(1);
-                } else {
-                    retained_start = Some(osc_start);
-                    break;
-                }
-            }
-        }
-    }
-    let retained = if let Some(start) = retained_start {
-        bounded_osc_pending_fragment(&bytes[start..])
-    } else {
-        trailing_mez_osc_prefix_fragment(bytes)
-    };
-    (events, retained)
-}
-
-/// Finds an OSC string terminator within the bounded Mezzanine marker window.
-///
-/// # Parameters
-/// - `bytes`: The byte slice being scanned.
-/// - `payload_start`: The byte offset immediately after `ESC ]`.
-pub(super) fn find_bounded_osc_terminator(
-    bytes: &[u8],
-    payload_start: usize,
-) -> Option<(usize, usize)> {
-    let search_end = bytes
-        .len()
-        .min(payload_start.saturating_add(RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES));
-    let mut index = payload_start;
-    while index < search_end {
-        match bytes[index] {
-            0x07 => return Some((index, index + 1)),
-            0x1b if bytes.get(index + 1) == Some(&b'\\') => return Some((index, index + 2)),
-            _ => index += 1,
-        }
-    }
-    None
-}
-
-/// Bounds one retained OSC parser fragment to the maximum marker window.
-///
-/// # Parameters
-/// - `fragment`: The potential partial OSC marker fragment to retain.
-pub(super) fn bounded_osc_pending_fragment(fragment: &[u8]) -> Vec<u8> {
-    if fragment.len() <= RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES {
-        fragment.to_vec()
-    } else {
-        fragment[fragment.len() - RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES..].to_vec()
-    }
-}
-
-/// Returns a trailing byte prefix that could start a future Mezzanine marker.
-///
-/// # Parameters
-/// - `bytes`: The complete scanned byte slice.
-pub(super) fn trailing_mez_osc_prefix_fragment(bytes: &[u8]) -> Vec<u8> {
-    let max_len = bytes
-        .len()
-        .min(RUNTIME_MEZ_OSC_PREFIX.len().saturating_sub(1));
-    for len in (1..=max_len).rev() {
-        if bytes[bytes.len() - len..] == RUNTIME_MEZ_OSC_PREFIX[..len] {
-            return bytes[bytes.len() - len..].to_vec();
-        }
-    }
-    Vec::new()
-}
-
 impl RuntimeSessionService {
     /// Runs the apply pane process output operation for this subsystem.
     ///
@@ -766,31 +673,6 @@ impl RuntimeSessionService {
         if bytes.is_empty() {
             return Ok((Vec::new(), false, false, Vec::new()));
         }
-        let hidden_render_mode = matches!(
-            self.pane_output_render_mode(pane_id),
-            PaneOutputRenderMode::HiddenLiveAgentShell
-                | PaneOutputRenderMode::HiddenRetainedAgentShell
-        );
-        let hidden_agent_action_output = hidden_render_mode
-            && self
-                .process
-                .running_shell_transactions
-                .values()
-                .any(|transaction| {
-                    transaction.pane_id == pane_id
-                        && matches!(
-                            transaction.kind,
-                            RunningShellTransactionKind::AgentAction { .. }
-                        )
-                });
-        if hidden_agent_action_output {
-            return Ok((
-                self.hidden_agent_shell_osc_events_for_pane_bytes(pane_id, bytes),
-                false,
-                false,
-                Vec::new(),
-            ));
-        }
         let screen =
             if let Some(screen) = self.process.pane_transaction_osc_screens.get_mut(pane_id) {
                 screen.resize(size);
@@ -832,36 +714,6 @@ impl RuntimeSessionService {
             alternate_screen_switched,
             terminal_response_bytes,
         ))
-    }
-
-    /// Scans hidden agent-shell bytes for Mezzanine-owned OSC transaction
-    /// markers without feeding arbitrary command output into a terminal parser.
-    ///
-    /// Hidden agent-shell output is command data for the model. Treating long
-    /// file bodies or embedded escape sequences as terminal traffic can
-    /// monopolize the runtime actor and mutate parser state. This scanner keeps
-    /// only a bounded fragment that may contain a split `ESC ] 133` marker and
-    /// ignores all other hidden bytes.
-    fn hidden_agent_shell_osc_events_for_pane_bytes(
-        &mut self,
-        pane_id: &str,
-        bytes: &[u8],
-    ) -> Vec<TerminalOscEvent> {
-        let mut pending = self
-            .process
-            .pane_transaction_osc_pending
-            .remove(pane_id)
-            .unwrap_or_default();
-        pending.extend_from_slice(bytes);
-        let (events, retained) = scan_mezzanine_osc_transaction_events(&pending);
-        if retained.is_empty() {
-            self.process.pane_transaction_osc_pending.remove(pane_id);
-        } else {
-            self.process
-                .pane_transaction_osc_pending
-                .insert(pane_id.to_string(), retained);
-        }
-        events
     }
 
     /// Runs the remember mez wrapper filter command operation for this subsystem.
