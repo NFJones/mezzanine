@@ -743,11 +743,10 @@ For complete effects, Mezzanine resolves read, write, create, delete, and touch
 paths in one action-specific pane-shell request before probing or launching
 Bubblewrap. The action waits for exact evidence; resolver failure, timeout,
 truncation, or stale pane identity fails closed. Unknown effects retain bounded
-maximum authority. A deterministic `/home/<user>` scope also resolves `.ssh`,
-`.gnupg`, `.aws`, `.azure`, `.kube`, and `.docker` descendants. Existing
-protected directories are hidden by private tmpfs masks emitted after host
-binds; absent descendants are not mounted. The multi-user `/home` root and
-direct credential-directory scopes fail closed. Exact primary, subagent, and
+maximum authority. Scope configuration alone determines filesystem exposure,
+including credential-bearing paths; Bubblewrap does not inspect, mask, or
+reject paths based on credential-directory names. The multi-user `/home` root
+remains forbidden. Exact primary, subagent, and
 action requests are cached independently for the current pane environment and
 configuration generation. With no explicit scopes, a trusted current project
 provides the default read-write scope; nested trusted projects select the
@@ -763,8 +762,8 @@ the active pane's effective scopes. `effective_scope_provenance` is `explicit`,
 `trusted-project`, or `none`; trusted-project authority also reports the selected
 root. Bubblewrap status reports stable restriction identifiers:
 `authority-mounts-only`, `synthetic-home`, `minimal-path`, `network-isolated`,
-and `host-credentials-hidden`. These describe likely denial causes without
-including raw Bubblewrap arguments, environment values, or unrelated host paths.
+These describe likely denial causes without including raw Bubblewrap arguments,
+environment values, or unrelated host paths.
 
 Use `mez sandbox status [PATH] [--verbose]` for a standalone configured/effective
 projection with stable readiness diagnostics. Global `--json` emits the

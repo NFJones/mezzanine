@@ -88,10 +88,6 @@ impl RuntimeSessionService {
                     "sandbox_read_write_mount_count",
                     summary.read_write_mount_count.to_string(),
                 )
-                .with_metadata(
-                    "sandbox_protected_mask_count",
-                    summary.protected_mask_count.to_string(),
-                )
                 .with_metadata("sandbox_network", summary.network.as_str())
                 .with_metadata("sandbox_plan_sha256", summary.plan_sha256.clone());
         }

@@ -3003,13 +3003,11 @@ truncation, or stale identity MUST fail it closed. Classifier-only or unknown
 confinement effects MUST retain bounded maximum authority. Pre-launch failure
 remains valid for explicit policy decisions, invalid or unavailable maximum
 authority, stale capability identity, forbidden sandbox configuration, and
-invalid explicit declared-confinement evidence. For deterministic
-`/home/<user>` authority,
-Mezzanine MUST additionally resolve `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
-and `.docker` descendants regardless of effect completeness. Existing protected
-descendants MUST be replaced by private tmpfs mounts emitted after host binds;
-absent descendants MUST remain unmounted. The multi-user `/home` root and direct
-credential-directory authority MUST fail closed. A failed, stale, truncated, or timed-out Bubblewrap capability probe MUST
+invalid explicit declared-confinement evidence. Filesystem exposure, including
+credential-bearing paths, MUST be determined solely by the configured and
+effectively narrowed scopes; Bubblewrap MUST NOT inspect, mask, or reject paths
+based on credential-directory names. The multi-user `/home` root MUST fail
+closed. A failed, stale, truncated, or timed-out Bubblewrap capability probe MUST
 never trigger automatic or approval-gated unsandboxed execution. Probe success
 MUST require complete registered transaction framing, an exact pane,
 environment, configuration-generation, executable, and runtime-profile

@@ -70,15 +70,12 @@ pub(crate) fn shell_transaction_output_max_raw_bytes(command: &str) -> usize {
 }
 
 /// Builds the exact resolver request needed for complete per-action filesystem
-/// effects and protected descendants of deterministic user-home authority.
+/// effects.
 fn bubblewrap_action_path_resolution_request(
     maximum: &PathScopes,
     evaluation: &PermissionEvaluation,
 ) -> Result<Option<mez_agent::shell::PanePathResolutionRequest>> {
-    let mut additional_paths =
-        crate::security::sandbox::bubblewrap_protected_path_resolution_candidates(maximum)
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>();
+    let mut additional_paths = std::collections::BTreeSet::new();
     if let Some(effects) = evaluation.confinement_effects.as_ref() {
         additional_paths.extend(
             effects

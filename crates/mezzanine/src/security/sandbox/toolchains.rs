@@ -20,8 +20,7 @@ use mez_agent::permissions::PathScopes;
 use sha2::{Digest, Sha256};
 
 use super::{
-    SandboxCompileError, SandboxCompileErrorKind, path_is_credential_directory, path_overlaps,
-    validate_printable_absolute_path,
+    SandboxCompileError, SandboxCompileErrorKind, path_overlaps, validate_printable_absolute_path,
 };
 
 /// Stable supported toolchain kinds in display and completion order.
@@ -4120,7 +4119,6 @@ fn validate_toolchain_root(
     }
     if rendered == "/"
         || rendered == "/home"
-        || path_is_credential_directory(&rendered)
         || path_overlaps(&rendered, "/run/user")
         || path_overlaps(&rendered, "/var/run")
     {

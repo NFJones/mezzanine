@@ -364,7 +364,19 @@ fn real_bubblewrap_projects_configured_ipc_socket() {
         NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = fs::remove_dir_all(&socket_root);
-    fs::create_dir_all(&socket_root).unwrap();
+    if let Err(error) = fs::create_dir_all(&socket_root) {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            eprintln!(
+                "skipping real Bubblewrap IPC socket test: cannot create {}",
+                socket_root.display()
+            );
+            return;
+        }
+        panic!(
+            "create IPC socket fixture {}: {error}",
+            socket_root.display()
+        );
+    }
     let socket_path = socket_root.join("service.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
     let (received_sender, received) = mpsc::channel();
@@ -612,32 +624,29 @@ fn real_bubblewrap_projects_sanitized_git_identity() {
 }
 
 #[test]
-/// Proves a broad host-backed authority keeps ordinary direct children visible
-/// while replacing a credential descendant with an empty private tmpfs.
-fn real_bubblewrap_masks_credential_descendants_of_broad_authority() {
+/// Proves a broad host-backed authority exposes only its configured scope
+/// without implicit credential-descendant masking.
+fn real_bubblewrap_does_not_mask_configured_credential_descendants() {
     let config = config();
     let Some(capability) = verified_capability(&config) else {
         return;
     };
-    let fixture = RealBubblewrapFixture::new("credential-mask");
+    let fixture = RealBubblewrapFixture::new("configured-credentials");
     let mut unknown = effects();
     unknown.unknown = true;
     let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
     let plan = real_plan(&config, capability, &fixture.authority(), &evaluation);
 
-    assert_eq!(plan.audit_summary.protected_mask_count, 7);
     let output = execute_plan(
         plan,
         "set -eu\n\
          test \"$(cat root-only.txt)\" = root-only\n\
-         test ! -e .ssh/id_test\n\
-         test -d .ssh\n\
-         test -d .config/mezzanine\n\
-         printf '%s\\n' REAL_BWRAP_CREDENTIAL_MASK_OK",
+         test \"$(cat .ssh/id_test)\" = credential-secret\n\
+         printf '%s\\n' REAL_BWRAP_CONFIGURED_SCOPE_OK",
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("REAL_BWRAP_CREDENTIAL_MASK_OK"),
+        stdout.contains("REAL_BWRAP_CONFIGURED_SCOPE_OK"),
         "status={:?} stdout={stdout:?} stderr={:?}",
         output.status,
         String::from_utf8_lossy(&output.stderr)

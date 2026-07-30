@@ -247,7 +247,6 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
         authority_source: crate::security::sandbox::SandboxAuthoritySource::Narrowed,
         read_only_mount_count: 2,
         read_write_mount_count: 1,
-        protected_mask_count: 6,
         network: crate::runtime::BubblewrapNetworkMode::Isolated,
         plan_sha256: plan_sha256.clone(),
     };
@@ -274,7 +273,6 @@ fn runtime_bubblewrap_shell_audit_records_redacted_plan_metadata() {
     assert_eq!(metadata["sandbox_authority_source"], "narrowed");
     assert_eq!(metadata["sandbox_read_only_mount_count"], "2");
     assert_eq!(metadata["sandbox_read_write_mount_count"], "1");
-    assert_eq!(metadata["sandbox_protected_mask_count"], "6");
     assert_eq!(metadata["sandbox_network"], "isolated");
     assert_eq!(metadata["sandbox_plan_sha256"], plan_sha256);
     assert!(!serialized.contains("/private/workspace/secret.txt"));
@@ -2749,10 +2747,10 @@ fn runtime_advisory_effects_skip_action_specific_path_resolution() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies broad deterministic user-home authority resolves every protected
-/// credential descendant even when command effects are otherwise unknown.
+/// Verifies unknown effects do not inspect credential-named descendants of a
+/// user-configured home scope.
 #[test]
-fn runtime_user_home_authority_resolves_credential_mask_paths() {
+fn runtime_user_home_authority_does_not_resolve_credential_paths() {
     let root = temp_root("runtime-user-home-path-resolution");
     let home = root.join("home").join("alice");
     fs::create_dir_all(&home).unwrap();
@@ -2774,7 +2772,7 @@ fn runtime_user_home_authority_resolves_credential_mask_paths() {
         path_resolution_evaluation(mez_agent::permissions::EffectCompleteness::Unknown, effects);
 
     assert!(
-        !service
+        service
             .ensure_bubblewrap_path_resolution_for_action(
                 &path_resolution_turn(),
                 "action-1",
@@ -2782,34 +2780,7 @@ fn runtime_user_home_authority_resolves_credential_mask_paths() {
             )
             .unwrap()
     );
-    let transaction = service
-        .running_shell_transactions_for_tests()
-        .values()
-        .find(|transaction| {
-            matches!(
-                &transaction.kind,
-                RunningShellTransactionKind::PathResolution {
-                    waiters,
-                    ..
-                } if waiters == &vec![("path-resolution-turn".to_string(), "action-1".to_string())]
-            )
-        })
-        .unwrap();
-    let RunningShellTransactionKind::PathResolution { cache_key, .. } = &transaction.kind else {
-        unreachable!();
-    };
-    let expected = [
-        ".aws",
-        ".azure",
-        ".config/mezzanine",
-        ".docker",
-        ".gnupg",
-        ".kube",
-        ".ssh",
-    ]
-    .map(|protected| home.join(protected).to_string_lossy().into_owned())
-    .to_vec();
-    assert_eq!(cache_key.request.additional_paths, expected);
+    assert!(service.running_shell_transactions_for_tests().is_empty());
 
     fs::remove_dir_all(root).unwrap();
 }

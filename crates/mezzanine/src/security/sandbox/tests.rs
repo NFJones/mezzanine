@@ -240,7 +240,16 @@ fn protected_ipc_socket_read_scope_is_compiled_read_only() {
         std::thread::current().id()
     ));
     let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
+    if let Err(error) = std::fs::create_dir_all(&root) {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            eprintln!(
+                "skipping IPC read-scope test: cannot create {}",
+                root.display()
+            );
+            return;
+        }
+        panic!("create IPC socket fixture {}: {error}", root.display());
+    }
     let socket = root.join("service.sock");
     let _listener = UnixListener::bind(&socket).unwrap();
     let file = root.join("regular");
@@ -433,10 +442,10 @@ fn advisory_filesystem_operands_compile_to_maximum_authority() {
     }
 }
 
-/// Broad deterministic user-home authority keeps ordinary files available but
-/// masks every direct credential directory after the parent host bind.
+/// Broad deterministic user-home authority projects its configured scope
+/// without inspecting or masking credential-named descendants.
 #[test]
-fn user_home_authority_emits_credential_masks_after_host_mounts() {
+fn user_home_authority_does_not_emit_credential_masks() {
     let config = config();
     let authority = home_authority("/home/alice");
     let mut unknown = effects();
@@ -444,39 +453,38 @@ fn user_home_authority_emits_credential_masks_after_host_mounts() {
     let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
 
     let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
-    assert_eq!(plan.audit_summary.protected_mask_count, 7);
-    let parent_mount = plan
-        .arguments
-        .windows(3)
-        .position(|args| args == ["--ro-bind", "/home/alice", "/home/alice"])
-        .unwrap();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", "/home/alice", "/home/alice"])
+    );
     for protected in [
-        ".ssh",
-        ".gnupg",
-        ".aws",
-        ".azure",
-        ".kube",
-        ".docker",
-        ".config/mezzanine",
+        "/home/alice/.ssh",
+        "/home/alice/.gnupg",
+        "/home/alice/.aws",
+        "/home/alice/.azure",
+        "/home/alice/.kube",
+        "/home/alice/.docker",
+        "/home/alice/.config/mezzanine",
     ] {
-        let destination = format!("/home/alice/{protected}");
-        let mask = plan
-            .arguments
-            .windows(2)
-            .position(|args| args == ["--tmpfs", destination.as_str()])
-            .unwrap();
-        assert!(parent_mount < mask, "mask must follow its parent host bind");
+        assert!(
+            !plan
+                .arguments
+                .windows(2)
+                .any(|args| args == ["--tmpfs", protected]),
+            "credential path {protected} must not be implicitly masked"
+        );
     }
 }
 
-/// Complete effects that narrow to a deterministic user home retain the same
-/// credential masks as maximum-authority compilation.
+/// Complete effects may narrow command authority to an explicitly configured
+/// credential-named descendant without implicit sandbox policy rejection.
 #[test]
-fn narrowed_user_home_authority_retains_credential_masks() {
+fn narrowed_credential_directory_authority_is_allowed() {
     let config = config();
     let authority = home_authority("/home/alice");
     let mut complete = effects();
-    complete.reads.push(".".to_string());
+    complete.reads.push(".ssh".to_string());
     let evaluation = evaluation(EffectCompleteness::Complete, complete);
 
     let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
@@ -487,29 +495,13 @@ fn narrowed_user_home_authority_retains_credential_masks() {
     );
     assert!(
         plan.arguments
-            .windows(2)
-            .any(|args| { args == ["--tmpfs", "/home/alice/.ssh"] })
+            .windows(3)
+            .any(|args| args == ["--ro-bind", "/home/alice/.ssh", "/home/alice/.ssh"])
     );
 }
 
-/// Complete effects cannot bypass protected descendant masking by narrowing
-/// command authority directly to a credential directory.
-#[test]
-fn narrowed_credential_directory_authority_fails_closed() {
-    let config = config();
-    let authority = home_authority("/home/alice");
-    let mut complete = effects();
-    complete.reads.push(".ssh".to_string());
-    let evaluation = evaluation(EffectCompleteness::Complete, complete);
-
-    let error =
-        compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap_err();
-
-    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
-}
-
-/// Multi-user home roots cannot be protected by deterministic direct-child
-/// masks and therefore fail closed before a launch plan is produced.
+/// Multi-user home roots remain forbidden because they exceed a bounded user
+/// authority boundary.
 #[test]
 fn multi_user_home_authority_fails_closed() {
     let config = config();
@@ -522,18 +514,20 @@ fn multi_user_home_authority_fails_closed() {
     assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
 }
 
-/// Direct credential-directory authority remains forbidden even though broad
-/// deterministic parents are projected with protected descendant masks.
+/// Direct credential-directory authority is accepted when explicitly
+/// configured by the user.
 #[test]
-fn direct_credential_directory_authority_fails_closed() {
+fn direct_credential_directory_authority_is_allowed() {
     let config = config();
     let authority = home_authority("/home/alice/.ssh");
     let evaluation = evaluation(EffectCompleteness::Unknown, effects());
 
-    let error =
-        compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap_err();
-
-    assert_eq!(error.kind(), SandboxCompileErrorKind::ForbiddenHostPath);
+    let plan = compile_bubblewrap_launch_plan(request(&config, &authority, &evaluation)).unwrap();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", "/home/alice/.ssh", "/home/alice/.ssh"])
+    );
 }
 
 /// Complete effects narrow mounts to resolved paths and produce deterministic
