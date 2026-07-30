@@ -114,23 +114,19 @@ impl RuntimeSessionService {
                 )
             }
             PaneOutputRenderMode::VerboseAgentAction | PaneOutputRenderMode::Trace => {
-                let conversation_id = self
-                    .agent_shell_store()
-                    .get(output.pane_id.as_str())
-                    .map(|session| session.session_id.clone())
-                    .ok_or_else(|| {
-                        MezError::invalid_state("agent PTY presentation target session not found")
-                    })?;
-                let screen = self.ensure_agent_pane_screen(
+                let (previous_activity_events, previous_bell_events) = self
+                    .agent_pane_screen(output.pane_id.as_str())
+                    .map(|screen| (screen.activity_events(), screen.bell_events()))
+                    .unwrap_or_default();
+                self.append_agent_pty_diagnostic_bytes_to_terminal_buffer(
                     output.pane_id.as_str(),
-                    &conversation_id,
-                    descriptor_size,
+                    &render_bytes,
                 )?;
-                let previous_activity_events = screen.activity_events();
-                let previous_bell_events = screen.bell_events();
-                screen.feed(&render_bytes);
-                let _ = screen.drain_osc_events();
-                let _ = screen.drain_terminal_response_bytes();
+                let screen = self
+                    .agent_pane_screen(output.pane_id.as_str())
+                    .ok_or_else(|| {
+                        MezError::invalid_state("agent PTY presentation target screen not found")
+                    })?;
                 (
                     screen
                         .activity_events()

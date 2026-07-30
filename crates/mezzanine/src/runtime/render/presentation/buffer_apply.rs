@@ -672,6 +672,55 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Appends transient PTY diagnostics without granting terminal controls
+    /// authority over the retained agent transcript surface.
+    pub(crate) fn append_agent_pty_diagnostic_bytes_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let lines = String::from_utf8_lossy(bytes)
+            .trim_end_matches(['\r', '\n'])
+            .lines()
+            .map(sanitized_agent_terminal_line)
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>();
+        if lines.is_empty() {
+            return Ok(());
+        }
+        self.ensure_current_agent_presentation_screen(pane_id)?;
+        self.clear_agent_shell_output_status_line(pane_id)?;
+        let ui_theme = self.presentation.settings.ui_theme.clone();
+        let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
+            MezError::invalid_state("agent terminal presentation screen was not initialized")
+        })?;
+        let mut rendered = String::new();
+        let cursor = screen.cursor_state();
+        let current_line_has_content = screen
+            .visible_lines()
+            .get(cursor.row)
+            .is_some_and(|line| !line.trim().is_empty());
+        if cursor.column == 0 && !current_line_has_content {
+            rendered.push('\r');
+        } else {
+            rendered.push_str("\r\n");
+        }
+        for line in lines {
+            append_styled_agent_terminal_line(
+                &mut rendered,
+                AgentTerminalPresentationStyle::Status,
+                &line,
+                &ui_theme,
+            );
+            rendered.push_str("\x1b[0m\r\n");
+        }
+        Self::feed_agent_terminal_screen(
+            screen,
+            rendered.as_bytes(),
+            "appending transient agent PTY diagnostics",
+        )
+    }
+
     /// Runs the append agent thinking text to terminal buffer operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

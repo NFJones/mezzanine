@@ -226,7 +226,7 @@ fn runtime_pane_output_routes_each_visible_class_to_one_surface() {
             mez_mux::process::PaneProcessOutput {
                 pane_id: "%1".to_string(),
                 primary_pid: 7,
-                bytes: b"verbose agent output\r\n".to_vec(),
+                bytes: b"\x1b[2J\x1b[Hverbose agent output\r\n".to_vec(),
             },
             &mut std::collections::BTreeSet::new(),
         )
@@ -240,7 +240,7 @@ fn runtime_pane_output_routes_each_visible_class_to_one_surface() {
             mez_mux::process::PaneProcessOutput {
                 pane_id: "%1".to_string(),
                 primary_pid: 7,
-                bytes: b"trace agent output\r\n".to_vec(),
+                bytes: b"\x1b[?1049h\x1b[4;20Htrace agent output\r\n\x1b[?1049l".to_vec(),
             },
             &mut std::collections::BTreeSet::new(),
         )
