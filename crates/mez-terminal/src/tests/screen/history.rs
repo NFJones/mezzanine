@@ -134,7 +134,26 @@ fn protocol_preserving_feed_reuses_retained_history_storage() {
     assert_eq!(history_line_after.as_ptr(), history_storage_before);
     assert!(screen.bracketed_paste_enabled());
     assert_eq!(screen.cursor_state().row, 1);
-    assert_eq!(screen.cursor_state().column, 4);
+    assert_eq!(screen.cursor_state().column, 0);
+}
+
+/// Verifies hidden agent output cannot advance the regular shell cursor.
+///
+/// Agent output shares the pane process screen so its control bytes must still
+/// be parsed. Restoring only its printed cells previously left CRLF movement
+/// behind, causing later shell output to land below blank retained rows.
+#[test]
+fn protocol_preserving_feed_keeps_following_shell_output_on_its_original_row() {
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 100).unwrap();
+    screen.feed(b"shell> ");
+    let cursor_before_hidden_output = screen.cursor_state();
+
+    screen.feed_protocol_preserving_content(b"agent activity\r\nmore activity\r\n");
+    screen.feed(b"done");
+
+    assert_eq!(screen.visible_lines(), vec!["shell> done", "", "", ""]);
+    assert_eq!(screen.cursor_state().row, cursor_before_hidden_output.row);
+    assert_eq!(screen.cursor_state().column, 11);
 }
 
 /// Verifies default history limit matches spec.

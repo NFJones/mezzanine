@@ -686,8 +686,8 @@ fn runtime_hidden_agent_action_output_preserves_terminal_protocol() {
     assert_eq!(deferred[0].pane_input_parts().1, b"\x1b[3;5R");
 }
 
-/// Verifies fragmented private shell-output frames are decoded before hidden
-/// terminal protocol state is applied to the authoritative process screen.
+/// Verifies fragmented private shell-output frames retain protocol modes while
+/// preserving the authoritative process screen's shell cursor.
 #[test]
 fn runtime_hidden_encoded_agent_action_updates_authoritative_process_protocol() {
     let mut service = test_runtime_service();
@@ -744,8 +744,8 @@ fn runtime_hidden_encoded_agent_action_updates_authoritative_process_protocol() 
     assert!(process_screen.focus_events_enabled());
     assert!(process_screen.application_keypad_enabled());
     assert!(!process_screen.alternate_screen_active());
-    assert_eq!(process_screen.cursor_state().row, 2);
-    assert_eq!(process_screen.cursor_state().column, 4);
+    assert_eq!(process_screen.cursor_state().row, 0);
+    assert_eq!(process_screen.cursor_state().column, 15);
     assert_eq!(
         process_screen
             .normal_content_lines()

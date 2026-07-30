@@ -18,6 +18,51 @@ struct RetainedScreenContent {
     normal_viewport_detached_from_history: bool,
 }
 
+/// Scalar display state retained while hidden protocol bytes are parsed.
+///
+/// Hidden traffic must continue to update protocol observations such as OSC
+/// events and bracketed-paste mode, but it must not reposition or restyle the
+/// visible screen that receives later shell output.
+#[derive(Clone, Copy)]
+struct RetainedDisplayMetadata {
+    cursor: Cursor,
+    cursor_visible: bool,
+    wrap_pending: bool,
+    saved_cursor: Option<Cursor>,
+    graphic_rendition: GraphicRendition,
+    autowrap_enabled: bool,
+    origin_mode_enabled: bool,
+    scroll_region: Option<(usize, usize)>,
+}
+
+impl RetainedDisplayMetadata {
+    /// Captures display-coupled state from the active screen buffer.
+    fn capture(screen: &TerminalScreen) -> Self {
+        Self {
+            cursor: screen.cursor,
+            cursor_visible: screen.cursor_visible,
+            wrap_pending: screen.wrap_pending,
+            saved_cursor: screen.saved_cursor,
+            graphic_rendition: screen.graphic_rendition,
+            autowrap_enabled: screen.autowrap_enabled,
+            origin_mode_enabled: screen.origin_mode_enabled,
+            scroll_region: screen.scroll_region,
+        }
+    }
+
+    /// Restores display-coupled state to the active screen buffer.
+    fn restore(self, screen: &mut TerminalScreen) {
+        screen.cursor = self.cursor;
+        screen.cursor_visible = self.cursor_visible;
+        screen.wrap_pending = self.wrap_pending;
+        screen.saved_cursor = self.saved_cursor;
+        screen.graphic_rendition = self.graphic_rendition;
+        screen.autowrap_enabled = self.autowrap_enabled;
+        screen.origin_mode_enabled = self.origin_mode_enabled;
+        screen.scroll_region = self.scroll_region;
+    }
+}
+
 impl RetainedScreenContent {
     /// Replaces the active display with bounded blank storage and returns the
     /// retained content without cloning it.
@@ -298,6 +343,7 @@ impl TerminalScreen {
             return;
         }
         let was_alternate = self.alternate.active();
+        let previous_display_metadata = RetainedDisplayMetadata::capture(self);
         let previous_content = RetainedScreenContent::take_current(self);
         let previous_saved_normal_metadata = self
             .alternate
@@ -319,6 +365,7 @@ impl TerminalScreen {
         let is_alternate = self.alternate.active();
         if !was_alternate && !is_alternate {
             previous_content.restore_current(self);
+            previous_display_metadata.restore(self);
         } else if !was_alternate && is_alternate {
             if let Some(saved) = self.alternate.saved_normal_screen.as_mut() {
                 previous_content.restore_saved(saved);
@@ -329,6 +376,7 @@ impl TerminalScreen {
             self.line_copy_texts = vec![None; usize::from(self.size.rows)];
         } else if was_alternate && is_alternate {
             previous_content.restore_current(self);
+            previous_display_metadata.restore(self);
             if let (Some(metadata), Some(content)) = (
                 previous_saved_normal_metadata,
                 previous_saved_normal_content,
