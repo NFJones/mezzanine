@@ -596,6 +596,7 @@ mod tests {
     fn fake_provider_and_ports_complete_one_agent_turn() {
         let turn = AgentTurnRecord {
             turn_id: "turn-1".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "agent-1".to_string(),
             pane_id: "pane-1".to_string(),
             trigger: AgentTurnTrigger::UserPrompt,
@@ -667,6 +668,7 @@ mod tests {
     fn routed_handoff_completes_from_structured_json_without_a_maap_batch() {
         let turn = AgentTurnRecord {
             turn_id: "turn-1".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "agent-1".to_string(),
             pane_id: "pane-1".to_string(),
             trigger: AgentTurnTrigger::UserPrompt,

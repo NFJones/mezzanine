@@ -235,6 +235,7 @@ impl RuntimeSessionService {
                 let mut ledger = self.agent_turn_ledger().clone();
                 ledger.start_turn(AgentTurnRecord {
                     turn_id: turn_id.to_string(),
+                    conversation_id: conversation_id.clone(),
                     agent_id: format!("agent-{pane_id}"),
                     pane_id: pane_id.clone(),
                     trigger: AgentTurnTrigger::ScheduledTask,

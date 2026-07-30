@@ -197,7 +197,15 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         state: AgentTurnState,
     ) -> Result<AgentShellSession> {
-        if state == AgentTurnState::Failed
+        let current_conversation = self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .map(|session| session.session_id.as_str());
+        let conversation_still_owned = current_conversation == Some(turn.conversation_id.as_str());
+        let conversation_was_replaced = current_conversation
+            .is_some_and(|conversation_id| conversation_id != turn.conversation_id);
+        if conversation_still_owned
+            && state == AgentTurnState::Failed
             && let Some(execution) = self.agent_turn_executions().get(&turn.turn_id).cloned()
             && execution.terminal_state == AgentTurnState::Failed
         {
@@ -213,14 +221,18 @@ impl RuntimeSessionService {
                 &reason,
             )?;
         }
-        if matches!(
-            state,
-            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) && !self.terminal_result_claimed_by_execution(&turn.turn_id)
+        if !conversation_was_replaced
+            && matches!(
+                state,
+                AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+            )
+            && !self.terminal_result_claimed_by_execution(&turn.turn_id)
         {
             self.emit_subagent_task_result_for_state(turn, state)?;
         }
-        if let Some(footer) = runtime_agent_finished_footer_line(turn, state) {
+        if conversation_still_owned
+            && let Some(footer) = runtime_agent_finished_footer_line(turn, state)
+        {
             self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer)?;
         }
         self.integration
@@ -228,7 +240,8 @@ impl RuntimeSessionService {
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut()
             .finish_turn(&turn.turn_id, state)?;
-        if turn.parent_turn_id.is_none()
+        if conversation_still_owned
+            && turn.parent_turn_id.is_none()
             && matches!(
                 state,
                 AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
@@ -361,6 +374,17 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("scheduled turn is missing from runtime ledger")
                 })?;
+            let current_conversation = self
+                .agent_shell_store()
+                .get(&turn.pane_id)
+                .map(|session| session.session_id.as_str());
+            if running.conversation_id != turn.conversation_id
+                || current_conversation != Some(turn.conversation_id.as_str())
+            {
+                let _ = self.agent.agent_scheduler.cancel(&turn.turn_id);
+                self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
+                continue;
+            }
             let previous_state = turn.state;
             match previous_state {
                 AgentTurnState::Queued => {

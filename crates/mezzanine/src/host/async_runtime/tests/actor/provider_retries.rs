@@ -1101,6 +1101,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         .expect("prompt should queue a provider task");
     let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

@@ -132,6 +132,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
     let task = pending[0].clone();
     let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

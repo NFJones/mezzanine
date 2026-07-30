@@ -85,6 +85,7 @@ impl RuntimeSessionService {
             turn_id.to_string(),
             RuntimeAgentProviderClaim {
                 turn_id: turn_id.to_string(),
+                conversation_id: turn.conversation_id,
                 agent_id: turn.agent_id,
                 generation: 1,
                 claimed_at_unix_ms: current_unix_millis(),
@@ -422,6 +423,17 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_args(
                 "agent provider dispatch agent id does not match turn",
             ));
+        }
+        if self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .is_none_or(|session| session.session_id != turn.conversation_id)
+        {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            let _ = self.agent.agent_scheduler.cancel(turn_id);
+            self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
+            return Ok(None);
         }
         if self.agent_is_compacting(&turn.pane_id) {
             return Ok(None);
@@ -1258,6 +1270,7 @@ impl RuntimeSessionService {
             turn.turn_id.clone(),
             RuntimeAgentProviderClaim {
                 turn_id: turn.turn_id.clone(),
+                conversation_id: turn.conversation_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 generation,
                 claimed_at_unix_ms: current_unix_millis(),

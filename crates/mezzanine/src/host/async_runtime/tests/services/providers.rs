@@ -208,6 +208,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         .expect("agent prompt should queue turn-1 provider task");
     let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -382,6 +383,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         .expect("agent prompt should queue turn-1 provider task");
     let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -538,6 +540,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
 async fn async_provider_worker_executes_network_actions_before_actor_completion() {
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-network-worker".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

@@ -28,6 +28,8 @@ pub struct AgentTurnRecord {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub turn_id: String,
+    /// Immutable conversation that owns this turn for its full lifecycle.
+    pub conversation_id: String,
     /// Stores the agent id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -135,6 +137,7 @@ impl AgentTurnLedger {
     /// on duplicated control-flow logic.
     pub fn queue_turn(&mut self, mut turn: AgentTurnRecord) -> AgentTurnLedgerResult<()> {
         validate_turn_required("turn_id", &turn.turn_id)?;
+        validate_turn_required("conversation_id", &turn.conversation_id)?;
         validate_turn_required("agent_id", &turn.agent_id)?;
         validate_turn_required("pane_id", &turn.pane_id)?;
         if self
@@ -201,6 +204,7 @@ impl AgentTurnLedger {
             ));
         }
         validate_turn_required("turn_id", &turn.turn_id)?;
+        validate_turn_required("conversation_id", &turn.conversation_id)?;
         validate_turn_required("agent_id", &turn.agent_id)?;
         validate_turn_required("pane_id", &turn.pane_id)?;
         if self

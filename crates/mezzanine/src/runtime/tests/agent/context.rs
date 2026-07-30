@@ -87,6 +87,7 @@ fn prepared_context_for_prompt(
 ) -> mez_agent::PreparedModelContext {
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-context-test".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -191,6 +192,7 @@ fn runtime_agent_context_keeps_cache_identity_out_of_model_text() {
 
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-cache-metadata".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

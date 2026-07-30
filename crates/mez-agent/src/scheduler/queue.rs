@@ -167,6 +167,7 @@ impl AgentScheduler {
         let work = self.waiting.remove(index);
         let scheduled = ScheduledWork {
             turn_id: work.turn_id.clone(),
+            conversation_id: work.conversation_id.clone(),
             agent_id: work.agent_id.clone(),
             pane_id: work.pane_id.clone(),
             kind: work.kind,
@@ -342,6 +343,7 @@ impl AgentScheduler {
         let work = self.queued.remove(index)?;
         let running = RunningWork {
             turn_id: work.turn_id,
+            conversation_id: work.conversation_id,
             agent_id: work.agent_id,
             pane_id: work.pane_id,
             kind: work.kind,

@@ -128,6 +128,7 @@ fn runtime_frame_context_animates_active_agent_status_without_live_footer() {
         .agent_turn_ledger_mut()
         .start_turn(mez_agent::AgentTurnRecord {
             turn_id: "turn-running".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: format!("agent-{pane_id}"),
             pane_id: pane_id.clone(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -342,6 +343,7 @@ fn runtime_frame_context_reports_agent_compacting_substate() {
         .agent_turn_ledger_mut()
         .start_turn(mez_agent::AgentTurnRecord {
             turn_id: "turn-completed".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: format!("agent-{pane_id}"),
             pane_id: pane_id.clone(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,

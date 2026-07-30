@@ -13,6 +13,7 @@ use super::{
 fn work(turn: &str, agent: &str, pane: &str) -> ScheduledWork {
     ScheduledWork {
         turn_id: turn.to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: agent.to_string(),
         pane_id: Some(pane.to_string()),
         kind: ScheduledWorkKind::ShellCapable,
@@ -116,6 +117,7 @@ fn planning_only_work_does_not_claim_a_pane() {
     scheduler
         .enqueue(ScheduledWork {
             turn_id: "t2".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "a2".to_string(),
             pane_id: Some("%1".to_string()),
             kind: ScheduledWorkKind::PlanningOnly,

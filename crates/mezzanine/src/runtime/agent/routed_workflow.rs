@@ -1457,8 +1457,14 @@ impl RuntimeSessionService {
         );
         context.validate_durable()?;
         let turn_id = self.next_agent_turn_id();
+        let conversation_id = self
+            .agent_shell_store()
+            .get(child_pane_id)
+            .map(|session| session.session_id.clone())
+            .ok_or_else(|| MezError::invalid_state("routed turn conversation is unavailable"))?;
         let turn = AgentTurnRecord {
             turn_id: turn_id.clone(),
+            conversation_id: conversation_id.clone(),
             agent_id: child_agent_id.to_string(),
             pane_id: child_pane_id.to_string(),
             trigger: mez_agent::AgentTurnTrigger::LocalMessage,
@@ -1497,6 +1503,7 @@ impl RuntimeSessionService {
             .insert(turn_id.clone(), parent_turn.agent_id.clone());
         self.agent.agent_scheduler.enqueue(ScheduledWork {
             turn_id: turn_id.clone(),
+            conversation_id,
             agent_id: child_agent_id.to_string(),
             pane_id: Some(child_pane_id.to_string()),
             kind: ScheduledWorkKind::ShellCapable,

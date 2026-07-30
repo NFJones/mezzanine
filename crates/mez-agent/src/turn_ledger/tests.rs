@@ -9,6 +9,7 @@ use super::*;
 fn turn() -> AgentTurnRecord {
     AgentTurnRecord {
         turn_id: "turn-1".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-1".to_string(),
         pane_id: "%1".to_string(),
         trigger: AgentTurnTrigger::UserPrompt,
@@ -74,6 +75,7 @@ fn turn_ledger_bounds_terminal_turn_retention() {
         ledger
             .start_turn(AgentTurnRecord {
                 turn_id: turn_id.clone(),
+                conversation_id: "conversation-1".to_string(),
                 ..turn()
             })
             .unwrap();
@@ -99,6 +101,7 @@ fn turn_ledger_serializes_turns_for_one_agent() {
 
     let error = ledger.start_turn(AgentTurnRecord {
         turn_id: "turn-2".to_string(),
+        conversation_id: "conversation-1".to_string(),
         ..turn()
     });
 
@@ -113,6 +116,7 @@ fn turn_ledger_serializes_turns_for_one_agent() {
     ledger
         .start_turn(AgentTurnRecord {
             turn_id: "turn-2".to_string(),
+            conversation_id: "conversation-1".to_string(),
             ..turn()
         })
         .unwrap();

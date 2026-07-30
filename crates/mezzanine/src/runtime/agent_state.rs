@@ -91,6 +91,8 @@ pub(crate) struct RuntimeApprovedExternalActionOutcome {
 pub(crate) struct RuntimeAgentProviderClaim {
     /// Runtime turn owned by the claimed provider worker.
     pub turn_id: String,
+    /// Immutable conversation that owns the claimed provider request.
+    pub conversation_id: String,
     /// Agent identity that owns the turn.
     pub agent_id: String,
     /// Timer generation associated with the current claim lease.

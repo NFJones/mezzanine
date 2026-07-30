@@ -26,6 +26,15 @@ impl RuntimeSessionService {
         mut execution: AgentTurnExecution,
     ) -> Result<AgentTurnExecution> {
         let turn_id = turn.turn_id.as_str();
+        if self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .is_none_or(|session| session.session_id != turn.conversation_id)
+        {
+            return Err(super::super::MezError::invalid_state(
+                "agent provider execution conversation no longer owns pane",
+            ));
+        }
         self.scope_provider_execution_action_ids(turn, &mut execution)?;
         if mez_agent::outcome::runtime_execution_has_apply_patch_action(&execution) {
             self.record_agent_loop_apply_patch_for_turn(turn_id);

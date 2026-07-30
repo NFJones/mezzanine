@@ -36,6 +36,29 @@ impl RuntimeSessionService {
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
+        if self
+            .agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .is_some_and(|claim| claim.conversation_id != turn.conversation_id)
+        {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            let _ = self.agent.agent_scheduler.cancel(turn_id);
+            self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
+            return Ok(false);
+        }
+        if self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .is_none_or(|session| session.session_id != turn.conversation_id)
+        {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            let _ = self.agent.agent_scheduler.cancel(turn_id);
+            self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
+            return Ok(false);
+        }
         let Some(mut model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned()
         else {
             let error = MezError::invalid_state("runtime agent turn has no model profile");

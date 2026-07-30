@@ -682,6 +682,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-pane-not-ready".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

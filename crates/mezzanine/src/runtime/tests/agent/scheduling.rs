@@ -65,6 +65,7 @@ fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
     let started = service
         .start_agent_turn(mez_agent::AgentTurnRecord {
             turn_id: "turn-1".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -150,6 +151,7 @@ fn runtime_background_completion_attention_projects_and_acknowledges_on_focus() 
     service
         .start_agent_turn(mez_agent::AgentTurnRecord {
             turn_id: "attention-turn".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: format!("agent-{background_pane}"),
             pane_id: background_pane.clone(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -240,6 +242,7 @@ fn runtime_background_subagent_completion_does_not_register_attention() {
     service
         .start_agent_turn(mez_agent::AgentTurnRecord {
             turn_id: "child-attention-turn".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: format!("agent-{background_pane}"),
             pane_id: background_pane.clone(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -353,6 +356,7 @@ fn runtime_config_reload_applies_agent_scheduler_limit() {
         .agent_scheduler_mut()
         .enqueue(ScheduledWork {
             turn_id: "turn-1".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "agent-1".to_string(),
             pane_id: Some("%1".to_string()),
             kind: ScheduledWorkKind::ShellCapable,
@@ -362,6 +366,7 @@ fn runtime_config_reload_applies_agent_scheduler_limit() {
         .agent_scheduler_mut()
         .enqueue(ScheduledWork {
             turn_id: "turn-2".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "agent-2".to_string(),
             pane_id: Some("%2".to_string()),
             kind: ScheduledWorkKind::ShellCapable,
@@ -494,6 +499,96 @@ fn runtime_config_reload_starts_newly_runnable_agent_turns() {
     service.kill_session(&primary, true).unwrap();
     let _ = fs::remove_file(path);
     let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies scheduler-delayed work cannot start after `/new` replaces the
+/// conversation that originally owned the queued turn.
+#[test]
+fn runtime_queued_turn_is_settled_after_conversation_rebind() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(1)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let second_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    for pane_id in ["%1", second_pane.as_str()] {
+        let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+        screen.feed(b"ready\n");
+        service.set_pane_screen(pane_id.to_string(), screen);
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane_id)
+            .unwrap();
+    }
+
+    let first = service.start_agent_prompt_turn("%1", "first").unwrap();
+    let second = service
+        .start_agent_prompt_turn(second_pane.as_str(), "second")
+        .unwrap();
+    assert_eq!(first.state, AgentTurnState::Running);
+    assert_eq!(second.state, AgentTurnState::Queued);
+    let original_conversation = service
+        .agent_shell_store()
+        .get(second_pane.as_str())
+        .unwrap()
+        .session_id
+        .clone();
+
+    service
+        .session
+        .select_pane(&primary, second_pane.as_str())
+        .unwrap();
+    let rebound = service
+        .execute_agent_shell_command(&primary, "/new")
+        .unwrap();
+    assert!(rebound.contains("new=true"), "{rebound}");
+    let replacement_conversation = service
+        .agent_shell_store()
+        .get(second_pane.as_str())
+        .unwrap()
+        .session_id
+        .clone();
+    assert_ne!(replacement_conversation, original_conversation);
+
+    let first_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == first.turn_id)
+        .cloned()
+        .unwrap();
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &first_turn,
+            AgentTurnState::Completed,
+            "test_capacity_released",
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == second.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Interrupted)
+    );
+    assert!(!service.agent_provider_task_is_owned(&second.turn_id));
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(second_pane.as_str())
+            .map(|session| session.session_id.as_str()),
+        Some(replacement_conversation.as_str())
+    );
+    service.kill_session(&primary, true).unwrap();
 }
 
 /// Verifies that stopping a queued pane-local agent turn does not depend on the

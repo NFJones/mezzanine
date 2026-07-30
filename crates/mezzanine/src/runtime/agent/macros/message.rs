@@ -246,11 +246,17 @@ impl RuntimeSessionService {
         let context = self.agent_context_for_pane_prompt(child_pane_id, payload, 100)?;
         let context = self.apply_agent_shell_preference_context(child_pane_id, context)?;
         let turn_id = self.next_agent_turn_id();
+        let conversation_id = self
+            .agent_shell_store()
+            .get(child_pane_id)
+            .map(|session| session.session_id.clone())
+            .ok_or_else(|| MezError::invalid_state("macro turn conversation is unavailable"))?;
         let created_at_unix_seconds = current_unix_seconds();
         let (model_profile_name, model_profile) =
             self.active_model_profile_for_pane(child_pane_id, &child_agent_id, None)?;
         let turn = AgentTurnRecord {
             turn_id: turn_id.clone(),
+            conversation_id: conversation_id.clone(),
             agent_id: child_agent_id.to_string(),
             pane_id: child_pane_id.to_string(),
             trigger: mez_agent::AgentTurnTrigger::LocalMessage,
@@ -284,6 +290,7 @@ impl RuntimeSessionService {
         self.append_agent_user_prompt_to_terminal_buffer(child_pane_id, payload)?;
         self.agent.agent_scheduler.enqueue(ScheduledWork {
             turn_id: turn_id.clone(),
+            conversation_id,
             agent_id: child_agent_id.to_string(),
             pane_id: Some(child_pane_id.to_string()),
             kind: ScheduledWorkKind::ShellCapable,

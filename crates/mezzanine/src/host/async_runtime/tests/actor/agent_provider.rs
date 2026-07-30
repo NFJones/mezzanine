@@ -103,6 +103,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
     let task = pending[0].clone();
     let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -282,6 +283,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
     let task = pending[0].clone();
     let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

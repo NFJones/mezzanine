@@ -29,25 +29,26 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<usize> {
-        let conversation_id = self
+        let Some((session_conversation_id, session_ephemeral)) = self
             .agent_shell_store()
             .get(&turn.pane_id)
-            .map(|session| session.session_id.clone());
-        if let Some(conversation_id) = conversation_id.as_deref() {
-            self.record_runtime_agent_patch_results(conversation_id, execution);
+            .map(|session| (session.session_id.clone(), session.ephemeral))
+        else {
+            return Ok(0);
+        };
+        if session_conversation_id != turn.conversation_id {
+            return Err(MezError::invalid_state(
+                "agent turn conversation no longer owns transcript target",
+            ));
         }
-        if self
-            .agent_shell_store()
-            .get(&turn.pane_id)
-            .is_some_and(|session| session.ephemeral)
-        {
+        let conversation_id = turn.conversation_id.clone();
+        self.record_runtime_agent_patch_results(&conversation_id, execution);
+        if session_ephemeral {
             return Ok(0);
         }
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
-        let conversation_id = conversation_id
-            .ok_or_else(|| MezError::invalid_state("agent shell session missing for transcript"))?;
         let persistence_key = (conversation_id.clone(), turn.turn_id.clone());
         if self
             .agent

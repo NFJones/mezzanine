@@ -23,9 +23,12 @@ pub fn runnable_agent_ids(scheduler: &AgentScheduler) -> BTreeSet<String> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn validate_work(work: &ScheduledWork) -> SchedulerResult<()> {
-    if work.turn_id.trim().is_empty() || work.agent_id.trim().is_empty() {
+    if work.turn_id.trim().is_empty()
+        || work.conversation_id.trim().is_empty()
+        || work.agent_id.trim().is_empty()
+    {
         return Err(SchedulerError::invalid_args(
-            "scheduled work requires turn and agent identity",
+            "scheduled work requires turn, conversation, and agent identity",
         ));
     }
     if work.kind == ScheduledWorkKind::ShellCapable

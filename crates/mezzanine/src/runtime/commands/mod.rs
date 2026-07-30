@@ -983,6 +983,9 @@ impl RuntimeSessionService {
             return Ok(());
         }
         if let Some(parent_turn_id) = state.routed_parent_turn_id.as_deref() {
+            if self.agent_shell_store().get(pane_id).is_none() {
+                return Ok(());
+            }
             self.agent_shell_store_mut()
                 .restore_conversation_for_running_turn_with_lineage(
                     pane_id,
@@ -1148,6 +1151,11 @@ impl RuntimeSessionService {
         context.validate_placement_order()?;
         let turn_id = self.next_agent_turn_id();
         let agent_id = format!("agent-{pane_id}");
+        let conversation_id = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+            .ok_or_else(|| MezError::invalid_state("agent turn conversation is unavailable"))?;
         let context_blocks = context.blocks().len();
         let created_at_unix_seconds = current_unix_seconds();
         let prompt_preview = prompt.chars().take(160).collect::<String>();
@@ -1155,6 +1163,7 @@ impl RuntimeSessionService {
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
         let turn = AgentTurnRecord {
             turn_id: turn_id.clone(),
+            conversation_id: conversation_id.clone(),
             agent_id: agent_id.clone(),
             pane_id: pane_id.to_string(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -1192,6 +1201,7 @@ impl RuntimeSessionService {
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
         self.enqueue_agent_work(ScheduledWork {
             turn_id: turn_id.clone(),
+            conversation_id,
             agent_id: agent_id.clone(),
             pane_id: Some(pane_id.to_string()),
             kind: ScheduledWorkKind::ShellCapable,

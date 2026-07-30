@@ -925,6 +925,7 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
     service
         .start_agent_turn(mez_agent::AgentTurnRecord {
             turn_id: "turn-running-restore".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
             trigger: mez_agent::AgentTurnTrigger::UserPrompt,

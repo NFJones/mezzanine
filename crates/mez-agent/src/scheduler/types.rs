@@ -29,6 +29,8 @@ pub enum ScheduledWorkKind {
 pub struct ScheduledWork {
     /// Stable turn identifier used for completion and cancellation.
     pub turn_id: String,
+    /// Immutable conversation that owns this scheduled work.
+    pub conversation_id: String,
     /// Agent that owns the turn.
     pub agent_id: String,
     /// Optional pane claimed by shell-capable work.
@@ -42,6 +44,8 @@ pub struct ScheduledWork {
 pub struct RunningWork {
     /// Stable turn identifier used for completion and cancellation.
     pub turn_id: String,
+    /// Immutable conversation that owns this running work.
+    pub conversation_id: String,
     /// Agent that owns the turn.
     pub agent_id: String,
     /// Optional pane claimed by shell-capable work.

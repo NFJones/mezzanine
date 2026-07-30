@@ -921,6 +921,7 @@ mod tests {
         .unwrap();
         let turn = AgentTurnRecord {
             turn_id: "turn-auto-order".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "agent-auto-order".to_string(),
             pane_id: "%1".to_string(),
             trigger: crate::AgentTurnTrigger::UserPrompt,
@@ -975,6 +976,7 @@ mod tests {
     fn auto_sizing_policy_defines_scope_depth_and_valid_pair_boundaries() {
         let turn = AgentTurnRecord {
             turn_id: "turn-auto-rubric".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "agent-auto-rubric".to_string(),
             pane_id: "%1".to_string(),
             trigger: crate::AgentTurnTrigger::UserPrompt,

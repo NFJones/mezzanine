@@ -604,6 +604,109 @@ fn runtime_late_result_retains_original_provider_execution_group() {
     );
 }
 
+/// Verifies a claimed provider completion cannot settle after the pane binds a
+/// replacement conversation.
+///
+/// The late result belongs to the immutable conversation captured by the turn,
+/// so completion ingress must interrupt it without presenting or retaining the
+/// stale provider text in the replacement conversation.
+#[tokio::test]
+async fn runtime_provider_completion_discards_rebound_conversation() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect before rebinding")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let consumed_high_water_mark = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests(&turn.turn_id, consumed_high_water_mark)
+        .unwrap();
+
+    service
+        .agent_shell_store_mut()
+        .finish_turn("%1", &turn.turn_id)
+        .unwrap();
+    let replacement_conversation = service
+        .agent_shell_store_mut()
+        .start_new_conversation("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    assert_ne!(replacement_conversation, turn.conversation_id);
+
+    let response = runtime_say_response(&turn.turn_id, "stale rebound answer", true);
+    let action = response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions
+        .first()
+        .unwrap()
+        .clone();
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response,
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["stale rebound answer".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    assert!(
+        !service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+                &turn.turn_id,
+                execution,
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|candidate| candidate.turn_id == turn.turn_id)
+            .map(|candidate| candidate.state),
+        Some(AgentTurnState::Interrupted)
+    );
+    assert!(!service.agent_provider_task_is_owned(&turn.turn_id));
+    assert!(!service.agent_turn_contexts().contains_key(&turn.turn_id));
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some(replacement_conversation.as_str())
+    );
+    let pane_text = service
+        .agent_pane_screen("%1")
+        .map(|screen| screen.normal_content_lines().join("\n"))
+        .unwrap_or_default();
+    assert!(!pane_text.contains("stale rebound answer"), "{pane_text}");
+}
+
 /// Verifies actor-accepted steering invalidates every older in-flight provider
 /// decision instead of reordering it around the newer user event.
 ///

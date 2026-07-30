@@ -2455,6 +2455,7 @@ fn runtime_subagent_profile_preset_restricts_pane_override() {
     service.set_pane_permission_preset_override("%2", Some(mez_agent::PermissionPreset::Auto));
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "profile-restriction".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%2".to_string(),
         pane_id: "%2".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

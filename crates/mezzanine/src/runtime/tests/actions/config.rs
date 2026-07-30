@@ -91,6 +91,7 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
     service.set_config_root(config_root.clone());
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-config-generic".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -146,6 +147,7 @@ fn runtime_config_change_rejects_user_only_sandbox_policy() {
     service.set_config_root(config_root.clone());
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-config-sandbox-policy".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -213,6 +215,7 @@ fn runtime_config_change_rejects_user_only_host_access() {
     service.set_config_root(config_root.clone());
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-config-host-access".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -271,6 +274,7 @@ fn runtime_config_change_reset_removes_override_and_restores_default() {
     service.set_config_root(config_root.clone());
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-config-reset".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -348,6 +352,7 @@ fn runtime_config_change_idempotency_uses_setting_payload() {
     service.set_config_root(config_root.clone());
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-config-idempotency".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -907,6 +912,7 @@ fn runtime_config_change_failure_is_redacted_and_not_recorded_as_success() {
     service.set_config_root(config_root.clone());
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-config-redaction".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

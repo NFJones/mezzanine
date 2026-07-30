@@ -792,6 +792,17 @@ impl RuntimeSessionService {
             .is_some_and(|workflow| !workflow.phase.is_terminal())
     }
 
+    /// Reports whether one routed parent is still waiting for its worker result.
+    pub(crate) fn routed_workflow_waits_for_worker_result(&self, parent_turn_id: &str) -> bool {
+        self.agent
+            .routed_workflows_by_parent_turn
+            .get(parent_turn_id)
+            .is_some_and(|workflow| {
+                workflow.phase
+                    == mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult
+            })
+    }
+
     /// Returns one active routed workflow to crate-local regression tests.
     #[cfg(test)]
     pub(crate) fn routed_workflow_for_tests(

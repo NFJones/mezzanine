@@ -1052,6 +1052,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         .unwrap();
     let turn = mez_agent::AgentTurnRecord {
         turn_id: "saved-context-validation".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

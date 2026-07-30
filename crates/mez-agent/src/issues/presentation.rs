@@ -175,6 +175,7 @@ mod tests {
     fn turn() -> AgentTurnRecord {
         AgentTurnRecord {
             turn_id: "turn-1".to_string(),
+            conversation_id: "conversation-1".to_string(),
             agent_id: "agent-1".to_string(),
             pane_id: "%1".to_string(),
             trigger: AgentTurnTrigger::UserPrompt,

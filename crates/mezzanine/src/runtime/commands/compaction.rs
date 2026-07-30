@@ -750,6 +750,11 @@ impl RuntimeSessionService {
                 &application_error,
             );
         }
+        if let Some(parent_turn_id) = self.routed_parent_turn_id_for_child(&turn.turn_id)
+            && self.routed_workflow_waits_for_worker_result(&parent_turn_id)
+        {
+            self.handle_routed_child_missing_execution(&turn, AgentTurnState::Failed)?;
+        }
         Ok(())
     }
 

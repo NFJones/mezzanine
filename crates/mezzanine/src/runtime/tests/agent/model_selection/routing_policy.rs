@@ -367,6 +367,7 @@ fn runtime_agent_shell_routing_policy_scopes_changes_and_preserves_subagents() {
 
     let root_turn = mez_agent::AgentTurnRecord {
         turn_id: "root-routing-policy".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,
@@ -385,6 +386,7 @@ fn runtime_agent_shell_routing_policy_scopes_changes_and_preserves_subagents() {
 
     let other_root_turn = mez_agent::AgentTurnRecord {
         turn_id: "other-root-routing-policy".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%2".to_string(),
         pane_id: "%2".to_string(),
         ..root_turn.clone()

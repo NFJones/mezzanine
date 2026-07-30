@@ -29,6 +29,7 @@ fn path_resolution_environment(working_directory: &Path) -> mez_agent::Environme
 fn path_resolution_turn() -> mez_agent::AgentTurnRecord {
     mez_agent::AgentTurnRecord {
         turn_id: "path-resolution-turn".to_string(),
+        conversation_id: "conversation-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
         trigger: mez_agent::AgentTurnTrigger::UserPrompt,

@@ -216,8 +216,14 @@ fn runtime_idle_agent_context_dump_for_pane(
     let context = service.apply_agent_shell_preference_context(pane_id, context)?;
     let mcp_summary = service.mcp_registry().prompt_summary();
     let turn_id = format!("idle-context-preview-{pane_id}");
+    let conversation_id = service
+        .agent_shell_store()
+        .get(pane_id)
+        .map(|session| session.session_id.clone())
+        .ok_or_else(|| MezError::invalid_state("agent preview conversation is unavailable"))?;
     let turn = AgentTurnRecord {
         turn_id: turn_id.clone(),
+        conversation_id,
         agent_id,
         pane_id: pane_id.to_string(),
         trigger: AgentTurnTrigger::UserPrompt,

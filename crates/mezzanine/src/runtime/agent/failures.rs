@@ -72,6 +72,9 @@ impl RuntimeSessionService {
                 error.message()
             ),
         );
+        if self.agent_shell_store().get(&turn.pane_id).is_none() {
+            let _ = self.emit_subagent_task_result_for_state(turn, AgentTurnState::Failed);
+        }
         if self
             .complete_running_agent_turn_and_start_ready(
                 turn,
