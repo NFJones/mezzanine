@@ -1022,6 +1022,17 @@ impl RuntimeSessionService {
         position: CopyPosition,
         finish: bool,
     ) -> Result<bool> {
+        if self
+            .presentation
+            .mouse_selection_drag_state
+            .as_ref()
+            .is_some_and(|state| {
+                self.presented_pane_surface(state.pane_id.as_str()) != state.surface
+            })
+        {
+            self.presentation.mouse_selection_drag_state = None;
+            return Ok(true);
+        }
         let target = self.mouse_selection_target_at(position)?;
         self.session
             .select_pane_global(primary_client_id, target.pane_id.as_str())?;
@@ -1227,6 +1238,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn mouse_selection_target_at(&self, position: CopyPosition) -> Result<MouseSelectionTarget> {
         if let Some(state) = self.presentation.mouse_selection_drag_state.as_ref()
+            && self.presented_pane_surface(state.pane_id.as_str()) == state.surface
             && let Some(target) =
                 self.mouse_pane_selection_target_at(state.pane_id.as_str(), position)
         {

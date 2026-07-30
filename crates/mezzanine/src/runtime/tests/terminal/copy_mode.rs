@@ -201,6 +201,16 @@ fn runtime_double_click_highlight_persists_until_cleanup_deadline() {
         *cleanup_at_unix_ms = 0;
     }
 
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    agent_screen.feed(b"agent surface");
+    service.set_agent_pane_screen("%1", &conversation_id, agent_screen);
+
     service
         .render_client_view(ClientViewRole::Primary, Size::new(20, 4).unwrap(), &config)
         .unwrap()

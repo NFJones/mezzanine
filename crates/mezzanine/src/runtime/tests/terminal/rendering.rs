@@ -504,6 +504,59 @@ fn runtime_mouse_drag_copies_visible_alternate_screen_content() {
     );
 }
 
+/// Verifies a drag started on the process surface does not remain active after
+/// the pane switches to its retained agent surface.
+#[test]
+fn runtime_mouse_drag_activation_is_scoped_to_presented_surface() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    service.set_frame_visibility_for_tests(false, false);
+    let primary = service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let mut process_screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    process_screen.feed(b"process selection text");
+    service.set_process_pane_screen(&pane_id, process_screen);
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::HandleMouse(
+                    MouseAction::CopySelectionStart(CopyPosition { line: 0, column: 0 }),
+                )],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert!(
+        service
+            .terminal_client_loop_config(TerminalClientLoopConfig::default())
+            .unwrap()
+            .mouse_selection_active
+    );
+
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    let mut agent_screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    agent_screen.feed(b"agent selection text");
+    service.set_agent_pane_screen(&pane_id, &conversation_id, agent_screen);
+
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(!config.mouse_selection_active);
+    assert!(!config.mouse_policy.copy_mode_active);
+}
+
 /// Verifies mouse focus uses the same pane-frame row accounting as rendering.
 ///
 /// A top pane frame that is merged into an interior divider does not consume the

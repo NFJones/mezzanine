@@ -455,29 +455,31 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let mut deferred_cleanup = self.presentation.deferred_word_copy_cleanup.borrow_mut();
         let mut clear_deferred_cleanup = false;
-        if let Some((pane_id, surface, copy_mode, cleanup_at_unix_ms)) = deferred_cleanup.as_ref()
-            && self.presented_pane_surface(pane_id) == *surface
-            && let Some(pane_index) = window
-                .panes()
-                .iter()
-                .position(|p| p.id.as_str() == pane_id.as_str())
-            && let Some((row, column, size)) = self.copy_mode_overlay_region(window, pane_index)
-        {
-            let mut lines = copy_mode.visible_styled_lines().to_vec();
-            apply_copy_mode_selection_spans(
-                copy_mode,
-                &mut lines,
-                &self.presentation.settings.ui_theme,
-            );
-            overlay_styled_lines(
-                view,
-                row,
-                column,
-                usize::from(size.columns),
-                usize::from(size.rows),
-                &lines,
-            );
-            clear_deferred_cleanup = current_unix_millis() >= *cleanup_at_unix_ms;
+        if let Some((pane_id, surface, copy_mode, cleanup_at_unix_ms)) = deferred_cleanup.as_ref() {
+            clear_deferred_cleanup = current_unix_millis() >= *cleanup_at_unix_ms
+                || self.presented_pane_surface(pane_id) != *surface;
+            if !clear_deferred_cleanup
+                && let Some(pane_index) = window
+                    .panes()
+                    .iter()
+                    .position(|p| p.id.as_str() == pane_id.as_str())
+                && let Some((row, column, size)) = self.copy_mode_overlay_region(window, pane_index)
+            {
+                let mut lines = copy_mode.visible_styled_lines().to_vec();
+                apply_copy_mode_selection_spans(
+                    copy_mode,
+                    &mut lines,
+                    &self.presentation.settings.ui_theme,
+                );
+                overlay_styled_lines(
+                    view,
+                    row,
+                    column,
+                    usize::from(size.columns),
+                    usize::from(size.rows),
+                    &lines,
+                );
+            }
         }
         if clear_deferred_cleanup {
             deferred_cleanup.take();
@@ -757,10 +759,11 @@ impl RuntimeSessionService {
             self.presentation.mouse_resize_drag_state.is_some();
         let active_pane_id = self.active_pane_id().ok();
         let active_mouse_selection_state = active_pane_id.as_deref().and_then(|pane_id| {
+            let surface = self.presented_pane_surface(pane_id);
             self.presentation
                 .mouse_selection_drag_state
                 .as_ref()
-                .filter(|state| state.pane_id.as_str() == pane_id)
+                .filter(|state| state.pane_id.as_str() == pane_id && state.surface == surface)
         });
         config.mouse_selection_active = active_mouse_selection_state.is_some();
         config.mouse_selection_autoscroll_position =
