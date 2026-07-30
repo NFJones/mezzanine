@@ -219,6 +219,8 @@ impl RuntimeSessionService {
         let presentation_entries = store.inspect_presentation(&conversation_id)?;
         let resume_directory = runtime_resume_directory_from_summary(&summary)
             .or_else(|| runtime_resume_directory_from_entries(&entries));
+        let prepared_resume_state =
+            self.prepare_agent_resume_state_for_conversation(&conversation_id)?;
         let previous_session = self
             .agent_shell_store()
             .get(pane_id)
@@ -269,8 +271,9 @@ impl RuntimeSessionService {
                     Self::runtime_resume_transcript_display(&summary, &entries),
                 )?;
             }
-            self.restore_agent_resume_state_for_conversation(pane_id, &session_id)?;
+            self.restore_agent_resume_directory(pane_id, resume_directory.as_deref())?;
             self.record_pane_transcript_ref(pane_id, format!("transcript:{pane_id}:{session_id}"))?;
+            self.commit_prepared_agent_resume_state(pane_id, &session_id, prepared_resume_state)?;
             Ok((session_id, transcript_entries, visibility))
         })();
         let (session_id, transcript_entries, visibility) = match resume_result {
@@ -294,7 +297,6 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
-        self.restore_agent_resume_directory(pane_id, resume_directory.as_deref())?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "resume".to_string(),
             body: format!(

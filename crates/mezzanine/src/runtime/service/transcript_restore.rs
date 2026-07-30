@@ -13,8 +13,17 @@ use super::{
 };
 use crate::integrations::agent::actions::next_transcript_sequence;
 use crate::runtime::{runtime_parse_permission_preset, runtime_permission_preset_name};
-use mez_agent::AutoSizingRoutingPolicy;
 use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+use mez_agent::{ApprovalPolicy, AutoSizingRoutingPolicy, PermissionPreset};
+
+/// Validated saved-session metadata ready for one transactional `/resume` commit.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedAgentResumeState {
+    metadata: AgentSessionMetadata,
+    root_routing_policy: Option<AutoSizingRoutingPolicy>,
+    permission_preset: Option<PermissionPreset>,
+    approval_policy: Option<ApprovalPolicy>,
+}
 
 impl RuntimeSessionService {
     /// Runs the provider registry operation for this subsystem.
@@ -399,75 +408,92 @@ impl RuntimeSessionService {
         store.save_agent_session_metadata(&mezzanine_session_id, &records)
     }
 
-    /// Restores persisted pane-local agent settings for one rebound conversation.
-    ///
-    /// `/resume` can bind a saved conversation without going through daemon
-    /// startup recovery. This helper reloads the matching metadata row so
-    /// explicit session choices such as routing, approval policy, and
-    /// provider token accounting continue from saved state instead of falling
-    /// back to current defaults.
-    pub(crate) fn restore_agent_resume_state_for_conversation(
-        &mut self,
-        pane_id: &str,
+    /// Loads and validates persisted pane-local settings before `/resume` mutates live state.
+    pub(crate) fn prepare_agent_resume_state_for_conversation(
+        &self,
         conversation_id: &str,
-    ) -> Result<()> {
+    ) -> Result<Option<PreparedAgentResumeState>> {
         let Some(store) = self.persistence.cloned_transcript_store() else {
-            return Ok(());
+            return Ok(None);
         };
         let mezzanine_session_id = self.session.id.as_str().to_string();
-        for metadata in store.load_agent_session_metadata(&mezzanine_session_id)? {
-            if metadata.conversation_id != conversation_id {
-                continue;
-            }
-            let session = self
-                .agent_shell_store_mut()
-                .ensure_session(pane_id.to_string())?;
-            session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
-            session.directive = metadata.directive.clone();
-            if let Some(profile) = metadata.pane_model_profile.as_ref() {
-                self.integration
-                    .model_profile_overrides_mut()
-                    .pane_profiles
-                    .insert(pane_id.to_string(), profile.clone());
-            } else {
-                self.integration
-                    .model_profile_overrides_mut()
-                    .pane_profiles
-                    .remove(pane_id);
-            }
-            self.set_agent_planning_enabled(pane_id, metadata.planning_enabled);
-            self.set_agent_response_style(pane_id, metadata.response_style.clone());
-            self.set_agent_routing_override(pane_id, metadata.routing_enabled);
-            let root_routing_policy = metadata
-                .root_routing_policy
-                .as_deref()
-                .map(|policy| {
-                    AutoSizingRoutingPolicy::parse(policy).ok_or_else(|| {
-                        MezError::invalid_args(
-                            "agent session metadata root routing policy is invalid",
-                        )
-                    })
+        let Some(metadata) = store
+            .load_agent_session_metadata(&mezzanine_session_id)?
+            .into_iter()
+            .find(|metadata| metadata.conversation_id == conversation_id)
+        else {
+            return Ok(None);
+        };
+        let root_routing_policy = metadata
+            .root_routing_policy
+            .as_deref()
+            .map(|policy| {
+                AutoSizingRoutingPolicy::parse(policy).ok_or_else(|| {
+                    MezError::invalid_args("agent session metadata root routing policy is invalid")
                 })
-                .transpose()?;
-            self.set_agent_root_routing_policy_override(pane_id, root_routing_policy);
-            self.restore_agent_permission_overrides_from_metadata(
-                pane_id,
+            })
+            .transpose()?;
+        let (permission_preset, approval_policy) = self
+            .prepare_agent_permission_overrides_from_metadata(
                 metadata.pane_permission_preset_override.as_deref(),
                 metadata.pane_approval_policy_override.as_deref(),
                 metadata.approval_policy.as_deref(),
-                "agent-session-resume",
             )?;
-            let token_usage_by_model = runtime_agent_token_usage_by_model_from_metadata(&metadata);
-            self.merge_restored_agent_token_usage(conversation_id, pane_id, token_usage_by_model);
-            self.restore_agent_context_usage(
-                conversation_id,
-                metadata.context_usage,
-                metadata.context_usage_snapshot,
-            );
-            self.restore_agent_latest_request_usage(conversation_id, metadata.latest_request_usage);
-            let _ = self.checkpoint_agent_session_metadata();
-            break;
+        Ok(Some(PreparedAgentResumeState {
+            metadata,
+            root_routing_policy,
+            permission_preset,
+            approval_policy,
+        }))
+    }
+
+    /// Commits one previously validated saved-session metadata plan.
+    ///
+    /// The caller performs every fallible presentation, directory, and
+    /// transcript-reference operation before entering this commit. Session
+    /// lookup is therefore the final fallible boundary; all mutations below
+    /// it are in-memory replacements that cannot expose a partial plan.
+    pub(crate) fn commit_prepared_agent_resume_state(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        prepared: Option<PreparedAgentResumeState>,
+    ) -> Result<()> {
+        let Some(prepared) = prepared else {
+            return Ok(());
+        };
+        let metadata = prepared.metadata;
+        let session = self
+            .agent_shell_store_mut()
+            .ensure_session(pane_id.to_string())?;
+        session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
+        session.directive = metadata.directive.clone();
+        if let Some(profile) = metadata.pane_model_profile.as_ref() {
+            self.integration
+                .model_profile_overrides_mut()
+                .pane_profiles
+                .insert(pane_id.to_string(), profile.clone());
+        } else {
+            self.integration
+                .model_profile_overrides_mut()
+                .pane_profiles
+                .remove(pane_id);
         }
+        self.set_agent_planning_enabled(pane_id, metadata.planning_enabled);
+        self.set_agent_response_style(pane_id, metadata.response_style.clone());
+        self.set_agent_routing_override(pane_id, metadata.routing_enabled);
+        self.set_agent_root_routing_policy_override(pane_id, prepared.root_routing_policy);
+        self.set_pane_permission_preset_override(pane_id, prepared.permission_preset);
+        self.set_pane_approval_policy_override(pane_id, prepared.approval_policy);
+        let token_usage_by_model = runtime_agent_token_usage_by_model_from_metadata(&metadata);
+        self.merge_restored_agent_token_usage(conversation_id, pane_id, token_usage_by_model);
+        self.restore_agent_context_usage(
+            conversation_id,
+            metadata.context_usage,
+            metadata.context_usage_snapshot,
+        );
+        self.restore_agent_latest_request_usage(conversation_id, metadata.latest_request_usage);
+        let _ = self.checkpoint_agent_session_metadata();
         Ok(())
     }
 
@@ -485,6 +511,25 @@ impl RuntimeSessionService {
         legacy_approval_policy: Option<&str>,
         source: &str,
     ) -> Result<()> {
+        let (permission_preset, approval_policy) = self
+            .prepare_agent_permission_overrides_from_metadata(
+                permission_preset,
+                approval_policy,
+                legacy_approval_policy,
+            )?;
+        self.set_pane_permission_preset_override(pane_id, permission_preset);
+        self.set_pane_approval_policy_override(pane_id, approval_policy);
+        self.reconcile_pending_agent_approvals_after_pane_permission_change(pane_id, source)?;
+        Ok(())
+    }
+
+    /// Parses saved permission metadata without mutating live pane authority.
+    fn prepare_agent_permission_overrides_from_metadata(
+        &self,
+        permission_preset: Option<&str>,
+        approval_policy: Option<&str>,
+        legacy_approval_policy: Option<&str>,
+    ) -> Result<(Option<PermissionPreset>, Option<ApprovalPolicy>)> {
         let permission_preset = permission_preset
             .filter(|value| !value.trim().is_empty())
             .map(|value| {
@@ -517,10 +562,7 @@ impl RuntimeSessionService {
                 approval_policy = Some(requested);
             }
         }
-        self.set_pane_permission_preset_override(pane_id, permission_preset);
-        self.set_pane_approval_policy_override(pane_id, approval_policy);
-        self.reconcile_pending_agent_approvals_after_pane_permission_change(pane_id, source)?;
-        Ok(())
+        Ok((permission_preset, approval_policy))
     }
 
     /// Drains transcript and prompt-history persistence through one runtime transition.

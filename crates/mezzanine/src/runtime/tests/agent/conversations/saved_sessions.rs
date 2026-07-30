@@ -593,6 +593,15 @@ fn runtime_resume_recovers_presentation_only_conversations() {
 fn runtime_resume_replay_failure_restores_prior_pane_state() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-rollback"));
+    let mezzanine_session_id = service.session().id.as_str().to_string();
+    let target_usage_key = mez_agent::ModelTokenUsageKey::new("openai", "target-model");
+    let target_usage = mez_agent::ModelTokenUsage {
+        input_tokens: 800,
+        output_tokens: 70,
+        reasoning_tokens: 20,
+        cached_input_tokens: Some(400),
+        cache_write_input_tokens: None,
+    };
     transcript_store
         .append(&TranscriptEntry {
             conversation_id: "resume-target".to_string(),
@@ -621,6 +630,48 @@ fn runtime_resume_replay_failure_restores_prior_pane_state() {
             source_content_type: None,
         })
         .unwrap();
+    transcript_store
+        .save_agent_session_metadata(
+            &mezzanine_session_id,
+            &[mez_agent::transcript::AgentSessionMetadata {
+                mezzanine_session_id: mezzanine_session_id.clone(),
+                pane_id: "%9".to_string(),
+                conversation_id: "resume-target".to_string(),
+                prompt_cache_lineage_id: "target-lineage".to_string(),
+                visibility: "visible".to_string(),
+                running_turn_id: None,
+                running_turn_kind: None,
+                transcript_entries: 1,
+                log_level: "normal".to_string(),
+                pane_model_profile: Some("target-profile".to_string()),
+                planning_enabled: true,
+                response_style: Some("concise".to_string()),
+                directive: Some("Use the target directive.".to_string()),
+                routing_enabled: Some(true),
+                root_routing_policy: Some("in-place".to_string()),
+                approval_policy: None,
+                pane_permission_preset_override: Some("read-only".to_string()),
+                pane_approval_policy_override: Some("full-access".to_string()),
+                working_directory: None,
+                project_root: None,
+                token_usage: target_usage,
+                token_usage_by_model: std::collections::BTreeMap::from([(
+                    target_usage_key.clone(),
+                    target_usage,
+                )]),
+                context_usage: Some("80%".to_string()),
+                context_usage_snapshot: Some(mez_agent::AgentContextUsageSnapshot {
+                    input_tokens: 800,
+                    context_window_tokens: 1_000,
+                    cached_input_tokens: Some(400),
+                }),
+                latest_request_usage: Some(mez_agent::LatestModelRequestUsage {
+                    model: target_usage_key,
+                    usage: target_usage,
+                }),
+            }],
+        )
+        .unwrap();
     let presentation_path = transcript_store.presentation_path("resume-target").unwrap();
     let corrupt = fs::read_to_string(&presentation_path).unwrap().replacen(
         "resume-target",
@@ -646,6 +697,8 @@ fn runtime_resume_replay_failure_restores_prior_pane_state() {
     service.set_agent_pane_screen("%1", &prior_conversation, agent_screen);
     let process_before = service.process_pane_screen("%1").unwrap().clone();
     let agent_before = service.agent_pane_screen("%1").unwrap().clone();
+    let session_before = service.agent_shell_store().get("%1").unwrap().clone();
+    let transcript_refs_before = service.persistence.pane_transcript_refs("%1");
 
     let failed = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"resume-failure","method":"agent/shell/command","params":{"idempotency_key":"resume-failure","input":"/resume resume-target"}}"#,
@@ -665,6 +718,32 @@ fn runtime_resume_replay_failure_restores_prior_pane_state() {
     );
     assert_eq!(service.process_pane_screen("%1").unwrap(), &process_before);
     assert_eq!(service.agent_pane_screen("%1").unwrap(), &agent_before);
+    assert_eq!(service.agent_shell_store().get("%1"), Some(&session_before));
+    assert_eq!(
+        service.persistence.pane_transcript_refs("%1"),
+        transcript_refs_before
+    );
+    assert!(
+        !service
+            .integration
+            .model_profile_overrides()
+            .pane_profiles
+            .contains_key("%1")
+    );
+    assert!(!service.agent_planning_enabled("%1"));
+    assert_eq!(service.agent_response_style("%1"), None);
+    assert_eq!(service.agent_routing_override("%1"), None);
+    assert_eq!(service.agent_root_routing_policy_override("%1"), None);
+    assert_eq!(service.integration.pane_permission_override("%1"), None);
+    assert!(
+        service
+            .agent_token_usage_for_conversation("resume-target")
+            .is_empty()
+    );
+    assert!(service.agent_token_usage_for_pane("%1").is_empty());
+    assert_eq!(service.agent_context_usage_display("resume-target"), None);
+    assert_eq!(service.agent_context_usage_snapshot("resume-target"), None);
+    assert_eq!(service.agent_latest_request_usage("resume-target"), None);
 }
 
 /// Verifies that saved agent conversations can be listed, resumed into the
