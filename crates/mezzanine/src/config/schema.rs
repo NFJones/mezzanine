@@ -19,6 +19,7 @@ pub const PRIMARY_CONFIG_FILENAMES: &[&str] =
 /// boundary and avoids relying on call-site inference.
 pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "version",
+    "runtime",
     "terminal",
     "keys",
     "frames",
@@ -406,6 +407,12 @@ pub(super) const COMMAND_RULE_EFFECT_KEYS: &[&str] = &[
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const SESSION_KEYS: &[&str] = &["default_command"];
+
+/// Defines the RUNTIME KEYS const used by this subsystem.
+///
+/// Keeping this value documented makes the contract explicit at the module
+/// boundary and avoids relying on call-site inference.
+pub(super) const RUNTIME_KEYS: &[&str] = &["cpu_count"];
 
 /// Defines the TERMINAL KEYS const used by this subsystem.
 ///

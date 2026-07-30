@@ -2556,6 +2556,7 @@ MUST be treated as the project root.
 The top-level configuration object MUST support the following keys:
 
 - `version`
+- `runtime`
 - `terminal`
 - `keys`
 - `frames`
@@ -2578,7 +2579,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 22 is the current configuration schema version for this
+schema version 47 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2592,6 +2593,12 @@ renamed or moved settings to their canonical current paths, and MUST remove
 settings that no longer exist in the current schema. Project overlay files are
 not durable user-primary configuration and MUST instead be validated against the
 current schema after the primary file has been migrated.
+
+The `runtime` table MUST support `cpu_count`. `runtime.cpu_count` MUST be a
+positive integer, MUST default to 2, and MUST select the Tokio worker-thread
+count when Mezzanine starts. Because the runtime is constructed before trusted
+project overlays can be discovered, this primary-user setting MUST NOT be
+overridden by project configuration and changes take effect on restart.
 
 Mezzanine schema version 2 MUST NOT support `session.default_command`. The
 version 1 to version 2 primary-config migration MUST remove

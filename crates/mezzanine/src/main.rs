@@ -10,7 +10,24 @@ use std::process::ExitCode;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
-    ExitCode::from(mezzanine::run_cli().await)
+fn main() -> ExitCode {
+    let worker_threads = match mezzanine::configured_runtime_cpu_count() {
+        Ok(worker_threads) => worker_threads,
+        Err(error) => {
+            eprintln!("mez: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("mez: failed to construct Tokio runtime: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    ExitCode::from(runtime.block_on(mezzanine::run_cli()))
 }

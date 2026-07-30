@@ -105,9 +105,37 @@ use schema::{
     COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS, CUSTOM_TOOLCHAIN_DEFINITION_KEYS,
     HISTORY_KEYS, HOOK_KEYS, INSTRUCTION_KEYS, ISSUE_KEYS, KEY_BINDING_KEYS, LAYOUT_KEYS,
     MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS,
-    PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, SESSION_KEYS,
-    SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
+    PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, RUNTIME_KEYS,
+    SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS,
+    WINDOW_FRAME_KEYS,
 };
+
+/// Reads the Tokio worker count from the migrated primary user configuration.
+///
+/// Project overlays are intentionally excluded because Tokio must be built
+/// before asynchronous CLI dispatch can discover and trust a project. Missing
+/// primary configuration uses the generated default of two worker threads.
+pub fn runtime_cpu_count_from_primary_config(paths: &ConfigPaths) -> Result<usize> {
+    let Some(path) = paths.select_primary_file()? else {
+        return Ok(2);
+    };
+    migrate_config_file(&path)?;
+    let format = ConfigFormat::from_path(&path)?;
+    let text = fs::read_to_string(&path)?;
+    let validation = validate_config_text(format, &text, ConfigScope::Primary);
+    if !validation.valid {
+        return Err(MezError::config(format_diagnostics(
+            &validation.diagnostics,
+        )));
+    }
+    let values = extract_config_values(format, &text);
+    match values.get("runtime.cpu_count") {
+        None => Ok(2),
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| MezError::config("runtime.cpu_count must be a positive integer")),
+    }
+}
 
 /// Exposes the tests module boundary.
 ///

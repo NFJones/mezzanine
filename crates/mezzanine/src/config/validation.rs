@@ -410,7 +410,8 @@ pub fn validate_config_text(
     }
 
     for (path, value) in values {
-        if path == "history.lines"
+        if path == "runtime.cpu_count"
+            || path == "history.lines"
             || path == "history.rotate_lines"
             || path == "history.saved_sessions_limit"
             || path == "agents.max_concurrent_agents"

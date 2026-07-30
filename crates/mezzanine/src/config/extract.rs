@@ -11,8 +11,8 @@ use super::{
     HOOK_KEYS, INSTRUCTION_KEYS, ISSUE_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS,
     LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS,
     MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS,
-    SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS,
-    WINDOW_FRAME_KEYS, exact_command_sha256, normalize_exact_command_text,
+    RUNTIME_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS,
+    THEME_KEYS, WINDOW_FRAME_KEYS, exact_command_sha256, normalize_exact_command_text,
     parse_config_json_value_best_effort,
 };
 use mez_mux::theme::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
@@ -288,6 +288,7 @@ pub(super) fn validate_known_schema_path(path: &str) -> Option<String> {
     let top_level = segments.first().copied()?;
     match top_level {
         "version" => validate_top_level_scalar_path(&segments, "version"),
+        "runtime" => validate_static_table_path(&segments, "runtime", RUNTIME_KEYS, &[]),
         "session" => validate_static_table_path(&segments, "session", SESSION_KEYS, &[]),
         "terminal" => validate_static_table_path(&segments, "terminal", TERMINAL_KEYS, &[]),
         "shell" => validate_static_table_path(&segments, "shell", SHELL_KEYS, &["env"]),

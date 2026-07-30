@@ -11,7 +11,11 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 46
+version = 47
+
+[runtime]
+# Tokio worker threads available to the daemon and foreground services.
+cpu_count = 2
 
 [terminal]
 profile = "xterm-compatible"

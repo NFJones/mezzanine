@@ -519,6 +519,25 @@ fn rejects_invalid_agent_concurrency_values() {
     );
 }
 
+/// Verifies the Tokio worker count must remain positive so runtime construction
+/// cannot silently recreate the single-thread scheduler starvation condition.
+#[test]
+fn rejects_zero_runtime_cpu_count() {
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        "[runtime]\ncpu_count = 0\n",
+        ConfigScope::Primary,
+    );
+
+    assert!(!validation.valid);
+    assert_eq!(validation.diagnostics[0].path, "runtime.cpu_count");
+    assert!(
+        validation.diagnostics[0]
+            .message
+            .contains("positive integer")
+    );
+}
+
 /// Verifies rejects invalid action-failure retry limits.
 ///
 /// Retry limits must be positive so model-correctable action failures have a

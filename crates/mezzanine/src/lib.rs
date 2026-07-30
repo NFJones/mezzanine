@@ -30,6 +30,12 @@ pub mod control_client {
 
 pub use error::{MezError, MezErrorKind, Result};
 
+/// Reads the configured Tokio worker count before constructing the runtime.
+pub fn configured_runtime_cpu_count() -> Result<usize> {
+    let paths = config::ConfigPaths::from_process_env()?;
+    config::runtime_cpu_count_from_primary_config(&paths)
+}
+
 /// Runs the product command-line workflow and returns the process exit code.
 pub async fn run_cli() -> u8 {
     cli::run().await
