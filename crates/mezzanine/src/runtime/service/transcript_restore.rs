@@ -14,7 +14,12 @@ use super::{
 use crate::integrations::agent::actions::next_transcript_sequence;
 use crate::runtime::{runtime_parse_permission_preset, runtime_permission_preset_name};
 use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
-use mez_agent::{ApprovalPolicy, AutoSizingRoutingPolicy, PermissionPreset};
+use mez_agent::{AgentShellSession, ApprovalPolicy, AutoSizingRoutingPolicy, PermissionPreset};
+
+/// Maximum model transcript entries rendered when restart hydration has no presentation log.
+const AGENT_RESTART_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;
+/// Maximum model transcript bytes read for restart hydration fallback.
+const AGENT_RESTART_TRANSCRIPT_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Validated saved-session metadata ready for one transactional `/resume` commit.
 #[derive(Debug, Clone)]
@@ -155,39 +160,14 @@ impl RuntimeSessionService {
             if runtime_pane_by_id(&self.session, &metadata.pane_id).is_err() {
                 continue;
             }
+            let pane_id = metadata.pane_id.clone();
+            let conversation_id = metadata.conversation_id.clone();
             let visibility = runtime_agent_session_metadata_visibility(&metadata.visibility)?;
             let log_level = AgentLogLevel::parse(&metadata.log_level).ok_or_else(|| {
                 MezError::invalid_args("agent session metadata log level is invalid")
             })?;
             let running_turn_id = metadata.running_turn_id.clone();
             let running_turn_kind = metadata.running_turn_kind.clone();
-            let session = self
-                .agent_shell_store_mut()
-                .ensure_session(metadata.pane_id.clone())?;
-            session.session_id = metadata.conversation_id.clone();
-            session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
-            session.visibility = visibility;
-            session.running_turn_id = None;
-            session.transcript_entries = metadata.transcript_entries;
-            session.ephemeral = false;
-            session.ephemeral_transcript_source_conversation_id = None;
-            session.ephemeral_transcript_source_entries = 0;
-            session.log_level = log_level;
-            session.directive = metadata.directive.clone();
-            if let Some(profile) = metadata.pane_model_profile.as_ref() {
-                self.integration
-                    .model_profile_overrides_mut()
-                    .pane_profiles
-                    .insert(metadata.pane_id.clone(), profile.clone());
-            } else {
-                self.integration
-                    .model_profile_overrides_mut()
-                    .pane_profiles
-                    .remove(&metadata.pane_id);
-            }
-            self.set_agent_planning_enabled(&metadata.pane_id, metadata.planning_enabled);
-            self.set_agent_response_style(&metadata.pane_id, metadata.response_style.clone());
-            self.set_agent_routing_override(&metadata.pane_id, metadata.routing_enabled);
             let root_routing_policy = metadata
                 .root_routing_policy
                 .as_deref()
@@ -199,53 +179,64 @@ impl RuntimeSessionService {
                     })
                 })
                 .transpose()?;
-            self.set_agent_root_routing_policy_override(&metadata.pane_id, root_routing_policy);
-            self.restore_agent_permission_overrides_from_metadata(
-                &metadata.pane_id,
-                metadata.pane_permission_preset_override.as_deref(),
-                metadata.pane_approval_policy_override.as_deref(),
-                metadata.approval_policy.as_deref(),
-                "agent-session-restore",
+            let (permission_preset, approval_policy) = self
+                .prepare_agent_permission_overrides_from_metadata(
+                    metadata.pane_permission_preset_override.as_deref(),
+                    metadata.pane_approval_policy_override.as_deref(),
+                    metadata.approval_policy.as_deref(),
+                )?;
+            let prompt_history = match store.prompt_history(&conversation_id) {
+                Ok(history) => history,
+                Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
+                Err(error) => return Err(error),
+            };
+            let presentation_entries = store.inspect_presentation(&conversation_id)?;
+            let transcript_fallback_entries =
+                if presentation_entries.is_empty() && metadata.transcript_entries > 0 {
+                    match store.inspect_recent(
+                        &conversation_id,
+                        AGENT_RESTART_TRANSCRIPT_REPLAY_ENTRIES,
+                        AGENT_RESTART_TRANSCRIPT_REPLAY_BYTES,
+                    ) {
+                        Ok(entries) => entries,
+                        Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {
+                            Vec::new()
+                        }
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    Vec::new()
+                };
+            let descriptor = self.find_pane_descriptor(&pane_id).ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "agent session restore target pane not found",
+                )
+            })?;
+            let fresh_screen = mez_terminal::TerminalScreen::new_with_history_config(
+                descriptor.size,
+                self.terminal_history_limit(),
+                self.terminal_history_rotate_lines(),
             )?;
-            if let Some(working_directory) = metadata.working_directory.as_ref() {
-                self.set_pane_current_working_directory(
-                    metadata.pane_id.clone(),
-                    PathBuf::from(working_directory),
-                );
-            }
-            let token_usage_by_model = runtime_agent_token_usage_by_model_from_metadata(&metadata);
-            self.replace_restored_agent_token_usage(
-                &metadata.conversation_id,
-                &metadata.pane_id,
-                token_usage_by_model,
-            );
-            self.restore_agent_context_usage(
-                &metadata.conversation_id,
-                metadata.context_usage.clone(),
-                metadata.context_usage_snapshot,
-            );
-            self.restore_agent_latest_request_usage(
-                &metadata.conversation_id,
-                metadata.latest_request_usage.clone(),
-            );
-            self.record_pane_transcript_ref(
-                &metadata.pane_id,
-                format!(
-                    "transcript:{}:{}",
-                    metadata.pane_id, metadata.conversation_id
-                ),
-            )?;
-            self.reload_agent_prompt_history_for_pane(&metadata.pane_id)?;
-            let presentation_entries = store.inspect_presentation(&metadata.conversation_id)?;
-            self.replay_agent_presentation_entries_to_terminal_buffer(
-                &metadata.pane_id,
-                &presentation_entries,
-            )?;
-            if let Some(turn_id) = running_turn_id {
-                self.agent_turn_ledger_mut().start_turn(AgentTurnRecord {
-                    turn_id: turn_id.clone(),
-                    agent_id: format!("agent-{}", metadata.pane_id),
-                    pane_id: metadata.pane_id.clone(),
+            let mut target_session = AgentShellSession {
+                session_id: conversation_id.clone(),
+                pane_id: pane_id.clone(),
+                prompt_cache_lineage_id: metadata.prompt_cache_lineage_id.clone(),
+                visibility,
+                running_turn_id: None,
+                transcript_entries: metadata.transcript_entries,
+                log_level,
+                directive: metadata.directive.clone(),
+                ephemeral: false,
+                ephemeral_transcript_source_conversation_id: None,
+                ephemeral_transcript_source_entries: 0,
+            };
+            let staged_ledger = if let Some(turn_id) = running_turn_id.as_deref() {
+                let mut ledger = self.agent_turn_ledger().clone();
+                ledger.start_turn(AgentTurnRecord {
+                    turn_id: turn_id.to_string(),
+                    agent_id: format!("agent-{pane_id}"),
+                    pane_id: pane_id.clone(),
                     trigger: AgentTurnTrigger::ScheduledTask,
                     started_at_unix_seconds: restored_at,
                     policy_profile: "agent-session-restore".to_string(),
@@ -255,28 +246,175 @@ impl RuntimeSessionService {
                     cooperation_mode: None,
                     initial_capability: None,
                 })?;
-                self.agent_turn_ledger_mut()
-                    .finish_turn(&turn_id, AgentTurnState::Interrupted)?;
-                if running_turn_kind.as_deref() == Some("routed-workflow") {
-                    let diagnostic = "routed workflow was interrupted by runtime restart; retry requires a fresh user action";
-                    let sequence = next_transcript_sequence(&store, &metadata.conversation_id)?;
+                ledger.finish_turn(turn_id, AgentTurnState::Interrupted)?;
+                Some(ledger)
+            } else {
+                None
+            };
+            let diagnostic = (running_turn_id.is_some()
+                && running_turn_kind.as_deref() == Some("routed-workflow"))
+            .then_some(
+                "routed workflow was interrupted by runtime restart; retry requires a fresh user action",
+            );
+            if diagnostic.is_some() {
+                target_session.transcript_entries =
+                    target_session.transcript_entries.saturating_add(1);
+            }
+            let diagnostic_already_recorded = if let (Some(turn_id), Some(diagnostic)) =
+                (running_turn_id.as_deref(), diagnostic)
+            {
+                let recent = match store.inspect_recent(
+                    &conversation_id,
+                    AGENT_RESTART_TRANSCRIPT_REPLAY_ENTRIES,
+                    AGENT_RESTART_TRANSCRIPT_REPLAY_BYTES,
+                ) {
+                    Ok(entries) => entries,
+                    Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {
+                        Vec::new()
+                    }
+                    Err(error) => return Err(error),
+                };
+                recent.iter().any(|entry| {
+                    entry.turn_id == turn_id
+                        && entry.role == TranscriptRole::System
+                        && entry.content == diagnostic
+                })
+            } else {
+                false
+            };
+            let diagnostic_already_presented = diagnostic.is_some_and(|diagnostic| {
+                presentation_entries.iter().any(|entry| {
+                    entry.source_text.as_deref() == Some(diagnostic)
+                        || entry
+                            .display_lines
+                            .iter()
+                            .any(|line| line.contains(diagnostic))
+                })
+            });
+
+            let previous_session = self.agent_shell_store().get(&pane_id).cloned();
+            let previous_agent_screen = self
+                .agent_pane_screen_state(&pane_id)
+                .map(|state| (state.conversation_id().to_string(), state.screen().clone()));
+            let previous_presentation = self.snapshot_agent_resume_presentation(&pane_id);
+            let previous_transcript_refs = self.persistence.pane_transcript_refs(&pane_id);
+            let previous_working_directory = self.pane_current_working_directory(&pane_id);
+            let hydrate_result = (|| -> Result<()> {
+                self.agent_shell_store_mut()
+                    .restore_session(&pane_id, target_session)?;
+                self.presentation.remove_agent_presentation_state(&pane_id);
+                self.set_agent_pane_screen(&pane_id, &conversation_id, fresh_screen);
+                self.set_agent_prompt_history_for_pane(&pane_id, prompt_history);
+                if !self.replay_agent_presentation_entries_to_terminal_buffer(
+                    &pane_id,
+                    &presentation_entries,
+                )? && !transcript_fallback_entries.is_empty()
+                {
+                    self.replay_agent_transcript_fallback_to_terminal_buffer(
+                        &pane_id,
+                        Self::runtime_resume_transcript_display(
+                            &conversation_id,
+                            usize::try_from(metadata.transcript_entries).unwrap_or(usize::MAX),
+                            &transcript_fallback_entries,
+                        ),
+                    )?;
+                }
+                self.record_pane_transcript_ref(
+                    &pane_id,
+                    format!("transcript:{pane_id}:{conversation_id}"),
+                )?;
+                if let Some(working_directory) = metadata.working_directory.as_ref() {
+                    self.set_pane_current_working_directory(
+                        pane_id.clone(),
+                        PathBuf::from(working_directory),
+                    );
+                }
+
+                if let (Some(turn_id), Some(diagnostic)) = (running_turn_id.as_deref(), diagnostic)
+                    && !diagnostic_already_recorded
+                {
+                    let sequence = next_transcript_sequence(&store, &conversation_id)?;
                     store.append(&TranscriptEntry {
-                        conversation_id: metadata.conversation_id.clone(),
+                        conversation_id: conversation_id.clone(),
                         sequence,
                         created_at_unix_seconds: restored_at,
                         role: TranscriptRole::System,
-                        turn_id: turn_id.clone(),
-                        agent_id: format!("agent-{}", metadata.pane_id),
-                        pane_id: metadata.pane_id.clone(),
+                        turn_id: turn_id.to_string(),
+                        agent_id: format!("agent-{pane_id}"),
+                        pane_id: pane_id.clone(),
                         content: diagnostic.to_string(),
                     })?;
-                    self.agent_shell_store_mut()
-                        .record_transcript_entries(&metadata.pane_id, 1)?;
+                }
+                if let Some(diagnostic) = diagnostic
+                    && !diagnostic_already_presented
+                {
                     self.append_agent_status_text_to_terminal_buffer(
-                        &metadata.pane_id,
+                        &pane_id,
                         &format!("agent: {diagnostic}"),
                     )?;
                 }
+
+                if let Some(profile) = metadata.pane_model_profile.as_ref() {
+                    self.integration
+                        .model_profile_overrides_mut()
+                        .pane_profiles
+                        .insert(pane_id.clone(), profile.clone());
+                } else {
+                    self.integration
+                        .model_profile_overrides_mut()
+                        .pane_profiles
+                        .remove(&pane_id);
+                }
+                self.set_agent_planning_enabled(&pane_id, metadata.planning_enabled);
+                self.set_agent_response_style(&pane_id, metadata.response_style.clone());
+                self.set_agent_routing_override(&pane_id, metadata.routing_enabled);
+                self.set_agent_root_routing_policy_override(&pane_id, root_routing_policy);
+                self.set_pane_permission_preset_override(&pane_id, permission_preset);
+                self.set_pane_approval_policy_override(&pane_id, approval_policy);
+                let token_usage_by_model =
+                    runtime_agent_token_usage_by_model_from_metadata(&metadata);
+                self.replace_restored_agent_token_usage(
+                    &conversation_id,
+                    &pane_id,
+                    token_usage_by_model,
+                );
+                self.restore_agent_context_usage(
+                    &conversation_id,
+                    metadata.context_usage.clone(),
+                    metadata.context_usage_snapshot,
+                );
+                self.restore_agent_latest_request_usage(
+                    &conversation_id,
+                    metadata.latest_request_usage.clone(),
+                );
+                if let Some(ledger) = staged_ledger {
+                    *self.agent_turn_ledger_mut() = ledger;
+                }
+                Ok(())
+            })();
+            if let Err(error) = hydrate_result {
+                if let Some(previous_session) = previous_session {
+                    self.agent_shell_store_mut()
+                        .restore_session(&pane_id, previous_session)?;
+                } else {
+                    self.agent_shell_store_mut().remove_session(&pane_id);
+                }
+                if let Some((conversation_id, screen)) = previous_agent_screen {
+                    self.set_agent_pane_screen(&pane_id, conversation_id, screen);
+                } else {
+                    self.remove_agent_pane_screen(&pane_id);
+                }
+                self.restore_agent_resume_presentation(&pane_id, previous_presentation);
+                self.persistence
+                    .replace_pane_transcript_refs(&pane_id, previous_transcript_refs);
+                if let Some(path) = previous_working_directory {
+                    self.set_pane_current_working_directory(&pane_id, path);
+                } else {
+                    self.remove_pane_current_working_directory(&pane_id);
+                }
+                return Err(error);
+            }
+            if running_turn_id.is_some() {
                 interrupted = interrupted.saturating_add(1);
             }
             restored = restored.saturating_add(1);
@@ -494,32 +632,6 @@ impl RuntimeSessionService {
         );
         self.restore_agent_latest_request_usage(conversation_id, metadata.latest_request_usage);
         let _ = self.checkpoint_agent_session_metadata();
-        Ok(())
-    }
-
-    /// Restores explicit pane-owned permission fields from session metadata.
-    ///
-    /// New checkpoints persist sparse pane fields directly. Older checkpoints
-    /// stored one effective approval policy in the legacy field, so accepted
-    /// legacy values are confined to the rebound pane and cannot narrow a
-    /// stronger configured default.
-    pub(super) fn restore_agent_permission_overrides_from_metadata(
-        &mut self,
-        pane_id: &str,
-        permission_preset: Option<&str>,
-        approval_policy: Option<&str>,
-        legacy_approval_policy: Option<&str>,
-        source: &str,
-    ) -> Result<()> {
-        let (permission_preset, approval_policy) = self
-            .prepare_agent_permission_overrides_from_metadata(
-                permission_preset,
-                approval_policy,
-                legacy_approval_policy,
-            )?;
-        self.set_pane_permission_preset_override(pane_id, permission_preset);
-        self.set_pane_approval_policy_override(pane_id, approval_policy);
-        self.reconcile_pending_agent_approvals_after_pane_permission_change(pane_id, source)?;
         Ok(())
     }
 

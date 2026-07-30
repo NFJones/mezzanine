@@ -622,6 +622,35 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
             String::from("/directive Prefer focused tests."),
         ]
     );
+    let first_projection = restored
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        first_projection.contains("saved restart context"),
+        "{first_projection}"
+    );
+    assert_eq!(
+        first_projection.matches("saved restart context").count(),
+        1,
+        "{first_projection}"
+    );
+
+    let repeated_count = restored
+        .restore_agent_sessions_from_transcript_store()
+        .unwrap();
+    assert_eq!(repeated_count, 1);
+    let repeated_projection = restored
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        repeated_projection.matches("saved restart context").count(),
+        1,
+        "{repeated_projection}"
+    );
     let context = restored
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
@@ -678,6 +707,201 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
 
     assert_eq!(restored, 0);
     assert!(service.agent_shell_store().get("%1").is_none());
+}
+
+/// Verifies restart hydration creates an independent blank agent surface for
+/// a hidden zero-entry conversation instead of leaving the pane without a
+/// conversation-bound log until the user reenters agent mode.
+#[test]
+fn runtime_restart_hydration_creates_blank_surface_for_hidden_empty_session() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-empty-restore"));
+    let mezzanine_session_id = service.session().id.as_str().to_string();
+    transcript_store
+        .save_agent_session_metadata(
+            &mezzanine_session_id,
+            &[mez_agent::transcript::AgentSessionMetadata {
+                mezzanine_session_id: mezzanine_session_id.clone(),
+                pane_id: "%1".to_string(),
+                conversation_id: "empty-restored".to_string(),
+                prompt_cache_lineage_id: "lineage-empty-restored".to_string(),
+                visibility: "hidden".to_string(),
+                running_turn_id: None,
+                running_turn_kind: None,
+                transcript_entries: 0,
+                log_level: "normal".to_string(),
+                pane_model_profile: None,
+                planning_enabled: false,
+                response_style: None,
+                directive: None,
+                routing_enabled: None,
+                root_routing_policy: None,
+                approval_policy: None,
+                pane_permission_preset_override: None,
+                pane_approval_policy_override: None,
+                working_directory: None,
+                project_root: None,
+                token_usage: Default::default(),
+                token_usage_by_model: Default::default(),
+                context_usage: None,
+                context_usage_snapshot: None,
+                latest_request_usage: None,
+            }],
+        )
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let mut process_screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 120).unwrap();
+    process_screen.feed(b"process surface remains visible");
+    service.set_process_pane_screen("%1", process_screen);
+
+    let restored = service
+        .restore_agent_sessions_from_transcript_store()
+        .unwrap();
+
+    assert_eq!(restored, 1);
+    let session = service.agent_shell_store().get("%1").unwrap();
+    assert_eq!(session.session_id, "empty-restored");
+    assert_eq!(session.visibility, AgentShellVisibility::Hidden);
+    let agent_state = service.agent_pane_screen_state("%1").unwrap();
+    assert_eq!(agent_state.conversation_id(), "empty-restored");
+    assert!(
+        agent_state
+            .screen()
+            .normal_content_lines()
+            .iter()
+            .all(|line| line.trim().is_empty())
+    );
+    let process_text = service
+        .presented_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(process_text.contains("process surface remains visible"));
+}
+
+/// Verifies a malformed durable presentation cannot leave a partially rebound
+/// restart session, replacement screen, transcript reference, or working
+/// directory after the replay target check rejects hydration.
+#[test]
+fn runtime_restart_hydration_failure_restores_prior_pane_state() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-restore-rollback"));
+    let mezzanine_session_id = service.session().id.as_str().to_string();
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "restore-target".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-restore-target".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "target restart context".to_string(),
+        })
+        .unwrap();
+    transcript_store
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
+            conversation_id: "restore-target".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            pane_id: "%1".to_string(),
+            turn_id: None,
+            terminal_width: 80,
+            style_names: vec!["assistant".to_string()],
+            display_lines: vec!["target restart projection".to_string()],
+            copy_lines: vec!["target restart projection".to_string()],
+            ansi_text: None,
+            source_text: None,
+            source_content_type: None,
+        })
+        .unwrap();
+    transcript_store
+        .save_agent_session_metadata(
+            &mezzanine_session_id,
+            &[mez_agent::transcript::AgentSessionMetadata {
+                mezzanine_session_id: mezzanine_session_id.clone(),
+                pane_id: "%1".to_string(),
+                conversation_id: "restore-target".to_string(),
+                prompt_cache_lineage_id: "lineage-restore-target".to_string(),
+                visibility: "visible".to_string(),
+                running_turn_id: None,
+                running_turn_kind: None,
+                transcript_entries: 1,
+                log_level: "normal".to_string(),
+                pane_model_profile: Some("target-profile".to_string()),
+                planning_enabled: true,
+                response_style: Some("concise".to_string()),
+                directive: Some("target directive".to_string()),
+                routing_enabled: Some(true),
+                root_routing_policy: Some("in-place".to_string()),
+                approval_policy: None,
+                pane_permission_preset_override: Some("auto".to_string()),
+                pane_approval_policy_override: Some("full-access".to_string()),
+                working_directory: Some("/target/restore/directory".to_string()),
+                project_root: None,
+                token_usage: Default::default(),
+                token_usage_by_model: Default::default(),
+                context_usage: None,
+                context_usage_snapshot: None,
+                latest_request_usage: None,
+            }],
+        )
+        .unwrap();
+    let presentation_path = transcript_store
+        .presentation_path("restore-target")
+        .unwrap();
+    let corrupt = fs::read_to_string(&presentation_path).unwrap().replacen(
+        "restore-target",
+        "wrong-restore-target",
+        1,
+    );
+    fs::write(presentation_path, corrupt).unwrap();
+    service.set_agent_transcript_store(transcript_store);
+    let prior_session = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .clone();
+    let mut prior_screen = TerminalScreen::new(Size::new(80, 24).unwrap(), 120).unwrap();
+    prior_screen.feed(b"prior restart projection");
+    service.set_agent_pane_screen("%1", &prior_session.session_id, prior_screen);
+    service
+        .record_pane_transcript_ref("%1", "transcript:%1:prior")
+        .unwrap();
+    let prior_directory = temp_root("runtime-agent-restore-prior-directory");
+    service.set_pane_current_working_directory("%1", prior_directory.clone());
+    let screen_before = service.agent_pane_screen("%1").unwrap().clone();
+    let refs_before = service.persistence.pane_transcript_refs("%1");
+
+    let error = service
+        .restore_agent_sessions_from_transcript_store()
+        .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("presentation replay target does not match"),
+        "{error}"
+    );
+    assert_eq!(service.agent_shell_store().get("%1"), Some(&prior_session));
+    assert_eq!(service.agent_pane_screen("%1"), Some(&screen_before));
+    assert_eq!(service.persistence.pane_transcript_refs("%1"), refs_before);
+    assert_eq!(
+        service.pane_current_working_directory("%1").as_deref(),
+        Some(prior_directory.as_path())
+    );
+    assert!(
+        !service
+            .integration
+            .model_profile_overrides()
+            .pane_profiles
+            .contains_key("%1")
+    );
+    assert!(!service.agent_planning_enabled("%1"));
+    assert_eq!(service.agent_response_style("%1"), None);
+    assert_eq!(service.agent_routing_override("%1"), None);
+    assert_eq!(service.agent_root_routing_policy_override("%1"), None);
+    assert_eq!(service.integration.pane_permission_override("%1"), None);
 }
 
 /// Verifies crash-recovered active metadata never resumes a previously running
@@ -814,6 +1038,35 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
         })
         .count();
     assert_eq!(restart_diagnostics, 1);
+
+    let repeated_count = restored
+        .restore_agent_sessions_from_transcript_store()
+        .unwrap();
+    assert_eq!(repeated_count, 1);
+    let repeated_agent_text = restored
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        repeated_agent_text
+            .matches("routed workflow was interrupted")
+            .count(),
+        1,
+        "{repeated_agent_text}"
+    );
+    let repeated_diagnostics = transcript_store
+        .inspect(&conversation_id)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| {
+            entry.role == mez_agent::transcript::TranscriptRole::System
+                && entry
+                    .content
+                    .contains("routed workflow was interrupted by runtime restart")
+        })
+        .count();
+    assert_eq!(repeated_diagnostics, 1);
 }
 
 /// Verifies runtime event fanout batches all ready event notifications for one

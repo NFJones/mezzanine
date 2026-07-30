@@ -728,6 +728,21 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Replaces one pane's prompt history with previously loaded durable state.
+    pub(crate) fn set_agent_prompt_history_for_pane(
+        &mut self,
+        pane_id: &str,
+        history: Vec<String>,
+    ) {
+        self.presentation
+            .agent_prompt_inputs
+            .entry(pane_id.to_string())
+            .or_insert_with(default_runtime_agent_prompt_input)
+            .prompt
+            .buffer
+            .set_history(history);
+    }
+
     /// Runs the set agent prompt display lines operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -268,7 +268,11 @@ impl RuntimeSessionService {
             )? {
                 self.set_agent_prompt_display_lines(
                     pane_id,
-                    Self::runtime_resume_transcript_display(&summary, &entries),
+                    Self::runtime_resume_transcript_display(
+                        &summary.conversation_id,
+                        summary.entries,
+                        &entries,
+                    ),
                 )?;
             }
             self.restore_agent_resume_directory(pane_id, resume_directory.as_deref())?;
@@ -591,8 +595,9 @@ impl RuntimeSessionService {
 
     /// Formats a resumed transcript as prompt display lines so the user can
     /// pick up the saved conversation with visible context in the pane.
-    fn runtime_resume_transcript_display(
-        summary: &ConversationSummary,
+    pub(crate) fn runtime_resume_transcript_display(
+        conversation_id: &str,
+        transcript_entries: usize,
         entries: &[TranscriptEntry],
     ) -> Vec<String> {
         let mut lines = vec!["Resumed Agent Session".to_string()];
@@ -602,8 +607,8 @@ impl RuntimeSessionService {
         }
         lines.push(format!(
             "Conversation ID: {} | Entries: {} | Resumed: yes",
-            json_escape(&summary.conversation_id),
-            summary.entries
+            json_escape(conversation_id),
+            transcript_entries
         ));
         lines.push(String::new());
         for entry in entries {

@@ -510,6 +510,22 @@ impl RuntimeSessionService {
         result
     }
 
+    /// Replays synthesized transcript fallback lines without persisting them as new presentation.
+    pub(crate) fn replay_agent_transcript_fallback_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        display_lines: Vec<String>,
+    ) -> Result<()> {
+        self.presentation
+            .agent_presentation_replay_panes
+            .insert(pane_id.to_string());
+        let result = self.set_agent_prompt_display_lines(pane_id, display_lines);
+        self.presentation
+            .agent_presentation_replay_panes
+            .remove(pane_id);
+        result
+    }
+
     /// Rebuilds a resized agent pane from complete durable presentation source.
     ///
     /// The rebuild is intentionally limited to histories that contain semantic
