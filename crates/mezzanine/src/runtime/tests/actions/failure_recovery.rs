@@ -228,20 +228,25 @@ fn runtime_removed_pane_cleanup_terminalizes_running_turn() {
     );
 }
 
-/// Verifies reconciliation treats a missing layout pane as a fenced late owner
-/// instead of attempting an agent-status presentation against it.
+/// Verifies reconciliation treats a missing layout pane as terminal even when
+/// its provider task still appears to own a live progress path.
 ///
 /// This defensive path covers a pane-removal event that reaches the actor
-/// before normal runtime cleanup. Reconciliation must settle the stale turn,
-/// clear its pane state, and remain a successful runtime event application.
+/// before normal runtime cleanup. Pane liveness must be checked before provider
+/// ownership, otherwise the retained provider bit hides the missing pane from
+/// unreachable-turn recovery and a later callback can present to that pane.
 #[test]
-fn runtime_unreachable_turn_reconciliation_fences_missing_pane() {
+fn runtime_reconciliation_fences_missing_pane_with_provider_progress() {
     let (mut service, pane_id, turn_id) = removable_pane_running_turn_fixture();
+    assert!(service.queue_agent_provider_task(turn_id.clone()));
     service
         .session
         .kill_pane_session_owned(Some(&pane_id), true)
         .unwrap();
 
+    assert!(
+        service.idle_cleanup_timer_needed_with_actor_progress(&std::collections::BTreeSet::new())
+    );
     assert_eq!(
         service
             .reconcile_agent_runtime_progress_paths_with_actor_progress(
@@ -260,6 +265,50 @@ fn runtime_unreachable_turn_reconciliation_fences_missing_pane() {
         Some(AgentTurnState::Failed)
     );
     assert!(service.agent_shell_store().get(&pane_id).is_none());
+}
+
+/// Verifies generic turn settlement cannot recreate or present through an
+/// agent shell session after the layout pane has disappeared.
+///
+/// Provider and routed-workflow completion paths can settle a turn without a
+/// running shell binding. A retained conversation is not sufficient evidence
+/// of pane ownership, so this path must return the removed session only as a
+/// caller snapshot and leave no pane-local runtime state behind.
+#[test]
+fn runtime_non_shell_settlement_does_not_recreate_missing_pane_session() {
+    let (mut service, pane_id, turn_id) = removable_pane_running_turn_fixture();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    service
+        .session
+        .kill_pane_session_owned(Some(&pane_id), true)
+        .unwrap();
+
+    let removed_session = service
+        .finish_agent_turn_without_shell_session(&turn, AgentTurnState::Failed)
+        .unwrap();
+
+    assert_eq!(
+        removed_session
+            .as_ref()
+            .map(|session| session.pane_id.as_str()),
+        Some(pane_id.as_str())
+    );
+    assert!(service.agent_shell_store().get(&pane_id).is_none());
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
 }
 
 /// Verifies unrecovered failures explain when recovery is unavailable because

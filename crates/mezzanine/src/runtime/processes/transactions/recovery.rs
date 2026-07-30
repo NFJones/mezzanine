@@ -7,6 +7,58 @@ use super::{
 };
 
 impl RuntimeSessionService {
+    /// Terminalizes every live agent turn whose layout pane no longer exists.
+    ///
+    /// Pane ownership is checked before provider, scheduler, shell, approval,
+    /// or actor progress because those asynchronous ownership bits can outlive
+    /// the pane they were created for. Cleanup is pane-scoped so every queued,
+    /// running, and blocked sibling is settled through the same removal
+    /// boundary.
+    pub(crate) fn fail_agent_turns_for_missing_panes(&mut self) -> Result<usize> {
+        let missing_pane_ids = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| {
+                matches!(
+                    turn.state,
+                    AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+                ) && self.find_pane_descriptor(&turn.pane_id).is_none()
+            })
+            .map(|turn| turn.pane_id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut failed = 0usize;
+        for pane_id in missing_pane_ids {
+            let live_turns = self
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .filter(|turn| {
+                    turn.pane_id == pane_id
+                        && matches!(
+                            turn.state,
+                            AgentTurnState::Queued
+                                | AgentTurnState::Running
+                                | AgentTurnState::Blocked
+                        )
+                })
+                .count();
+            self.cleanup_removed_pane_runtime_state(&pane_id)?;
+            failed = failed.saturating_add(live_turns);
+        }
+        Ok(failed)
+    }
+
+    /// Reports whether live agent work has lost its layout-pane owner.
+    pub(crate) fn missing_pane_agent_turn_cleanup_needed(&self) -> bool {
+        self.agent_turn_ledger().turns().iter().any(|turn| {
+            matches!(
+                turn.state,
+                AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+            ) && self.find_pane_descriptor(&turn.pane_id).is_none()
+        })
+    }
+
     /// Requeues pending shell dispatches that have no live transaction and are
     /// waiting behind readiness state that can be safely retried.
     pub(crate) fn recover_stranded_agent_shell_dispatches(&mut self) -> Result<usize> {

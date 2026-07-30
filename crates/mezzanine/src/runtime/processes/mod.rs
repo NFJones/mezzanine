@@ -1225,6 +1225,7 @@ impl RuntimeSessionService {
         self.require_live()?;
         let pane_id = pane_id.into();
         if self.find_pane_descriptor(&pane_id).is_none() {
+            self.process.detached_pane_processes.remove(&pane_id);
             return Ok(None);
         }
         let live_primary_pid = self.primary_pid_for_live_pane_process(&pane_id);
@@ -1239,6 +1240,7 @@ impl RuntimeSessionService {
         } else {
             primary_pid
         };
+        self.process.detached_pane_processes.remove(&pane_id);
         self.apply_exited_pane_process(
             ExitedPaneProcess {
                 pane_id: pane_id.clone(),
@@ -1247,10 +1249,7 @@ impl RuntimeSessionService {
             },
             false,
         )
-        .map(|update| {
-            self.process.detached_pane_processes.remove(&pane_id);
-            Some(update)
-        })
+        .map(Some)
     }
 
     /// Applies one process lifecycle failure delivered by an async watcher.
@@ -1980,10 +1979,12 @@ impl RuntimeSessionService {
 
     /// Returns whether an adapter event belongs to the currently owned process instance.
     pub(crate) fn pane_process_instance_is_current(&self, instance: &PaneProcessInstance) -> bool {
-        self.process
-            .detached_pane_processes
-            .get(&instance.pane_id)
-            .is_some_and(|process| process.generation == instance.generation)
+        self.find_pane_descriptor(&instance.pane_id).is_some()
+            && self
+                .process
+                .detached_pane_processes
+                .get(&instance.pane_id)
+                .is_some_and(|process| process.generation == instance.generation)
     }
 
     /// Returns the current adapter-owned process identity for one pane.
@@ -2152,6 +2153,20 @@ impl RuntimeSessionService {
     /// deferred I/O, and subagent bookkeeping that would otherwise make a
     /// closed pane appear partially alive to later agent/session surfaces.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) -> Result<()> {
+        let pane_present = self.find_pane_descriptor(pane_id).is_some();
+        if !pane_present && let Some(process) = self.process.detached_pane_processes.remove(pane_id)
+        {
+            self.persistence.ensure_pane_termination(
+                pane_id.to_string(),
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: PaneProcessInstance {
+                        pane_id: pane_id.to_string(),
+                        generation: process.generation,
+                    },
+                    effect: PaneProcessIoEffect::Terminate { force: true },
+                },
+            );
+        }
         let has_live_agent_turn = self.agent_turn_ledger().turns().iter().any(|turn| {
             turn.pane_id == pane_id
                 && matches!(

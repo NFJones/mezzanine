@@ -60,6 +60,23 @@ impl RuntimePersistenceComponent {
             .insert(pane_id.into(), effect);
     }
 
+    /// Retains an already-requested termination or queues the supplied fallback.
+    ///
+    /// Pane removal normally requests termination before cleanup. Defensive
+    /// cleanup can instead discover an adapter-owned process after its layout
+    /// pane has already disappeared; in that case the fallback guarantees the
+    /// retired worker still receives one exact-generation termination without
+    /// replacing an earlier graceful-versus-force decision.
+    pub(crate) fn ensure_pane_termination(
+        &mut self,
+        pane_id: impl Into<String>,
+        effect: RuntimeSideEffect,
+    ) {
+        self.queued_pane_termination_effects
+            .entry(pane_id.into())
+            .or_insert(effect);
+    }
+
     /// Drains input, resize, and termination effects in canonical order.
     pub(crate) fn take_pane_io_effects(&mut self) -> Vec<RuntimeSideEffect> {
         let mut effects = std::mem::take(&mut self.queued_pane_input_effects);

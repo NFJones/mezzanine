@@ -601,6 +601,11 @@ impl RuntimeSessionService {
                 self.finish_agent_turn(pane_id, &turn_id, AgentTurnState::Interrupted)?
             } else {
                 self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "stopped agent turn no longer has a live pane shell session",
+                        )
+                    })?
             }
         };
         if let Some(loop_turn) = self.remove_agent_loop_turn(&turn_id)

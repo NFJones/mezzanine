@@ -683,9 +683,9 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
 
 /// Verifies that pane close commands produce async termination side effects
 /// after pane process ownership has moved out of the manager. A foreground
-/// process observation can race with that termination after the pane has left
-/// the layout, so current-generation metadata must become a harmless no-op
-/// rather than failing the actor with `pane not found`.
+/// process callback can race with that termination after the pane has left the
+/// layout, so every event from the retired current generation must become a
+/// harmless no-op rather than failing the actor with `pane not found`.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_drains_service_deferred_termination_after_pane_handoff() {
     let mut service = test_service();
@@ -724,8 +724,29 @@ async fn async_actor_drains_service_deferred_termination_after_pane_handoff() {
             .unwrap();
         assert!(output.contains("closed=true"));
 
-        let mut late_metadata = RuntimeEventBatch::new();
-        late_metadata.push(RuntimeEvent::PaneProcess {
+        let mut late_events = RuntimeEventBatch::new();
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::Output {
+                pane_id: instance.pane_id.clone(),
+                bytes: b"late removed-pane output\n".to_vec(),
+            }),
+        });
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::InputWritten {
+                pane_id: instance.pane_id.clone(),
+                bytes: 5,
+            }),
+        });
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::Resized {
+                pane_id: instance.pane_id.clone(),
+                size: Size::new(70, 20).unwrap(),
+            }),
+        });
+        late_events.push(RuntimeEvent::PaneProcess {
             instance: instance.clone(),
             event: PaneProcessEvent::Pane(PaneEvent::ForegroundProcess {
                 pane_id: instance.pane_id.clone(),
@@ -734,8 +755,29 @@ async fn async_actor_drains_service_deferred_termination_after_pane_handoff() {
                 current_working_directory: Some("/tmp/removed-pane".to_string()),
             }),
         });
-        let report = handle.submit_runtime_events(late_metadata).await.unwrap();
-        assert_eq!(report.accepted, 1);
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: instance.clone(),
+            event: PaneProcessEvent::ForegroundProcessObservation(
+                crate::runtime::PaneForegroundProcessObservation {
+                    observation_id: "late-removed-pane-observation".to_string(),
+                    process_name: Some("cat".to_string()),
+                    process_group_id: Some(process.primary_pid()),
+                    current_working_directory: Some("/tmp/removed-pane".to_string()),
+                    error: None,
+                },
+            ),
+        });
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: instance.clone(),
+            event: PaneProcessEvent::Process(ProcessEvent::Exited {
+                pane_id: instance.pane_id.clone(),
+                primary_pid: Some(process.primary_pid()),
+                exit_code: Some(0),
+                signal: None,
+            }),
+        });
+        let report = handle.submit_runtime_events(late_events).await.unwrap();
+        assert_eq!(report.accepted, 6);
         assert_eq!(report.applied, 0);
 
         assert_eq!(
@@ -744,15 +786,215 @@ async fn async_actor_drains_service_deferred_termination_after_pane_handoff() {
                 .await
                 .unwrap(),
             vec![RuntimeSideEffect::TerminatePane {
-                pane_id: instance.pane_id,
+                pane_id: instance.pane_id.clone(),
                 force: true,
             }]
         );
         let _ = process.terminate(Duration::from_millis(10));
         let _ = remaining_process.terminate(Duration::from_millis(10));
         let _ = handle.shutdown().await.unwrap();
+        instance
     };
 
-    let ((), mut exit) = tokio::join!(client, actor.run());
+    let (retired_instance, mut exit) = tokio::join!(client, actor.run());
+    assert!(
+        !exit
+            .service
+            .pane_process_instance_is_current(&retired_instance)
+    );
+    assert!(exit.service.terminate_all_pane_processes().is_ok());
+}
+
+/// Verifies routed-child terminal cleanup retires its adapter process before a
+/// parent recovery continuation can be driven by late worker callbacks.
+///
+/// This reproduces the crash ordering with a blocked routed parent, a managed
+/// child whose process has crossed the async adapter boundary, terminal child
+/// settlement that closes its pane, and every pane-worker callback family
+/// arriving afterward. The callbacks must remain accepted no-ops and recovery
+/// must retain exactly one provider continuation for the parent.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_fences_late_routed_child_events_during_parent_recovery() {
+    let mut service = test_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(1)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let mut screen = mez_terminal::TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service
+        .execute_agent_shell_command(&primary, "/loop --limit 3 recover from the routed child")
+        .unwrap();
+    assert!(start.contains("state=running"), "{start}");
+    let parent_turn_id = service
+        .agent_loop_turns_for_tests()
+        .iter()
+        .find(|(_, loop_turn)| loop_turn.pane_id == "%1")
+        .map(|(turn_id, _)| turn_id.clone())
+        .expect("loop command should create a routed parent turn");
+    let worker_profile = service
+        .agent_turn_model_profile(&parent_turn_id)
+        .cloned()
+        .expect("routed parent profile should exist");
+    service
+        .apply_routing_selected_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            &parent_turn_id,
+            mez_agent::AutoSizingRoutingSelection {
+                selected_profile: worker_profile,
+                selected_profile_name: "default".to_string(),
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                decision_summary: None,
+                fallback: None,
+            },
+        )
+        .unwrap();
+    let child_turn_id = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .and_then(|workflow| workflow.child_turn_id.clone())
+        .expect("routing selection should create a managed child turn");
+    let child_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == child_turn_id)
+        .cloned()
+        .expect("managed child turn should be retained");
+    let child_pane_id = child_turn.pane_id.clone();
+
+    let mut processes = service
+        .take_running_pane_process_instances_for_adapter(8)
+        .unwrap();
+    let child_index = processes
+        .iter()
+        .position(|(instance, _)| instance.pane_id == child_pane_id)
+        .expect("managed child process should cross the adapter boundary");
+    let (child_instance, mut child_process) = processes.swap_remove(child_index);
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &child_turn,
+            mez_agent::AgentTurnState::Completed,
+            "routed_worker_missing_execution",
+        )
+        .unwrap();
+    assert!(
+        service
+            .session()
+            .windows()
+            .iter()
+            .flat_map(|window| window.panes())
+            .all(|pane| pane.id.as_str() != child_pane_id)
+    );
+    assert_eq!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .filter(|task| task.turn_id == parent_turn_id)
+            .count(),
+        1
+    );
+
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let mut late_events = RuntimeEventBatch::new();
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: child_instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::Output {
+                pane_id: child_pane_id.clone(),
+                bytes: b"late routed child output\n".to_vec(),
+            }),
+        });
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: child_instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::InputWritten {
+                pane_id: child_pane_id.clone(),
+                bytes: 7,
+            }),
+        });
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: child_instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::Resized {
+                pane_id: child_pane_id.clone(),
+                size: Size::new(70, 20).unwrap(),
+            }),
+        });
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: child_instance.clone(),
+            event: PaneProcessEvent::Pane(PaneEvent::ForegroundProcess {
+                pane_id: child_pane_id.clone(),
+                process_name: "cat".to_string(),
+                process_group_id: child_process.primary_pid(),
+                current_working_directory: Some("/tmp/routed-child".to_string()),
+            }),
+        });
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: child_instance.clone(),
+            event: PaneProcessEvent::ForegroundProcessObservation(
+                crate::runtime::PaneForegroundProcessObservation {
+                    observation_id: "late-routed-child-observation".to_string(),
+                    process_name: Some("cat".to_string()),
+                    process_group_id: Some(child_process.primary_pid()),
+                    current_working_directory: Some("/tmp/routed-child".to_string()),
+                    error: None,
+                },
+            ),
+        });
+        late_events.push(RuntimeEvent::PaneProcess {
+            instance: child_instance.clone(),
+            event: PaneProcessEvent::Process(ProcessEvent::Exited {
+                pane_id: child_pane_id.clone(),
+                primary_pid: Some(child_process.primary_pid()),
+                exit_code: Some(0),
+                signal: None,
+            }),
+        });
+        let report = handle.submit_runtime_events(late_events).await.unwrap();
+        assert_eq!(report.accepted, 6);
+        assert_eq!(report.applied, 0);
+        assert_eq!(
+            handle
+                .drain_pane_io_side_effects(&child_pane_id, 8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::TerminatePane {
+                pane_id: child_pane_id,
+                force: true,
+            }]
+        );
+        let _ = child_process.terminate(Duration::from_millis(10));
+        for (_, mut process) in processes {
+            let _ = process.terminate(Duration::from_millis(10));
+        }
+        let _ = handle.shutdown().await.unwrap();
+        child_instance
+    };
+
+    let (retired_instance, mut exit) = tokio::join!(client, actor.run());
+    assert!(
+        !exit
+            .service
+            .pane_process_instance_is_current(&retired_instance)
+    );
+    assert_eq!(
+        exit.service
+            .pending_agent_provider_tasks()
+            .iter()
+            .filter(|task| task.turn_id == parent_turn_id)
+            .count(),
+        1
+    );
     assert!(exit.service.terminate_all_pane_processes().is_ok());
 }

@@ -593,11 +593,14 @@ impl RuntimeSessionService {
         ) {
             return Ok(0);
         }
+        let missing_pane_failures = self.fail_agent_turns_for_missing_panes()?;
         let stranded_shell_recoveries = self
             .recover_stranded_agent_shell_dispatches_with_actor_progress(actor_progress_turn_ids)?;
         let unreachable_turn_failures =
             self.fail_unreachable_running_agent_turns_with_actor_progress(actor_progress_turn_ids)?;
-        Ok(stranded_shell_recoveries.saturating_add(unreachable_turn_failures))
+        Ok(missing_pane_failures
+            .saturating_add(stranded_shell_recoveries)
+            .saturating_add(unreachable_turn_failures))
     }
 
     /// Reports whether actor-owned idle cleanup should remain scheduled while
@@ -610,7 +613,8 @@ impl RuntimeSessionService {
         &self,
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> bool {
-        self.hidden_shell_render_retention_timer_needed()
+        self.missing_pane_agent_turn_cleanup_needed()
+            || self.hidden_shell_render_retention_timer_needed()
             || self.stranded_agent_shell_dispatch_recovery_timer_needed()
             || self.unreachable_running_agent_turn_timer_needed_with_actor_progress(
                 actor_progress_turn_ids,

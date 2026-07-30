@@ -206,7 +206,8 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
         state: AgentTurnState,
-    ) -> Result<AgentShellSession> {
+    ) -> Result<Option<AgentShellSession>> {
+        let pane_present = self.find_pane_descriptor(&turn.pane_id).is_some();
         let current_conversation = self
             .agent_shell_store()
             .get(&turn.pane_id)
@@ -214,7 +215,8 @@ impl RuntimeSessionService {
         let conversation_still_owned = current_conversation == Some(turn.conversation_id.as_str());
         let conversation_was_replaced = current_conversation
             .is_some_and(|conversation_id| conversation_id != turn.conversation_id);
-        if conversation_still_owned
+        if pane_present
+            && conversation_still_owned
             && state == AgentTurnState::Failed
             && let Some(execution) = self.agent_turn_executions().get(&turn.turn_id).cloned()
             && execution.terminal_state == AgentTurnState::Failed
@@ -240,7 +242,8 @@ impl RuntimeSessionService {
         {
             self.emit_subagent_task_result_for_state(turn, state)?;
         }
-        if conversation_still_owned
+        if pane_present
+            && conversation_still_owned
             && let Some(footer) = runtime_agent_finished_footer_line(turn, state)
         {
             self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer)?;
@@ -250,7 +253,8 @@ impl RuntimeSessionService {
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut()
             .finish_turn(&turn.turn_id, state)?;
-        if conversation_still_owned
+        if pane_present
+            && conversation_still_owned
             && turn.parent_turn_id.is_none()
             && matches!(
                 state,
@@ -268,14 +272,21 @@ impl RuntimeSessionService {
             "finish_agent_turn_without_shell_session",
         )?;
         self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
-        let session = self
-            .agent_shell_store_mut()
-            .ensure_session(&turn.pane_id)?
-            .clone();
-        if matches!(
-            state,
-            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
-        ) {
+        let session = if pane_present {
+            Some(
+                self.agent_shell_store_mut()
+                    .ensure_session(&turn.pane_id)?
+                    .clone(),
+            )
+        } else {
+            self.agent_shell_store_mut().remove_session(&turn.pane_id)
+        };
+        if pane_present
+            && matches!(
+                state,
+                AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+            )
+        {
             self.close_terminal_subagent_pane_if_pending(turn)?;
         }
         self.start_ready_agent_turns()?;
@@ -296,12 +307,13 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         state: AgentTurnState,
         reason: &str,
-    ) -> Result<AgentShellSession> {
+    ) -> Result<()> {
+        if self.find_pane_descriptor(&turn.pane_id).is_none() {
+            self.cleanup_removed_pane_runtime_state(&turn.pane_id)?;
+            return Ok(());
+        }
         if self.complete_routed_presentation(&turn.turn_id, state)? {
-            return Ok(self
-                .agent_shell_store_mut()
-                .ensure_session(&turn.pane_id)
-                .cloned()?);
+            return Ok(());
         }
         let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
         self.append_agent_trace_turn_event(
@@ -320,8 +332,10 @@ impl RuntimeSessionService {
             == Some(turn.turn_id.as_str())
         {
             self.finish_agent_turn(&turn.pane_id, &turn.turn_id, state)
+                .map(|_| ())
         } else {
             self.finish_agent_turn_without_shell_session(turn, state)
+                .map(|_| ())
         }
     }
 
@@ -352,6 +366,11 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("scheduled turn is missing from runtime ledger")
                 })?;
+            if self.find_pane_descriptor(&turn.pane_id).is_none() {
+                let _ = self.agent.agent_scheduler.cancel(&turn.turn_id);
+                self.cleanup_removed_pane_runtime_state(&turn.pane_id)?;
+                continue;
+            }
             let current_conversation = self
                 .agent_shell_store()
                 .get(&turn.pane_id)

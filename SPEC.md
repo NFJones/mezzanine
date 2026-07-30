@@ -1874,7 +1874,15 @@ presentation state. Cleanup that observes an already-removed pane MUST settle
 any remaining pane-owned turn without recreating the session or attempting
 presentation against the missing target. Late runtime events for that owner
 MUST be fenced, and an unavailable diagnostic presentation target MUST NOT fail
-the runtime actor or the pane-process supervisor.
+the runtime actor or the pane-process supervisor. Layout removal MUST
+synchronously retire the adapter-owned pane-process generation while retaining
+the exact termination request for that worker. Output, exit, resize,
+write-completion, periodic foreground metadata, and correlated foreground
+observations from a retired generation MUST be handled no-ops. A provider,
+scheduler, shell transaction, approval, subagent, continuation, or actor-owned
+progress marker MUST NOT keep an agent turn live after its layout pane has
+ceased to exist, and scheduler drain MUST NOT start queued work for a missing
+pane.
 
 By default, shell commands selected by the model MUST be rendered into the
 agent log as bounded command previews before dispatch, while their resulting
