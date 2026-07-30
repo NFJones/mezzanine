@@ -216,6 +216,74 @@ fn runtime_agent_shell_sorts_named_sessions_first_without_changing_latest() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies the `/resume` browser presents saved-session columns and row
+/// values in the requested user-facing order.
+#[test]
+fn runtime_resume_browser_orders_session_columns() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-column-order"));
+    for (sequence, role, content) in [
+        (1, TranscriptRole::System, "cwd=/tmp/resume-column-order"),
+        (2, TranscriptRole::User, "latest saved prompt"),
+    ] {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: "ordered-session".to_string(),
+                sequence,
+                created_at_unix_seconds: 20,
+                role,
+                turn_id: "turn-ordered".to_string(),
+                agent_id: "agent-%9".to_string(),
+                pane_id: "%9".to_string(),
+                content: content.to_string(),
+            })
+            .unwrap();
+    }
+    transcript_store
+        .name_session(
+            "ordered-session",
+            "Ordered investigation",
+            20,
+            Some("/tmp/resume-column-order".to_string()),
+        )
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+
+    let page = service
+        .saved_sessions_record_browser()
+        .unwrap()
+        .render_page()
+        .raw_markdown;
+    assert!(
+        page.contains(
+            "| Conversation | Name | Latest prompt | Last active | Directory | Entries |"
+        ),
+        "{page}"
+    );
+    let row = page
+        .lines()
+        .find(|line| line.contains("ordered-session"))
+        .expect("saved-session row should be rendered");
+    let cells = row
+        .split('|')
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(cells.len(), 6, "{row}");
+    assert!(cells[0].contains("ordered-session"), "{row}");
+    assert_eq!(
+        &cells[1..],
+        &[
+            "Ordered investigation",
+            "latest saved prompt",
+            "1970-01-01T00:00:20Z",
+            "/tmp/resume-column-order",
+            "2",
+        ],
+        "{row}"
+    );
+}
+
 /// Verifies the retained `/resume` browser deletes named metadata-only
 /// conversations through the shared record-browser backend and refreshes to
 /// the configured empty state.

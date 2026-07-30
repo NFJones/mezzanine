@@ -429,10 +429,10 @@ impl RuntimeSessionService {
         browser.set_table_id_column("Conversation");
         browser.set_table_columns_with_labels(vec![
             ("Name".to_string(), "name".to_string()),
+            ("Latest prompt".to_string(), "latest_prompt".to_string()),
             ("Last active".to_string(), "last_active".to_string()),
             ("Directory".to_string(), "directory".to_string()),
             ("Entries".to_string(), "entries".to_string()),
-            ("Latest prompt".to_string(), "latest_prompt".to_string()),
         ]);
         browser.set_help(
             Some(
