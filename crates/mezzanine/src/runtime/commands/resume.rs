@@ -773,7 +773,6 @@ impl RuntimeSessionService {
             .next()
             .map(ToOwned::to_owned)
             .unwrap_or_else(Self::runtime_new_agent_conversation_id);
-        let summary = store.fork(&source, &target, current_unix_seconds().max(1))?;
         let started = self.split_pane_in_window_with_process(
             primary_client_id,
             &source_descriptor.window_id,
@@ -782,36 +781,74 @@ impl RuntimeSessionService {
             None,
             source_start_directory.as_deref(),
         )?;
-        self.agent_shell_store_mut()
-            .enter_or_resume(&started.pane_id)?;
-        let (session_id, transcript_entries, visibility) = {
-            let session = self
-                .agent_shell_store_mut()
-                .bind_conversation_with_lineage(
-                    &started.pane_id,
-                    &summary.conversation_id,
-                    summary.entries as u64,
-                    source_lineage,
-                )?;
-            (
-                session.session_id.clone(),
-                session.transcript_entries,
-                session.visibility,
-            )
+        let setup_result = (|| -> Result<_> {
+            let summary = store.fork(&source, &target, current_unix_seconds().max(1))?;
+            #[cfg(test)]
+            if self.take_agent_fork_after_persistence_failure_for_tests() {
+                return Err(MezError::invalid_state(
+                    "injected agent fork failure after persistence",
+                ));
+            }
+            self.agent_shell_store_mut()
+                .enter_or_resume(&started.pane_id)?;
+            let (session_id, transcript_entries, visibility) = {
+                let session = self
+                    .agent_shell_store_mut()
+                    .bind_conversation_with_lineage(
+                        &started.pane_id,
+                        &summary.conversation_id,
+                        summary.entries as u64,
+                        source_lineage,
+                    )?;
+                (
+                    session.session_id.clone(),
+                    session.transcript_entries,
+                    session.visibility,
+                )
+            };
+            self.record_pane_transcript_ref(
+                &started.pane_id,
+                format!("transcript:{}:{session_id}", started.pane_id),
+            )?;
+            self.enter_agent_mode_for_pane(&started.pane_id)?;
+            if let Some(seed) = prompt_seed
+                && let Some(prompt_input) = self.agent_prompt_input_mut(&started.pane_id)
+            {
+                prompt_input
+                    .prompt
+                    .buffer
+                    .apply(ReadlineEdit::InsertText(seed));
+            }
+            Ok((session_id, transcript_entries, visibility))
+        })();
+        let (session_id, transcript_entries, visibility) = match setup_result {
+            Ok(result) => result,
+            Err(error) => {
+                let pane_cleanup = self.dispatch_runtime_pane_close(
+                    primary_client_id,
+                    &format!(
+                        r#"{{"pane_id":"{}","force":true}}"#,
+                        json_escape(&started.pane_id)
+                    ),
+                );
+                let pane_cleanup_failed = self.find_pane_descriptor(&started.pane_id).is_some();
+                let storage_cleanup = store.delete(&target);
+                if pane_cleanup_failed || storage_cleanup.is_err() {
+                    return Err(MezError::invalid_state(format!(
+                        "agent fork setup failed: {error}; rollback failed: pane={}; storage={}",
+                        pane_cleanup
+                            .err()
+                            .map(|cleanup| cleanup.to_string())
+                            .unwrap_or_else(|| "pane still exists".to_string()),
+                        storage_cleanup
+                            .err()
+                            .map(|cleanup| cleanup.to_string())
+                            .unwrap_or_else(|| "removed".to_string())
+                    )));
+                }
+                return Err(error);
+            }
         };
-        self.record_pane_transcript_ref(
-            &started.pane_id,
-            format!("transcript:{}:{session_id}", started.pane_id),
-        )?;
-        self.enter_agent_mode_for_pane(&started.pane_id)?;
-        if let Some(seed) = prompt_seed
-            && let Some(prompt_input) = self.agent_prompt_input_mut(&started.pane_id)
-        {
-            prompt_input
-                .prompt
-                .buffer
-                .apply(ReadlineEdit::InsertText(seed));
-        }
         Ok(AgentShellCommandOutcome::Mutated {
             command: "fork".to_string(),
             body: format!(

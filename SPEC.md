@@ -8939,6 +8939,11 @@ source pane's active conversation. The new pane's agent prompt MUST be seeded
 with the last submitted prompt before the `/fork` command when such a prompt is
 available, so users can edit and rerun the fork point. The new pane MUST load
 the shared prompt history; no conversation-local prompt history is copied.
+Fork persistence and pane setup MUST be atomic from the user's perspective. If
+durable transcript or presentation cloning fails, the incomplete target MUST be
+removed. If any later pane or agent-mode setup step fails, Mezzanine MUST remove
+both the newly created pane and every durable target-conversation artifact while
+leaving the source pane and conversation unchanged.
 
 ## 20. Hooks
 

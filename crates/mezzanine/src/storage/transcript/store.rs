@@ -905,26 +905,36 @@ impl AgentTranscriptStore {
                 "source conversation has no entries",
             ));
         }
-        for entry in entries {
-            let forked = TranscriptEntry {
-                conversation_id: target_conversation_id.to_string(),
-                created_at_unix_seconds,
-                ..entry
-            };
-            self.append(&forked)?;
+        let fork_result = (|| {
+            for entry in entries {
+                let forked = TranscriptEntry {
+                    conversation_id: target_conversation_id.to_string(),
+                    created_at_unix_seconds,
+                    ..entry
+                };
+                self.append(&forked)?;
+            }
+            for presentation in self.inspect_presentation(source_conversation_id)? {
+                let forked = AgentPresentationEntry {
+                    conversation_id: target_conversation_id.to_string(),
+                    created_at_unix_seconds,
+                    ..presentation
+                };
+                self.append_presentation(&forked)?;
+            }
+            self.list()?
+                .into_iter()
+                .find(|summary| summary.conversation_id == target_conversation_id)
+                .ok_or_else(|| MezError::invalid_state("forked conversation summary missing"))
+        })();
+        if fork_result.is_err()
+            && let Err(cleanup_error) = self.delete(target_conversation_id)
+        {
+            return Err(MezError::invalid_state(format!(
+                "conversation fork failed and target cleanup failed: {cleanup_error}"
+            )));
         }
-        for presentation in self.inspect_presentation(source_conversation_id)? {
-            let forked = AgentPresentationEntry {
-                conversation_id: target_conversation_id.to_string(),
-                created_at_unix_seconds,
-                ..presentation
-            };
-            self.append_presentation(&forked)?;
-        }
-        self.list()?
-            .into_iter()
-            .find(|summary| summary.conversation_id == target_conversation_id)
-            .ok_or_else(|| MezError::invalid_state("forked conversation summary missing"))
+        fork_result
     }
 
     /// Appends one submitted agent prompt to the bounded shared history file.

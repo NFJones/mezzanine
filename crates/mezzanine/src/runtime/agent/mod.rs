@@ -347,6 +347,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Test-only one-shot failure injected after a routed child is enqueued.
     #[cfg(test)]
     fail_routed_child_enqueue_trace: bool,
+    /// Test-only one-shot failure injected after a durable `/fork` is created.
+    #[cfg(test)]
+    fail_agent_fork_after_persistence: bool,
     /// Test-only one-shot failure injected before a routed loop continuation queues.
     #[cfg(test)]
     fail_routed_loop_continuation_queue: bool,
@@ -810,6 +813,18 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn fail_next_routed_child_enqueue_trace_for_tests(&mut self) {
         self.agent.fail_routed_child_enqueue_trace = true;
+    }
+
+    /// Injects one `/fork` setup failure after durable persistence succeeds.
+    #[cfg(test)]
+    pub(crate) fn fail_next_agent_fork_after_persistence_for_tests(&mut self) {
+        self.agent.fail_agent_fork_after_persistence = true;
+    }
+
+    /// Consumes the test-only post-persistence `/fork` failure injection.
+    #[cfg(test)]
+    pub(crate) fn take_agent_fork_after_persistence_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.agent.fail_agent_fork_after_persistence)
     }
 
     /// Injects one routed loop continuation queue failure.

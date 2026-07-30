@@ -246,3 +246,79 @@ fn runtime_agent_shell_fork_reports_missing_transcript_store() {
     assert!(response.contains("source=runtime-fork"), "{response}");
     assert!(!response.contains("requires_runtime"), "{response}");
 }
+
+/// Verifies a runtime setup failure after durable fork creation removes both
+/// the newly created pane and every target-conversation persistence artifact.
+#[test]
+fn runtime_agent_shell_fork_rolls_back_post_persistence_setup_failure() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-fork-rollback"));
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "fork-source".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::User,
+            turn_id: "turn-source".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "source prompt".to_string(),
+        })
+        .unwrap();
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "fork-source", 1)
+        .unwrap();
+    let pane_count_before = service.session().windows()[0].panes().len();
+    service.fail_next_agent_fork_after_persistence_for_tests();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"fork-rollback","method":"agent/shell/command","params":{"idempotency_key":"fork-rollback","input":"/fork fork-target"}}"#,
+        &primary,
+    );
+
+    assert!(
+        response.contains("injected agent fork failure after persistence"),
+        "{response}"
+    );
+    assert_eq!(
+        service.session().windows()[0].panes().len(),
+        pane_count_before
+    );
+    let transcript_error = transcript_store.inspect("fork-target").unwrap_err();
+    assert_eq!(
+        transcript_error.kind(),
+        crate::error::MezErrorKind::NotFound
+    );
+    assert!(
+        transcript_store
+            .inspect_presentation("fork-target")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        service
+            .agent_shell_store()
+            .sessions()
+            .all(|session| session.session_id != "fork-target")
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .map(|session| session.session_id.as_str()),
+        Some("fork-source")
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
