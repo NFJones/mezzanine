@@ -2138,6 +2138,7 @@ impl RuntimeSessionService {
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) -> Result<()> {
         self.presentation.remove_completion_attention(pane_id);
         self.presentation.remove_agent_presentation_state(pane_id);
+        self.discard_agent_loop_parent_projections_for_pane(pane_id);
         let removed_transaction_markers = self
             .process
             .running_shell_transactions

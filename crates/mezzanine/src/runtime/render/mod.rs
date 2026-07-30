@@ -270,6 +270,9 @@ pub(crate) struct RuntimePresentationComponent {
     /// Deferred copied-word highlight cleanup.
     deferred_word_copy_cleanup:
         std::cell::RefCell<Option<(String, PaneSurfaceKind, CopyMode, u64)>>,
+    /// Parent pane projections retained while ephemeral loop conversations run.
+    agent_loop_parent_projections:
+        std::collections::BTreeMap<String, RuntimeAgentLoopParentProjectionSnapshot>,
     /// Window-frame action pressed until a matching mouse release.
     pressed_window_action: Option<WindowFrameAction>,
     /// Transient primary-client error status.
@@ -290,6 +293,17 @@ pub(crate) struct RuntimeAgentResumePresentationSnapshot {
     replay_active: bool,
     copy_modes: Vec<((String, PaneSurfaceKind), CopyMode)>,
     scrollback_surfaces: Vec<(String, PaneSurfaceKind)>,
+    mouse_selection_drag_state: Option<MouseSelectionDragState>,
+    last_mouse_click_state: Option<RuntimeMouseClickState>,
+    deferred_word_copy_cleanup: Option<(String, PaneSurfaceKind, CopyMode, u64)>,
+}
+
+/// Exact parent projection retained while a logical loop uses ephemeral conversations.
+#[derive(Debug, Clone)]
+struct RuntimeAgentLoopParentProjectionSnapshot {
+    pane_id: String,
+    agent_screen: Option<(String, TerminalScreen)>,
+    presentation: RuntimeAgentResumePresentationSnapshot,
 }
 
 /// Candidate cycle retained while one record-browser Save prompt is active.
@@ -458,6 +472,25 @@ impl RuntimeSessionService {
                 .filter(|(candidate, _)| candidate == pane_id)
                 .cloned()
                 .collect(),
+            mouse_selection_drag_state: self
+                .presentation
+                .mouse_selection_drag_state
+                .as_ref()
+                .filter(|state| state.pane_id == pane_id)
+                .cloned(),
+            last_mouse_click_state: self
+                .presentation
+                .last_mouse_click_state
+                .as_ref()
+                .filter(|state| state.pane_id == pane_id)
+                .cloned(),
+            deferred_word_copy_cleanup: self
+                .presentation
+                .deferred_word_copy_cleanup
+                .borrow()
+                .as_ref()
+                .filter(|(candidate, _, _, _)| candidate == pane_id)
+                .cloned(),
         }
     }
 
@@ -514,6 +547,67 @@ impl RuntimeSessionService {
             .copy
             .scrollback_copy_mode_panes
             .extend(snapshot.scrollback_surfaces);
+        if let Some(state) = snapshot.mouse_selection_drag_state {
+            self.presentation.mouse_selection_drag_state = Some(state);
+        }
+        if let Some(state) = snapshot.last_mouse_click_state {
+            self.presentation.last_mouse_click_state = Some(state);
+        }
+        if let Some(state) = snapshot.deferred_word_copy_cleanup {
+            self.presentation
+                .deferred_word_copy_cleanup
+                .replace(Some(state));
+        }
+    }
+
+    /// Retains one pane's parent projection before an ephemeral loop rebinds it.
+    pub(crate) fn retain_agent_loop_parent_projection(&mut self, loop_id: &str, pane_id: &str) {
+        if self
+            .presentation
+            .agent_loop_parent_projections
+            .contains_key(loop_id)
+        {
+            return;
+        }
+        let agent_screen = self
+            .agent_pane_screen_state(pane_id)
+            .map(|state| (state.conversation_id().to_string(), state.screen().clone()));
+        let presentation = self.snapshot_agent_resume_presentation(pane_id);
+        self.presentation.agent_loop_parent_projections.insert(
+            loop_id.to_string(),
+            RuntimeAgentLoopParentProjectionSnapshot {
+                pane_id: pane_id.to_string(),
+                agent_screen,
+                presentation,
+            },
+        );
+    }
+
+    /// Restores and consumes the exact parent projection retained for one loop.
+    pub(crate) fn restore_agent_loop_parent_projection(&mut self, loop_id: &str, pane_id: &str) {
+        let Some(snapshot) = self
+            .presentation
+            .agent_loop_parent_projections
+            .remove(loop_id)
+        else {
+            return;
+        };
+        if snapshot.pane_id != pane_id {
+            return;
+        }
+        if let Some((conversation_id, screen)) = snapshot.agent_screen {
+            self.set_agent_pane_screen(pane_id, conversation_id, screen);
+        } else {
+            self.remove_agent_pane_screen(pane_id);
+        }
+        self.restore_agent_resume_presentation(pane_id, snapshot.presentation);
+    }
+
+    /// Discards retained loop projections owned by a pane that is being removed.
+    pub(crate) fn discard_agent_loop_parent_projections_for_pane(&mut self, pane_id: &str) {
+        self.presentation
+            .agent_loop_parent_projections
+            .retain(|_, snapshot| snapshot.pane_id != pane_id);
     }
 
     /// Acknowledges pending completion attention for the currently focused pane.

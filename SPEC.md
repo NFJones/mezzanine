@@ -2748,6 +2748,11 @@ saved agent conversations, MUST NOT appear in `/resume` pickers, and MUST NOT
 replace the parent conversation in active-session
 metadata checkpoints. The parent conversation that invoked `/loop` MUST remain
 the resumable/listable conversation while fork-mode or new-mode iterations run.
+Before either ephemeral mode rebinds the pane, Mezzanine MUST retain the exact
+parent agent screen and its surface-qualified interaction state. Normal
+settlement, cancellation, and recoverable failure MUST restore that projection
+atomically with the parent conversation binding; ephemeral rows, viewport, and
+copy state MUST NOT replace or contaminate the retained parent projection.
 The `/loop` command MUST accept `--limit <int>` as a per-command positive
 integer override for `agents.loop_limit`.
 Mezzanine MUST continue running work iterations after any completed iteration

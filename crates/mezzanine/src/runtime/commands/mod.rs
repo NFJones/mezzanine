@@ -826,6 +826,9 @@ impl RuntimeSessionService {
         let parent_prompt_cache_lineage_id = parent_session.prompt_cache_lineage_id.clone();
         let max_iterations = parsed.max_iterations.unwrap_or(self.agent_loop_limit());
         let loop_id = format!("loop-{}", Self::runtime_new_agent_conversation_id());
+        if parsed.mode != RuntimeAgentLoopMode::ReuseCurrentConversation {
+            self.retain_agent_loop_parent_projection(&loop_id, pane_id);
+        }
         self.insert_agent_loop_state(RuntimeAgentLoopState {
             loop_id,
             invoking_pane_id: pane_id.to_string(),
@@ -988,6 +991,7 @@ impl RuntimeSessionService {
                     state.parent_transcript_entries,
                     state.parent_prompt_cache_lineage_id.clone(),
                 )?;
+            self.restore_agent_loop_parent_projection(&state.loop_id, pane_id);
             return Ok(());
         }
         self.agent_shell_store_mut()
@@ -997,6 +1001,7 @@ impl RuntimeSessionService {
                 state.parent_transcript_entries,
                 state.parent_prompt_cache_lineage_id.clone(),
             )?;
+        self.restore_agent_loop_parent_projection(&state.loop_id, pane_id);
         Ok(())
     }
 

@@ -484,6 +484,73 @@ fn runtime_agent_loop_new_option_starts_first_iteration_in_fresh_ephemeral_conve
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies ephemeral loop modes restore the exact parent agent screen and
+/// agent-surface copy state when the logical loop returns to its parent.
+#[test]
+fn runtime_agent_loop_ephemeral_modes_restore_parent_projection() {
+    for command in [
+        "/loop --fork review this document",
+        "/loop --new review this document",
+    ] {
+        let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+        let pane_id = service.active_pane_id().unwrap().to_string();
+        let parent_conversation = service
+            .agent_shell_store_mut()
+            .enter_or_resume(&pane_id)
+            .unwrap()
+            .session_id
+            .clone();
+        let mut parent_screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 20).unwrap();
+        parent_screen
+            .feed(b"parent one\r\nparent two\r\nparent three\r\nparent four\r\nparent five");
+        service.set_agent_pane_screen(&pane_id, &parent_conversation, parent_screen);
+        let parent_screen = service.agent_pane_screen(&pane_id).unwrap().clone();
+        let parent_copy_state = {
+            let copy_mode = service.ensure_active_copy_mode(&pane_id).unwrap();
+            copy_mode.scroll_to_top();
+            copy_mode
+                .select_range(
+                    CopyPosition { line: 0, column: 0 },
+                    CopyPosition { line: 0, column: 5 },
+                )
+                .unwrap();
+            (copy_mode.scroll_top(), copy_mode.selection())
+        };
+
+        service
+            .execute_agent_shell_loop_command(&pane_id, command)
+            .unwrap();
+        assert_ne!(
+            service
+                .agent_shell_store()
+                .get(&pane_id)
+                .unwrap()
+                .session_id,
+            parent_conversation
+        );
+        let stopped = service.stop_agent_turn_for_pane(&pane_id).unwrap();
+        assert!(!stopped.turn_id.is_empty());
+
+        assert_eq!(
+            service
+                .agent_shell_store()
+                .get(&pane_id)
+                .unwrap()
+                .session_id,
+            parent_conversation
+        );
+        assert_eq!(service.agent_pane_screen(&pane_id).unwrap(), &parent_screen);
+        let agent_key = service.copy_mode_key(&pane_id, crate::runtime::PaneSurfaceKind::Agent);
+        assert_eq!(
+            service
+                .active_copy_modes()
+                .get(&agent_key)
+                .map(|copy_mode| (copy_mode.scroll_top(), copy_mode.selection())),
+            Some(parent_copy_state)
+        );
+    }
+}
+
 /// Verifies that `/clear` follows the spec-level behavior of clearing the live
 /// viewport while preserving pane logs and starting a fresh visible
 /// conversation.
