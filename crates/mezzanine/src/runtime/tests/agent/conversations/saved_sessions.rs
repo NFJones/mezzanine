@@ -3,8 +3,8 @@
 use super::*;
 
 /// Verifies `/name-session` assigns durable metadata to the current
-/// zero-entry conversation and exposes the name beside, but outside, its UUID
-/// resume link after the same conversation is resumed.
+/// zero-entry conversation without making it visible in `/resume` until it
+/// has prompt history, while direct resume still restores the named session.
 #[test]
 fn runtime_agent_shell_names_and_resumes_zero_entry_conversations() {
     let mut service = test_runtime_service();
@@ -43,11 +43,8 @@ fn runtime_agent_shell_names_and_resumes_zero_entry_conversations() {
         r#"{"jsonrpc":"2.0","id":"list","method":"agent/shell/command","params":{"idempotency_key":"list","input":"/resume"}}"#,
         &primary,
     );
-    let linked_uuid = format!(
-        "[`{conversation_id}`](mez-agent:%2Fresume%20{conversation_id}) | Release investigation |"
-    );
-    assert!(picker.contains(&linked_uuid), "{picker}");
-    assert!(!picker.contains("Release%20investigation"), "{picker}");
+    assert!(!picker.contains(&conversation_id), "{picker}");
+    assert!(!picker.contains("Release investigation"), "{picker}");
 
     let resumed = service.dispatch_runtime_control_body(
         &format!(
@@ -284,11 +281,64 @@ fn runtime_resume_browser_orders_session_columns() {
     );
 }
 
-/// Verifies the retained `/resume` browser deletes named metadata-only
-/// conversations through the shared record-browser backend and refreshes to
-/// the configured empty state.
+/// Verifies `/resume` lists only conversations that retain a user prompt.
+///
+/// Routed workers and presentation-only records can leave durable directories
+/// without a user-authored conversation to continue. The picker must exclude
+/// those records while retaining the parent conversation that owns prompt
+/// history.
 #[test]
-fn runtime_resume_browser_deletes_named_zero_entry_sessions() {
+fn runtime_resume_browser_excludes_promptless_sessions() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-prompt-filter"));
+    for (conversation_id, role, content) in [
+        (
+            "parent-session",
+            TranscriptRole::User,
+            "continue parent work",
+        ),
+        (
+            "routed-turn-worker",
+            TranscriptRole::Assistant,
+            "worker output",
+        ),
+        (
+            "system-only",
+            TranscriptRole::System,
+            "cwd=/tmp/prompt-filter",
+        ),
+    ] {
+        transcript_store
+            .append(&TranscriptEntry {
+                conversation_id: conversation_id.to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 10,
+                role,
+                turn_id: format!("turn-{conversation_id}"),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: content.to_string(),
+            })
+            .unwrap();
+    }
+    transcript_store
+        .name_session("named-empty", "Empty session", 10, None)
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store);
+
+    let browser = service.saved_sessions_record_browser().unwrap();
+    let record_ids = browser
+        .records()
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(record_ids, vec!["parent-session"]);
+}
+
+/// Verifies `/resume` omits named metadata-only conversations because they do
+/// not retain a user prompt to resume.
+#[test]
+fn runtime_resume_browser_omits_named_zero_entry_sessions() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-delete-named"));
     transcript_store
@@ -298,27 +348,17 @@ fn runtime_resume_browser_deletes_named_zero_entry_sessions() {
 
     let browser = service.saved_sessions_record_browser().unwrap();
     assert!(browser.deletion_enabled());
-    assert_eq!(browser.records().len(), 1);
-    assert_eq!(browser.records()[0].id, "named-empty");
-    assert_eq!(
-        browser.records()[0].open_command.as_deref(),
-        Some("/resume named-empty")
-    );
-
-    let refreshed = service
-        .delete_record_browser_entry(
-            &crate::runtime::service_state::RuntimeRecordBrowserOverlaySource::SavedSessions,
-            "named-empty",
-            0,
-        )
-        .unwrap();
-    assert!(refreshed.records().is_empty());
-    assert!(transcript_store.saved_sessions().unwrap().is_empty());
     assert!(
-        refreshed
+        browser
             .render_page()
             .raw_markdown
             .contains("No saved agent sessions are available.")
+    );
+    assert!(
+        transcript_store
+            .named_session("named-empty")
+            .unwrap()
+            .is_some()
     );
 }
 
@@ -517,10 +557,10 @@ fn runtime_resume_browser_enter_resumes_and_i_opens_details() {
     );
 }
 
-/// Verifies a named session with no durable transcript entries still opens a
-/// detail page that clearly distinguishes its empty transcript from a failure.
+/// Verifies a named session with no durable transcript entries is omitted from
+/// `/resume` rather than rendered as a resumable empty transcript.
 #[test]
-fn runtime_resume_browser_shows_empty_named_session_transcript() {
+fn runtime_resume_browser_omits_empty_named_session_transcript() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-empty-detail"));
     transcript_store
@@ -528,17 +568,13 @@ fn runtime_resume_browser_shows_empty_named_session_transcript() {
         .unwrap();
     service.set_agent_transcript_store(transcript_store);
 
-    let mut browser = service.saved_sessions_record_browser().unwrap();
-    browser
-        .apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)
-        .unwrap();
-    let detail = browser.render_page().raw_markdown;
+    let browser = service.saved_sessions_record_browser().unwrap();
+    let page = browser.render_page().raw_markdown;
 
-    assert!(browser.is_detail_view());
-    assert!(detail.contains("Empty investigation"), "{detail}");
+    assert!(browser.records().is_empty());
     assert!(
-        detail.contains("No saved transcript entries were found for this session."),
-        "{detail}"
+        page.contains("No saved agent sessions are available."),
+        "{page}"
     );
 }
 
@@ -587,10 +623,12 @@ fn runtime_resume_browser_rejects_deleting_active_sessions() {
     assert_eq!(transcript_store.inspect("active-saved").unwrap().len(), 1);
 }
 
-/// Verifies presentation-only conversations remain discoverable and resumable
-/// even when they have no model transcript entries.
+/// Verifies presentation-only conversations are excluded from `/resume`.
+///
+/// Presentation output without a user prompt cannot restore a user-owned
+/// conversation, so it must not be shown alongside resumable parent sessions.
 #[test]
-fn runtime_resume_recovers_presentation_only_conversations() {
+fn runtime_resume_omits_presentation_only_conversations() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-presentation-only"));
     transcript_store
@@ -626,32 +664,10 @@ fn runtime_resume_recovers_presentation_only_conversations() {
         r#"{"jsonrpc":"2.0","id":"presentation-picker","method":"agent/shell/command","params":{"idempotency_key":"presentation-picker","input":"/resume"}}"#,
         &primary,
     );
-    assert!(picker.contains("[`presentation-only`]"), "{picker}");
-
-    let resumed = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"presentation-resume","method":"agent/shell/command","params":{"idempotency_key":"presentation-resume","input":"/resume presentation-only"}}"#,
-        &primary,
-    );
+    assert!(!picker.contains("presentation-only"), "{picker}");
     assert!(
-        resumed.contains("conversation_id=presentation-only"),
-        "{resumed}"
-    );
-    assert!(resumed.contains("entries=0"), "{resumed}");
-    assert_eq!(
-        service
-            .agent_shell_store()
-            .get("%1")
-            .map(|session| session.session_id.as_str()),
-        Some("presentation-only")
-    );
-    let agent_text = service
-        .agent_pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    assert!(
-        agent_text.contains("presentation-only history"),
-        "{agent_text}"
+        picker.contains("No saved agent sessions are available."),
+        "{picker}"
     );
 }
 

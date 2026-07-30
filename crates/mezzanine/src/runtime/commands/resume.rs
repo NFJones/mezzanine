@@ -415,7 +415,11 @@ impl RuntimeSessionService {
             .persistence
             .transcript_store()
             .ok_or_else(|| MezError::invalid_state("resume requires transcript storage"))?;
-        let mut sessions = store.saved_sessions()?;
+        let mut sessions = store
+            .saved_sessions()?
+            .into_iter()
+            .filter(|session| session.summary.latest_user_prompt.is_some())
+            .collect::<Vec<_>>();
         Self::sort_agent_saved_sessions_for_picker(&mut sessions);
         let prompt_width = usize::from(self.session.authoritative_size.columns)
             .saturating_sub(40)
