@@ -88,6 +88,71 @@ fn runtime_subagent_spawn_logs_parent_prompt_in_child_pane() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies spawned subagent conversations remain runtime-only and are excluded
+/// from `/resume` saved-session results.
+///
+/// Subagents carry out delegated work for a parent conversation, not separate
+/// user-resumable threads. Persisting their pane binding made the resume picker
+/// offer child sessions that lack the parent interaction context.
+#[test]
+fn runtime_subagent_sessions_are_not_saved_for_resume() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("subagent-not-resumable"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "explorer".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::ExploreOnly,
+        cooperation_mode_defaulted: false,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: false,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: false,
+        task_prompt: "inspect the renderer issue".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: false,
+    };
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            spawn,
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let child_pane_id = serde_json::from_str::<serde_json::Value>(&spawned)
+        .unwrap()
+        .get("pane")
+        .and_then(|pane| pane.get("pane_id"))
+        .and_then(serde_json::Value::as_str)
+        .expect("spawned pane id")
+        .to_string();
+    let child_session = service.agent_shell_store().get(&child_pane_id).unwrap();
+
+    assert!(child_session.ephemeral);
+    assert!(
+        transcript_store
+            .saved_sessions()
+            .unwrap()
+            .iter()
+            .all(|session| session.summary.conversation_id != child_session.session_id)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Builds a Bubblewrap runtime whose root pane is inside one trusted project.
 ///
 /// The helper intentionally leaves configured scope arrays empty so subagent

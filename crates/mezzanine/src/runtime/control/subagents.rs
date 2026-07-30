@@ -466,6 +466,22 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
         }
+        let child_conversation_id = self
+            .agent_shell_store()
+            .get(&started.pane_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("spawned subagent shell session is unavailable")
+            })?
+            .session_id
+            .clone();
+        self.agent_shell_store_mut()
+            .bind_ephemeral_conversation_with_lineage(
+                &started.pane_id,
+                child_conversation_id,
+                0,
+                None,
+            )?;
+        self.checkpoint_agent_session_metadata()?;
         if spawn.skip_initial_turn {
             let (window, pane) = match runtime_pane_by_id(&self.session, started.pane_id.as_str()) {
                 Ok(result) => result,
