@@ -26,7 +26,7 @@ fn config() -> BubblewrapConfig {
         unavailable: SandboxUnavailablePolicy::Fail,
         network: BubblewrapNetworkMode::Isolated,
         environment: SandboxEnvironmentPolicy::Minimal,
-        supplementary_groups: ConfiguredSandboxGroups::default(),
+        group_whitelist: ConfiguredSandboxGroups::default(),
         git_user_name: None,
         git_user_email: None,
         toolchains: Vec::new(),
@@ -135,7 +135,7 @@ fn request<'a>(
     BubblewrapCompileRequest {
         config,
         identity: resolve_sandbox_identity(
-            &config.supplementary_groups,
+            &config.group_whitelist,
             &identity::current_process_environment_signature().unwrap(),
         )
         .unwrap(),
@@ -886,7 +886,7 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
     let authority = authority();
     let evaluation = evaluation(EffectCompleteness::Unknown, effects());
     let identity = resolve_sandbox_identity(
-        &config.supplementary_groups,
+        &config.group_whitelist,
         &identity::current_process_environment_signature().unwrap(),
     )
     .unwrap();

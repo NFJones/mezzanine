@@ -122,7 +122,7 @@ impl SandboxConfig {
             unavailable: SandboxUnavailablePolicy::Fail,
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
-            supplementary_groups: ConfiguredSandboxGroups::default(),
+            group_whitelist: ConfiguredSandboxGroups::default(),
             git_user_name: None,
             git_user_email: None,
             toolchains: Vec::new(),
@@ -154,7 +154,7 @@ pub(crate) struct BubblewrapConfig {
     /// Environment reconstruction policy.
     pub(crate) environment: SandboxEnvironmentPolicy,
     /// Exact host supplementary groups selected by the primary user.
-    pub(crate) supplementary_groups: ConfiguredSandboxGroups,
+    pub(crate) group_whitelist: ConfiguredSandboxGroups,
     /// Optional non-secret Git author name projected without host Git config.
     pub(crate) git_user_name: Option<String>,
     /// Optional non-secret Git author email projected without host Git config.
@@ -184,7 +184,7 @@ impl ConfiguredSandboxGroups {
     fn parse(names: Vec<String>) -> Result<Self> {
         if names.len() > Self::MAX_GROUPS {
             return Err(MezError::config(
-                "permissions.bubblewrap.supplementary_groups must contain at most 64 names",
+                "permissions.bubblewrap.group_whitelist must contain at most 64 names",
             ));
         }
         let mut encoded_bytes = 0usize;
@@ -193,23 +193,23 @@ impl ConfiguredSandboxGroups {
             encoded_bytes = encoded_bytes.saturating_add(name.len());
             if name.is_empty() || name.chars().any(char::is_control) {
                 return Err(MezError::config(
-                    "permissions.bubblewrap.supplementary_groups must contain non-empty printable names",
+                    "permissions.bubblewrap.group_whitelist must contain non-empty printable names",
                 ));
             }
             if name.bytes().all(|byte| byte.is_ascii_digit()) {
                 return Err(MezError::config(
-                    "permissions.bubblewrap.supplementary_groups does not accept numeric GIDs",
+                    "permissions.bubblewrap.group_whitelist does not accept numeric GIDs",
                 ));
             }
             if !seen.insert(name.clone()) {
                 return Err(MezError::config(
-                    "permissions.bubblewrap.supplementary_groups must not contain duplicate names",
+                    "permissions.bubblewrap.group_whitelist must not contain duplicate names",
                 ));
             }
         }
         if encoded_bytes > Self::MAX_ENCODED_BYTES {
             return Err(MezError::config(
-                "permissions.bubblewrap.supplementary_groups exceeds the 8 KiB input limit",
+                "permissions.bubblewrap.group_whitelist exceeds the 8 KiB input limit",
             ));
         }
         Ok(Self {
@@ -1010,9 +1010,9 @@ pub(crate) fn runtime_configured_permissions_from_config(
                     ));
                 }
             };
-            let supplementary_groups = ConfiguredSandboxGroups::parse(
+            let group_whitelist = ConfiguredSandboxGroups::parse(
                 runtime_json_string_array(
-                    bubblewrap.and_then(|config| config.get("supplementary_groups")),
+                    bubblewrap.and_then(|config| config.get("group_whitelist")),
                 )?
                 .unwrap_or_default(),
             )?;
@@ -1076,7 +1076,7 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 unavailable,
                 network,
                 environment,
-                supplementary_groups,
+                group_whitelist,
                 git_user_name,
                 git_user_email,
                 toolchains,

@@ -20,7 +20,7 @@ Primary config discovery looks for exactly one of these files under
 If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions.
 
-The current config schema version is `20`. On launch, Mezzanine migrates an
+The current config schema version is `49`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -63,7 +63,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `20` | Config schema version. Do not change this. |
+| `version` | integer | `49` | Config schema version. Do not change this. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -703,7 +703,7 @@ Provider options under a model profile:
 | `permissions.bubblewrap.unavailable` | string | `"fail"` | Never runs unsandboxed automatically. A prompt-classified action may offer one exact approval-gated fallback after Bubblewrap failure. |
 | `permissions.bubblewrap.network` | string | `"isolated"` | Private network namespace policy. |
 | `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
-| `permissions.bubblewrap.supplementary_groups` | string array | `[]` | Schema-v48 primary-user-only pane group mappings. The active pane's primary group is automatic and must not be listed. Names must be non-empty, non-numeric, and unique; at most 64 names and 8 KiB are accepted. A name unavailable in the active pane is omitted with a warning. Empty projects no supplementary group names but does not filter inherited pane credentials. |
+| `permissions.bubblewrap.group_whitelist` | string array | `[]` | Schema-v49 primary-user-only pane group mappings. The active pane's primary group is automatic and must not be listed. Names must be non-empty, non-numeric, and unique; at most 64 names and 8 KiB are accepted. A name unavailable in the active pane is omitted with a warning. Empty projects no supplementary group names but does not filter inherited pane credentials. |
 | `permissions.bubblewrap.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.toolchains` | string array | omitted | Ordered direct-user-selected read-only built-in or `custom:<name>` toolchains. Built-in selectors persist identity rather than discovered host paths. |

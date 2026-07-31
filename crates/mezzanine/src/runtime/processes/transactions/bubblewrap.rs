@@ -95,11 +95,9 @@ impl RuntimeSessionService {
                     "pane environment is unavailable for Bubblewrap capability probing",
                 )
             })?;
-        let identity = crate::security::sandbox::resolve_sandbox_identity(
-            &config.supplementary_groups,
-            &signature,
-        )
-        .map_err(|error| crate::MezError::invalid_state(error.message()))?;
+        let identity =
+            crate::security::sandbox::resolve_sandbox_identity(&config.group_whitelist, &signature)
+                .map_err(|error| crate::MezError::invalid_state(error.message()))?;
         for warning in &identity.mapping_warnings {
             self.append_sandbox_mapping_warning_once(
                 &turn.pane_id,

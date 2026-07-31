@@ -479,7 +479,7 @@ pub(crate) fn bubblewrap_capability_probe_plan(
     child_shell_path: &str,
 ) -> Result<BubblewrapCapabilityProbePlan, SandboxCompileError> {
     let environment = identity::current_process_environment_signature()?;
-    let identity = resolve_sandbox_identity(&config.supplementary_groups, &environment)?;
+    let identity = resolve_sandbox_identity(&config.group_whitelist, &environment)?;
     bubblewrap_capability_probe_plan_for_identity(config, child_shell_path, &identity)
 }
 

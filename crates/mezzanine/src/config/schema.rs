@@ -362,7 +362,7 @@ pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] = &[
     "unavailable",
     "network",
     "environment",
-    "supplementary_groups",
+    "group_whitelist",
     "git_user_name",
     "git_user_email",
     "toolchains",

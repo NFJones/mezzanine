@@ -1006,16 +1006,16 @@ fn rejects_malformed_custom_toolchain_structure() {
 /// Verifies schema v48 accepts a bounded primary exact group list and rejects
 /// malformed or project-supplied host group authority before NSS resolution.
 #[test]
-fn supplementary_groups_are_structurally_validated_and_primary_only() {
+fn group_whitelist_are_structurally_validated_and_primary_only() {
     let valid = format!(
-        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\nsupplementary_groups = [\"sudo\", \"docker\"]\n"
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngroup_whitelist = [\"sudo\", \"docker\"]\n"
     );
     let primary = validate_config_text(ConfigFormat::Toml, &valid, ConfigScope::Primary);
     assert!(primary.valid, "{:?}", primary.diagnostics);
 
     let overlay = validate_config_text(ConfigFormat::Toml, &valid, ConfigScope::ProjectOverlay);
     assert!(overlay.diagnostics.iter().any(|diagnostic| {
-        diagnostic.path == "permissions.bubblewrap.supplementary_groups"
+        diagnostic.path == "permissions.bubblewrap.group_whitelist"
             && diagnostic
                 .message
                 .starts_with("primary_user_only_execution_authority:")
@@ -1023,14 +1023,14 @@ fn supplementary_groups_are_structurally_validated_and_primary_only() {
 
     for value in ["[\"\"]", "[\"27\"]", "[\"sudo\", \"sudo\"]", "[1]"] {
         let invalid = format!(
-            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\nsupplementary_groups = {value}\n"
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\ngroup_whitelist = {value}\n"
         );
         let validation = validate_config_text(ConfigFormat::Toml, &invalid, ConfigScope::Primary);
         assert!(
             validation
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.path == "permissions.bubblewrap.supplementary_groups"),
+                .any(|diagnostic| diagnostic.path == "permissions.bubblewrap.group_whitelist"),
             "missing diagnostic for {value}: {:?}",
             validation.diagnostics
         );

@@ -2579,7 +2579,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 47 is the current configuration schema version for this
+schema version 49 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2967,9 +2967,12 @@ Bubblewrap launch rather than narrowing mounts to classified patch effects or a
 trusted-project root. Other sandboxed writes MAY retain or narrow configured
 authority according to their complete classified effects.
 
-Schema v48 adds the primary-user-only
-`permissions.bubblewrap.supplementary_groups` string array. It MUST default to
-an empty mapping, and migration from v47 MUST write `[]`. The active pane
+Schema v48 added the primary-user-only
+`permissions.bubblewrap.supplementary_groups` string array, and migration from
+v47 MUST write `[]`. Schema v49 MUST rename that setting to the canonical
+`permissions.bubblewrap.group_whitelist` string array and MUST reject a v48
+configuration that defines both names. The canonical setting MUST default to
+an empty mapping. The active pane
 shell's primary group MUST remain automatic and MUST NOT be listed. Entries
 MUST be non-empty printable non-numeric group names; duplicate configured
 names, control data, more than 64 entries, or more than 8 KiB of encoded names

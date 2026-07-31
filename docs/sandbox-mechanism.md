@@ -79,7 +79,7 @@ Bubblewrap projects only the authority needed by the compiled plan:
   by canonical project root and sandbox runtime profile. Its HOME and XDG
   paths remain inside that managed home. The child uses the invoking user's
   native UID and primary GID while inheriting the active pane shell's
-  supplementary credentials. `permissions.bubblewrap.supplementary_groups`
+  supplementary credentials. `permissions.bubblewrap.group_whitelist`
   maps selected active pane group names into the sandbox's synthetic group
   records; empty maps no supplementary names but does not filter inherited
   credentials. Mezzanine omits configured names absent from pane bootstrap

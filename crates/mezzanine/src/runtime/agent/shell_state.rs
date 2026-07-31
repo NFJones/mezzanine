@@ -226,7 +226,7 @@ impl RuntimeSessionService {
                     )
                 })?;
             let identity = crate::security::sandbox::resolve_sandbox_identity(
-                &config.supplementary_groups,
+                &config.group_whitelist,
                 &signature,
             )
             .map_err(|error| MezError::invalid_state(error.message()))?;

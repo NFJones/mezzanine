@@ -447,7 +447,7 @@ Current support reflects behavior implemented in the repository today.
   never copy the real user home, and are removed when project trust is revoked.
   Sandboxed launches use the active pane shell's native UID, primary GID, and
   inherited supplementary credentials. The primary-user-only
-  `permissions.bubblewrap.supplementary_groups` list names the pane groups that
+  `permissions.bubblewrap.group_whitelist` list names the pane groups that
   Mezzanine attempts to map into synthetic identity records; it does not
   create, replace, or filter kernel credentials. Names unavailable in the
   active pane are omitted with an `agent warning:` and the sandbox continues

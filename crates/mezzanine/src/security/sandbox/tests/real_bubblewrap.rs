@@ -267,7 +267,7 @@ fn real_plan(
     let environment = identity::current_process_environment_signature().unwrap();
     compile_bubblewrap_launch_plan(BubblewrapCompileRequest {
         config,
-        identity: resolve_sandbox_identity(&config.supplementary_groups, &environment).unwrap(),
+        identity: resolve_sandbox_identity(&config.group_whitelist, &environment).unwrap(),
         capability,
         pane_environment_signature: "real-linux-pane-environment",
         network_policy: NetworkPolicy::Prompt,
@@ -541,7 +541,7 @@ fn real_bubblewrap_projects_read_only_rust_toolchain() {
     let environment = identity::current_process_environment_signature().unwrap();
     let plan = compile_bubblewrap_launch_plan(BubblewrapCompileRequest {
         config: &config,
-        identity: resolve_sandbox_identity(&config.supplementary_groups, &environment).unwrap(),
+        identity: resolve_sandbox_identity(&config.group_whitelist, &environment).unwrap(),
         capability,
         pane_environment_signature: "real-linux-pane-environment",
         network_policy: NetworkPolicy::Prompt,

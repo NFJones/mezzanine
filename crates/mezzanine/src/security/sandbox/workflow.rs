@@ -91,7 +91,7 @@ pub(crate) struct SandboxConfiguredState {
     /// Source layer for configured write scopes.
     pub(crate) write_scopes_source: String,
     /// Primary-user-selected pane supplementary group mappings.
-    pub(crate) supplementary_groups: Vec<String>,
+    pub(crate) group_whitelist: Vec<String>,
     /// Direct-user-selected allowlisted toolchain kinds.
     pub(crate) toolchains: Vec<String>,
 }
@@ -217,11 +217,11 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
     let effective_sandbox =
         effective_sandbox_boundary(&request.permissions.sandbox, approval_policy).to_string();
 
-    let (configured_supplementary_groups, supplementary_group_state, supplementary_group_count) =
+    let (configured_group_whitelist, supplementary_group_state, supplementary_group_count) =
         match &request.permissions.sandbox {
             SandboxConfig::PolicyOnly => (Vec::new(), "not-applicable".to_string(), 0),
             SandboxConfig::Bubblewrap(config) => {
-                let configured = config.supplementary_groups.requested_names.clone();
+                let configured = config.group_whitelist.requested_names.clone();
                 let count = configured.len();
                 (configured, "pane-bootstrap-required".to_string(), count)
             }
@@ -388,7 +388,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             read_scopes_source: request.read_scopes_source.to_string(),
             write_scopes: request.permissions.resources.write_scopes.clone(),
             write_scopes_source: request.write_scopes_source.to_string(),
-            supplementary_groups: configured_supplementary_groups,
+            group_whitelist: configured_group_whitelist,
             toolchains: configured_toolchains,
         },
         effective: SandboxEffectiveState {
@@ -496,7 +496,7 @@ mod tests {
             unavailable: SandboxUnavailablePolicy::Fail,
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
-            supplementary_groups: crate::runtime::ConfiguredSandboxGroups::default(),
+            group_whitelist: crate::runtime::ConfiguredSandboxGroups::default(),
             git_user_name: None,
             git_user_email: None,
             toolchains: Vec::new(),
@@ -555,7 +555,7 @@ mod tests {
                 unavailable: SandboxUnavailablePolicy::Fail,
                 network: BubblewrapNetworkMode::Isolated,
                 environment: SandboxEnvironmentPolicy::Minimal,
-                supplementary_groups: crate::runtime::ConfiguredSandboxGroups::default(),
+                group_whitelist: crate::runtime::ConfiguredSandboxGroups::default(),
                 git_user_name: None,
                 git_user_email: None,
                 toolchains: Vec::new(),
@@ -604,7 +604,7 @@ mod tests {
             unavailable: SandboxUnavailablePolicy::Fail,
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
-            supplementary_groups: crate::runtime::ConfiguredSandboxGroups::default(),
+            group_whitelist: crate::runtime::ConfiguredSandboxGroups::default(),
             git_user_name: None,
             git_user_email: None,
             toolchains: vec![crate::runtime::SandboxToolchainKind::Rust],

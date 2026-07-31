@@ -318,7 +318,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
     let migrated = fs::read_to_string(paths.root().join("config.toml")).unwrap();
 
     assert_eq!(layers.len(), 1);
-    assert_eq!(effective.get("version"), Some("48"));
+    assert_eq!(effective.get("version"), Some("49"));
     assert_eq!(
         effective.get("terminal.nested_multiplexer"),
         Some("disabled")
@@ -328,7 +328,7 @@ fn startup_config_layers_migrate_existing_primary_config() {
             .get("agents.implementation_pressure_after_shell_actions")
             .is_none()
     );
-    assert!(migrated.contains("version = 48"));
+    assert!(migrated.contains("version = 49"));
     assert!(migrated.contains("emoji_width = \"wide\""));
     assert!(migrated.contains("provider_refresh_leeway_seconds = 86400"));
     assert!(!migrated.contains("implementation_pressure_after_shell_actions"));
@@ -356,12 +356,12 @@ fn startup_config_layers_discover_project_overlays_and_apply_trust() {
     fs::create_dir_all(project.join(".mezzanine")).unwrap();
     fs::write(
         project.join(".mezzanine/config.toml"),
-        "version = 48\n[history]\nlines = 7\n",
+        "version = 49\n[history]\nlines = 7\n",
     )
     .unwrap();
     fs::write(
         nested.join(".mezzanine/config.toml"),
-        "version = 48\n[history]\nlines = 11\n",
+        "version = 49\n[history]\nlines = 11\n",
     )
     .unwrap();
 
