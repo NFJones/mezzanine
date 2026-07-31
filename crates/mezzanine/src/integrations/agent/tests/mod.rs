@@ -370,6 +370,7 @@ fn test_env_signature(
         None,
         host,
         user,
+        None,
         shell_path,
         ShellClassification::classify(shell_path),
         None,

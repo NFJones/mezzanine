@@ -18,6 +18,7 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains("uname -m"));
     assert!(script.contains("hostname"));
     assert!(script.contains("whoami"));
+    assert!(script.contains("home_directory"));
     assert!(script.contains("SHELL"));
     assert!(script.contains("PATH"));
     assert!(script.contains("pwd"));
@@ -76,6 +77,7 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
 
     assert!(script.contains("function mez_bootstrap_field"));
     assert!(script.contains("status fish-path"));
+    assert!(script.contains("home_directory \"$HOME\""));
     assert!(script.contains("mez_bootstrap_field shell_class fish"));
     assert!(script.contains("AGENTS.md"));
     assert!(script.contains("instruction\\tpath=%s"));
@@ -238,6 +240,7 @@ tool\tpython\t1\t/usr/bin/python3\tPython 3.12.3\tcommand -v python3 || command 
     assert_eq!(sig.kernel_version.as_deref(), Some("6.8.0-generic"));
     assert_eq!(sig.host, "myhost");
     assert_eq!(sig.user, "me");
+    assert_eq!(sig.home_directory, None);
     assert_eq!(sig.shell_path, "/bin/bash");
     assert_eq!(sig.shell_classification, ShellClassification::Bash);
     assert_eq!(

@@ -138,7 +138,8 @@ fn request<'a>(
         preserve_maximum_authority: false,
         child_shell_path: "/bin/sh",
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
-        managed_home_host_path: None,
+        managed_home: None,
+        pane_home_directory: None,
         toolchain_projection: None,
         stateful: false,
         interactive: false,
@@ -867,9 +868,14 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
     let config = config();
     let authority = authority();
     let evaluation = evaluation(EffectCompleteness::Unknown, effects());
-    let managed_home = Path::new("/private/mez/cache-home");
+    let managed_home = BubblewrapManagedHome {
+        host_path: Path::new("/private/mez/cache-home").to_path_buf(),
+        passwd_path: Path::new("/private/mez/passwd").to_path_buf(),
+        group_path: Path::new("/private/mez/group").to_path_buf(),
+        project_key: "0".repeat(64),
+    };
     let mut compile_request = request(&config, &authority, &evaluation);
-    compile_request.managed_home_host_path = Some(managed_home);
+    compile_request.managed_home = Some(&managed_home);
 
     let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
 
@@ -898,6 +904,41 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
             "missing {name}={value}"
         );
     }
+    for arguments in [
+        &["--uid", "1000"][..],
+        &["--gid", "1000"][..],
+        &["--ro-bind", "/private/mez/passwd", "/etc/passwd"][..],
+        &["--ro-bind", "/private/mez/group", "/etc/group"][..],
+    ] {
+        assert!(
+            plan.arguments
+                .windows(arguments.len())
+                .any(|window| window == arguments),
+            "missing synthetic identity arguments {arguments:?}"
+        );
+    }
+}
+
+/// Authorized pane-home paths are rehomed below the synthetic user home while
+/// paths outside that home retain their canonical sandbox destinations.
+#[test]
+fn pane_home_authority_is_projected_below_synthetic_home() {
+    let config = config();
+    let authority = home_authority("/home/alice");
+    let mut unknown = effects();
+    unknown.unknown = true;
+    let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
+    let mut compile_request = request(&config, &authority, &evaluation);
+    compile_request.pane_home_directory = Some(Path::new("/home/alice"));
+
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", "/home/alice", "/home/mez"]),
+    );
+    assert_eq!(plan.sandbox_working_directory, "/home/mez");
 }
 
 /// A configured sanitized Git identity uses command-scope Git configuration

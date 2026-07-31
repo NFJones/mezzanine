@@ -221,6 +221,7 @@ mod tests {
             None,
             host,
             user,
+            None,
             shell_path,
             ShellClassification::classify(shell_path),
             None,

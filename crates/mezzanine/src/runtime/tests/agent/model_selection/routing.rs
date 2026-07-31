@@ -17,6 +17,7 @@ fn routed_path_resolution_environment(working_directory: &Path) -> mez_agent::En
         None,
         "test-host",
         "test-user",
+        None,
         "/bin/sh",
         mez_agent::ShellClassification::PosixSh,
         None,

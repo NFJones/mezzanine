@@ -12,6 +12,7 @@ fn toolchain_environment(environment_managers: Vec<String>) -> mez_agent::Enviro
         None,
         "test-host",
         "test-user",
+        None,
         "/bin/sh",
         mez_agent::ShellClassification::PosixSh,
         None,

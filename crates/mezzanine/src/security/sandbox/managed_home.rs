@@ -22,6 +22,8 @@ use super::{BUBBLEWRAP_RUNTIME_PROFILE_VERSION, SandboxCompileError, SandboxComp
 const MANAGED_HOME_METADATA_FILE: &str = "metadata.json";
 const MANAGED_HOME_LOCK_FILE: &str = ".active.lock";
 const MANAGED_HOME_PREPARATION_LOCK_FILE: &str = ".prepare.lock";
+const MANAGED_HOME_PASSWD_FILE: &str = "passwd";
+const MANAGED_HOME_GROUP_FILE: &str = "group";
 
 /// Private lifecycle metadata retained beside one managed home.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +84,10 @@ pub(crate) struct BubblewrapManagedHomeMaintenance {
 pub(crate) struct BubblewrapManagedHome {
     /// Private host directory mounted read-write as the synthetic home.
     pub(crate) host_path: PathBuf,
+    /// Private synthetic passwd record mounted read-only inside Bubblewrap.
+    pub(crate) passwd_path: PathBuf,
+    /// Private synthetic group record mounted read-only inside Bubblewrap.
+    pub(crate) group_path: PathBuf,
     /// Stable non-secret project/profile key used for isolation and cleanup.
     pub(crate) project_key: String,
 }
@@ -129,10 +135,19 @@ pub(crate) fn prepare_bubblewrap_managed_home_for_workload(
     ] {
         ensure_private_managed_directory(&directory)?;
     }
+    let passwd_path = project_directory.join(MANAGED_HOME_PASSWD_FILE);
+    let group_path = project_directory.join(MANAGED_HOME_GROUP_FILE);
+    write_private_managed_file(
+        &passwd_path,
+        b"mez:x:1000:1000:Mezzanine sandbox user:/home/mez:/bin/sh\n",
+    )?;
+    write_private_managed_file(&group_path, b"mez:x:1000:\n")?;
     write_managed_home_metadata(&project_directory, &project_key)?;
     Ok((
         BubblewrapManagedHome {
             host_path: home,
+            passwd_path,
+            group_path,
             project_key,
         },
         activity,
@@ -289,6 +304,27 @@ fn managed_home_project_directory(config_root: &Path, project_key: &str) -> Path
 
 fn managed_home_error(message: impl Into<String>) -> SandboxCompileError {
     SandboxCompileError::new(SandboxCompileErrorKind::InvalidInput, message)
+}
+
+/// Replaces one private regular file without accepting a symlink target.
+fn write_private_managed_file(path: &Path, contents: &[u8]) -> Result<(), SandboxCompileError> {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && (metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Err(managed_home_error(
+            "managed Bubblewrap identity record must be a regular file",
+        ));
+    }
+    fs::write(path, contents).map_err(|error| {
+        managed_home_error(format!(
+            "managed Bubblewrap identity record write failed: {error}"
+        ))
+    })?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
+        managed_home_error(format!(
+            "managed Bubblewrap identity record permission update failed: {error}"
+        ))
+    })
 }
 
 fn validate_project_key(project_key: &str) -> Result<(), SandboxCompileError> {
@@ -732,6 +768,14 @@ mod tests {
         );
         assert_ne!(first.project_key, second.project_key);
         assert_ne!(first.host_path, second.host_path);
+        assert_eq!(
+            fs::read_to_string(&first.passwd_path).unwrap(),
+            "mez:x:1000:1000:Mezzanine sandbox user:/home/mez:/bin/sh\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&first.group_path).unwrap(),
+            "mez:x:1000:\n"
+        );
         for relative in [".cache", ".config", ".local/share", ".local/state"] {
             assert!(first.host_path.join(relative).is_dir());
         }

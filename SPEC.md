@@ -3552,12 +3552,17 @@ configuration root is available, Mezzanine MUST create or reuse a private
 managed home keyed by the canonical project root and sandbox runtime profile.
 It MUST mount that directory read-write at `/home/mez` and set `HOME`,
 `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME` to
-paths within it. Managed homes MUST be shared across concurrent panes for the
-same key, isolated between projects and profile versions, and created with
-user-only permissions. Mezzanine MUST NOT copy or mount the host user's home,
-credentials, or configuration into a managed home. Revoking project trust MUST
-best-effort remove the matching managed home without removing other projects'
-homes. Implementations MAY leave cleanup or storage quotas to external private
+paths within it. The Bubblewrap child MUST run as UID and GID `1000` and expose
+a synthetic `mez` passwd and group entry for that identity with `/home/mez` as
+its home. Explicitly authorized host paths beneath the pane's reported home
+directory MUST be projected beneath `/home/mez` at the same relative path;
+authorized paths outside that home MUST retain their canonical sandbox paths.
+Managed homes MUST be shared across concurrent panes for the same key, isolated
+between projects and profile versions, and created with user-only permissions.
+Mezzanine MUST NOT copy or mount the host user's home, credentials, or
+configuration into a managed home. Revoking project trust MUST best-effort
+remove the matching managed home without removing other projects' homes.
+Implementations MAY leave cleanup or storage quotas to external private
 filesystem policy; status and documentation MUST disclose that limitation.
 
 Project configuration overlays SHOULD be created at `.mezzanine/config.toml`

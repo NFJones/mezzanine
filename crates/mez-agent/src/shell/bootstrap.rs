@@ -74,6 +74,7 @@ fi\n\
 \n\
 mez_bootstrap_field host \"$(hostname 2>/dev/null || printf 'unknown')\"\n\
 mez_bootstrap_field user \"$(whoami 2>/dev/null || printf 'unknown')\"\n\
+mez_bootstrap_field home_directory \"$HOME\"\n\
 mez_bootstrap_field shell_path \"$SHELL\"\n\
 \n\
 mez_shell_name=$(printf '%s' \"$SHELL\" | { IFS=/ read -r _ _ _ _ _ _ _ _ _ _ _ mez_stem; printf '%s' \"$mez_stem\"; });\n\
@@ -287,6 +288,7 @@ end\n\
 \n\
 mez_bootstrap_field host (hostname 2>/dev/null; or printf 'unknown')\n\
 mez_bootstrap_field user (whoami 2>/dev/null; or printf 'unknown')\n\
+mez_bootstrap_field home_directory \"$HOME\"\n\
 set -l mez_shell_path (status fish-path 2>/dev/null; or command -v fish 2>/dev/null; or printf '%s' \"$SHELL\")\n\
 if test -z \"$mez_shell_path\"\n\
   set mez_shell_path \"$SHELL\"\n\
@@ -587,6 +589,7 @@ pub fn parse_bootstrap_env_output(
     let mut kernel_version: Option<String> = None;
     let mut host = String::new();
     let mut user = String::new();
+    let mut home_directory: Option<String> = None;
     let mut shell_path = String::new();
     let mut shell_class: Option<String> = None;
     let mut shell_version: Option<String> = None;
@@ -634,6 +637,9 @@ pub fn parse_bootstrap_env_output(
             "kernel_version" => kernel_version = Some(value.to_string()),
             "host" => host = value.to_string(),
             "user" => user = value.to_string(),
+            "home_directory" if !value.is_empty() => {
+                home_directory = Some(value.to_string());
+            }
             "shell_path" => shell_path = value.to_string(),
             "shell_class" => shell_class = Some(value.to_string()),
             "shell_version" => shell_version = Some(value.to_string()),
@@ -696,6 +702,7 @@ pub fn parse_bootstrap_env_output(
             kernel_version,
             host,
             user,
+            home_directory,
             shell_path,
             shell_classification,
             shell_version,

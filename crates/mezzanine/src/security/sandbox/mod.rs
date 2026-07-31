@@ -35,7 +35,7 @@ mod toolchains;
 mod workflow;
 
 #[cfg(test)]
-pub(crate) use managed_home::prepare_bubblewrap_managed_home;
+pub(crate) use managed_home::{BubblewrapManagedHome, prepare_bubblewrap_managed_home};
 pub(crate) use managed_home::{
     BubblewrapManagedHomeActivityLock, BubblewrapManagedHomeMaintenance,
     clear_bubblewrap_managed_home, inspect_bubblewrap_managed_home,
@@ -83,7 +83,7 @@ pub(crate) use workflow::{
 };
 
 /// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v4";
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v5";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -93,6 +93,8 @@ const SANDBOX_COMMAND_PATH: &str = "/run/mez/command";
 pub(crate) const BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER: &str =
     "/run/mez/host-command-placeholder";
 const SANDBOX_HOME: &str = "/home/mez";
+const SANDBOX_UID: u32 = 1000;
+const SANDBOX_GID: u32 = 1000;
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
 /// Stable, non-sensitive restriction identifiers used by status and failure diagnostics.
 pub(crate) const BUBBLEWRAP_RESTRICTION_IDS: [&str; 4] = [
@@ -135,8 +137,10 @@ pub(crate) struct BubblewrapCompileRequest<'a> {
     pub(crate) child_shell_path: &'a str,
     /// Absolute harness-owned command-file path in the pane environment.
     pub(crate) command_file_host_path: &'a str,
-    /// Optional Mezzanine-owned persistent home mounted at `/home/mez`.
-    pub(crate) managed_home_host_path: Option<&'a Path>,
+    /// Optional Mezzanine-owned persistent home and synthetic account records.
+    pub(crate) managed_home: Option<&'a managed_home::BubblewrapManagedHome>,
+    /// Canonical pane home whose authorized descendants map below `/home/mez`.
+    pub(crate) pane_home_directory: Option<&'a Path>,
     /// Descriptor-composed toolchain projection resolved from pane bootstrap.
     pub(crate) toolchain_projection: Option<&'a ResolvedToolchainProjection>,
     /// Whether the command must mutate persistent shell state.
@@ -420,7 +424,10 @@ pub(crate) fn compile_bubblewrap_launch_plan(
     request: BubblewrapCompileRequest<'_>,
 ) -> Result<BubblewrapLaunchPlan, SandboxCompileError> {
     validate_request(&request)?;
-    let policy = effective_sandbox_policy(&request)?;
+    let policy = project_policy_into_synthetic_home(
+        effective_sandbox_policy(&request)?,
+        request.pane_home_directory,
+    );
     let arguments = bubblewrap_arguments(&request, &policy);
     let plan_sha256 = launch_plan_sha256(&request.config.executable, &arguments);
     let read_only_mount_count = policy
@@ -639,8 +646,22 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
     validate_printable_absolute_path(&request.config.executable, "Bubblewrap executable")?;
     validate_canonical_path(request.command_file_host_path, "sandbox command file")?;
     validate_canonical_path(request.child_shell_path, "sandbox child shell")?;
-    if let Some(managed_home) = request.managed_home_host_path {
-        validate_canonical_path(&managed_home.to_string_lossy(), "managed Bubblewrap home")?;
+    if let Some(managed_home) = request.managed_home {
+        validate_canonical_path(
+            &managed_home.host_path.to_string_lossy(),
+            "managed Bubblewrap home",
+        )?;
+        validate_canonical_path(
+            &managed_home.passwd_path.to_string_lossy(),
+            "managed Bubblewrap passwd record",
+        )?;
+        validate_canonical_path(
+            &managed_home.group_path.to_string_lossy(),
+            "managed Bubblewrap group record",
+        )?;
+    }
+    if let Some(home) = request.pane_home_directory {
+        validate_canonical_path(&home.to_string_lossy(), "pane home directory")?;
     }
     if let Some(toolchains) = request.toolchain_projection {
         toolchains.validate()?;
@@ -965,6 +986,46 @@ fn normalize_mounts(mounts: Vec<SandboxMount>) -> Vec<SandboxMount> {
     normalized
 }
 
+/// Rehomes only explicitly authorized paths beneath the pane home below the
+/// synthetic home while preserving every other authorized destination.
+fn project_policy_into_synthetic_home(
+    mut policy: EffectiveSandboxPolicy,
+    pane_home_directory: Option<&Path>,
+) -> EffectiveSandboxPolicy {
+    let Some(pane_home_directory) = pane_home_directory else {
+        return policy;
+    };
+    policy.working_directory = synthetic_home_path(&policy.working_directory, pane_home_directory);
+    policy.mounts = normalize_mounts(
+        policy
+            .mounts
+            .into_iter()
+            .map(|mut mount| {
+                mount.destination = synthetic_home_path(&mount.destination, pane_home_directory);
+                mount
+            })
+            .collect(),
+    );
+    policy
+}
+
+/// Returns the synthetic destination for an authorized path within the pane home.
+fn synthetic_home_path(path: &str, pane_home_directory: &Path) -> String {
+    Path::new(path)
+        .strip_prefix(pane_home_directory)
+        .map(|relative| {
+            if relative.as_os_str().is_empty() {
+                SANDBOX_HOME.to_string()
+            } else {
+                Path::new(SANDBOX_HOME)
+                    .join(relative)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        })
+        .unwrap_or_else(|_| path.to_string())
+}
+
 fn bubblewrap_arguments(
     request: &BubblewrapCompileRequest<'_>,
     policy: &EffectiveSandboxPolicy,
@@ -973,6 +1034,10 @@ fn bubblewrap_arguments(
         "--json-status-fd",
         "3",
         "--unshare-user",
+        "--uid",
+        "1000",
+        "--gid",
+        "1000",
         "--unshare-pid",
         "--unshare-ipc",
         "--unshare-uts",
@@ -1043,10 +1108,16 @@ fn bubblewrap_arguments(
     if policy.network == BubblewrapNetworkMode::Isolated {
         arguments.insert(7, "--unshare-net".to_string());
     }
-    if let Some(managed_home) = request.managed_home_host_path {
+    if let Some(managed_home) = request.managed_home {
         arguments.push("--bind".to_string());
-        arguments.push(managed_home.to_string_lossy().into_owned());
+        arguments.push(managed_home.host_path.to_string_lossy().into_owned());
         arguments.push(SANDBOX_HOME.to_string());
+        arguments.push("--ro-bind".to_string());
+        arguments.push(managed_home.passwd_path.to_string_lossy().into_owned());
+        arguments.push("/etc/passwd".to_string());
+        arguments.push("--ro-bind".to_string());
+        arguments.push(managed_home.group_path.to_string_lossy().into_owned());
+        arguments.push("/etc/group".to_string());
     } else {
         arguments.push("--tmpfs".to_string());
         arguments.push(SANDBOX_HOME.to_string());

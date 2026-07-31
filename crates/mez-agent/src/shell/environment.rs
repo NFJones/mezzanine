@@ -38,6 +38,11 @@ pub struct EnvironmentSignature {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub user: String,
+    /// Canonical home directory reported by the pane shell when available.
+    ///
+    /// This value is retained for filesystem projection decisions and is not
+    /// included in model-facing context.
+    pub home_directory: Option<String>,
     /// Stores the shell path value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -98,6 +103,7 @@ impl EnvironmentSignature {
         kernel_version: Option<String>,
         host: impl Into<String>,
         user: impl Into<String>,
+        home_directory: Option<String>,
         shell_path: impl Into<String>,
         shell_classification: ShellClassification,
         shell_version: Option<String>,
@@ -114,6 +120,7 @@ impl EnvironmentSignature {
             kernel_version,
             host: host.into(),
             user: user.into(),
+            home_directory,
             shell_path: shell_path.into(),
             shell_classification,
             shell_version,
@@ -150,6 +157,7 @@ impl EnvironmentSignature {
             kernel_version: None,
             host: "unknown".to_string(),
             user: "unknown".to_string(),
+            home_directory: None,
             shell_path: "/bin/sh".to_string(),
             shell_classification: ShellClassification::UnknownUnix,
             shell_version: None,
@@ -198,6 +206,9 @@ impl EnvironmentSignature {
         }
         fields.push(format!("host={}", self.host));
         fields.push(format!("user={}", self.user));
+        if let Some(ref home_directory) = self.home_directory {
+            fields.push(format!("home_directory={home_directory}"));
+        }
         fields.push(format!("shell_path={}", self.shell_path));
         fields.push(format!(
             "shell_classification={}",

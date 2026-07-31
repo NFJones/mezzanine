@@ -22,7 +22,7 @@ use mez_agent::permissions::{
     PermissionAuthorityChange, PermissionEvaluation, compare_permission_preset_authority,
 };
 use mez_agent::{SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Effective primary filesystem authority and its user-visible provenance.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,9 +291,8 @@ impl RuntimeSessionService {
                     child_shell_path: &signature.shell_path,
                     command_file_host_path:
                         crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
-                    managed_home_host_path: managed_home
-                        .as_ref()
-                        .map(|home| home.host_path.as_path()),
+                    managed_home: managed_home.as_ref(),
+                    pane_home_directory: signature.home_directory.as_deref().map(Path::new),
                     toolchain_projection: toolchain_projection.as_ref(),
                     stateful,
                     interactive,
