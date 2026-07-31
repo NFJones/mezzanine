@@ -87,7 +87,7 @@ pub(crate) struct BubblewrapManagedHomeMaintenance {
     pub(crate) removed: bool,
 }
 
-/// Prepared host-side home projected at `/home/mez` inside Bubblewrap.
+/// Prepared host-side home projected at the invoking user's synthetic home.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BubblewrapManagedHome {
     /// Private host directory mounted read-write as the synthetic home.
@@ -188,13 +188,17 @@ pub(crate) fn prepare_bubblewrap_managed_home_for_workload_with_identity(
         .collect::<Vec<_>>();
     write_private_managed_file(
         &passwd_path,
-        format!("mez:x:{user_id}:{group_id}:Mezzanine sandbox user:/home/mez:/bin/sh\n").as_bytes(),
+        format!(
+            "{}:x:{user_id}:{group_id}:Mezzanine sandbox user:/home/{}/bin/sh\n",
+            identity.user_name, identity.user_name
+        )
+        .as_bytes(),
     )?;
     let mut group_records = format!("{}:x:{group_id}:\n", identity.primary_group_name);
     for group in &identity.supplementary_groups {
         group_records.push_str(&format!(
-            "{}:x:{}:mez\n",
-            group.canonical_name, group.group_id
+            "{}:x:{}:{}\n",
+            group.canonical_name, group.group_id, identity.user_name
         ));
     }
     write_private_managed_file(&group_path, group_records.as_bytes())?;
@@ -834,8 +838,8 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&first.passwd_path).unwrap(),
             format!(
-                "mez:x:{}:{}:Mezzanine sandbox user:/home/mez:/bin/sh\n",
-                first.user_id, first.group_id
+                "{}:x:{}:{}:Mezzanine sandbox user:/home/{}/bin/sh\n",
+                identity.user_name, first.user_id, first.group_id, identity.user_name
             )
         );
         assert_eq!(

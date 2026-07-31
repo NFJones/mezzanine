@@ -877,9 +877,10 @@ the canonical project root and Bubblewrap runtime-profile version, so panes in
 the same project share caches while different projects and future incompatible
 profiles remain isolated. The host directory and its `.cache`, `.config`,
 `.local/share`, and `.local/state` children are user-private and are mounted at
-`/home/mez`; the corresponding `HOME` and XDG variables point only inside that
-mount. Mezzanine does not copy the real home, credentials, or user configuration.
-Trust revocation performs best-effort removal of that project's keyed home.
+`/home/<pane-user>`; the corresponding `HOME` and XDG variables point only
+inside that mount. The synthetic account and its home path use the active pane
+user name, while the mount never copies the real home, credentials, or user
+configuration. Trust revocation performs best-effort removal of that project's keyed home.
 Mezzanine does not currently enforce a built-in size quota or periodic age-based
 pruning; operators may apply filesystem quotas or remove inactive private cache
 directories while no sandbox command is using them.

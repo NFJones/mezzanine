@@ -441,9 +441,11 @@ pub(crate) fn compile_bubblewrap_launch_plan(
     request: BubblewrapCompileRequest<'_>,
 ) -> Result<BubblewrapLaunchPlan, SandboxCompileError> {
     validate_request(&request)?;
+    let sandbox_home = sandbox_home_path(&request.identity.user_name);
     let policy = project_policy_into_synthetic_home(
         effective_sandbox_policy(&request)?,
         request.pane_home_directory,
+        &sandbox_home,
     );
     let arguments = bubblewrap_arguments(&request, &policy);
     let plan_sha256 = launch_plan_sha256(&request.config.executable, &arguments);
@@ -515,6 +517,7 @@ pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
     }
     let user_id = identity.user_id;
     let group_id = identity.primary_group_id;
+    let sandbox_home = sandbox_home_path(&identity.user_name);
     let expected_stdout = "mez-bubblewrap-capability-v6";
     let probe_script = format!(
         "test ! -e /etc/passwd && test \"$(id -u)\" = '{user_id}' && test \"$(id -g)\" = '{group_id}' && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
@@ -559,10 +562,10 @@ pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
         "--dir",
         "/home",
         "--tmpfs",
-        SANDBOX_HOME,
+        sandbox_home.as_str(),
         "--setenv",
         "HOME",
-        SANDBOX_HOME,
+        sandbox_home.as_str(),
         "--setenv",
         "PATH",
         MINIMAL_PATH,
@@ -1046,17 +1049,20 @@ fn normalize_mounts(mounts: Vec<SandboxMount>) -> Vec<SandboxMount> {
 fn project_policy_into_synthetic_home(
     mut policy: EffectiveSandboxPolicy,
     pane_home_directory: Option<&Path>,
+    sandbox_home: &str,
 ) -> EffectiveSandboxPolicy {
     let Some(pane_home_directory) = pane_home_directory else {
         return policy;
     };
-    policy.working_directory = synthetic_home_path(&policy.working_directory, pane_home_directory);
+    policy.working_directory =
+        synthetic_home_path(&policy.working_directory, pane_home_directory, sandbox_home);
     policy.mounts = normalize_mounts(
         policy
             .mounts
             .into_iter()
             .map(|mut mount| {
-                mount.destination = synthetic_home_path(&mount.destination, pane_home_directory);
+                mount.destination =
+                    synthetic_home_path(&mount.destination, pane_home_directory, sandbox_home);
                 mount
             })
             .collect(),
@@ -1065,14 +1071,36 @@ fn project_policy_into_synthetic_home(
 }
 
 /// Returns the synthetic destination for an authorized path within the pane home.
-fn synthetic_home_path(path: &str, pane_home_directory: &Path) -> String {
+fn synthetic_home_path(path: &str, pane_home_directory: &Path, sandbox_home: &str) -> String {
     Path::new(path)
         .strip_prefix(pane_home_directory)
         .map(|relative| {
             if relative.as_os_str().is_empty() {
-                SANDBOX_HOME.to_string()
+                sandbox_home.to_string()
             } else {
-                Path::new(SANDBOX_HOME)
+                Path::new(sandbox_home)
+                    .join(relative)
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        })
+        .unwrap_or_else(|_| path.to_string())
+}
+
+/// Returns the synthetic home path associated with one validated pane user.
+fn sandbox_home_path(user_name: &str) -> String {
+    format!("/home/{user_name}")
+}
+
+/// Rehomes fixed managed-state templates below the active synthetic home.
+fn rehome_managed_path(path: &str, sandbox_home: &str) -> String {
+    Path::new(path)
+        .strip_prefix(SANDBOX_HOME)
+        .map(|relative| {
+            if relative.as_os_str().is_empty() {
+                sandbox_home.to_string()
+            } else {
+                Path::new(sandbox_home)
                     .join(relative)
                     .to_string_lossy()
                     .into_owned()
@@ -1087,6 +1115,11 @@ fn bubblewrap_arguments(
 ) -> Vec<String> {
     let user_id = request.identity.user_id;
     let group_id = request.identity.primary_group_id;
+    let sandbox_home = sandbox_home_path(&request.identity.user_name);
+    let xdg_cache_home = format!("{sandbox_home}/.cache");
+    let xdg_config_home = format!("{sandbox_home}/.config");
+    let xdg_data_home = format!("{sandbox_home}/.local/share");
+    let xdg_state_home = format!("{sandbox_home}/.local/state");
     let mut arguments = vec![
         "--json-status-fd",
         "3",
@@ -1168,7 +1201,7 @@ fn bubblewrap_arguments(
     if let Some(managed_home) = request.managed_home {
         arguments.push("--bind".to_string());
         arguments.push(managed_home.host_path.to_string_lossy().into_owned());
-        arguments.push(SANDBOX_HOME.to_string());
+        arguments.push(sandbox_home.clone());
         arguments.push("--ro-bind".to_string());
         arguments.push(managed_home.passwd_path.to_string_lossy().into_owned());
         arguments.push("/etc/passwd".to_string());
@@ -1177,7 +1210,7 @@ fn bubblewrap_arguments(
         arguments.push("/etc/group".to_string());
     } else {
         arguments.push("--tmpfs".to_string());
-        arguments.push(SANDBOX_HOME.to_string());
+        arguments.push(sandbox_home.clone());
     }
     if let Some(toolchains) = request.toolchain_projection {
         for directory in &toolchains.sandbox_directories {
@@ -1252,9 +1285,13 @@ fn bubblewrap_arguments(
     if let Some(toolchains) = request.toolchain_projection {
         for (name, value) in &toolchains.environment {
             arguments.extend(
-                ["--setenv", name.as_str(), value.as_str()]
-                    .into_iter()
-                    .map(str::to_string),
+                [
+                    "--setenv",
+                    name.as_str(),
+                    rehome_managed_path(value, &sandbox_home).as_str(),
+                ]
+                .into_iter()
+                .map(str::to_string),
             );
         }
         for environment in &toolchains.project_environments {
@@ -1276,19 +1313,19 @@ fn bubblewrap_arguments(
             policy.working_directory.as_str(),
             "--setenv",
             "HOME",
-            SANDBOX_HOME,
+            sandbox_home.as_str(),
             "--setenv",
             "XDG_CACHE_HOME",
-            "/home/mez/.cache",
+            xdg_cache_home.as_str(),
             "--setenv",
             "XDG_CONFIG_HOME",
-            "/home/mez/.config",
+            xdg_config_home.as_str(),
             "--setenv",
             "XDG_DATA_HOME",
-            "/home/mez/.local/share",
+            xdg_data_home.as_str(),
             "--setenv",
             "XDG_STATE_HOME",
-            "/home/mez/.local/state",
+            xdg_state_home.as_str(),
             "--setenv",
             "PATH",
             executable_path.as_str(),
@@ -1303,10 +1340,10 @@ fn bubblewrap_arguments(
             "C.UTF-8",
             "--setenv",
             "USER",
-            "mez",
+            request.identity.user_name.as_str(),
             "--setenv",
             "LOGNAME",
-            "mez",
+            request.identity.user_name.as_str(),
             "--setenv",
             "SHELL",
             request.child_shell_path,

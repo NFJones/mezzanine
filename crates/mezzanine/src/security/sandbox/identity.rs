@@ -64,6 +64,7 @@ pub(crate) fn resolve_sandbox_identity(
     configured: &ConfiguredSandboxGroups,
     environment: &EnvironmentSignature,
 ) -> Result<ResolvedSandboxIdentity, SandboxCompileError> {
+    let user_name = validated_sandbox_user_name(&environment.user)?;
     let uid = environment
         .user_id
         .ok_or_else(|| identity_error("active pane bootstrap did not report its effective UID"))?;
@@ -121,13 +122,14 @@ pub(crate) fn resolve_sandbox_identity(
     let identity_sha256 = identity_sha256(
         uid,
         gid,
+        &user_name,
         &configured.requested_names,
         &supplementary_groups,
         &mapping_warnings,
     );
     Ok(ResolvedSandboxIdentity {
         user_id: uid,
-        user_name: environment.user.clone(),
+        user_name,
         primary_group_id: gid,
         primary_group_name,
         supplementary_groups,
@@ -162,7 +164,7 @@ pub(crate) fn current_process_environment_signature()
         std::env::consts::ARCH,
         None,
         "test-host",
-        "test-user",
+        "mez",
         None,
         "/bin/sh",
         ShellClassification::PosixSh,
@@ -216,14 +218,17 @@ fn current_group_name(group_id: u32) -> Result<String, SandboxCompileError> {
 fn identity_sha256(
     uid: u32,
     gid: u32,
+    user_name: &str,
     requested_groups: &[String],
     groups: &[ResolvedHostGroup],
     warnings: &[SandboxMappingWarning],
 ) -> String {
     let mut digest = Sha256::new();
-    digest.update(b"mez-sandbox-identity-v2\0");
+    digest.update(b"mez-sandbox-identity-v3\0");
     digest.update(uid.to_le_bytes());
     digest.update(gid.to_le_bytes());
+    digest.update(b"\0user\0");
+    digest.update(user_name.as_bytes());
     let mut requested_groups = requested_groups.iter().collect::<Vec<_>>();
     requested_groups.sort();
     for requested in requested_groups {
@@ -249,6 +254,20 @@ fn identity_sha256(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// Validates the pane account name before using it in sandbox paths and records.
+fn validated_sandbox_user_name(user_name: &str) -> Result<String, SandboxCompileError> {
+    if matches!(user_name, "" | "." | "..")
+        || user_name
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || matches!(byte, b'/' | b':' | b'='))
+    {
+        return Err(identity_error(
+            "active pane bootstrap reported an unsafe account name for sandbox projection",
+        ));
+    }
+    Ok(user_name.to_string())
 }
 
 fn identity_error(message: impl Into<String>) -> SandboxCompileError {
@@ -337,6 +356,20 @@ mod tests {
             assert!(identity.supplementary_groups.is_empty());
             assert_eq!(identity.mapping_warnings.len(), 1);
             assert_eq!(identity.mapping_warnings[0].configured_value, name);
+        }
+    }
+
+    /// Verifies unsafe pane account names cannot become synthetic-home path
+    /// components or passwd-record fields.
+    #[test]
+    fn rejects_unsafe_pane_account_names() {
+        for user_name in ["", "alice/bob", "alice:admin", "alice\nadmin", ".", ".."] {
+            let mut environment = pane_environment();
+            environment.user = user_name.to_string();
+
+            let error = resolve_sandbox_identity(&ConfiguredSandboxGroups::default(), &environment)
+                .unwrap_err();
+            assert!(error.message().contains("unsafe account name"));
         }
     }
 }

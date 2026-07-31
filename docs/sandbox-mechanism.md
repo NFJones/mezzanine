@@ -74,8 +74,9 @@ Bubblewrap projects only the authority needed by the compiled plan:
   descendants such as `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
   and Mezzanine configuration are masked by private tmpfs mounts. They are not
   mounted merely because a parent is mounted.
-- The child receives a synthetic home at `/home/mez`, not the host user's
-  home. For trusted projects, Mezzanine may reuse a private managed home keyed
+- The child receives a synthetic home at `/home/<pane-user>`, named after the
+  active pane user but backed by a private Mezzanine-managed directory rather
+  than the host user's home. For trusted projects, Mezzanine may reuse a private managed home keyed
   by canonical project root and sandbox runtime profile. Its HOME and XDG
   paths remain inside that managed home. The child uses the invoking user's
   native UID and primary GID while inheriting the active pane shell's

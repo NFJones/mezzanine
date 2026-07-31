@@ -497,7 +497,8 @@ Current support reflects behavior implemented in the repository today.
   `JAVA_HOME` and includes only the selected SDK. Maven and Gradle require that
   JDK, prefer validated repository `mvnw` and `gradlew` wrappers, fall back to
   exact standalone pane evidence, and isolate user homes, caches, wrapper
-  distributions, and daemon state beneath `/home/mez`. Host settings,
+  distributions, and daemon state beneath the pane user's synthetic home.
+  Host settings,
   properties, init scripts, credentials, signing keys, manager homes, and
   existing daemons remain hidden. Wrapper downloads still use normal sandbox
   network policy and are never performed during detection. .NET
@@ -527,7 +528,7 @@ Current support reflects behavior implemented in the repository today.
   read-only only at fixed sandbox paths; they do not add write authority or
   generic mounts at their original host paths.
   Writable cache and package state is redirected beneath
-  `/home/mez`; host credentials, caches, Deno authentication and certificate
+  the pane user's synthetic home; host credentials, caches, Deno authentication and certificate
   settings, Bun global tools and configuration, npm credentials and global
   packages, Python package credentials and host caches, `GOBIN`, and
   `GOPATH/bin` remain hidden. Node.js does not

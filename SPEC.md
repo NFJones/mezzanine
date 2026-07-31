@@ -3584,7 +3584,7 @@ MUST preserve omission and MUST NOT infer a toolchain from ambient state.
 When Bubblewrap authority comes from a trusted project and a private Mezzanine
 configuration root is available, Mezzanine MUST create or reuse a private
 managed home keyed by the canonical project root and sandbox runtime profile.
-It MUST mount that directory read-write at `/home/mez` and set `HOME`,
+It MUST mount that directory read-write at `/home/<pane-user>` and set `HOME`,
 `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME` to
 paths within it. The Bubblewrap child MUST run as the invoking user's native
 UID and primary GID while inheriting the active pane shell's supplementary
@@ -3595,10 +3595,11 @@ or workload launch. Mezzanine MUST NOT add, replace, or filter supplementary
 kernel credentials. An unprivileged user namespace MAY expose an unmapped host
 GID as the overflow GID, so inner numeric display MUST NOT be treated as the
 canonical host mapping.
-Managed homes MUST expose a synthetic `mez` passwd entry and immutable,
+Managed homes MUST expose a synthetic passwd entry named for the active pane
+user and immutable,
 identity-hash-keyed primary and configured supplementary group entries
-with `/home/mez` as the home. Explicitly authorized host paths beneath the pane's reported home
-directory MUST be projected beneath `/home/mez` at the same relative path;
+with `/home/<pane-user>` as the home. Explicitly authorized host paths beneath the pane's reported home
+directory MUST be projected beneath `/home/<pane-user>` at the same relative path;
 authorized paths outside that home MUST retain their canonical sandbox paths.
 Managed homes MUST be shared across concurrent panes for the same key, isolated
 between projects and profile versions, and created with user-only permissions.

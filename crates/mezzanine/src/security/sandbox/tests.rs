@@ -952,6 +952,88 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
     }
 }
 
+/// Verifies a pane username distinct from the former fixed alias determines
+/// every launch-time home and account environment path without altering the
+/// fixed toolchain projection templates.
+#[test]
+fn sandbox_home_uses_the_resolved_pane_username() {
+    let config = config();
+    let authority = home_authority("/home/alice");
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let environment = mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "pane-host",
+        "alice",
+        Some("/home/alice".to_string()),
+        "/bin/sh",
+        mez_agent::ShellClassification::PosixSh,
+        None,
+        None,
+        "/home/alice",
+        None,
+        false,
+        None,
+        Vec::new(),
+    )
+    .unwrap()
+    .with_process_identity(
+        1000,
+        1000,
+        vec![mez_agent::EnvironmentGroup {
+            id: 1000,
+            name: "alice".to_string(),
+        }],
+    )
+    .unwrap();
+    let identity = resolve_sandbox_identity(&config.group_whitelist, &environment).unwrap();
+    let mut compile_request = request(&config, &authority, &evaluation);
+    let probe = bubblewrap_capability_probe_plan_for_identity(
+        &config,
+        "/bin/sh",
+        &identity,
+        compile_request.environment_evidence,
+    )
+    .unwrap();
+    compile_request.identity = identity;
+    compile_request.capability = parse_bubblewrap_capability_probe(
+        "%1",
+        "pane-env-sha256",
+        0,
+        &probe,
+        0,
+        probe.expected_stdout,
+    )
+    .unwrap();
+    compile_request.pane_home_directory = Some(Path::new("/home/alice"));
+
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--ro-bind", "/home/alice", "/home/alice"])
+    );
+    for (name, value) in [
+        ("HOME", "/home/alice"),
+        ("XDG_CACHE_HOME", "/home/alice/.cache"),
+        ("XDG_CONFIG_HOME", "/home/alice/.config"),
+        ("XDG_DATA_HOME", "/home/alice/.local/share"),
+        ("XDG_STATE_HOME", "/home/alice/.local/state"),
+        ("USER", "alice"),
+        ("LOGNAME", "alice"),
+    ] {
+        assert!(
+            plan.arguments
+                .windows(3)
+                .any(|args| args == ["--setenv", name, value]),
+            "missing {name}={value}"
+        );
+    }
+    assert_eq!(plan.sandbox_working_directory, "/home/alice");
+}
+
 /// Authorized pane-home paths are rehomed below the synthetic user home while
 /// paths outside that home retain their canonical sandbox destinations.
 #[test]
