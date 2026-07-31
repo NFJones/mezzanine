@@ -97,6 +97,179 @@ async fn runtime_provider_completion_queues_network_action_for_worker() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a correctable routed-presentation patch failure reaches a model
+/// continuation instead of terminalizing the routed turn.
+///
+/// Malformed add-file syntax is a bounded, model-correctable validation error.
+/// The continuation must retain the exact parser diagnostic, and a corrected
+/// follow-up execution must then be able to settle the presentation normally.
+#[tokio::test]
+async fn runtime_routed_presentation_retries_correctable_patch_failure() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routed-patch-correction","method":"agent/shell/command","params":{"idempotency_key":"routed-patch-correction","input":"present the routed implementation"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    service.remove_pending_agent_provider_task("turn-1");
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    service.mark_routed_presentation_turn_for_tests(&turn.turn_id);
+
+    let malformed_action = mez_agent::AgentAction {
+        id: "malformed-routed-patch".to_string(),
+        rationale: "write the routed plan".to_string(),
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Add File: routed-plan.md\nmissing-prefix\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let diagnostic = "apply_patch: add-file lines must start with +";
+    let failed_result = mez_agent::ActionResult::failed(
+        &turn,
+        &malformed_action,
+        ActionStatus::Failed,
+        "invalid_params",
+        diagnostic,
+    )
+    .unwrap();
+    let failed_execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "write malformed routed patch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "write the routed plan".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![malformed_action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![failed_result],
+        final_turn: false,
+        terminal_state: AgentTurnState::Failed,
+    };
+
+    assert!(
+        service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+                &turn.turn_id,
+                failed_execution,
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == turn.turn_id)
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|record| record.turn_id == turn.turn_id)
+            .map(|record| record.state),
+        Some(AgentTurnState::Running)
+    );
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult && block.content.contains(diagnostic)
+    }));
+
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+    let corrected_action = mez_agent::AgentAction {
+        id: "corrected-routed-patch".to_string(),
+        rationale: "write the corrected routed plan".to_string(),
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Add File: routed-plan.md\n+corrected\n*** End Patch"
+                .to_string(),
+            strip: None,
+        },
+    };
+    let corrected_execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "write corrected routed patch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "write the corrected routed plan".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![corrected_action.clone()],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &corrected_action,
+            vec!["corrected routed patch applied".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    assert!(
+        service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+                &turn.turn_id,
+                corrected_execution,
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|record| record.turn_id == turn.turn_id)
+            .map(|record| record.state),
+        Some(AgentTurnState::Completed)
+    );
+    assert!(!service.has_active_routed_workflow(&turn.turn_id));
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies provider execution identity is idempotent for exact replay while
 /// preserving textually identical responses reached from different requests.
 ///

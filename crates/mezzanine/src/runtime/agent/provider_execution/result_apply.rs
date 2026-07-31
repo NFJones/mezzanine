@@ -138,15 +138,11 @@ impl RuntimeSessionService {
             self.apply_permission_request_hooks_for_execution(turn, &mut execution)?;
         }
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
-        let failure_feedback_queued = if self.routed_presentation_turn(&turn.turn_id) {
-            false
-        } else {
-            self.queue_agent_failure_feedback_for_correction(
-                turn,
-                &mut execution,
-                "provider_execution_failed_action",
-            )?
-        };
+        let failure_feedback_queued = self.queue_agent_failure_feedback_for_correction(
+            turn,
+            &mut execution,
+            "provider_execution_failed_action",
+        )?;
         self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         let mut persisted_transcript_entries = 0usize;
         if failure_feedback_queued {
