@@ -483,7 +483,10 @@ fn provider_worker_event(
                 message: error.message().to_string(),
                 provider_failure_json: error.provider_failure_json().map(str::to_string),
                 provider_raw_text: error.provider_raw_text().map(str::to_string),
-                provider_output_limit_state: error.provider_output_limit_state().cloned().map(Box::new),
+                provider_output_limit_state: error
+                    .provider_output_limit_state()
+                    .cloned()
+                    .map(Box::new),
             }),
             false,
         ),
