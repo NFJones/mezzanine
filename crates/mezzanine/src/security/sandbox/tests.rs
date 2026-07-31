@@ -642,10 +642,17 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     let plan = bubblewrap_capability_probe_plan(&config, "/bin/sh").unwrap();
 
     assert_eq!(plan.executable, "/usr/bin/bwrap");
-    assert_eq!(plan.expected_stdout, "mez-bubblewrap-capability-v1");
+    assert_eq!(plan.expected_stdout, "mez-bubblewrap-capability-v2");
     assert!(plan.arguments.contains(&"--unshare-net".to_string()));
+    assert!(plan.arguments.contains(&"--uid".to_string()));
+    assert!(plan.arguments.contains(&"--gid".to_string()));
     assert!(plan.arguments.contains(&"--disable-userns".to_string()));
     assert!(plan.arguments.contains(&"--clearenv".to_string()));
+    assert!(
+        plan.arguments
+            .last()
+            .is_some_and(|script| script.contains("/proc/self/gid_map"))
+    );
     assert!(
         plan.arguments
             .iter()
@@ -654,7 +661,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     assert!(
         plan.arguments
             .last()
-            .is_some_and(|script| script.contains("printf '%s' 'mez-bubblewrap-capability-v1'"))
+            .is_some_and(|script| script.contains("printf '%s' 'mez-bubblewrap-capability-v2'"))
     );
     let capability = parse_bubblewrap_capability_probe(
         "%1",
@@ -662,7 +669,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
         0,
         &plan,
         0,
-        "mez-bubblewrap-capability-v1",
+        "mez-bubblewrap-capability-v2",
     )
     .unwrap();
     assert_eq!(
@@ -678,10 +685,10 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     );
 
     for contaminated_output in [
-        "mez-bubblewrap-capability-v1\n",
-        "mez-bubblewrap-capability-v1\r\n",
-        "leading-mez-bubblewrap-capability-v1",
-        "mez-bubblewrap-capability-v1trailing",
+        "mez-bubblewrap-capability-v2\n",
+        "mez-bubblewrap-capability-v2\r\n",
+        "leading-mez-bubblewrap-capability-v2",
+        "mez-bubblewrap-capability-v2trailing",
         "",
     ] {
         assert_eq!(
@@ -874,6 +881,7 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
         group_path: Path::new("/private/mez/group").to_path_buf(),
         user_id: 1234,
         group_id: 5678,
+        supplementary_group_ids: vec![6789],
         project_key: "0".repeat(64),
     };
     let mut compile_request = request(&config, &authority, &evaluation);

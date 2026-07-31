@@ -442,6 +442,9 @@ Current support reflects behavior implemented in the repository today.
   persistent XDG cache, config, data, and state directories. Homes are isolated
   by project and sandbox profile, support overlapping same-project workloads,
   never copy the real user home, and are removed when project trust is revoked.
+  Sandboxed launches require the calling user's native UID, primary GID, and
+  supplementary groups; capability probing fails closed when Bubblewrap cannot
+  preserve that kernel credential set.
   `mez sandbox cache status [PATH]` reports usage without creating storage.
   `cache clear [PATH]` and `cache prune` preview inactive candidates by default;
   pass `--dry-run` for an explicit preview or `--yes` to delete. Active homes

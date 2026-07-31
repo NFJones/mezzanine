@@ -12,7 +12,7 @@
 //! all fail before a workload can start. Generated plans contain typed argv,
 //! never user-provided Bubblewrap arguments or wrapper shell fragments.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
@@ -83,7 +83,7 @@ pub(crate) use workflow::{
 };
 
 /// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v6";
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v7";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -474,13 +474,38 @@ pub(crate) fn bubblewrap_capability_probe_plan(
             "initial Bubblewrap profile supports child shells under /bin or /usr only",
         ));
     }
-    let expected_stdout = "mez-bubblewrap-capability-v1";
+    let user_id = rustix::process::getuid().as_raw();
+    let group_id = rustix::process::getgid().as_raw();
+    let supplementary_group_ids = rustix::process::getgroups()
+        .map_err(|error| {
+            SandboxCompileError::new(
+                SandboxCompileErrorKind::CapabilityProbeFailed,
+                format!("Bubblewrap could not read native supplementary groups: {error}"),
+            )
+        })?
+        .into_iter()
+        .map(|group| group.as_raw())
+        .filter(|group| *group != group_id)
+        .collect::<BTreeSet<_>>();
+    let group_checks = std::iter::once(group_id)
+        .chain(supplementary_group_ids)
+        .map(|group_id| {
+            format!(
+                "grep -Eq '^[[:space:]]*{group_id}[[:space:]]+{group_id}[[:space:]]+1[[:space:]]*$' /proc/self/gid_map && case \" $(id -G) \" in *\" {group_id} \"*) ;; *) exit 1;; esac"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let expected_stdout = "mez-bubblewrap-capability-v2";
     let probe_script = format!(
-        "test ! -e /etc/passwd && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{}'",
-        expected_stdout
+        "test ! -e /etc/passwd && test \"$(id -u)\" = '{user_id}' && test \"$(id -g)\" = '{group_id}' && {group_checks} && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
     );
     let arguments = vec![
         "--unshare-user",
+        "--uid",
+        &user_id.to_string(),
+        "--gid",
+        &group_id.to_string(),
         "--unshare-pid",
         "--unshare-ipc",
         "--unshare-uts",

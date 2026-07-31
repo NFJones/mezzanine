@@ -72,7 +72,11 @@ Bubblewrap projects only the authority needed by the compiled plan:
 - The child receives a synthetic home at `/home/mez`, not the host user's
   home. For trusted projects, Mezzanine may reuse a private managed home keyed
   by canonical project root and sandbox runtime profile. Its HOME and XDG
-  paths remain inside that managed home.
+  paths remain inside that managed home. The child retains the invoking
+  user's native UID, primary GID, and supplementary groups. Capability probing
+  verifies that kernel credential set before enabling Bubblewrap; an installed
+  Bubblewrap profile that cannot retain every group fails closed rather than
+  silently denying group-authorized mounted paths.
 - The default runtime environment is rebuilt from a fixed non-secret set with
   a minimal PATH. Debian-style executable alternatives at `/etc/alternatives`
   are projected read-only so system compiler symlinks resolve. Host system and

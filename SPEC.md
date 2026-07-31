@@ -3553,8 +3553,12 @@ managed home keyed by the canonical project root and sandbox runtime profile.
 It MUST mount that directory read-write at `/home/mez` and set `HOME`,
 `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME` to
 paths within it. The Bubblewrap child MUST run as the invoking user's native
-UID and primary GID and expose a synthetic `mez` passwd and group entry for
-that identity with `/home/mez` as its home. Explicitly authorized host paths beneath the pane's reported home
+UID, primary GID, and supplementary groups. The capability probe MUST verify
+that every native group is present in the child's kernel credentials; otherwise
+Bubblewrap MUST fail closed rather than silently dropping group-based filesystem
+access. Managed homes MUST expose a
+synthetic `mez` passwd entry and synthetic primary and supplementary group
+entries for that identity with `/home/mez` as its home. Explicitly authorized host paths beneath the pane's reported home
 directory MUST be projected beneath `/home/mez` at the same relative path;
 authorized paths outside that home MUST retain their canonical sandbox paths.
 Managed homes MUST be shared across concurrent panes for the same key, isolated
