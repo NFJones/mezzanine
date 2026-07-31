@@ -292,6 +292,11 @@ fn protected_ipc_socket_read_scope_is_compiled_read_only() {
             .windows(3)
             .any(|args| args == ["--ro-bind", socket_scope.as_str(), socket_scope.as_str()])
     );
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|args| args == ["--symlink", "/run", "/var/run"])
+    );
 
     for read_scope in [
         root.to_string_lossy().into_owned(),

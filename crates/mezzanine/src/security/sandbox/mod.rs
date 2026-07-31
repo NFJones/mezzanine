@@ -88,7 +88,7 @@ pub(crate) use workflow::{
 };
 
 /// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v11";
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v12";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -1184,6 +1184,11 @@ fn bubblewrap_arguments(
         "/home",
         "--dir",
         "/run",
+        "--dir",
+        "/var",
+        "--symlink",
+        "/run",
+        "/var/run",
         "--dir",
         "/run/mez",
         "--dir",
