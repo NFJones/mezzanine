@@ -92,7 +92,11 @@ Bubblewrap projects only the authority needed by the compiled plan:
   are passed as direct `--setenv` arguments and retained only in protected
   launch state; status and diagnostics expose names and omission classes only.
   Missing, invalid, oversized, or reserved mappings warn and degrade without
-  disabling Bubblewrap or substituting controller-local values.
+  disabling Bubblewrap or substituting controller-local values. Ordinary
+  actions use this configured-forwarding profile. Internal semantic
+  `apply_patch` phases instead use a deterministic no-forwarding profile and do
+  not start pane-environment evidence transactions. Capability probing and
+  workload compilation must use the same profile and evidence digest.
 - The default runtime environment is rebuilt from a fixed non-secret set with
   a minimal PATH. Debian-style executable alternatives at `/etc/alternatives`
   are projected read-only so system compiler symlinks resolve. Host system and

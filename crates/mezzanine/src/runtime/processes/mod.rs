@@ -60,7 +60,9 @@ use mez_agent::{
 use mez_mux::process::PaneProcess;
 use mez_terminal::TerminalStyledLine;
 
-pub(crate) use transactions::RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES;
+pub(crate) use transactions::{
+    BubblewrapEnvironmentProfile, RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES,
+};
 use transactions::{
     RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS, RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT,
     RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS, runtime_running_shell_transaction_kind_name,

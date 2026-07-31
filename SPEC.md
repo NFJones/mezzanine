@@ -2982,11 +2982,14 @@ most 16 KiB. Values MUST be discovered only from the active pane process using
 a bounded framed protocol. Unset, malformed, non-text, oversized, reserved, or
 protocol-invalid values MUST be omitted independently with a value-redacted
 pane warning. Successful values MUST become direct Bubblewrap `--setenv`
-arguments, MUST be bound by digest to the capability identity, and MUST never
-appear in status, warnings, telemetry, snapshots, or logs. The fixed sandbox
-HOME, PATH, XDG, locale, identity, shell, and Git isolation variables MUST NOT
-be overridden. Forwarding MUST NOT grant filesystem, socket, network, group,
-or credential authority. The active pane
+arguments for ordinary actions, MUST be bound by digest to the capability
+identity, and MUST never appear in status, warnings, telemetry, snapshots, or
+logs. Internal semantic `apply_patch` phases MUST NOT resolve or forward these
+optional values; their capability probe and workload compilation MUST use the
+same deterministic digest-bound no-forwarding profile. The fixed sandbox HOME,
+PATH, XDG, locale, identity, shell, and Git isolation variables MUST NOT be
+overridden. Forwarding MUST NOT grant filesystem, socket, network, group, or
+credential authority. The active pane
 shell's primary group MUST remain automatic and MUST NOT be listed. Entries
 MUST be non-empty printable non-numeric group names; duplicate configured
 names, control data, more than 64 entries, or more than 8 KiB of encoded names

@@ -6,10 +6,10 @@
 //! fail-closed action result without retrying the workload unsandboxed.
 
 use super::{
-    ActionStatus, EventKind, PaneReadinessState, Result, RunningShellTransactionKind,
-    RunningShellTransactionRef, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    ShellTransaction, current_unix_millis, json_escape, runtime_marker_for_action,
-    runtime_pane_readiness_state_name,
+    ActionStatus, BubblewrapEnvironmentProfile, EventKind, PaneReadinessState, Result,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
+    RuntimeShellTransactionActionFailure, ShellTransaction, current_unix_millis, json_escape,
+    runtime_marker_for_action, runtime_pane_readiness_state_name,
 };
 use crate::runtime::SandboxConfig;
 use mez_agent::{ShellChildArgument, ShellChildLaunch};
@@ -76,6 +76,21 @@ impl RuntimeSessionService {
         turn: &mez_agent::AgentTurnRecord,
         action_id: &str,
     ) -> Result<bool> {
+        self.ensure_bubblewrap_capability_for_action_with_environment_profile(
+            turn,
+            action_id,
+            BubblewrapEnvironmentProfile::ConfiguredForwarding,
+        )
+    }
+
+    /// Ensures the active pane has a capability matching the selected action
+    /// environment profile exactly.
+    pub(crate) fn ensure_bubblewrap_capability_for_action_with_environment_profile(
+        &mut self,
+        turn: &mez_agent::AgentTurnRecord,
+        action_id: &str,
+        environment_profile: BubblewrapEnvironmentProfile,
+    ) -> Result<bool> {
         let permission_policy = self.permission_policy_for_turn(turn);
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         if !crate::runtime::config::bubblewrap_applies_to_policy(
@@ -115,17 +130,18 @@ impl RuntimeSessionService {
             config.env_whitelist.requested_names.clone(),
         )
         .map_err(|error| crate::MezError::invalid_args(error.message()))?;
-        let environment_evidence = if environment_request.names.is_empty() {
-            mez_agent::shell::PaneEnvironmentEvidence::restrictive(
+        let environment_evidence = self
+            .bubblewrap_environment_evidence_for_action(
+                turn,
+                action_id,
                 &environment_request,
-                "not_configured",
+                environment_profile,
             )
-        } else {
-            self.pane_environment_evidence(turn, action_id, &environment_request)
-                .ok_or_else(|| crate::MezError::invalid_state(
+            .ok_or_else(|| {
+                crate::MezError::invalid_state(
                     "pane environment evidence is unavailable for Bubblewrap capability probing",
-                ))?
-        };
+                )
+            })?;
         let probe_plan = crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
             &config,
             &signature.shell_path,

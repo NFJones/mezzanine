@@ -420,6 +420,31 @@ fn configure_path_resolution_bubblewrap(service: &mut RuntimeSessionService) {
         .replace_configured_permissions(configured);
 }
 
+/// Configures the path-resolution fixture with one optional pane variable so
+/// action-specific environment profile behavior can be tested.
+fn configure_path_resolution_bubblewrap_with_environment(service: &mut RuntimeSessionService) {
+    let configured =
+        crate::runtime::config::runtime_configured_permissions_from_config(&serde_json::json!({
+            "permissions": {
+                "sandbox": "bubblewrap",
+                "read_scopes": ["."],
+                "write_scopes": ["."],
+                "network_policy": "deny",
+                "bubblewrap": {
+                    "executable": "/usr/bin/bwrap",
+                    "unavailable": "fail",
+                    "network": "isolated",
+                    "environment": "minimal",
+                    "env_whitelist": ["CI"]
+                }
+            }
+        }))
+        .unwrap();
+    service
+        .integration
+        .replace_configured_permissions(configured);
+}
+
 /// Configures Bubblewrap without explicit scopes so project trust is the only
 /// possible source of primary filesystem authority.
 fn configure_trusted_project_bubblewrap(service: &mut RuntimeSessionService) {
@@ -850,6 +875,158 @@ fn bubblewrap_probe_service() -> RuntimeSessionService {
     service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
     mark_test_pane_ready(&mut service, "%1");
     service
+}
+
+/// Verifies semantic patch phases use one deterministic no-forwarding
+/// environment profile for both Bubblewrap probing and workload compilation.
+///
+/// A nonempty pane-variable whitelist previously made `apply_patch` fail before
+/// probing because its evidence transaction had deliberately been removed.
+/// Patch phases must now omit those variables without starting that unrelated
+/// transaction, while retaining an exact digest match through final dispatch.
+#[test]
+fn runtime_semantic_patch_with_env_whitelist_uses_no_forwarding_profile() {
+    let root = std::env::current_dir().unwrap().join(format!(
+        "target/mez-runtime-patch-environment-profile-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_path_resolution_bubblewrap_with_environment(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(&root));
+    cache_path_resolution_maximum(&mut service, &root);
+    mark_test_pane_ready(&mut service, "%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+    let turn = path_resolution_turn();
+    let action_id = "patch-environment-profile";
+    let request = mez_agent::shell::PaneEnvironmentRequest::new(vec!["CI".to_string()]).unwrap();
+    let expected_evidence = service
+        .bubblewrap_environment_evidence_for_action(
+            &turn,
+            action_id,
+            &request,
+            crate::runtime::BubblewrapEnvironmentProfile::SemanticPatchNoForwarding,
+        )
+        .unwrap();
+    assert_eq!(
+        expected_evidence.omitted.get("CI").map(String::as_str),
+        Some("semantic_patch_not_forwarded")
+    );
+
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action_with_environment_profile(
+                &turn,
+                action_id,
+                crate::runtime::BubblewrapEnvironmentProfile::SemanticPatchNoForwarding,
+            )
+            .unwrap()
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| !matches!(
+                transaction.kind,
+                RunningShellTransactionKind::EnvironmentEvidence { .. }
+            ))
+    );
+    let (marker, mut transaction) = take_bubblewrap_probe_transaction(&mut service);
+    let RunningShellTransactionKind::BubblewrapCapabilityProbe { probe_plan, .. } =
+        &transaction.kind
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        probe_plan.environment_sha256,
+        expected_evidence.value_sha256
+    );
+    assert!(!probe_plan.arguments.iter().any(|argument| argument == "CI"));
+    transaction.observed_output_preview = probe_plan.expected_stdout.to_string();
+    service
+        .observe_bubblewrap_capability_probe_transaction_end(&marker, transaction, 0)
+        .unwrap();
+
+    let action = mez_agent::AgentAction {
+        id: action_id.to_string(),
+        rationale: "exercise semantic patch sandbox dispatch".to_string(),
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch".to_string(),
+            strip: None,
+        },
+    };
+    assert!(
+        service
+            .dispatch_shell_action_to_pane_for_tests(
+                &turn,
+                &action,
+                "# __MEZ_APPLY_PATCH_READ_PHASE__",
+                None,
+            )
+            .unwrap()
+    );
+    let patch_marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::AgentAction { action_id: running }
+                    if running == action_id
+            )
+            .then(|| marker.clone())
+        })
+        .expect("semantic patch phase should dispatch after capability settlement");
+    assert!(service.shell_transaction_is_sandboxed_for_tests(&patch_marker));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| !matches!(
+                transaction.kind,
+                RunningShellTransactionKind::EnvironmentEvidence { .. }
+            ))
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies ordinary sandboxed actions with a configured variable still start
+/// pane-local evidence acquisition instead of inheriting patch behavior.
+#[test]
+fn runtime_ordinary_action_with_env_whitelist_requests_environment_evidence() {
+    let mut service = bubblewrap_probe_service();
+    configure_path_resolution_bubblewrap_with_environment(&mut service);
+    let turn = path_resolution_turn();
+
+    assert!(
+        !service
+            .ensure_bubblewrap_environment_evidence_for_action(&turn, "ordinary-action")
+            .unwrap()
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| matches!(
+                &transaction.kind,
+                RunningShellTransactionKind::EnvironmentEvidence { waiters, .. }
+                    if waiters == &vec![(
+                        "path-resolution-turn".to_string(),
+                        "ordinary-action".to_string()
+                    )]
+            ))
+    );
+
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies host access skips Bubblewrap path and capability preflight without

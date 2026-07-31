@@ -12,6 +12,16 @@ use crate::runtime::RuntimeEnvironmentEvidenceCacheKey;
 
 const ENVIRONMENT_EVIDENCE_TIMEOUT_MS: u64 = 10_000;
 
+/// Selects how one Bubblewrap workload obtains optional pane environment
+/// values without weakening the fixed sandbox environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BubblewrapEnvironmentProfile {
+    /// Resolve and forward the configured pane variables for ordinary actions.
+    ConfiguredForwarding,
+    /// Omit configured pane variables from internal semantic patch phases.
+    SemanticPatchNoForwarding,
+}
+
 impl RuntimeSessionService {
     fn environment_evidence_cache_key(
         &self,
@@ -40,6 +50,31 @@ impl RuntimeSessionService {
         let key =
             self.environment_evidence_cache_key(&turn.pane_id, &turn.turn_id, action_id, request)?;
         self.process.pane_environment_evidence.get(&key).cloned()
+    }
+
+    /// Resolves the exact environment evidence used by both Bubblewrap
+    /// capability probing and workload compilation for one action profile.
+    pub(crate) fn bubblewrap_environment_evidence_for_action(
+        &self,
+        turn: &mez_agent::AgentTurnRecord,
+        action_id: &str,
+        request: &mez_agent::shell::PaneEnvironmentRequest,
+        profile: BubblewrapEnvironmentProfile,
+    ) -> Option<mez_agent::shell::PaneEnvironmentEvidence> {
+        match profile {
+            BubblewrapEnvironmentProfile::SemanticPatchNoForwarding => {
+                Some(mez_agent::shell::PaneEnvironmentEvidence::restrictive(
+                    request,
+                    "semantic_patch_not_forwarded",
+                ))
+            }
+            BubblewrapEnvironmentProfile::ConfiguredForwarding if request.names.is_empty() => Some(
+                mez_agent::shell::PaneEnvironmentEvidence::restrictive(request, "not_configured"),
+            ),
+            BubblewrapEnvironmentProfile::ConfiguredForwarding => {
+                self.pane_environment_evidence(turn, action_id, request)
+            }
+        }
     }
 
     pub(crate) fn ensure_bubblewrap_environment_evidence_for_action(

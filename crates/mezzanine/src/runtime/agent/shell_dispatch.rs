@@ -567,7 +567,11 @@ impl RuntimeSessionService {
                         continue;
                     }
                 }
-                match self.ensure_bubblewrap_capability_for_action(turn, &action.id) {
+                match self.ensure_bubblewrap_capability_for_action_with_environment_profile(
+                    turn,
+                    &action.id,
+                    crate::runtime::BubblewrapEnvironmentProfile::SemanticPatchNoForwarding,
+                ) {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(error) => {

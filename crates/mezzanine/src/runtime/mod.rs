@@ -322,7 +322,8 @@ mod processes;
 // rendering, presentation, interaction, resize, and lifecycle refactors.
 #[allow(unused_imports)]
 pub(crate) use processes::{
-    PaneSurfaceKind, RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, RuntimeProcessComponent,
+    BubblewrapEnvironmentProfile, PaneSurfaceKind,
+    RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES, RuntimeProcessComponent,
 };
 /// Exposes the render module boundary.
 ///

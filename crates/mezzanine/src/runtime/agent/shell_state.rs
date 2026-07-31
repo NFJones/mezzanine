@@ -247,19 +247,24 @@ impl RuntimeSessionService {
                 config.env_whitelist.requested_names.clone(),
             )
             .map_err(|error| MezError::invalid_args(error.message()))?;
-            let environment_evidence = if environment_request.names.is_empty() {
-                mez_agent::shell::PaneEnvironmentEvidence::restrictive(
+            let environment_profile =
+                if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+                    crate::runtime::BubblewrapEnvironmentProfile::SemanticPatchNoForwarding
+                } else {
+                    crate::runtime::BubblewrapEnvironmentProfile::ConfiguredForwarding
+                };
+            let environment_evidence = self
+                .bubblewrap_environment_evidence_for_action(
+                    turn,
+                    &action.id,
                     &environment_request,
-                    "not_configured",
+                    environment_profile,
                 )
-            } else {
-                self.pane_environment_evidence(turn, &action.id, &environment_request)
-                    .ok_or_else(|| {
-                        MezError::invalid_state(
-                            "pane environment evidence is unavailable for Bubblewrap dispatch",
-                        )
-                    })?
-            };
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "pane environment evidence is unavailable for Bubblewrap dispatch",
+                    )
+                })?;
             let probe_plan =
                 crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
                     &config,

@@ -285,6 +285,8 @@ mod recovery;
 mod timers;
 mod write_failures;
 
+pub(crate) use environment_evidence::BubblewrapEnvironmentProfile;
+
 /// Runs the runtime shell transaction timer kind operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

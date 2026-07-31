@@ -463,7 +463,9 @@ Current support reflects behavior implemented in the repository today.
   Each unavailable or unsafe value is omitted with a redacted warning while
   Bubblewrap continues with reduced environment data. Values never appear in
   status or logs and cannot override Mez-owned HOME, PATH, XDG, locale,
-  identity, shell, or Git isolation variables.
+  identity, shell, or Git isolation variables. Internal semantic `apply_patch`
+  phases intentionally use the fixed sandbox environment without resolving or
+  forwarding these optional pane values.
   `mez sandbox cache status [PATH]` reports usage without creating storage.
   `cache clear [PATH]` and `cache prune` preview inactive candidates by default;
   pass `--dry-run` for an explicit preview or `--yes` to delete. Active homes
