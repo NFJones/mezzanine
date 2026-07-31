@@ -567,6 +567,20 @@ impl RuntimeSessionService {
                         continue;
                     }
                 }
+                match self.ensure_bubblewrap_environment_evidence_for_action(turn, &action.id) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        execution.action_results[index] = self.shell_action_runtime_error_result(
+                            turn,
+                            action,
+                            "apply_patch",
+                            "bubblewrap_environment_evidence",
+                            &error,
+                        )?;
+                        continue;
+                    }
+                }
                 match self.ensure_bubblewrap_capability_for_action(turn, &action.id) {
                     Ok(true) => {}
                     Ok(false) => break,
@@ -1096,6 +1110,20 @@ impl RuntimeSessionService {
                             action,
                             command,
                             "bubblewrap_path_resolution",
+                            &error,
+                        )?;
+                        continue;
+                    }
+                }
+                match self.ensure_bubblewrap_environment_evidence_for_action(turn, &action.id) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        execution.action_results[index] = self.shell_action_runtime_error_result(
+                            turn,
+                            action,
+                            command,
+                            "bubblewrap_environment_evidence",
                             &error,
                         )?;
                         continue;

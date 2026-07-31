@@ -130,6 +130,8 @@ pub(crate) struct BubblewrapCompileRequest<'a> {
     pub(crate) capability: BubblewrapCapability,
     /// Bootstrap-derived identity of the active pane environment.
     pub(crate) pane_environment_signature: &'a str,
+    /// Protected pane-derived values selected for forwarding.
+    pub(crate) environment_evidence: &'a mez_agent::shell::PaneEnvironmentEvidence,
     /// Effective authorization policy for network-requiring commands.
     pub(crate) network_policy: NetworkPolicy,
     /// Trusted maximum filesystem authority resolved by the pane shell.
@@ -252,6 +254,8 @@ pub(crate) struct BubblewrapCapabilityProbePlan {
     pub(crate) expected_stdout: &'static str,
     /// Digest of the pane identity and configured group mappings under test.
     pub(crate) identity_sha256: String,
+    /// Digest of the protected effective environment mapping.
+    pub(crate) environment_sha256: String,
     /// Stable digest of the executable and arguments.
     pub(crate) probe_sha256: String,
 }
@@ -271,6 +275,8 @@ pub(crate) struct BubblewrapCapabilityCacheKey {
     pub(crate) bubblewrap_executable: String,
     /// Digest of the exact resolved native identity exercised by the probe.
     pub(crate) identity_sha256: String,
+    /// Digest of the protected effective environment mapping.
+    pub(crate) environment_sha256: String,
     /// Fixed runtime-profile version exercised by the probe.
     pub(crate) runtime_profile_version: &'static str,
     /// Digest of the exact probe plan that succeeded.
@@ -480,7 +486,13 @@ pub(crate) fn bubblewrap_capability_probe_plan(
 ) -> Result<BubblewrapCapabilityProbePlan, SandboxCompileError> {
     let environment = identity::current_process_environment_signature()?;
     let identity = resolve_sandbox_identity(&config.group_whitelist, &environment)?;
-    bubblewrap_capability_probe_plan_for_identity(config, child_shell_path, &identity)
+    let request =
+        mez_agent::shell::PaneEnvironmentRequest::new(config.env_whitelist.requested_names.clone())
+            .map_err(|error| {
+                SandboxCompileError::new(SandboxCompileErrorKind::InvalidInput, error.message())
+            })?;
+    let evidence = mez_agent::shell::PaneEnvironmentEvidence::restrictive(&request, "test_default");
+    bubblewrap_capability_probe_plan_for_identity(config, child_shell_path, &identity, &evidence)
 }
 
 /// Builds the deterministic capability probe for one already resolved exact
@@ -489,6 +501,7 @@ pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
     config: &BubblewrapConfig,
     child_shell_path: &str,
     identity: &ResolvedSandboxIdentity,
+    environment_evidence: &mez_agent::shell::PaneEnvironmentEvidence,
 ) -> Result<BubblewrapCapabilityProbePlan, SandboxCompileError> {
     validate_printable_absolute_path(&config.executable, "Bubblewrap executable")?;
     validate_canonical_path(child_shell_path, "sandbox child shell")?;
@@ -574,6 +587,7 @@ pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
         arguments: bubblewrap_arguments,
         expected_stdout,
         identity_sha256: identity.identity_sha256.clone(),
+        environment_sha256: environment_evidence.value_sha256.clone(),
         probe_sha256,
     })
 }
@@ -640,6 +654,7 @@ pub(crate) fn bubblewrap_capability_cache_key(
         executable: plan.executable.clone(),
         bubblewrap_executable: plan.executable.clone(),
         identity_sha256: plan.identity_sha256.clone(),
+        environment_sha256: plan.environment_sha256.clone(),
         runtime_profile_version: BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
         probe_sha256: plan.probe_sha256.clone(),
     })
@@ -650,11 +665,14 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
         request.config,
         request.child_shell_path,
         &request.identity,
+        request.environment_evidence,
     )?;
     if request.capability.cache_key.pane_environment_signature != request.pane_environment_signature
         || request.capability.cache_key.executable != request.config.executable
         || request.capability.cache_key.bubblewrap_executable != request.config.executable
         || request.capability.cache_key.identity_sha256 != request.identity.identity_sha256
+        || request.capability.cache_key.environment_sha256
+            != request.environment_evidence.value_sha256
         || request.capability.cache_key.runtime_profile_version
             != BUBBLEWRAP_RUNTIME_PROFILE_VERSION
         || request.capability.cache_key.probe_sha256 != expected_probe.probe_sha256
@@ -1195,6 +1213,13 @@ fn bubblewrap_arguments(
         .into_iter()
         .map(str::to_string),
     );
+    for (name, value) in &request.environment_evidence.values {
+        arguments.extend(
+            ["--setenv", name.as_str(), value.as_str()]
+                .into_iter()
+                .map(str::to_string),
+        );
+    }
     if let (Some(name), Some(email)) = (
         request.config.git_user_name.as_deref(),
         request.config.git_user_email.as_deref(),

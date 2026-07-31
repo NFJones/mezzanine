@@ -458,6 +458,12 @@ Current support reflects behavior implemented in the repository today.
   socket, device, or path: filesystem policy must authorize that separately.
   Unprivileged user namespaces may display an unmapped configured GID as the
   overflow GID even though its kernel credential remains active.
+- `permissions.bubblewrap.env_whitelist` explicitly selects environment
+  variable names to read from the active pane process, including remote panes.
+  Each unavailable or unsafe value is omitted with a redacted warning while
+  Bubblewrap continues with reduced environment data. Values never appear in
+  status or logs and cannot override Mez-owned HOME, PATH, XDG, locale,
+  identity, shell, or Git isolation variables.
   `mez sandbox cache status [PATH]` reports usage without creating storage.
   `cache clear [PATH]` and `cache prune` preview inactive candidates by default;
   pass `--dry-run` for an explicit preview or `--yes` to delete. Active homes

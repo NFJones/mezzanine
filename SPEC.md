@@ -2579,7 +2579,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 49 is the current configuration schema version for this
+schema version 50 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2972,7 +2972,21 @@ Schema v48 added the primary-user-only
 v47 MUST write `[]`. Schema v49 MUST rename that setting to the canonical
 `permissions.bubblewrap.group_whitelist` string array and MUST reject a v48
 configuration that defines both names. The canonical setting MUST default to
-an empty mapping. The active pane
+an empty mapping.
+
+Schema v50 adds the primary-user-only
+`permissions.bubblewrap.env_whitelist` string array. It MUST default to empty,
+and migration from v49 MUST write `[]`. Names MUST match
+`[A-Za-z_][A-Za-z0-9_]*`, be unique, contain at most 128 entries, and total at
+most 16 KiB. Values MUST be discovered only from the active pane process using
+a bounded framed protocol. Unset, malformed, non-text, oversized, reserved, or
+protocol-invalid values MUST be omitted independently with a value-redacted
+pane warning. Successful values MUST become direct Bubblewrap `--setenv`
+arguments, MUST be bound by digest to the capability identity, and MUST never
+appear in status, warnings, telemetry, snapshots, or logs. The fixed sandbox
+HOME, PATH, XDG, locale, identity, shell, and Git isolation variables MUST NOT
+be overridden. Forwarding MUST NOT grant filesystem, socket, network, group,
+or credential authority. The active pane
 shell's primary group MUST remain automatic and MUST NOT be listed. Entries
 MUST be non-empty printable non-numeric group names; duplicate configured
 names, control data, more than 64 entries, or more than 8 KiB of encoded names

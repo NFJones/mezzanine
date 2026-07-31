@@ -75,6 +75,14 @@ impl RuntimeSessionService {
                         elapsed_ms,
                     )?;
                 }
+                RunningShellTransactionKind::EnvironmentEvidence { .. } => {
+                    self.interrupt_shell_transaction_pane(&transaction.pane_id)?;
+                    self.degrade_environment_evidence_transaction(
+                        &marker,
+                        &transaction,
+                        "timeout",
+                    )?;
+                }
                 RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
                     self.expire_bubblewrap_capability_probe_transaction(
                         &marker,

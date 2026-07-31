@@ -114,6 +114,9 @@ impl RuntimeSessionService {
                         RuntimeShellTransactionTimerKind::PathResolution => {
                             RuntimeTimerKind::PathResolution
                         }
+                        RuntimeShellTransactionTimerKind::EnvironmentEvidence => {
+                            RuntimeTimerKind::ShellTransaction
+                        }
                         RuntimeShellTransactionTimerKind::BubblewrapCapabilityProbe => {
                             RuntimeTimerKind::ShellTransaction
                         }

@@ -87,6 +87,12 @@ Bubblewrap projects only the authority needed by the compiled plan:
   directly without a privileged helper. An unprivileged user namespace may present unmapped host
   GIDs as the overflow GID. Group mapping does not expose sockets, devices, or
   paths by itself.
+- `permissions.bubblewrap.env_whitelist` names optional variables to read from
+  the active pane process through a bounded framed protocol. Effective values
+  are passed as direct `--setenv` arguments and retained only in protected
+  launch state; status and diagnostics expose names and omission classes only.
+  Missing, invalid, oversized, or reserved mappings warn and degrade without
+  disabling Bubblewrap or substituting controller-local values.
 - The default runtime environment is rebuilt from a fixed non-secret set with
   a minimal PATH. Debian-style executable alternatives at `/etc/alternatives`
   are projected read-only so system compiler symlinks resolve. Host system and

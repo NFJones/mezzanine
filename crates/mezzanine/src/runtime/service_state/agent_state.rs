@@ -262,6 +262,23 @@ pub(crate) struct RuntimePathResolutionCacheKey {
     pub(crate) request: mez_agent::shell::PanePathResolutionRequest,
 }
 
+/// Cache identity for one request-scoped pane environment evidence result.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RuntimeEnvironmentEvidenceCacheKey {
+    /// Pane whose active process environment supplies the values.
+    pub(crate) pane_id: String,
+    /// Stable bootstrap identity of the pane environment.
+    pub(crate) environment_signature: String,
+    /// Configuration generation that selected the requested names.
+    pub(crate) config_generation: u64,
+    /// Exact turn whose action requested these values.
+    pub(crate) turn_id: String,
+    /// Exact action whose launch may consume these values.
+    pub(crate) action_id: String,
+    /// Exact validated variable-name request.
+    pub(crate) request: mez_agent::shell::PaneEnvironmentRequest,
+}
+
 /// Tracks a shell-backed `apply_patch` action across batched read phases.
 ///
 /// Large patch read snapshots can exceed a pane PTY capture budget when every
@@ -337,6 +354,13 @@ pub(crate) enum RunningShellTransactionKind {
         /// Provider-only resolutions retain an empty collection.
         waiters: Vec<(String, String)>,
     },
+    /// Internal request-scoped pane environment evidence transaction.
+    EnvironmentEvidence {
+        /// Exact cache identity captured before pane dispatch.
+        cache_key: RuntimeEnvironmentEvidenceCacheKey,
+        /// Every turn/action pair awaiting this evidence.
+        waiters: Vec<(String, String)>,
+    },
     /// Internal Bubblewrap runtime-profile capability probe.
     BubblewrapCapabilityProbe {
         /// Pending action that initiated the probe.
@@ -345,7 +369,7 @@ pub(crate) enum RunningShellTransactionKind {
         /// initiating action. Each terminal probe path settles every waiter.
         waiters: Vec<(String, String)>,
         /// Exact capability identity captured before pane dispatch.
-        cache_key: crate::security::sandbox::BubblewrapCapabilityCacheKey,
+        cache_key: Box<crate::security::sandbox::BubblewrapCapabilityCacheKey>,
         /// Exact deterministic probe plan whose output must be validated.
         probe_plan: crate::security::sandbox::BubblewrapCapabilityProbePlan,
     },
@@ -362,6 +386,8 @@ pub enum RuntimeShellTransactionTimerKind {
     Bootstrap,
     /// Pane-shell canonical path-resolution timeout.
     PathResolution,
+    /// Pane environment evidence timeout.
+    EnvironmentEvidence,
     /// Bubblewrap runtime-profile capability probe timeout.
     BubblewrapCapabilityProbe,
     /// Focused-shell hook marker timeout.

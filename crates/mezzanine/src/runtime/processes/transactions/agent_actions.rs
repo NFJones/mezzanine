@@ -236,6 +236,17 @@ impl RuntimeSessionService {
             }
             return Ok(observed);
         }
+        if let RunningShellTransactionKind::EnvironmentEvidence { cache_key, waiters } =
+            transaction_ref.kind.clone()
+        {
+            return self.observe_environment_evidence_transaction_end(
+                marker,
+                &transaction_ref,
+                exit_code,
+                &cache_key,
+                &waiters,
+            );
+        }
         if matches!(
             transaction_ref.kind,
             RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }

@@ -363,6 +363,7 @@ pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] = &[
     "network",
     "environment",
     "group_whitelist",
+    "env_whitelist",
     "git_user_name",
     "git_user_email",
     "toolchains",

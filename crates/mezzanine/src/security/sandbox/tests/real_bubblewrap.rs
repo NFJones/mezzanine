@@ -270,6 +270,15 @@ fn real_plan(
         identity: resolve_sandbox_identity(&config.group_whitelist, &environment).unwrap(),
         capability,
         pane_environment_signature: "real-linux-pane-environment",
+        environment_evidence: Box::leak(Box::new(
+            mez_agent::shell::PaneEnvironmentEvidence::restrictive(
+                &mez_agent::shell::PaneEnvironmentRequest::new(
+                    config.env_whitelist.requested_names.clone(),
+                )
+                .unwrap(),
+                "test_default",
+            ),
+        )),
         network_policy: NetworkPolicy::Prompt,
         maximum_authority: authority,
         permission_evaluation: evaluation,
@@ -544,6 +553,15 @@ fn real_bubblewrap_projects_read_only_rust_toolchain() {
         identity: resolve_sandbox_identity(&config.group_whitelist, &environment).unwrap(),
         capability,
         pane_environment_signature: "real-linux-pane-environment",
+        environment_evidence: Box::leak(Box::new(
+            mez_agent::shell::PaneEnvironmentEvidence::restrictive(
+                &mez_agent::shell::PaneEnvironmentRequest::new(
+                    config.env_whitelist.requested_names.clone(),
+                )
+                .unwrap(),
+                "test_default",
+            ),
+        )),
         network_policy: NetworkPolicy::Prompt,
         maximum_authority: &authority,
         permission_evaluation: &evaluation,

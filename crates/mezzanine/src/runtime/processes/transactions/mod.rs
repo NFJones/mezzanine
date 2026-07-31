@@ -173,6 +173,7 @@ pub(super) fn runtime_running_shell_transaction_kind_name(
         RunningShellTransactionKind::ReadinessProbe => "readiness_probe",
         RunningShellTransactionKind::Bootstrap => "bootstrap",
         RunningShellTransactionKind::PathResolution { .. } => "path_resolution",
+        RunningShellTransactionKind::EnvironmentEvidence { .. } => "environment_evidence",
         RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
             "bubblewrap_capability_probe"
         }
@@ -273,6 +274,7 @@ fn runtime_shell_transaction_observation_limit(
 mod agent_actions;
 mod bootstrap;
 mod bubblewrap;
+mod environment_evidence;
 mod expiry;
 mod hooks;
 mod observation;
@@ -301,6 +303,9 @@ fn runtime_shell_transaction_timer_kind(
         RunningShellTransactionKind::Bootstrap => RuntimeShellTransactionTimerKind::Bootstrap,
         RunningShellTransactionKind::PathResolution { .. } => {
             RuntimeShellTransactionTimerKind::PathResolution
+        }
+        RunningShellTransactionKind::EnvironmentEvidence { .. } => {
+            RuntimeShellTransactionTimerKind::EnvironmentEvidence
         }
         RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
             RuntimeShellTransactionTimerKind::BubblewrapCapabilityProbe

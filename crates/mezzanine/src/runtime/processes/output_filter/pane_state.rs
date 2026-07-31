@@ -355,6 +355,7 @@ impl RuntimeSessionService {
                 RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
                 | RunningShellTransactionKind::PathResolution { .. }
+                | RunningShellTransactionKind::EnvironmentEvidence { .. }
                 | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
                     return PaneOutputRenderMode::HiddenLiveAgentShell;
                 }

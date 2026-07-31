@@ -214,6 +214,9 @@ impl RuntimeSessionService {
             .pane_path_scope_failures
             .retain(|key, _| key.pane_id != pane_id);
         self.process
+            .pane_environment_evidence
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
             .pane_bubblewrap_capabilities
             .retain(|key, _| key.pane_id != pane_id);
         self.clear_pane_agent_instruction_files(pane_id);
@@ -873,6 +876,9 @@ impl RuntimeSessionService {
             .pane_path_scope_failures
             .retain(|key, _| key.pane_id != pane_id);
         self.process
+            .pane_environment_evidence
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
             .pane_environment_signatures
             .insert(pane_id.to_string(), signature.clone());
         if let Some(inventory) = tool_inventory {
@@ -929,6 +935,9 @@ impl RuntimeSessionService {
             .retain(|key, _| key.pane_id != pane_id);
         self.process
             .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_environment_evidence
             .retain(|key, _| key.pane_id != pane_id);
         self.process
             .pane_bubblewrap_capabilities
@@ -1031,6 +1040,9 @@ impl RuntimeSessionService {
             .retain(|key, _| key.pane_id != pane_id);
         self.process
             .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_environment_evidence
             .retain(|key, _| key.pane_id != pane_id);
         self.process
             .pane_bubblewrap_capabilities

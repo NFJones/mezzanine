@@ -64,6 +64,8 @@ pub(super) use model::{
     runtime_model_override_scope_name, runtime_model_profile_display,
     runtime_validate_latency_preference,
 };
+#[cfg(test)]
+pub(crate) use permissions::ConfiguredSandboxEnvironment;
 pub(crate) use permissions::{
     BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, ConfiguredSandboxGroups,
     CustomToolchainDefinition, CustomToolchainName, CustomToolchainReference, NetworkPolicy,

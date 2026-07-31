@@ -111,10 +111,26 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
+        let environment_request = mez_agent::shell::PaneEnvironmentRequest::new(
+            config.env_whitelist.requested_names.clone(),
+        )
+        .map_err(|error| crate::MezError::invalid_args(error.message()))?;
+        let environment_evidence = if environment_request.names.is_empty() {
+            mez_agent::shell::PaneEnvironmentEvidence::restrictive(
+                &environment_request,
+                "not_configured",
+            )
+        } else {
+            self.pane_environment_evidence(turn, action_id, &environment_request)
+                .ok_or_else(|| crate::MezError::invalid_state(
+                    "pane environment evidence is unavailable for Bubblewrap capability probing",
+                ))?
+        };
         let probe_plan = crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
             &config,
             &signature.shell_path,
             &identity,
+            &environment_evidence,
         )
         .map_err(|error| crate::MezError::invalid_state(error.message()))?;
         let cache_key = crate::security::sandbox::bubblewrap_capability_cache_key(
@@ -141,7 +157,7 @@ impl RuntimeSessionService {
                         RunningShellTransactionKind::BubblewrapCapabilityProbe {
                             cache_key: pending,
                             ..
-                        } if pending == &cache_key
+                        } if pending.as_ref() == &cache_key
                     )
                 })
         {
@@ -194,7 +210,7 @@ impl RuntimeSessionService {
                 kind: RunningShellTransactionKind::BubblewrapCapabilityProbe {
                     action_id: action_id.to_string(),
                     waiters: vec![(turn.turn_id.clone(), action_id.to_string())],
-                    cache_key,
+                    cache_key: Box::new(cache_key),
                     probe_plan,
                 },
                 pane_id: turn.pane_id.clone(),
@@ -276,14 +292,14 @@ impl RuntimeSessionService {
         };
 
         match parsed {
-            Ok(capability) if capability.cache_key == cache_key => {
+            Ok(capability) if capability.cache_key == *cache_key => {
                 self.process.pane_bubblewrap_capabilities.retain(|key, _| {
                     key.pane_environment_signature != cache_key.pane_environment_signature
                         || key.executable == cache_key.executable
                 });
                 self.process
                     .pane_bubblewrap_capabilities
-                    .insert(cache_key, capability);
+                    .insert(*cache_key, capability);
                 let previous = self.pane_readiness_state(&transaction.pane_id);
                 self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Ready);
                 self.append_agent_trace_turn_event(
@@ -460,7 +476,9 @@ impl RuntimeSessionService {
         else {
             return Ok(());
         };
-        self.process.pane_bubblewrap_capabilities.remove(&cache_key);
+        self.process
+            .pane_bubblewrap_capabilities
+            .remove(cache_key.as_ref());
         let previous = self.pane_readiness_state(&transaction.pane_id);
         self.set_pane_readiness(
             &transaction.pane_id,

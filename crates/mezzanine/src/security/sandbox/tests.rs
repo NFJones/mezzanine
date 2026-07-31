@@ -14,8 +14,8 @@ use mez_agent::permissions::{
 };
 
 use crate::runtime::{
-    ConfiguredSandboxGroups, CustomToolchainDefinition, CustomToolchainReference,
-    ToolchainSelection,
+    ConfiguredSandboxEnvironment, ConfiguredSandboxGroups, CustomToolchainDefinition,
+    CustomToolchainReference, ToolchainSelection,
 };
 
 use super::*;
@@ -27,6 +27,7 @@ fn config() -> BubblewrapConfig {
         network: BubblewrapNetworkMode::Isolated,
         environment: SandboxEnvironmentPolicy::Minimal,
         group_whitelist: ConfiguredSandboxGroups::default(),
+        env_whitelist: ConfiguredSandboxEnvironment::default(),
         git_user_name: None,
         git_user_email: None,
         toolchains: Vec::new(),
@@ -141,6 +142,15 @@ fn request<'a>(
         .unwrap(),
         capability: capability(config),
         pane_environment_signature: "pane-env-sha256",
+        environment_evidence: Box::leak(Box::new(
+            mez_agent::shell::PaneEnvironmentEvidence::restrictive(
+                &mez_agent::shell::PaneEnvironmentRequest::new(
+                    config.env_whitelist.requested_names.clone(),
+                )
+                .unwrap(),
+                "test_default",
+            ),
+        )),
         network_policy: NetworkPolicy::Prompt,
         maximum_authority: authority,
         permission_evaluation: evaluation,
@@ -3974,4 +3984,64 @@ fn rust_toolchain_home_discovery_preserves_partial_state_and_rejects_symlinks() 
 
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(external);
+}
+
+/// Effective pane evidence is projected exactly and omitted names never become
+/// Bubblewrap environment arguments.
+#[test]
+fn pane_environment_evidence_projects_only_effective_values() {
+    let mut config = config();
+    config.env_whitelist = ConfiguredSandboxEnvironment {
+        requested_names: vec!["CI".to_string(), "UNSET_VALUE".to_string()],
+    };
+    let environment_request =
+        mez_agent::shell::PaneEnvironmentRequest::new(config.env_whitelist.requested_names.clone())
+            .unwrap();
+    let environment_evidence = mez_agent::shell::PaneEnvironmentEvidence::from_parts(
+        &environment_request,
+        BTreeMap::from([("CI".to_string(), "pane-ci".to_string())]),
+        BTreeMap::from([("UNSET_VALUE".to_string(), "unset".to_string())]),
+    )
+    .unwrap();
+    let identity = resolve_sandbox_identity(
+        &config.group_whitelist,
+        &identity::current_process_environment_signature().unwrap(),
+    )
+    .unwrap();
+    let probe = bubblewrap_capability_probe_plan_for_identity(
+        &config,
+        "/bin/sh",
+        &identity,
+        &environment_evidence,
+    )
+    .unwrap();
+    let capability = parse_bubblewrap_capability_probe(
+        "%1",
+        "pane-env-sha256",
+        0,
+        &probe,
+        0,
+        probe.expected_stdout,
+    )
+    .unwrap();
+    let authority = authority();
+    let evaluation = evaluation(EffectCompleteness::Complete, effects());
+    let mut request = request(&config, &authority, &evaluation);
+    request.identity = identity;
+    request.capability = capability;
+    request.environment_evidence = &environment_evidence;
+
+    let plan = compile_bubblewrap_launch_plan(request).unwrap();
+    assert!(
+        plan.arguments
+            .windows(3)
+            .any(|arguments| arguments == ["--setenv", "CI", "pane-ci"])
+    );
+    assert!(
+        !plan
+            .arguments
+            .iter()
+            .any(|argument| argument == "UNSET_VALUE")
+    );
+    assert!(!plan.arguments.iter().any(|argument| argument == "unset"));
 }

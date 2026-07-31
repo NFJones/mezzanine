@@ -24,11 +24,11 @@ pub(crate) use agent_state::{
     PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
     RuntimeAgentPreShellHookCompletion, RuntimeApplyPatchBatchState, RuntimeDisplayOverlay,
-    RuntimeHookPipelineDecision, RuntimeModelProfileOverrideScope,
-    RuntimeModelProfileOverrideStore, RuntimePaneAgentStatusSelector,
-    RuntimePathResolutionCacheKey, RuntimePendingApplyPatchPhase, RuntimeRecordBrowserOverlayFrame,
-    RuntimeRecordBrowserOverlaySource, RuntimeRecordBrowserOverlayState,
-    RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
+    RuntimeEnvironmentEvidenceCacheKey, RuntimeHookPipelineDecision,
+    RuntimeModelProfileOverrideScope, RuntimeModelProfileOverrideStore,
+    RuntimePaneAgentStatusSelector, RuntimePathResolutionCacheKey, RuntimePendingApplyPatchPhase,
+    RuntimeRecordBrowserOverlayFrame, RuntimeRecordBrowserOverlaySource,
+    RuntimeRecordBrowserOverlayState, RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
     RuntimeShellTransactionActionFailure, RuntimeSubagentLineage,
 };
 pub use agent_state::{

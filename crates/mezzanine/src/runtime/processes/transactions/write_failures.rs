@@ -130,6 +130,14 @@ impl RuntimeSessionService {
                     Ok(1)
                 }
             }
+            RunningShellTransactionKind::EnvironmentEvidence { .. } => {
+                self.degrade_environment_evidence_transaction(
+                    marker,
+                    &transaction,
+                    "protocol_invalid",
+                )?;
+                Ok(1)
+            }
             RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
                 self.fail_bubblewrap_capability_probe_transaction(
                     marker,
@@ -189,6 +197,13 @@ impl RuntimeSessionService {
                 }
                 RunningShellTransactionKind::PathResolution { .. } => {
                     self.fail_path_resolution_for_pane_write_failure(&marker, transaction, error)?;
+                }
+                RunningShellTransactionKind::EnvironmentEvidence { .. } => {
+                    self.degrade_environment_evidence_transaction(
+                        &marker,
+                        &transaction,
+                        "pane_write_failed",
+                    )?;
                 }
                 RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
                     self.fail_bubblewrap_capability_probe_transaction(

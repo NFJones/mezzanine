@@ -123,6 +123,7 @@ impl SandboxConfig {
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
             group_whitelist: ConfiguredSandboxGroups::default(),
+            env_whitelist: ConfiguredSandboxEnvironment::default(),
             git_user_name: None,
             git_user_email: None,
             toolchains: Vec::new(),
@@ -155,6 +156,8 @@ pub(crate) struct BubblewrapConfig {
     pub(crate) environment: SandboxEnvironmentPolicy,
     /// Exact host supplementary groups selected by the primary user.
     pub(crate) group_whitelist: ConfiguredSandboxGroups,
+    /// Pane environment variable names selected for best-effort forwarding.
+    pub(crate) env_whitelist: ConfiguredSandboxEnvironment,
     /// Optional non-secret Git author name projected without host Git config.
     pub(crate) git_user_name: Option<String>,
     /// Optional non-secret Git author email projected without host Git config.
@@ -210,6 +213,58 @@ impl ConfiguredSandboxGroups {
         if encoded_bytes > Self::MAX_ENCODED_BYTES {
             return Err(MezError::config(
                 "permissions.bubblewrap.group_whitelist exceeds the 8 KiB input limit",
+            ));
+        }
+        Ok(Self {
+            requested_names: names,
+        })
+    }
+}
+
+/// Primary-user-selected pane environment variable names.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ConfiguredSandboxEnvironment {
+    /// Ordered configured names retained without reading controller environment state.
+    pub(crate) requested_names: Vec<String>,
+}
+
+impl ConfiguredSandboxEnvironment {
+    /// Maximum number of selected variables.
+    pub(crate) const MAX_VARIABLES: usize = 128;
+    /// Maximum total bytes across selected names.
+    pub(crate) const MAX_ENCODED_BYTES: usize = 16 * 1024;
+
+    /// Parses the portable, bounded configured variable-name contract.
+    fn parse(names: Vec<String>) -> Result<Self> {
+        if names.len() > Self::MAX_VARIABLES {
+            return Err(MezError::config(
+                "permissions.bubblewrap.env_whitelist must contain at most 128 names",
+            ));
+        }
+        let mut bytes = 0usize;
+        let mut seen = std::collections::BTreeSet::new();
+        for name in &names {
+            bytes = bytes.saturating_add(name.len());
+            let mut characters = name.chars();
+            let valid = characters
+                .next()
+                .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+                && characters
+                    .all(|character| character == '_' || character.is_ascii_alphanumeric());
+            if !valid {
+                return Err(MezError::config(
+                    "permissions.bubblewrap.env_whitelist names must match [A-Za-z_][A-Za-z0-9_]*",
+                ));
+            }
+            if !seen.insert(name.clone()) {
+                return Err(MezError::config(
+                    "permissions.bubblewrap.env_whitelist must not contain duplicate names",
+                ));
+            }
+        }
+        if bytes > Self::MAX_ENCODED_BYTES {
+            return Err(MezError::config(
+                "permissions.bubblewrap.env_whitelist exceeds the 16 KiB name limit",
             ));
         }
         Ok(Self {
@@ -1016,6 +1071,12 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 )?
                 .unwrap_or_default(),
             )?;
+            let env_whitelist = ConfiguredSandboxEnvironment::parse(
+                runtime_json_string_array(
+                    bubblewrap.and_then(|config| config.get("env_whitelist")),
+                )?
+                .unwrap_or_default(),
+            )?;
             let git_user_name = bubblewrap
                 .and_then(|config| runtime_json_string(config.get("git_user_name")))
                 .map(str::to_string);
@@ -1077,6 +1138,7 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 network,
                 environment,
                 group_whitelist,
+                env_whitelist,
                 git_user_name,
                 git_user_email,
                 toolchains,

@@ -243,11 +243,29 @@ impl RuntimeSessionService {
                     ),
                 )?;
             }
+            let environment_request = mez_agent::shell::PaneEnvironmentRequest::new(
+                config.env_whitelist.requested_names.clone(),
+            )
+            .map_err(|error| MezError::invalid_args(error.message()))?;
+            let environment_evidence = if environment_request.names.is_empty() {
+                mez_agent::shell::PaneEnvironmentEvidence::restrictive(
+                    &environment_request,
+                    "not_configured",
+                )
+            } else {
+                self.pane_environment_evidence(turn, &action.id, &environment_request)
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "pane environment evidence is unavailable for Bubblewrap dispatch",
+                        )
+                    })?
+            };
             let probe_plan =
                 crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
                     &config,
                     &signature.shell_path,
                     &identity,
+                    &environment_evidence,
                 )
                 .map_err(|error| MezError::invalid_state(error.message()))?;
             let cache_key = crate::security::sandbox::bubblewrap_capability_cache_key(
@@ -303,6 +321,7 @@ impl RuntimeSessionService {
                     identity,
                     capability,
                     pane_environment_signature: &cache_key.pane_environment_signature,
+                    environment_evidence: &environment_evidence,
                     network_policy: self.configured_permissions().resources.network_policy,
                     maximum_authority: &maximum_authority,
                     permission_evaluation: evaluation,

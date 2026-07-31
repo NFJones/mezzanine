@@ -10,6 +10,7 @@ use std::path::Path;
 
 mod bootstrap;
 mod environment;
+mod environment_resolution;
 mod path_resolution;
 mod transaction;
 
@@ -20,6 +21,11 @@ pub use bootstrap::{
 };
 pub use environment::{
     EnvironmentGroup, EnvironmentSignature, ToolDiscoveryCache, ToolInventory, ToolProbe,
+};
+pub use environment_resolution::{
+    MAX_ENVIRONMENT_NAME_BYTES, MAX_ENVIRONMENT_TOTAL_VALUE_BYTES, MAX_ENVIRONMENT_VALUE_BYTES,
+    MAX_ENVIRONMENT_VARIABLES, PaneEnvironmentEvidence, PaneEnvironmentRequest,
+    pane_environment_evidence_command, parse_pane_environment_evidence,
 };
 pub use path_resolution::{
     PanePathResolutionRequest, PanePathResolutionResult, pane_path_resolution_command,
@@ -237,6 +243,7 @@ mod tests {
         .expect("the test environment signature should be valid")
     }
 
+    mod environment_resolution;
     mod path_resolution;
     mod shell_bootstrap;
     mod shell_transport;

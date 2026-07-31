@@ -92,6 +92,8 @@ pub(crate) struct SandboxConfiguredState {
     pub(crate) write_scopes_source: String,
     /// Primary-user-selected pane supplementary group mappings.
     pub(crate) group_whitelist: Vec<String>,
+    /// Requested pane environment variable names; values are never serialized.
+    pub(crate) env_whitelist: Vec<String>,
     /// Direct-user-selected allowlisted toolchain kinds.
     pub(crate) toolchains: Vec<String>,
 }
@@ -389,6 +391,10 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             write_scopes: request.permissions.resources.write_scopes.clone(),
             write_scopes_source: request.write_scopes_source.to_string(),
             group_whitelist: configured_group_whitelist,
+            env_whitelist: match &request.permissions.sandbox {
+                SandboxConfig::PolicyOnly => Vec::new(),
+                SandboxConfig::Bubblewrap(config) => config.env_whitelist.requested_names.clone(),
+            },
             toolchains: configured_toolchains,
         },
         effective: SandboxEffectiveState {
@@ -497,6 +503,7 @@ mod tests {
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
             group_whitelist: crate::runtime::ConfiguredSandboxGroups::default(),
+            env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
             git_user_name: None,
             git_user_email: None,
             toolchains: Vec::new(),
@@ -556,6 +563,7 @@ mod tests {
                 network: BubblewrapNetworkMode::Isolated,
                 environment: SandboxEnvironmentPolicy::Minimal,
                 group_whitelist: crate::runtime::ConfiguredSandboxGroups::default(),
+                env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
                 git_user_name: None,
                 git_user_email: None,
                 toolchains: Vec::new(),
@@ -605,6 +613,7 @@ mod tests {
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
             group_whitelist: crate::runtime::ConfiguredSandboxGroups::default(),
+            env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
             git_user_name: None,
             git_user_email: None,
             toolchains: vec![crate::runtime::SandboxToolchainKind::Rust],

@@ -244,6 +244,8 @@ mod commands_support;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod config;
+#[cfg(test)]
+pub(crate) use config::ConfiguredSandboxEnvironment;
 pub(crate) use config::{
     BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, ConfiguredSandboxGroups,
     CustomToolchainDefinition, CustomToolchainName, CustomToolchainReference, NetworkPolicy,
@@ -520,9 +522,10 @@ use service_state::{
     BlockedAgentApprovalRef, MouseResizeDragState, MouseSelectionDragState, PaneDescriptor,
     PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
-    RuntimeAgentPreShellHookCompletion, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
-    RuntimeHttpMcpTransportState, RuntimeMcpRetryReport, RuntimeModelProfileOverrideScope,
-    RuntimePathResolutionCacheKey, RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
+    RuntimeAgentPreShellHookCompletion, RuntimeEnvironmentEvidenceCacheKey,
+    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeHttpMcpTransportState,
+    RuntimeMcpRetryReport, RuntimeModelProfileOverrideScope, RuntimePathResolutionCacheKey,
+    RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
     RuntimeShellTransactionActionFailure,
 };
 pub(crate) use service_state::{RuntimeMcpTransport, RuntimeMcpTransportSet};

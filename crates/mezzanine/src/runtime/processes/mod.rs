@@ -318,6 +318,11 @@ pub(crate) struct RuntimeProcessComponent {
     /// Fail-closed resolver outcomes keyed by the same exact authority identity.
     pane_path_scope_failures:
         std::collections::BTreeMap<crate::runtime::RuntimePathResolutionCacheKey, String>,
+    /// Protected pane-derived environment values keyed by exact request identity.
+    pane_environment_evidence: std::collections::BTreeMap<
+        crate::runtime::RuntimeEnvironmentEvidenceCacheKey,
+        mez_agent::shell::PaneEnvironmentEvidence,
+    >,
     /// Mapping-warning identities already retained in each pane log.
     pub(crate) sandbox_mapping_warnings_emitted: BTreeSet<String>,
     /// Successful Bubblewrap probes keyed by exact pane-environment and
@@ -1528,6 +1533,7 @@ impl RuntimeSessionService {
                 RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
                 | RunningShellTransactionKind::PathResolution { .. }
+                | RunningShellTransactionKind::EnvironmentEvidence { .. }
                 | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => String::new(),
             };
             self.append_agent_trace_turn_event(
@@ -2249,6 +2255,9 @@ impl RuntimeSessionService {
             .retain(|key, _| key.pane_id != pane_id);
         self.process
             .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_environment_evidence
             .retain(|key, _| key.pane_id != pane_id);
         self.process
             .sandbox_mapping_warnings_emitted

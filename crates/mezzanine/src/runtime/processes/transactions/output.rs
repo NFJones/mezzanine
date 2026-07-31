@@ -120,6 +120,7 @@ impl RuntimeSessionService {
                     RunningShellTransactionKind::ReadinessProbe
                     | RunningShellTransactionKind::Bootstrap
                     | RunningShellTransactionKind::PathResolution { .. }
+                    | RunningShellTransactionKind::EnvironmentEvidence { .. }
                     | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
                         complete_bytes
                     }
