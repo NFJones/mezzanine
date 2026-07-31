@@ -3553,10 +3553,13 @@ managed home keyed by the canonical project root and sandbox runtime profile.
 It MUST mount that directory read-write at `/home/mez` and set `HOME`,
 `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME` to
 paths within it. The Bubblewrap child MUST run as the invoking user's native
-UID and primary GID. It SHOULD retain every invoking supplementary group that
-the host user-namespace mapping can establish, but an unmappable supplementary
-group MUST NOT prevent sandbox startup. The capability probe MUST verify the
-native UID and primary GID without requiring every supplementary credential.
+UID and primary GID. Mezzanine MUST capture the invoking supplementary group
+list before launch, and the Bubblewrap capability probe MUST verify that the
+child retains the same number of kernel supplementary credential entries so
+group-based filesystem authority is not silently dropped. An unprivileged user
+namespace MAY expose an unmapped native supplementary GID as the overflow GID;
+this presentation difference MUST NOT be treated as loss of the corresponding
+kernel credential when group-authorized filesystem access remains effective.
 Managed homes MUST expose a
 synthetic `mez` passwd entry and synthetic primary and supplementary group
 entries for that identity with `/home/mez` as its home. Explicitly authorized host paths beneath the pane's reported home

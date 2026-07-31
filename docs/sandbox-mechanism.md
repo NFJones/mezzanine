@@ -73,10 +73,13 @@ Bubblewrap projects only the authority needed by the compiled plan:
   home. For trusted projects, Mezzanine may reuse a private managed home keyed
   by canonical project root and sandbox runtime profile. Its HOME and XDG
   paths remain inside that managed home. The child uses the invoking user's
-  native UID and primary GID. Bubblewrap retains supplementary groups where
-  the host user-namespace mapping permits them; unavailable groups are omitted
-  rather than preventing the sandbox from starting. Capability probing verifies
-  the required UID and primary GID before enabling Bubblewrap.
+  native UID and primary GID. Mezzanine captures supplementary groups before
+  launch, and capability probing verifies that Bubblewrap retains the same
+  number of kernel supplementary credential entries. This preserves group-based
+  filesystem authority. Because an unprivileged user namespace cannot
+  identity-map arbitrary host GIDs, tools such as `id` may display the overflow
+  GID for one or more native supplementary groups even while their filesystem
+  authority remains active.
 - The default runtime environment is rebuilt from a fixed non-secret set with
   a minimal PATH. Debian-style executable alternatives at `/etc/alternatives`
   are projected read-only so system compiler symlinks resolve. Host system and

@@ -1019,7 +1019,7 @@ impl BubblewrapProtocolFixture {
             &executable,
             "#!/bin/sh\n\
              if [ \"$1\" != \"--json-status-fd\" ]; then\n\
-               printf '%s' 'mez-bubblewrap-capability-v3'\n\
+               printf '%s' 'mez-bubblewrap-capability-v4'\n\
                exit 0\n\
              fi\n\
              host_command=\n\

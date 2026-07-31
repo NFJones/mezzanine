@@ -83,7 +83,7 @@ pub(crate) use workflow::{
 };
 
 /// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v8";
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v9";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -476,9 +476,17 @@ pub(crate) fn bubblewrap_capability_probe_plan(
     }
     let user_id = rustix::process::getuid().as_raw();
     let group_id = rustix::process::getgid().as_raw();
-    let expected_stdout = "mez-bubblewrap-capability-v3";
+    let supplementary_group_count = rustix::process::getgroups()
+        .map_err(|error| {
+            SandboxCompileError::new(
+                SandboxCompileErrorKind::CapabilityProbeFailed,
+                format!("Bubblewrap could not read native supplementary groups: {error}"),
+            )
+        })?
+        .len();
+    let expected_stdout = "mez-bubblewrap-capability-v4";
     let probe_script = format!(
-        "test ! -e /etc/passwd && test \"$(id -u)\" = '{user_id}' && test \"$(id -g)\" = '{group_id}' && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
+        "test ! -e /etc/passwd && test \"$(id -u)\" = '{user_id}' && test \"$(id -g)\" = '{group_id}' && supplementary_group_count=0 && while read -r key groups; do if test \"$key\" = 'Groups:'; then set -- $groups; supplementary_group_count=$#; break; fi; done < /proc/self/status && test \"$supplementary_group_count\" = '{supplementary_group_count}' && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
     );
     let arguments = vec![
         "--unshare-user",
