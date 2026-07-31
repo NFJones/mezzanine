@@ -83,7 +83,7 @@ pub(crate) use workflow::{
 };
 
 /// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v5";
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v6";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -93,8 +93,6 @@ const SANDBOX_COMMAND_PATH: &str = "/run/mez/command";
 pub(crate) const BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER: &str =
     "/run/mez/host-command-placeholder";
 const SANDBOX_HOME: &str = "/home/mez";
-const SANDBOX_UID: u32 = 1000;
-const SANDBOX_GID: u32 = 1000;
 const MINIMAL_PATH: &str = "/usr/bin:/bin";
 /// Stable, non-sensitive restriction identifiers used by status and failure diagnostics.
 pub(crate) const BUBBLEWRAP_RESTRICTION_IDS: [&str; 4] = [
@@ -1030,14 +1028,23 @@ fn bubblewrap_arguments(
     request: &BubblewrapCompileRequest<'_>,
     policy: &EffectiveSandboxPolicy,
 ) -> Vec<String> {
+    let (user_id, group_id) = request
+        .managed_home
+        .map(|home| (home.user_id, home.group_id))
+        .unwrap_or_else(|| {
+            (
+                rustix::process::getuid().as_raw(),
+                rustix::process::getgid().as_raw(),
+            )
+        });
     let mut arguments = vec![
         "--json-status-fd",
         "3",
         "--unshare-user",
         "--uid",
-        "1000",
+        &user_id.to_string(),
         "--gid",
-        "1000",
+        &group_id.to_string(),
         "--unshare-pid",
         "--unshare-ipc",
         "--unshare-uts",

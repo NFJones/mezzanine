@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::fs::{FlockOperation, flock};
+use rustix::process::{getgid, getuid};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -88,6 +89,10 @@ pub(crate) struct BubblewrapManagedHome {
     pub(crate) passwd_path: PathBuf,
     /// Private synthetic group record mounted read-only inside Bubblewrap.
     pub(crate) group_path: PathBuf,
+    /// Native numeric user identity represented by the synthetic account files.
+    pub(crate) user_id: u32,
+    /// Native numeric primary group identity represented by the synthetic account files.
+    pub(crate) group_id: u32,
     /// Stable non-secret project/profile key used for isolation and cleanup.
     pub(crate) project_key: String,
 }
@@ -137,17 +142,21 @@ pub(crate) fn prepare_bubblewrap_managed_home_for_workload(
     }
     let passwd_path = project_directory.join(MANAGED_HOME_PASSWD_FILE);
     let group_path = project_directory.join(MANAGED_HOME_GROUP_FILE);
+    let user_id = getuid().as_raw();
+    let group_id = getgid().as_raw();
     write_private_managed_file(
         &passwd_path,
-        b"mez:x:1000:1000:Mezzanine sandbox user:/home/mez:/bin/sh\n",
+        format!("mez:x:{user_id}:{group_id}:Mezzanine sandbox user:/home/mez:/bin/sh\n").as_bytes(),
     )?;
-    write_private_managed_file(&group_path, b"mez:x:1000:\n")?;
+    write_private_managed_file(&group_path, format!("mez:x:{group_id}:\n").as_bytes())?;
     write_managed_home_metadata(&project_directory, &project_key)?;
     Ok((
         BubblewrapManagedHome {
             host_path: home,
             passwd_path,
             group_path,
+            user_id,
+            group_id,
             project_key,
         },
         activity,
@@ -770,11 +779,14 @@ mod tests {
         assert_ne!(first.host_path, second.host_path);
         assert_eq!(
             fs::read_to_string(&first.passwd_path).unwrap(),
-            "mez:x:1000:1000:Mezzanine sandbox user:/home/mez:/bin/sh\n"
+            format!(
+                "mez:x:{}:{}:Mezzanine sandbox user:/home/mez:/bin/sh\n",
+                first.user_id, first.group_id
+            )
         );
         assert_eq!(
             fs::read_to_string(&first.group_path).unwrap(),
-            "mez:x:1000:\n"
+            format!("mez:x:{}:\n", first.group_id)
         );
         for relative in [".cache", ".config", ".local/share", ".local/state"] {
             assert!(first.host_path.join(relative).is_dir());

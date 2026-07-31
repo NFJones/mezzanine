@@ -872,6 +872,8 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
         host_path: Path::new("/private/mez/cache-home").to_path_buf(),
         passwd_path: Path::new("/private/mez/passwd").to_path_buf(),
         group_path: Path::new("/private/mez/group").to_path_buf(),
+        user_id: 1234,
+        group_id: 5678,
         project_key: "0".repeat(64),
     };
     let mut compile_request = request(&config, &authority, &evaluation);
@@ -905,8 +907,8 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
         );
     }
     for arguments in [
-        &["--uid", "1000"][..],
-        &["--gid", "1000"][..],
+        &["--uid", "1234"][..],
+        &["--gid", "5678"][..],
         &["--ro-bind", "/private/mez/passwd", "/etc/passwd"][..],
         &["--ro-bind", "/private/mez/group", "/etc/group"][..],
     ] {

@@ -3552,9 +3552,9 @@ configuration root is available, Mezzanine MUST create or reuse a private
 managed home keyed by the canonical project root and sandbox runtime profile.
 It MUST mount that directory read-write at `/home/mez` and set `HOME`,
 `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME` to
-paths within it. The Bubblewrap child MUST run as UID and GID `1000` and expose
-a synthetic `mez` passwd and group entry for that identity with `/home/mez` as
-its home. Explicitly authorized host paths beneath the pane's reported home
+paths within it. The Bubblewrap child MUST run as the invoking user's native
+UID and primary GID and expose a synthetic `mez` passwd and group entry for
+that identity with `/home/mez` as its home. Explicitly authorized host paths beneath the pane's reported home
 directory MUST be projected beneath `/home/mez` at the same relative path;
 authorized paths outside that home MUST retain their canonical sandbox paths.
 Managed homes MUST be shared across concurrent panes for the same key, isolated
