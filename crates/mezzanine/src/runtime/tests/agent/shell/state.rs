@@ -24,6 +24,15 @@ fn path_resolution_environment(working_directory: &Path) -> mez_agent::Environme
         Vec::new(),
     )
     .unwrap()
+    .with_process_identity(
+        1000,
+        1000,
+        vec![mez_agent::EnvironmentGroup {
+            id: 1000,
+            name: "test-user".to_string(),
+        }],
+    )
+    .unwrap()
 }
 
 /// Builds a running turn identity for action-specific path-resolution tests.
@@ -2542,10 +2551,10 @@ fn runtime_path_resolution_success_resumes_all_waiters() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies a failed shared resolver settles every live action while an
-/// already-stale waiter is ignored without blocking the remaining failures.
+/// Verifies a failed shared resolver resumes every live action with empty
+/// authority while an already-stale waiter does not block continuation.
 #[test]
-fn runtime_path_resolution_failure_settles_all_live_waiters() {
+fn runtime_path_resolution_failure_resumes_all_live_waiters() {
     let root = temp_root("runtime-path-resolution-failure-waiters");
     let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
     configure_path_resolution_bubblewrap(&mut service);
@@ -2617,13 +2626,15 @@ fn runtime_path_resolution_failure_settles_all_live_waiters() {
             .iter()
             .find(|turn| turn.turn_id == turn_id)
             .map(|turn| turn.state),
-        Some(AgentTurnState::Failed)
+        Some(AgentTurnState::Running)
     );
     let trace = service.agent_pane_trace_log_text("%1").unwrap();
-    assert!(trace.contains(&action_id), "{trace}");
-    assert!(trace.contains("second-waiter"), "{trace}");
     assert!(
-        trace.contains("bubblewrap_path_resolution_write_failed"),
+        trace.contains("pending shell dispatch resume started"),
+        "{trace}"
+    );
+    assert!(
+        !trace.contains("bubblewrap_path_resolution_write_failed"),
         "{trace}"
     );
 
@@ -2910,10 +2921,10 @@ fn runtime_path_resolution_cache_retains_distinct_exact_requests() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies a terminal resolver failure is retained for the exact cache key so
-/// provider polling fails closed instead of repeatedly launching the resolver.
+/// Verifies a resolver failure is retained as empty authority for the exact
+/// cache key so provider polling continues without repeatedly launching it.
 #[test]
-fn runtime_path_resolution_failure_is_terminal_for_exact_identity() {
+fn runtime_path_resolution_failure_degrades_for_exact_identity() {
     let root = temp_root("runtime-path-resolution-failure");
     fs::create_dir_all(&root).unwrap();
     let mut service = test_runtime_service();
@@ -2948,10 +2959,25 @@ fn runtime_path_resolution_failure_is_terminal_for_exact_identity() {
             "resolver protocol failed",
         )
         .unwrap();
-    let error = service
+    let scopes = service
         .path_scopes_for_pane_request("%1", &request)
-        .unwrap_err();
-    assert!(error.message().contains("resolver protocol failed"));
+        .unwrap()
+        .unwrap();
+    assert!(scopes.read_scopes.is_empty());
+    assert!(scopes.write_scopes.is_empty());
+    let pane_text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        pane_text.contains("agent warning: sandbox omitted"),
+        "{pane_text}"
+    );
+    assert!(
+        pane_text.contains("resolver protocol failed"),
+        "{pane_text}"
+    );
 
     service.session.advance_config_generation();
     assert!(

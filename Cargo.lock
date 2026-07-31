@@ -1762,6 +1762,7 @@ dependencies = [
  "futures-util",
  "include_dir",
  "keyring-core",
+ "libc",
  "merman",
  "merman-ascii",
  "mez-agent",

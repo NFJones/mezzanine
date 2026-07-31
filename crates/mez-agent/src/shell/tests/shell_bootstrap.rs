@@ -215,6 +215,10 @@ env\tarch\tx86_64\n\
 env\tkernel_version\t6.8.0-generic\n\
 env\thost\tmyhost\n\
 env\tuser\tme\n\
+env\tuser_id\t1000\n\
+env\tprimary_group_id\t1000\n\
+env\tactive_group\t1000:me\n\
+env\tactive_group\t27:sudo\n\
 env\tshell_path\t/bin/bash\n\
 env\tshell_class\tbash\n\
 env\tshell_version\tGNU bash, version 5.2.21\n\
@@ -240,6 +244,21 @@ tool\tpython\t1\t/usr/bin/python3\tPython 3.12.3\tcommand -v python3 || command 
     assert_eq!(sig.kernel_version.as_deref(), Some("6.8.0-generic"));
     assert_eq!(sig.host, "myhost");
     assert_eq!(sig.user, "me");
+    assert_eq!(sig.user_id, Some(1000));
+    assert_eq!(sig.primary_group_id, Some(1000));
+    assert_eq!(
+        sig.active_groups,
+        vec![
+            super::EnvironmentGroup {
+                id: 27,
+                name: "sudo".to_string(),
+            },
+            super::EnvironmentGroup {
+                id: 1000,
+                name: "me".to_string(),
+            },
+        ]
+    );
     assert_eq!(sig.home_directory, None);
     assert_eq!(sig.shell_path, "/bin/bash");
     assert_eq!(sig.shell_classification, ShellClassification::Bash);

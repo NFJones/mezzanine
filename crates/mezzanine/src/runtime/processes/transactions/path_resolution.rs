@@ -200,8 +200,10 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
-    /// Resumes every waiting action after successful exact resolution or fails
-    /// them closed when the resolver produced no trusted evidence.
+    /// Resumes every waiting action after successful or restrictive resolution.
+    ///
+    /// A stale cache identity remains fatal because it cannot safely attribute
+    /// authority to the active pane environment.
     pub(crate) fn settle_action_path_resolution_transaction(
         &mut self,
         marker: &str,
@@ -237,6 +239,21 @@ impl RuntimeSessionService {
                 error.message(),
             ),
         }
+    }
+
+    /// Resumes actions after a resolver safely degraded to reduced authority.
+    pub(crate) fn resume_action_path_resolution_waiters(
+        &mut self,
+        waiters: &[(String, String)],
+    ) -> Result<()> {
+        for turn_id in waiters
+            .iter()
+            .map(|(turn_id, _)| turn_id)
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            let _ = self.dispatch_stored_running_shell_actions(turn_id)?;
+        }
+        Ok(())
     }
 
     /// Settles all actions whose shared path-resolution prerequisite failed.
@@ -291,7 +308,7 @@ impl RuntimeSessionService {
     }
 
     /// Settles one internal path-resolution transaction and caches only fresh,
-    /// complete, validated pane-shell evidence.
+    /// independently validated pane-shell evidence.
     pub(crate) fn observe_path_resolution_transaction_end(
         &mut self,
         marker: &str,
@@ -313,16 +330,27 @@ impl RuntimeSessionService {
                 .map_err(|error| error.message().to_string())
                 .and_then(|parsed| {
                     parsed
-                        .into_path_scopes(&cache_key.request)
+                        .into_outcome(&cache_key.request)
                         .map_err(|error| error.message().to_string())
                 });
                 match resolved {
-                    Ok(scopes) => {
+                    Ok(resolved) => {
+                        for (path, reason) in &resolved.unavailable_paths {
+                            self.append_sandbox_mapping_warning_once(
+                                pane_id,
+                                &format!("path:{}:{reason}", path),
+                                &format!("path `{path}` ({reason})"),
+                            )?;
+                        }
                         self.process.pane_path_scope_failures.remove(&cache_key);
                         self.process
                             .pane_path_scopes
-                            .insert(cache_key.clone(), scopes);
-                        outcome = "completed";
+                            .insert(cache_key.clone(), resolved.scopes);
+                        outcome = if resolved.unavailable_paths.is_empty() {
+                            "completed"
+                        } else {
+                            "degraded"
+                        };
                     }
                     Err(reason) => failure_reason = Some(reason),
                 }
@@ -341,11 +369,29 @@ impl RuntimeSessionService {
                 .as_ref()
                 == Some(&cache_key)
         {
-            self.process.pane_path_scopes.remove(&cache_key);
             self.process.pane_path_scope_failures.remove(&cache_key);
-            self.process
-                .pane_path_scope_failures
-                .insert(cache_key, reason);
+            let current_directory = self
+                .pane_environment_signature(pane_id)
+                .map(|signature| signature.working_directory.clone())
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "pane environment became unavailable during path resolution",
+                    )
+                })?;
+            let scopes = mez_agent::permissions::PathScopes::try_shell_resolved(
+                current_directory,
+                Vec::new(),
+                Vec::new(),
+                Default::default(),
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+            self.process.pane_path_scopes.insert(cache_key, scopes);
+            self.append_sandbox_mapping_warning_once(
+                pane_id,
+                &format!("path-resolution:{reason}"),
+                &format!("configured paths could not be resolved ({reason})"),
+            )?;
+            outcome = "degraded";
         }
         if self.pane_readiness_state(pane_id) == PaneReadinessState::Busy {
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
@@ -364,8 +410,7 @@ impl RuntimeSessionService {
         Ok(1)
     }
 
-    /// Fails one internal path-resolution transaction without retaining any
-    /// authority produced by the failed request.
+    /// Degrades one failed resolver transaction to empty filesystem authority.
     pub(crate) fn fail_path_resolution_transaction(
         &mut self,
         marker: &str,
@@ -378,16 +423,35 @@ impl RuntimeSessionService {
                 .as_ref()
                 == Some(cache_key)
         {
-            self.process.pane_path_scopes.remove(cache_key);
             self.process.pane_path_scope_failures.remove(cache_key);
+            let current_directory = self
+                .pane_environment_signature(&transaction.pane_id)
+                .map(|signature| signature.working_directory.clone())
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "pane environment became unavailable during path resolution",
+                    )
+                })?;
+            let scopes = mez_agent::permissions::PathScopes::try_shell_resolved(
+                current_directory,
+                Vec::new(),
+                Vec::new(),
+                Default::default(),
+            )
+            .map_err(|error| MezError::invalid_state(error.message()))?;
             self.process
-                .pane_path_scope_failures
-                .insert(cache_key.clone(), reason.to_string());
+                .pane_path_scopes
+                .insert(cache_key.clone(), scopes);
+            self.append_sandbox_mapping_warning_once(
+                &transaction.pane_id,
+                &format!("path-resolution:{reason}"),
+                &format!("configured paths could not be resolved ({reason})"),
+            )?;
         }
         self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
-                r#"{{"pane_id":"{}","path_resolution":"failed","marker":"{}","reason":"{}"}}"#,
+                r#"{{"pane_id":"{}","path_resolution":"degraded","marker":"{}","reason":"{}"}}"#,
                 json_escape(&transaction.pane_id),
                 json_escape(marker),
                 json_escape(reason)
@@ -396,7 +460,7 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Expires a resolver without retaining stale or partial path authority.
+    /// Degrades an expired resolver to empty authority and resumes its waiters.
     pub(crate) fn expire_path_resolution_transaction(
         &mut self,
         marker: &str,
@@ -406,7 +470,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         self.interrupt_shell_transaction_pane(&transaction.pane_id)?;
         let previous = self.pane_readiness_state(&transaction.pane_id);
-        self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
+        self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Ready);
         self.fail_path_resolution_transaction(
             marker,
             &transaction,
@@ -416,27 +480,18 @@ impl RuntimeSessionService {
             &transaction.pane_id,
             &transaction.turn_id,
             &format!(
-                "pane_readiness {} -> degraded reason=path_resolution_timeout marker={}",
+                "pane_readiness {} -> ready reason=path_resolution_degraded marker={}",
                 runtime_pane_readiness_state_name(previous),
                 marker
             ),
         )?;
         if let RunningShellTransactionKind::PathResolution { waiters, .. } = &transaction.kind {
-            self.fail_action_path_resolution_waiters(
-                marker,
-                &transaction,
-                waiters,
-                ActionStatus::TimedOut,
-                "bubblewrap_path_resolution_timeout",
-                &format!(
-                    "Bubblewrap action path resolution timed out after {elapsed_ms} ms (limit {timeout_ms} ms)"
-                ),
-            )?;
+            self.resume_action_path_resolution_waiters(waiters)?;
         }
         Ok(())
     }
 
-    /// Settles a resolver whose pane input could not be written.
+    /// Degrades a resolver whose input could not be written to empty authority.
     pub(crate) fn fail_path_resolution_for_pane_write_failure(
         &mut self,
         marker: &str,
@@ -444,7 +499,7 @@ impl RuntimeSessionService {
         error: &str,
     ) -> Result<()> {
         let previous = self.pane_readiness_state(&transaction.pane_id);
-        self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
+        self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Ready);
         self.fail_path_resolution_transaction(
             marker,
             &transaction,
@@ -454,22 +509,13 @@ impl RuntimeSessionService {
             &transaction.pane_id,
             &transaction.turn_id,
             &format!(
-                "pane_readiness {} -> degraded reason=path_resolution_pane_input_write_failed marker={}",
+                "pane_readiness {} -> ready reason=path_resolution_degraded marker={}",
                 runtime_pane_readiness_state_name(previous),
                 marker
             ),
         )?;
         if let RunningShellTransactionKind::PathResolution { waiters, .. } = &transaction.kind {
-            self.fail_action_path_resolution_waiters(
-                marker,
-                &transaction,
-                waiters,
-                ActionStatus::Failed,
-                "bubblewrap_path_resolution_write_failed",
-                &format!(
-                    "pane input write failed while sending Bubblewrap action path resolution: {error}"
-                ),
-            )?;
+            self.resume_action_path_resolution_waiters(waiters)?;
         }
         Ok(())
     }

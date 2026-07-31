@@ -30,16 +30,21 @@ use crate::runtime::{
     SandboxUnavailablePolicy,
 };
 
+mod identity;
 mod managed_home;
 mod toolchains;
 mod workflow;
 
+pub(crate) use identity::{ResolvedSandboxIdentity, resolve_sandbox_identity};
 #[cfg(test)]
-pub(crate) use managed_home::{BubblewrapManagedHome, prepare_bubblewrap_managed_home};
+pub(crate) use managed_home::{
+    BubblewrapManagedHome, prepare_bubblewrap_managed_home,
+    prepare_bubblewrap_managed_home_for_workload,
+};
 pub(crate) use managed_home::{
     BubblewrapManagedHomeActivityLock, BubblewrapManagedHomeMaintenance,
     clear_bubblewrap_managed_home, inspect_bubblewrap_managed_home,
-    prepare_bubblewrap_managed_home_for_workload, prune_bubblewrap_managed_homes,
+    prepare_bubblewrap_managed_home_for_workload_with_identity, prune_bubblewrap_managed_homes,
     remove_bubblewrap_managed_home,
 };
 pub(crate) use toolchains::{
@@ -83,7 +88,7 @@ pub(crate) use workflow::{
 };
 
 /// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v9";
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v11";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -119,6 +124,8 @@ pub(crate) fn bubblewrap_failure_remediation(message: &str) -> String {
 pub(crate) struct BubblewrapCompileRequest<'a> {
     /// Typed Bubblewrap backend configuration.
     pub(crate) config: &'a BubblewrapConfig,
+    /// NSS-resolved exact native identity shared with the successful probe.
+    pub(crate) identity: ResolvedSandboxIdentity,
     /// Successful capability probe for the active pane environment.
     pub(crate) capability: BubblewrapCapability,
     /// Bootstrap-derived identity of the active pane environment.
@@ -243,6 +250,8 @@ pub(crate) struct BubblewrapCapabilityProbePlan {
     pub(crate) arguments: Vec<String>,
     /// Exact stdout emitted only after every probe assertion succeeds.
     pub(crate) expected_stdout: &'static str,
+    /// Digest of the pane identity and configured group mappings under test.
+    pub(crate) identity_sha256: String,
     /// Stable digest of the executable and arguments.
     pub(crate) probe_sha256: String,
 }
@@ -256,8 +265,12 @@ pub(crate) struct BubblewrapCapabilityCacheKey {
     pub(crate) pane_environment_signature: String,
     /// Configuration generation that selected the executable and profile.
     pub(crate) config_generation: u64,
-    /// Absolute executable path tested by the probe.
+    /// Absolute Bubblewrap path tested by the probe.
     pub(crate) executable: String,
+    /// Absolute Bubblewrap executable selected by configuration.
+    pub(crate) bubblewrap_executable: String,
+    /// Digest of the exact resolved native identity exercised by the probe.
+    pub(crate) identity_sha256: String,
     /// Fixed runtime-profile version exercised by the probe.
     pub(crate) runtime_profile_version: &'static str,
     /// Digest of the exact probe plan that succeeded.
@@ -460,9 +473,22 @@ pub(crate) fn compile_bubblewrap_launch_plan(
 /// The sentinel deliberately omits a line terminator because pane PTYs may
 /// translate LF output to CRLF. Transaction framing supplies the output
 /// boundary, so exact matching can still reject every additional byte.
+#[cfg(test)]
 pub(crate) fn bubblewrap_capability_probe_plan(
     config: &BubblewrapConfig,
     child_shell_path: &str,
+) -> Result<BubblewrapCapabilityProbePlan, SandboxCompileError> {
+    let environment = identity::current_process_environment_signature()?;
+    let identity = resolve_sandbox_identity(&config.supplementary_groups, &environment)?;
+    bubblewrap_capability_probe_plan_for_identity(config, child_shell_path, &identity)
+}
+
+/// Builds the deterministic capability probe for one already resolved exact
+/// identity so runtime cache lookup and workload compilation share it.
+pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
+    config: &BubblewrapConfig,
+    child_shell_path: &str,
+    identity: &ResolvedSandboxIdentity,
 ) -> Result<BubblewrapCapabilityProbePlan, SandboxCompileError> {
     validate_printable_absolute_path(&config.executable, "Bubblewrap executable")?;
     validate_canonical_path(child_shell_path, "sandbox child shell")?;
@@ -474,21 +500,13 @@ pub(crate) fn bubblewrap_capability_probe_plan(
             "initial Bubblewrap profile supports child shells under /bin or /usr only",
         ));
     }
-    let user_id = rustix::process::getuid().as_raw();
-    let group_id = rustix::process::getgid().as_raw();
-    let supplementary_group_count = rustix::process::getgroups()
-        .map_err(|error| {
-            SandboxCompileError::new(
-                SandboxCompileErrorKind::CapabilityProbeFailed,
-                format!("Bubblewrap could not read native supplementary groups: {error}"),
-            )
-        })?
-        .len();
-    let expected_stdout = "mez-bubblewrap-capability-v4";
+    let user_id = identity.user_id;
+    let group_id = identity.primary_group_id;
+    let expected_stdout = "mez-bubblewrap-capability-v6";
     let probe_script = format!(
-        "test ! -e /etc/passwd && test \"$(id -u)\" = '{user_id}' && test \"$(id -g)\" = '{group_id}' && supplementary_group_count=0 && while read -r key groups; do if test \"$key\" = 'Groups:'; then set -- $groups; supplementary_group_count=$#; break; fi; done < /proc/self/status && test \"$supplementary_group_count\" = '{supplementary_group_count}' && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
+        "test ! -e /etc/passwd && test \"$(id -u)\" = '{user_id}' && test \"$(id -g)\" = '{group_id}' && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
     );
-    let arguments = vec![
+    let bubblewrap_arguments = vec![
         "--unshare-user",
         "--uid",
         &user_id.to_string(),
@@ -547,14 +565,15 @@ pub(crate) fn bubblewrap_capability_probe_plan(
     .map(str::to_string)
     .collect::<Vec<_>>();
     let probe_sha256 = argument_plan_sha256(
-        b"mez-bubblewrap-capability-probe-v1\0",
+        b"mez-bubblewrap-capability-probe-v3\0",
         &config.executable,
-        &arguments,
+        &bubblewrap_arguments,
     );
     Ok(BubblewrapCapabilityProbePlan {
         executable: config.executable.clone(),
-        arguments,
+        arguments: bubblewrap_arguments,
         expected_stdout,
+        identity_sha256: identity.identity_sha256.clone(),
         probe_sha256,
     })
 }
@@ -619,16 +638,23 @@ pub(crate) fn bubblewrap_capability_cache_key(
         pane_environment_signature: pane_environment_signature.to_string(),
         config_generation,
         executable: plan.executable.clone(),
+        bubblewrap_executable: plan.executable.clone(),
+        identity_sha256: plan.identity_sha256.clone(),
         runtime_profile_version: BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
         probe_sha256: plan.probe_sha256.clone(),
     })
 }
 
 fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), SandboxCompileError> {
-    let expected_probe =
-        bubblewrap_capability_probe_plan(request.config, request.child_shell_path)?;
+    let expected_probe = bubblewrap_capability_probe_plan_for_identity(
+        request.config,
+        request.child_shell_path,
+        &request.identity,
+    )?;
     if request.capability.cache_key.pane_environment_signature != request.pane_environment_signature
         || request.capability.cache_key.executable != request.config.executable
+        || request.capability.cache_key.bubblewrap_executable != request.config.executable
+        || request.capability.cache_key.identity_sha256 != request.identity.identity_sha256
         || request.capability.cache_key.runtime_profile_version
             != BUBBLEWRAP_RUNTIME_PROFILE_VERSION
         || request.capability.cache_key.probe_sha256 != expected_probe.probe_sha256
@@ -1041,15 +1067,8 @@ fn bubblewrap_arguments(
     request: &BubblewrapCompileRequest<'_>,
     policy: &EffectiveSandboxPolicy,
 ) -> Vec<String> {
-    let (user_id, group_id) = request
-        .managed_home
-        .map(|home| (home.user_id, home.group_id))
-        .unwrap_or_else(|| {
-            (
-                rustix::process::getuid().as_raw(),
-                rustix::process::getgid().as_raw(),
-            )
-        });
+    let user_id = request.identity.user_id;
+    let group_id = request.identity.primary_group_id;
     let mut arguments = vec![
         "--json-status-fd",
         "3",

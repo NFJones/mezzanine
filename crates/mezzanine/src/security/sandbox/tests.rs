@@ -13,7 +13,10 @@ use mez_agent::permissions::{
     PermissionEvaluation, ResolvedPathEvidence, ResolvedPathKind, RuleDecision,
 };
 
-use crate::runtime::{CustomToolchainDefinition, CustomToolchainReference, ToolchainSelection};
+use crate::runtime::{
+    ConfiguredSandboxGroups, CustomToolchainDefinition, CustomToolchainReference,
+    ToolchainSelection,
+};
 
 use super::*;
 
@@ -23,6 +26,7 @@ fn config() -> BubblewrapConfig {
         unavailable: SandboxUnavailablePolicy::Fail,
         network: BubblewrapNetworkMode::Isolated,
         environment: SandboxEnvironmentPolicy::Minimal,
+        supplementary_groups: ConfiguredSandboxGroups::default(),
         git_user_name: None,
         git_user_email: None,
         toolchains: Vec::new(),
@@ -130,6 +134,11 @@ fn request<'a>(
 ) -> BubblewrapCompileRequest<'a> {
     BubblewrapCompileRequest {
         config,
+        identity: resolve_sandbox_identity(
+            &config.supplementary_groups,
+            &identity::current_process_environment_signature().unwrap(),
+        )
+        .unwrap(),
         capability: capability(config),
         pane_environment_signature: "pane-env-sha256",
         network_policy: NetworkPolicy::Prompt,
@@ -642,7 +651,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     let plan = bubblewrap_capability_probe_plan(&config, "/bin/sh").unwrap();
 
     assert_eq!(plan.executable, "/usr/bin/bwrap");
-    assert_eq!(plan.expected_stdout, "mez-bubblewrap-capability-v4");
+    assert_eq!(plan.expected_stdout, "mez-bubblewrap-capability-v6");
     assert!(plan.arguments.contains(&"--unshare-net".to_string()));
     assert!(plan.arguments.contains(&"--uid".to_string()));
     assert!(plan.arguments.contains(&"--gid".to_string()));
@@ -651,7 +660,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     assert!(
         plan.arguments
             .last()
-            .is_some_and(|script| script.contains("supplementary_group_count"))
+            .is_some_and(|script| script.contains("/proc/self/status"))
     );
     assert!(
         plan.arguments
@@ -661,7 +670,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     assert!(
         plan.arguments
             .last()
-            .is_some_and(|script| script.contains("printf '%s' 'mez-bubblewrap-capability-v4'"))
+            .is_some_and(|script| script.contains("printf '%s' 'mez-bubblewrap-capability-v6'"))
     );
     let capability = parse_bubblewrap_capability_probe(
         "%1",
@@ -669,7 +678,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
         0,
         &plan,
         0,
-        "mez-bubblewrap-capability-v4",
+        "mez-bubblewrap-capability-v6",
     )
     .unwrap();
     assert_eq!(
@@ -677,6 +686,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
         BUBBLEWRAP_RUNTIME_PROFILE_VERSION
     );
     assert_eq!(capability.cache_key.executable, "/usr/bin/bwrap");
+    assert_eq!(capability.cache_key.bubblewrap_executable, "/usr/bin/bwrap");
     assert_eq!(capability.cache_key.pane_id, "%1");
     assert_eq!(capability.cache_key.config_generation, 0);
     assert_eq!(
@@ -685,10 +695,10 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     );
 
     for contaminated_output in [
-        "mez-bubblewrap-capability-v4\n",
-        "mez-bubblewrap-capability-v4\r\n",
-        "leading-mez-bubblewrap-capability-v4",
-        "mez-bubblewrap-capability-v4trailing",
+        "mez-bubblewrap-capability-v6\n",
+        "mez-bubblewrap-capability-v6\r\n",
+        "leading-mez-bubblewrap-capability-v6",
+        "mez-bubblewrap-capability-v6trailing",
         "",
     ] {
         assert_eq!(
@@ -875,13 +885,18 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
     let config = config();
     let authority = authority();
     let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let identity = resolve_sandbox_identity(
+        &config.supplementary_groups,
+        &identity::current_process_environment_signature().unwrap(),
+    )
+    .unwrap();
     let managed_home = BubblewrapManagedHome {
         host_path: Path::new("/private/mez/cache-home").to_path_buf(),
         passwd_path: Path::new("/private/mez/passwd").to_path_buf(),
         group_path: Path::new("/private/mez/group").to_path_buf(),
-        user_id: 1234,
-        group_id: 5678,
-        supplementary_group_ids: vec![6789],
+        user_id: identity.user_id,
+        group_id: identity.primary_group_id,
+        supplementary_group_ids: Vec::new(),
         project_key: "0".repeat(64),
     };
     let mut compile_request = request(&config, &authority, &evaluation);
@@ -915,8 +930,6 @@ fn managed_home_is_bound_with_expected_xdg_environment() {
         );
     }
     for arguments in [
-        &["--uid", "1234"][..],
-        &["--gid", "5678"][..],
         &["--ro-bind", "/private/mez/passwd", "/etc/passwd"][..],
         &["--ro-bind", "/private/mez/group", "/etc/group"][..],
     ] {

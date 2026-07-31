@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 47
+version = 48
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -482,6 +482,9 @@ sandbox = "policy-only"
 # Optional sanitized Git identity for Bubblewrap commits. Configure both fields;
 # Mezzanine never imports the host global Git configuration.
 # [permissions.bubblewrap]
+# Exact host supplementary groups to project. The primary group is automatic;
+# an empty list strips all ambient supplementary groups.
+# supplementary_groups = []
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
 # Opt-in read-only Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, Maven, Gradle, .NET, Dart, Kotlin/JVM, Ruby, PHP, Composer, Erlang/OTP, Elixir, GHC, Cabal, Stack, OCaml, LLVM, GCC, CMake, Ninja, Meson, or Swift projections;

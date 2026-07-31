@@ -122,6 +122,7 @@ impl SandboxConfig {
             unavailable: SandboxUnavailablePolicy::Fail,
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
+            supplementary_groups: ConfiguredSandboxGroups::default(),
             git_user_name: None,
             git_user_email: None,
             toolchains: Vec::new(),
@@ -152,6 +153,8 @@ pub(crate) struct BubblewrapConfig {
     pub(crate) network: BubblewrapNetworkMode,
     /// Environment reconstruction policy.
     pub(crate) environment: SandboxEnvironmentPolicy,
+    /// Exact host supplementary groups selected by the primary user.
+    pub(crate) supplementary_groups: ConfiguredSandboxGroups,
     /// Optional non-secret Git author name projected without host Git config.
     pub(crate) git_user_name: Option<String>,
     /// Optional non-secret Git author email projected without host Git config.
@@ -162,6 +165,57 @@ pub(crate) struct BubblewrapConfig {
     pub(crate) toolchain_selections: Vec<ToolchainSelection>,
     /// Primary-user custom definitions keyed by validated stable name.
     pub(crate) custom_toolchains: BTreeMap<String, CustomToolchainDefinition>,
+}
+
+/// Primary-user-selected host group names projected into Bubblewrap.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ConfiguredSandboxGroups {
+    /// Ordered configured names retained for diagnostics and host resolution.
+    pub(crate) requested_names: Vec<String>,
+}
+
+impl ConfiguredSandboxGroups {
+    /// Maximum number of supplementary groups accepted by the launcher protocol.
+    pub(crate) const MAX_GROUPS: usize = 64;
+    /// Maximum total UTF-8 bytes accepted from configured group names.
+    pub(crate) const MAX_ENCODED_BYTES: usize = 8 * 1024;
+
+    /// Parses and validates the static configured group-name contract.
+    fn parse(names: Vec<String>) -> Result<Self> {
+        if names.len() > Self::MAX_GROUPS {
+            return Err(MezError::config(
+                "permissions.bubblewrap.supplementary_groups must contain at most 64 names",
+            ));
+        }
+        let mut encoded_bytes = 0usize;
+        let mut seen = std::collections::BTreeSet::new();
+        for name in &names {
+            encoded_bytes = encoded_bytes.saturating_add(name.len());
+            if name.is_empty() || name.chars().any(char::is_control) {
+                return Err(MezError::config(
+                    "permissions.bubblewrap.supplementary_groups must contain non-empty printable names",
+                ));
+            }
+            if name.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(MezError::config(
+                    "permissions.bubblewrap.supplementary_groups does not accept numeric GIDs",
+                ));
+            }
+            if !seen.insert(name.clone()) {
+                return Err(MezError::config(
+                    "permissions.bubblewrap.supplementary_groups must not contain duplicate names",
+                ));
+            }
+        }
+        if encoded_bytes > Self::MAX_ENCODED_BYTES {
+            return Err(MezError::config(
+                "permissions.bubblewrap.supplementary_groups exceeds the 8 KiB input limit",
+            ));
+        }
+        Ok(Self {
+            requested_names: names,
+        })
+    }
 }
 
 /// One selected built-in or primary-user-defined sandbox toolchain.
@@ -956,6 +1010,12 @@ pub(crate) fn runtime_configured_permissions_from_config(
                     ));
                 }
             };
+            let supplementary_groups = ConfiguredSandboxGroups::parse(
+                runtime_json_string_array(
+                    bubblewrap.and_then(|config| config.get("supplementary_groups")),
+                )?
+                .unwrap_or_default(),
+            )?;
             let git_user_name = bubblewrap
                 .and_then(|config| runtime_json_string(config.get("git_user_name")))
                 .map(str::to_string);
@@ -1016,6 +1076,7 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 unavailable,
                 network,
                 environment,
+                supplementary_groups,
                 git_user_name,
                 git_user_email,
                 toolchains,

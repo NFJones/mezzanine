@@ -90,6 +90,8 @@ pub(crate) struct SandboxConfiguredState {
     pub(crate) write_scopes: Vec<String>,
     /// Source layer for configured write scopes.
     pub(crate) write_scopes_source: String,
+    /// Primary-user-selected pane supplementary group mappings.
+    pub(crate) supplementary_groups: Vec<String>,
     /// Direct-user-selected allowlisted toolchain kinds.
     pub(crate) toolchains: Vec<String>,
 }
@@ -109,6 +111,10 @@ pub(crate) struct SandboxEffectiveState {
     pub(crate) bubblewrap_executable: Option<PathBuf>,
     /// Read-only local executable inspection state.
     pub(crate) bubblewrap_executable_state: String,
+    /// Group resolution state for the active pane environment.
+    pub(crate) supplementary_group_state: String,
+    /// Number of configured supplementary groups after successful resolution.
+    pub(crate) supplementary_group_count: usize,
     /// Pane-specific capability probe state.
     pub(crate) bubblewrap_probe_state: String,
     /// Managed-home readiness without creating a home.
@@ -210,6 +216,16 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
     };
     let effective_sandbox =
         effective_sandbox_boundary(&request.permissions.sandbox, approval_policy).to_string();
+
+    let (configured_supplementary_groups, supplementary_group_state, supplementary_group_count) =
+        match &request.permissions.sandbox {
+            SandboxConfig::PolicyOnly => (Vec::new(), "not-applicable".to_string(), 0),
+            SandboxConfig::Bubblewrap(config) => {
+                let configured = config.supplementary_groups.requested_names.clone();
+                let count = configured.len();
+                (configured, "pane-bootstrap-required".to_string(), count)
+            }
+        };
 
     let configured_toolchains = match &request.permissions.sandbox {
         SandboxConfig::PolicyOnly => Vec::new(),
@@ -372,6 +388,7 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             read_scopes_source: request.read_scopes_source.to_string(),
             write_scopes: request.permissions.resources.write_scopes.clone(),
             write_scopes_source: request.write_scopes_source.to_string(),
+            supplementary_groups: configured_supplementary_groups,
             toolchains: configured_toolchains,
         },
         effective: SandboxEffectiveState {
@@ -381,6 +398,8 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             write_scopes,
             bubblewrap_executable,
             bubblewrap_executable_state: executable_state.to_string(),
+            supplementary_group_state,
+            supplementary_group_count,
             bubblewrap_probe_state: if matches!(
                 request.permissions.sandbox,
                 SandboxConfig::Bubblewrap(_)
@@ -477,6 +496,7 @@ mod tests {
             unavailable: SandboxUnavailablePolicy::Fail,
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
+            supplementary_groups: crate::runtime::ConfiguredSandboxGroups::default(),
             git_user_name: None,
             git_user_email: None,
             toolchains: Vec::new(),
@@ -535,6 +555,7 @@ mod tests {
                 unavailable: SandboxUnavailablePolicy::Fail,
                 network: BubblewrapNetworkMode::Isolated,
                 environment: SandboxEnvironmentPolicy::Minimal,
+                supplementary_groups: crate::runtime::ConfiguredSandboxGroups::default(),
                 git_user_name: None,
                 git_user_email: None,
                 toolchains: Vec::new(),
@@ -583,6 +604,7 @@ mod tests {
             unavailable: SandboxUnavailablePolicy::Fail,
             network: BubblewrapNetworkMode::Isolated,
             environment: SandboxEnvironmentPolicy::Minimal,
+            supplementary_groups: crate::runtime::ConfiguredSandboxGroups::default(),
             git_user_name: None,
             git_user_email: None,
             toolchains: vec![crate::runtime::SandboxToolchainKind::Rust],

@@ -2966,6 +2966,20 @@ semantic `apply_patch` actions MUST retain every effective write scope in their
 Bubblewrap launch rather than narrowing mounts to classified patch effects or a
 trusted-project root. Other sandboxed writes MAY retain or narrow configured
 authority according to their complete classified effects.
+
+Schema v48 adds the primary-user-only
+`permissions.bubblewrap.supplementary_groups` string array. It MUST default to
+an empty mapping, and migration from v47 MUST write `[]`. The active pane
+shell's primary group MUST remain automatic and MUST NOT be listed. Entries
+MUST be non-empty printable non-numeric group names; duplicate configured
+names, control data, more than 64 entries, or more than 8 KiB of encoded names
+MUST fail closed as malformed configuration. At runtime, a name absent from
+the active pane shell's bootstrap-reported kernel group set, a name matching
+the automatic primary group, or aliases identifying one GID MUST be omitted
+from synthetic identity records with a bounded `agent warning:`. Such omission
+MUST NOT prevent Bubblewrap from running with reduced access and MUST NOT add,
+replace, or filter kernel credentials. Project layers, profiles, setup recipes,
+and model-authored mutation MUST NOT change this list.
 scopes MUST NOT be inferred from command patterns, approvals, presets, or
 trusted directories. Independently classified filesystem operands are advisory
 observations for authorization context, approval, audit, and display. They MUST
@@ -3553,16 +3567,17 @@ managed home keyed by the canonical project root and sandbox runtime profile.
 It MUST mount that directory read-write at `/home/mez` and set `HOME`,
 `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME` to
 paths within it. The Bubblewrap child MUST run as the invoking user's native
-UID and primary GID. Mezzanine MUST capture the invoking supplementary group
-list before launch, and the Bubblewrap capability probe MUST verify that the
-child retains the same number of kernel supplementary credential entries so
-group-based filesystem authority is not silently dropped. An unprivileged user
-namespace MAY expose an unmapped native supplementary GID as the overflow GID;
-this presentation difference MUST NOT be treated as loss of the corresponding
-kernel credential when group-authorized filesystem access remains effective.
-Managed homes MUST expose a
-synthetic `mez` passwd entry and synthetic primary and supplementary group
-entries for that identity with `/home/mez` as its home. Explicitly authorized host paths beneath the pane's reported home
+UID and primary GID while inheriting the active pane shell's supplementary
+credentials. Mezzanine MUST invoke the pane-local configured Bubblewrap image
+directly and MUST NOT use a privileged credential helper. Each configured group
+name MUST resolve from the pane bootstrap's active name-to-GID map before probe
+or workload launch. Mezzanine MUST NOT add, replace, or filter supplementary
+kernel credentials. An unprivileged user namespace MAY expose an unmapped host
+GID as the overflow GID, so inner numeric display MUST NOT be treated as the
+canonical host mapping.
+Managed homes MUST expose a synthetic `mez` passwd entry and immutable,
+identity-hash-keyed primary and configured supplementary group entries
+with `/home/mez` as the home. Explicitly authorized host paths beneath the pane's reported home
 directory MUST be projected beneath `/home/mez` at the same relative path;
 authorized paths outside that home MUST retain their canonical sandbox paths.
 Managed homes MUST be shared across concurrent panes for the same key, isolated
@@ -8615,9 +8630,17 @@ subagent authority MUST be the canonical intersection with parent authority;
 it MUST NOT broaden that authority.
 
 For a non-existent create target, Mezzanine MUST canonicalize the nearest
-existing parent and preserve the remaining unambiguous path components. NUL
-bytes, unexpanded home syntax, lexical traversal ambiguity, symlink escape,
-missing resolver output, and partially validated results MUST fail closed.
+existing parent and preserve the remaining unambiguous path components for a
+configured write mapping. Each configured host mapping MUST be validated
+independently. A path that is absent, unavailable, or cannot be resolved in the
+active pane MUST be omitted with a bounded `agent warning:` while Bubblewrap
+continues with the independently validated subset, including an empty mount
+set when no mapping survives. Resolver timeout, nonzero exit, truncation, or
+malformed output MUST likewise produce empty authority for that exact request
+and a warning. NUL bytes, unexpanded home syntax, lexical traversal ambiguity,
+symlink escape, forged or duplicate protocol entries, and any result whose
+exclusion cannot be proven MUST NOT add authority; launch MUST fail only when
+the unsafe candidate cannot be proven absent from the compiled plan.
 Resolver results MAY be cached only for the exact pane environment signature,
 configuration generation, and bounded path request. Distinct exact requests in
 one unchanged pane identity MUST coexist so primary, subagent, and per-action

@@ -16,7 +16,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-const PATH_RESOLUTION_PROTOCOL_MARKER: &str = "MEZ_PATH_RESOLUTION_V1\t";
+const PATH_RESOLUTION_PROTOCOL_MARKER: &str = "MEZ_PATH_RESOLUTION_V2\t";
 const MAX_PATH_RESOLUTION_REQUESTS: usize = 4096;
 const MAX_PATH_RESOLUTION_REQUEST_BYTES: usize = 1024 * 1024;
 
@@ -25,32 +25,35 @@ payload=json.loads(base64.b64decode(sys.argv[1],validate=True))
 cwd=os.path.realpath(os.getcwd())
 entries=[]
 for requested in payload["paths"]:
-    if not requested or "\x00" in requested or requested.startswith("~"):
-        raise ValueError("invalid requested path")
-    target=requested if os.path.isabs(requested) else os.path.join(cwd,requested)
-    target=os.path.abspath(target)
-    probe=target
-    while not os.path.lexists(probe):
-        parent=os.path.dirname(probe)
-        if parent==probe:
-            raise ValueError("path has no existing parent")
-        probe=parent
-    nearest=os.path.realpath(probe)
-    if os.path.lexists(target):
-        canonical=os.path.realpath(target)
-        kind="existing"
-        nearest=canonical
-    else:
-        relative=os.path.relpath(target,probe)
-        suffix=relative.split(os.sep)
-        if any(part in ("",".","..") for part in suffix):
-            raise ValueError("ambiguous create target")
-        canonical=os.path.normpath(os.path.join(nearest,*suffix))
-        kind="create-target"
-    entries.append({"requested":requested,"canonical_path":canonical,"kind":kind,"nearest_existing_parent":nearest})
-result={"version":1,"current_directory":cwd,"entries":entries}
+    try:
+        if not requested or "\x00" in requested or requested.startswith("~"):
+            raise ValueError("invalid requested path")
+        target=requested if os.path.isabs(requested) else os.path.join(cwd,requested)
+        target=os.path.abspath(target)
+        probe=target
+        while not os.path.lexists(probe):
+            parent=os.path.dirname(probe)
+            if parent==probe:
+                raise ValueError("path has no existing parent")
+            probe=parent
+        nearest=os.path.realpath(probe)
+        if os.path.lexists(target):
+            canonical=os.path.realpath(target)
+            kind="existing"
+            nearest=canonical
+        else:
+            relative=os.path.relpath(target,probe)
+            suffix=relative.split(os.sep)
+            if any(part in ("",".","..") for part in suffix):
+                raise ValueError("ambiguous create target")
+            canonical=os.path.normpath(os.path.join(nearest,*suffix))
+            kind="create-target"
+        entries.append({"requested":requested,"status":"resolved","canonical_path":canonical,"kind":kind,"nearest_existing_parent":nearest})
+    except (OSError,ValueError) as error:
+        entries.append({"requested":requested,"status":"unavailable","reason":type(error).__name__})
+result={"version":2,"current_directory":cwd,"entries":entries}
 encoded=base64.b64encode(json.dumps(result,separators=(",",":"),ensure_ascii=False).encode()).decode()
-print("MEZ_PATH_RESOLUTION_V1\t"+encoded)
+print("MEZ_PATH_RESOLUTION_V2\t"+encoded)
 "#;
 
 /// Paths that one pane-shell resolution transaction must canonicalize.
@@ -124,6 +127,18 @@ pub struct PanePathResolutionResult {
     pub current_directory: String,
     /// Evidence for every requested authority or command path.
     pub path_evidence: BTreeMap<String, ResolvedPathEvidence>,
+    /// Requested paths that could not be safely resolved in this pane.
+    pub unavailable_paths: BTreeMap<String, String>,
+}
+
+/// Restrictive authority produced by pane path resolution together with
+/// configured paths that were safely omitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanePathResolutionOutcome {
+    /// Independently validated read/write authority.
+    pub scopes: PathScopes,
+    /// Requested mappings omitted because this pane could not fulfill them.
+    pub unavailable_paths: BTreeMap<String, String>,
 }
 
 impl PanePathResolutionResult {
@@ -132,14 +147,37 @@ impl PanePathResolutionResult {
         self,
         request: &PanePathResolutionRequest,
     ) -> crate::permissions::PermissionResult<PathScopes> {
-        let read_scopes = resolved_requested_paths(&request.read_scopes, &self.path_evidence)?;
-        let write_scopes = resolved_requested_paths(&request.write_scopes, &self.path_evidence)?;
-        PathScopes::try_shell_resolved_with_evidence(
+        self.into_outcome(request).map(|outcome| outcome.scopes)
+    }
+
+    /// Converts independently resolved entries into restrictive authority and
+    /// reports every requested scope that was omitted.
+    pub fn into_outcome(
+        mut self,
+        request: &PanePathResolutionRequest,
+    ) -> crate::permissions::PermissionResult<PanePathResolutionOutcome> {
+        let read_scopes = resolved_requested_paths(
+            &request.read_scopes,
+            &self.path_evidence,
+            &mut self.unavailable_paths,
+            false,
+        );
+        let write_scopes = resolved_requested_paths(
+            &request.write_scopes,
+            &self.path_evidence,
+            &mut self.unavailable_paths,
+            true,
+        );
+        let scopes = PathScopes::try_shell_resolved_with_evidence(
             self.current_directory,
             read_scopes,
             write_scopes,
             self.path_evidence,
-        )
+        )?;
+        Ok(PanePathResolutionOutcome {
+            scopes,
+            unavailable_paths: self.unavailable_paths,
+        })
     }
 }
 
@@ -149,7 +187,7 @@ pub fn pane_path_resolution_command(
     classification: ShellClassification,
 ) -> AgentShellValidationResult<String> {
     let payload = PathResolutionRequestWire {
-        version: 1,
+        version: 2,
         paths: request.all_paths(),
     };
     let payload = serde_json::to_vec(&payload).map_err(|error| {
@@ -199,7 +237,7 @@ pub fn parse_pane_path_resolution_output(
             "path-resolution output contained invalid JSON: {error}"
         ))
     })?;
-    if result.version != 1 {
+    if result.version != 2 {
         return Err(AgentShellValidationError::invalid_args(
             "path-resolution output used an unsupported protocol version",
         ));
@@ -207,15 +245,44 @@ pub fn parse_pane_path_resolution_output(
 
     let expected = request.all_paths().into_iter().collect::<BTreeSet<_>>();
     let mut path_evidence = BTreeMap::new();
+    let mut unavailable_paths = BTreeMap::new();
+    let mut observed = BTreeSet::new();
     for entry in result.entries {
-        if !expected.contains(&entry.requested) || path_evidence.contains_key(&entry.requested) {
+        if !expected.contains(&entry.requested) || !observed.insert(entry.requested.clone()) {
             return Err(AgentShellValidationError::invalid_args(
                 "path-resolution output contained an unexpected or duplicate path",
             ));
         }
-        let kind = match entry.kind.as_str() {
-            "existing" => ResolvedPathKind::Existing,
-            "create-target" => ResolvedPathKind::CreateTarget,
+        if entry.status == "unavailable" {
+            let reason = entry.reason.unwrap_or_else(|| "unavailable".to_string());
+            unavailable_paths.insert(
+                entry.requested,
+                reason
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .take(128)
+                    .collect(),
+            );
+            continue;
+        }
+        if entry.status != "resolved" {
+            return Err(AgentShellValidationError::invalid_args(
+                "path-resolution output contained an unknown entry status",
+            ));
+        }
+        let canonical_path = entry.canonical_path.ok_or_else(|| {
+            AgentShellValidationError::invalid_args(
+                "resolved path output omitted its canonical path",
+            )
+        })?;
+        let nearest_existing_parent = entry.nearest_existing_parent.ok_or_else(|| {
+            AgentShellValidationError::invalid_args(
+                "resolved path output omitted its nearest existing parent",
+            )
+        })?;
+        let kind = match entry.kind.as_deref() {
+            Some("existing") => ResolvedPathKind::Existing,
+            Some("create-target") => ResolvedPathKind::CreateTarget,
             _ => {
                 return Err(AgentShellValidationError::invalid_args(
                     "path-resolution output contained an unknown path kind",
@@ -225,13 +292,13 @@ pub fn parse_pane_path_resolution_output(
         path_evidence.insert(
             entry.requested,
             ResolvedPathEvidence {
-                canonical_path: entry.canonical_path,
+                canonical_path,
                 kind,
-                nearest_existing_parent: entry.nearest_existing_parent,
+                nearest_existing_parent,
             },
         );
     }
-    if path_evidence.keys().cloned().collect::<BTreeSet<_>>() != expected {
+    if observed != expected {
         return Err(AgentShellValidationError::invalid_args(
             "path-resolution output omitted one or more requested paths",
         ));
@@ -239,6 +306,7 @@ pub fn parse_pane_path_resolution_output(
     Ok(PanePathResolutionResult {
         current_directory: result.current_directory,
         path_evidence,
+        unavailable_paths,
     })
 }
 
@@ -253,18 +321,25 @@ fn stable_unique(paths: Vec<String>) -> Vec<String> {
 fn resolved_requested_paths(
     requested: &[String],
     evidence: &BTreeMap<String, ResolvedPathEvidence>,
-) -> crate::permissions::PermissionResult<Vec<String>> {
+    unavailable: &mut BTreeMap<String, String>,
+    allow_create_target: bool,
+) -> Vec<String> {
     requested
         .iter()
-        .map(|path| {
-            evidence
-                .get(path)
-                .map(|entry| entry.canonical_path.clone())
-                .ok_or_else(|| {
-                    crate::permissions::PermissionError::invalid_args(format!(
-                        "path-resolution result omitted requested scope `{path}`"
-                    ))
-                })
+        .filter_map(|path| match evidence.get(path) {
+            Some(entry)
+                if entry.kind == ResolvedPathKind::Existing
+                    || (allow_create_target && entry.kind == ResolvedPathKind::CreateTarget) =>
+            {
+                Some(entry.canonical_path.clone())
+            }
+            Some(_) => {
+                unavailable
+                    .entry(path.clone())
+                    .or_insert_with(|| "configured scope does not exist on this pane".to_string());
+                None
+            }
+            None => None,
         })
         .collect()
 }
@@ -285,7 +360,9 @@ struct PathResolutionResultWire {
 #[derive(Deserialize)]
 struct PathResolutionEntryWire {
     requested: String,
-    canonical_path: String,
-    kind: String,
-    nearest_existing_parent: String,
+    status: String,
+    canonical_path: Option<String>,
+    kind: Option<String>,
+    nearest_existing_parent: Option<String>,
+    reason: Option<String>,
 }

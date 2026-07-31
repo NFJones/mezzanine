@@ -37,7 +37,9 @@ For each local shell action, Mezzanine follows this sequence:
    `read_scopes` and `write_scopes` are maximum authority. If both are absent,
    a pane inside a trusted project receives that project's canonical root as
    read-write authority; the deepest matching trusted root wins. A pane with
-   neither source has no Bubblewrap filesystem authority.
+   neither source has no Bubblewrap filesystem authority. Configured paths
+   unavailable on this pane are omitted with an agent-pane warning; other
+   successfully resolved paths remain active.
 3. It probes the configured Bubblewrap executable in the target pane
    environment. Successful capability evidence is bound to the exact pane,
    environment signature, configuration generation, executable, and runtime
@@ -62,9 +64,12 @@ Bubblewrap projects only the authority needed by the compiled plan:
 
 - Read scopes are mounted read-only; write scopes are mounted read-write and
   also imply read access.
-- Paths are canonicalized in the pane environment. Unresolved paths,
-  symlink escapes, invalid authority, direct credential-directory authority,
-  and the multi-user `/home` root fail closed.
+- Paths are canonicalized in the pane environment. A configured path that is
+  absent or unavailable on this pane is omitted with an `agent warning:` and
+  Bubblewrap continues with reduced access. A mapping that would broaden
+  authority, including a symlink escape, invalid authority, direct
+  credential-directory authority, or the multi-user `/home` root, is excluded;
+  launch fails only when exclusion cannot be proven.
 - When a deterministic `/home/<user>` scope is permitted, sensitive existing
   descendants such as `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`, `.docker`,
   and Mezzanine configuration are masked by private tmpfs mounts. They are not
@@ -73,13 +78,15 @@ Bubblewrap projects only the authority needed by the compiled plan:
   home. For trusted projects, Mezzanine may reuse a private managed home keyed
   by canonical project root and sandbox runtime profile. Its HOME and XDG
   paths remain inside that managed home. The child uses the invoking user's
-  native UID and primary GID. Mezzanine captures supplementary groups before
-  launch, and capability probing verifies that Bubblewrap retains the same
-  number of kernel supplementary credential entries. This preserves group-based
-  filesystem authority. Because an unprivileged user namespace cannot
-  identity-map arbitrary host GIDs, tools such as `id` may display the overflow
-  GID for one or more native supplementary groups even while their filesystem
-  authority remains active.
+  native UID and primary GID while inheriting the active pane shell's
+  supplementary credentials. `permissions.bubblewrap.supplementary_groups`
+  maps selected active pane group names into the sandbox's synthetic group
+  records; empty maps no supplementary names but does not filter inherited
+  credentials. Mezzanine omits configured names absent from pane bootstrap
+  evidence, logs a warning, and invokes the pane-local Bubblewrap executable
+  directly without a privileged helper. An unprivileged user namespace may present unmapped host
+  GIDs as the overflow GID. Group mapping does not expose sockets, devices, or
+  paths by itself.
 - The default runtime environment is rebuilt from a fixed non-secret set with
   a minimal PATH. Debian-style executable alternatives at `/etc/alternatives`
   are projected read-only so system compiler symlinks resolve. Host system and

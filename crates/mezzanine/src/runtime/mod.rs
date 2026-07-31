@@ -245,10 +245,10 @@ mod commands_support;
 /// declaration makes the boundary available to the crate.
 mod config;
 pub(crate) use config::{
-    BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, CustomToolchainDefinition,
-    CustomToolchainName, CustomToolchainReference, NetworkPolicy, SandboxConfig,
-    SandboxEnvironmentPolicy, SandboxToolchainKind, SandboxUnavailablePolicy, ToolchainSelection,
-    runtime_configured_permissions_from_config,
+    BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, ConfiguredSandboxGroups,
+    CustomToolchainDefinition, CustomToolchainName, CustomToolchainReference, NetworkPolicy,
+    SandboxConfig, SandboxEnvironmentPolicy, SandboxToolchainKind, SandboxUnavailablePolicy,
+    ToolchainSelection, runtime_configured_permissions_from_config,
 };
 /// Exposes the control module boundary.
 ///

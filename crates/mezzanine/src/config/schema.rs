@@ -356,12 +356,13 @@ pub(super) const COMMAND_RULE_KEYS: &[&str] = &[
     "effects",
 ];
 
-/// Defines the typed Bubblewrap configuration keys accepted by schema v32.
+/// Defines the typed Bubblewrap configuration keys accepted by the current schema.
 pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] = &[
     "executable",
     "unavailable",
     "network",
     "environment",
+    "supplementary_groups",
     "git_user_name",
     "git_user_email",
     "toolchains",

@@ -659,6 +659,40 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Appends one bounded sandbox-mapping warning to the retained agent log.
+    ///
+    /// Warning identities are deduplicated for the lifetime of the active pane
+    /// environment. The warning is visible regardless of verbose-mode state.
+    pub(crate) fn append_sandbox_mapping_warning_once(
+        &mut self,
+        pane_id: &str,
+        warning_id: &str,
+        detail: &str,
+    ) -> Result<()> {
+        let identity = format!(
+            "{pane_id}\0{}\0{warning_id}",
+            self.session.config_generation
+        );
+        if !self
+            .process
+            .sandbox_mapping_warnings_emitted
+            .insert(identity)
+        {
+            return Ok(());
+        }
+        let detail = detail
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(512)
+            .collect::<String>();
+        self.append_agent_status_text_to_terminal_buffer(
+            pane_id,
+            &format!(
+                "agent warning: sandbox omitted unavailable host mapping: {detail}. The sandbox remains active with reduced access."
+            ),
+        )
+    }
+
     /// Runs the append agent verbose status text to terminal buffer operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

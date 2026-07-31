@@ -697,12 +697,13 @@ Provider options under a model profile:
 | `permissions.approval_policy` | string | `"ask"` | Default approval policy: `ask`, `auto-allow`, `full-access`, or primary-user-only `host-access`. `full-access` remains sandboxed; `host-access` executes local shell actions on the host outside the configured sandbox. |
 | `permissions.preset` | string | omitted | Optional preset, such as `read-only` or `auto`. |
 | `permissions.sandbox` | string | `"policy-only"` | Additive confinement backend: `policy-only` or `bubblewrap`. |
-| `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. |
-| `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. |
+| `permissions.read_scopes` | string array | omitted | Maximum pane-resolved read authority for the primary agent. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. |
+| `permissions.write_scopes` | string array | omitted | Maximum pane-resolved write authority; write also implies read. When both scope arrays are omitted, a trusted current project is granted read-write authority for its root. Paths unavailable on the active pane are omitted with a warning. |
 | `permissions.bubblewrap.executable` | string | `"/usr/bin/bwrap"` | Absolute Bubblewrap path resolved and probed in the pane environment. |
 | `permissions.bubblewrap.unavailable` | string | `"fail"` | Never runs unsandboxed automatically. A prompt-classified action may offer one exact approval-gated fallback after Bubblewrap failure. |
 | `permissions.bubblewrap.network` | string | `"isolated"` | Private network namespace policy. |
 | `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
+| `permissions.bubblewrap.supplementary_groups` | string array | `[]` | Schema-v48 primary-user-only pane group mappings. The active pane's primary group is automatic and must not be listed. Names must be non-empty, non-numeric, and unique; at most 64 names and 8 KiB are accepted. A name unavailable in the active pane is omitted with a warning. Empty projects no supplementary group names but does not filter inherited pane credentials. |
 | `permissions.bubblewrap.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.toolchains` | string array | omitted | Ordered direct-user-selected read-only built-in or `custom:<name>` toolchains. Built-in selectors persist identity rather than discovered host paths. |
@@ -882,8 +883,21 @@ Mezzanine does not currently enforce a built-in size quota or periodic age-based
 pruning; operators may apply filesystem quotas or remove inactive private cache
 directories while no sandbox command is using them.
 
-On Linux, Mezzanine validates the configured executable inside the target pane
-environment before launching a sandboxed workload. The probe requires usable
+Each managed home stores immutable synthetic passwd/group records below an
+identity-hash directory. The passwd entry uses the pane UID and primary GID;
+the group file uses the pane primary-group name and only the configured active
+supplementary groups. Changing the mapping does not discard the project's
+persistent XDG caches.
+
+Mezzanine collects the active UID, primary GID, and named kernel group set from
+the active pane bootstrap. It rejects unknown or inactive configured names,
+duplicate GID mappings, and the automatic primary group. Probes and workloads
+invoke the pane-local configured Bubblewrap executable directly. Mezzanine does
+not add, replace, or filter supplementary credentials, so a pane session must
+already carry every configured group and may retain unconfigured ambient groups.
+
+Mezzanine then validates the configured Bubblewrap executable inside the target
+pane environment. The probe requires usable
 user, mount, PID, IPC, UTS, cgroup, and network namespaces plus the fixed
 read-only runtime projection. Missing executables and unsupported namespace
 facilities never trigger an automatic unsandboxed retry. For a local action

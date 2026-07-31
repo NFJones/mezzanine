@@ -147,6 +147,9 @@ This installs `mez` into Cargo's bin directory, typically `~/.cargo/bin`. If
 that directory is not already on your `PATH`, run `~/.cargo/bin/mez` in the
 steps below.
 
+Bubblewrap confinement requires only the configured `bwrap` executable in the
+active pane environment. No privileged Mezzanine helper is installed.
+
 ### 2. Create config and authenticate
 
 ```sh
@@ -442,12 +445,19 @@ Current support reflects behavior implemented in the repository today.
   persistent XDG cache, config, data, and state directories. Homes are isolated
   by project and sandbox profile, support overlapping same-project workloads,
   never copy the real user home, and are removed when project trust is revoked.
-  Sandboxed launches require the calling user's native UID and primary GID.
-  Mezzanine captures supplementary groups before launch, and capability probing
-  verifies that Bubblewrap retains every kernel credential entry so group-based
-  filesystem access is preserved. Unprivileged user namespaces may display an
-  unmapped native supplementary GID as the overflow GID even though its kernel
-  credential and filesystem authority remain active.
+  Sandboxed launches use the active pane shell's native UID, primary GID, and
+  inherited supplementary credentials. The primary-user-only
+  `permissions.bubblewrap.supplementary_groups` list names the pane groups that
+  Mezzanine attempts to map into synthetic identity records; it does not
+  create, replace, or filter kernel credentials. Names unavailable in the
+  active pane are omitted with an `agent warning:` and the sandbox continues
+  with reduced access.
+  Empty means no supplementary names are projected, while ambient pane groups
+  may remain inherited. Reconnect or relog a stale shell when the omitted group
+  is needed on that pane. A group credential does not mount a corresponding
+  socket, device, or path: filesystem policy must authorize that separately.
+  Unprivileged user namespaces may display an unmapped configured GID as the
+  overflow GID even though its kernel credential remains active.
   `mez sandbox cache status [PATH]` reports usage without creating storage.
   `cache clear [PATH]` and `cache prune` preview inactive candidates by default;
   pass `--dry-run` for an explicit preview or `--yes` to delete. Active homes

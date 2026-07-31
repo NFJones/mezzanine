@@ -297,6 +297,42 @@ fn runtime_hidden_agent_presentation_isolated_from_process_screen() {
     );
 }
 
+/// Verifies sandbox mapping warnings are visible without verbose mode and one
+/// stable mapping outcome is retained only once in the affected pane log.
+#[test]
+fn runtime_sandbox_mapping_warning_is_visible_and_deduplicated() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .ensure_session("%1")
+        .unwrap();
+
+    for _ in 0..2 {
+        service
+            .append_sandbox_mapping_warning_once(
+                "%1",
+                "supplementary-group:docker:not-active",
+                "supplementary-group `docker` (not active in the pane shell)",
+            )
+            .unwrap();
+    }
+
+    let pane_text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert_eq!(
+        pane_text.matches("agent warning:").count(),
+        1,
+        "{pane_text}"
+    );
+    assert!(pane_text.contains("sandbox remains active"), "{pane_text}");
+}
+
 /// Verifies persisted presentation from another pane conversation is rejected
 /// before replay can mutate either retained screen.
 #[test]

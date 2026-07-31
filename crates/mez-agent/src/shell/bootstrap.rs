@@ -4,7 +4,7 @@
 //! agent contracts and discovered instruction metadata without product I/O.
 
 use super::transaction::classify_version_probe;
-use super::{EnvironmentSignature, ShellClassification, ToolInventory};
+use super::{EnvironmentGroup, EnvironmentSignature, ShellClassification, ToolInventory};
 use crate::instructions::{DiscoveredInstructionFile, parse_instruction_discovery_output};
 use std::path::Path;
 
@@ -262,6 +262,16 @@ done\n\
 \n\
 printf 'bootstrap\\tcomplete\\t%s\\n' \"$mez_discovered_at\"\n"
         .to_string();
+    script.push_str(
+        "mez_bootstrap_field user_id \"$(id -u 2>/dev/null)\"\n\
+mez_bootstrap_field primary_group_id \"$(id -g 2>/dev/null)\"\n\
+set -- $(id -nG 2>/dev/null)\n\
+for mez_group_id in $(id -G 2>/dev/null); do\n\
+  mez_group_name=$1\n\
+  shift\n\
+  mez_bootstrap_field active_group \"$mez_group_id:$mez_group_name\"\n\
+done\n",
+    );
     script.push_str(tool_discovery_script());
     script
 }
@@ -487,6 +497,15 @@ end\n\
 \n\
 printf 'bootstrap\\tcomplete\\t%s\\n' \"$mez_discovered_at\"\n"
         .to_string();
+    script.push_str(
+        "mez_bootstrap_field user_id (id -u 2>/dev/null)\n\
+mez_bootstrap_field primary_group_id (id -g 2>/dev/null)\n\
+set -l mez_group_ids (id -G 2>/dev/null | string split ' ')\n\
+set -l mez_group_names (id -nG 2>/dev/null | string split ' ')\n\
+for mez_group_index in (seq (count $mez_group_ids))\n\
+  mez_bootstrap_field active_group \"$mez_group_ids[$mez_group_index]:$mez_group_names[$mez_group_index]\"\n\
+end\n",
+    );
     script.push_str(fish_tool_discovery_script());
     script
 }
@@ -589,6 +608,9 @@ pub fn parse_bootstrap_env_output(
     let mut kernel_version: Option<String> = None;
     let mut host = String::new();
     let mut user = String::new();
+    let mut user_id: Option<u32> = None;
+    let mut primary_group_id: Option<u32> = None;
+    let mut active_groups = Vec::new();
     let mut home_directory: Option<String> = None;
     let mut shell_path = String::new();
     let mut shell_class: Option<String> = None;
@@ -637,6 +659,18 @@ pub fn parse_bootstrap_env_output(
             "kernel_version" => kernel_version = Some(value.to_string()),
             "host" => host = value.to_string(),
             "user" => user = value.to_string(),
+            "user_id" => user_id = value.parse().ok(),
+            "primary_group_id" => primary_group_id = value.parse().ok(),
+            "active_group" => {
+                if let Some((id, name)) = value.split_once(':')
+                    && let Ok(id) = id.parse()
+                {
+                    active_groups.push(EnvironmentGroup {
+                        id,
+                        name: name.to_string(),
+                    });
+                }
+            }
             "home_directory" if !value.is_empty() => {
                 home_directory = Some(value.to_string());
             }
@@ -696,7 +730,7 @@ pub fn parse_bootstrap_env_output(
         if working_directory.is_empty() {
             working_directory = "/".to_string();
         }
-        EnvironmentSignature::new(
+        let signature = EnvironmentSignature::new(
             os,
             arch,
             kernel_version,
@@ -713,7 +747,13 @@ pub fn parse_bootstrap_env_output(
             container,
             environment_managers,
         )
-        .ok()
+        .ok();
+        match (signature, user_id, primary_group_id) {
+            (Some(signature), Some(user_id), Some(primary_group_id)) => signature
+                .with_process_identity(user_id, primary_group_id, active_groups)
+                .ok(),
+            (signature, _, _) => signature,
+        }
     };
 
     let inventory = if tool_output.is_empty() {

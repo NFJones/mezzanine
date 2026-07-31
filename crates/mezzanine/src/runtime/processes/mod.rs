@@ -318,6 +318,8 @@ pub(crate) struct RuntimeProcessComponent {
     /// Fail-closed resolver outcomes keyed by the same exact authority identity.
     pane_path_scope_failures:
         std::collections::BTreeMap<crate::runtime::RuntimePathResolutionCacheKey, String>,
+    /// Mapping-warning identities already retained in each pane log.
+    pub(crate) sandbox_mapping_warnings_emitted: BTreeSet<String>,
     /// Successful Bubblewrap probes keyed by exact pane-environment and
     /// runtime-profile identity.
     pane_bubblewrap_capabilities: std::collections::BTreeMap<
@@ -2248,6 +2250,9 @@ impl RuntimeSessionService {
         self.process
             .pane_path_scope_failures
             .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .sandbox_mapping_warnings_emitted
+            .retain(|identity| !identity.starts_with(&format!("{pane_id}\0")));
         self.process.pane_bootstrap_pending.remove(pane_id);
         self.clear_pane_agent_instruction_files(pane_id);
         self.process.pane_closing.remove(pane_id);

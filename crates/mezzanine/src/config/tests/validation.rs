@@ -1002,3 +1002,37 @@ fn rejects_malformed_custom_toolchain_structure() {
         );
     }
 }
+
+/// Verifies schema v48 accepts a bounded primary exact group list and rejects
+/// malformed or project-supplied host group authority before NSS resolution.
+#[test]
+fn supplementary_groups_are_structurally_validated_and_primary_only() {
+    let valid = format!(
+        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\nsupplementary_groups = [\"sudo\", \"docker\"]\n"
+    );
+    let primary = validate_config_text(ConfigFormat::Toml, &valid, ConfigScope::Primary);
+    assert!(primary.valid, "{:?}", primary.diagnostics);
+
+    let overlay = validate_config_text(ConfigFormat::Toml, &valid, ConfigScope::ProjectOverlay);
+    assert!(overlay.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "permissions.bubblewrap.supplementary_groups"
+            && diagnostic
+                .message
+                .starts_with("primary_user_only_execution_authority:")
+    }));
+
+    for value in ["[\"\"]", "[\"27\"]", "[\"sudo\", \"sudo\"]", "[1]"] {
+        let invalid = format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\nsupplementary_groups = {value}\n"
+        );
+        let validation = validate_config_text(ConfigFormat::Toml, &invalid, ConfigScope::Primary);
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == "permissions.bubblewrap.supplementary_groups"),
+            "missing diagnostic for {value}: {:?}",
+            validation.diagnostics
+        );
+    }
+}

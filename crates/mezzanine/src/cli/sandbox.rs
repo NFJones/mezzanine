@@ -1107,7 +1107,7 @@ fn write_setup_result<W: Write>(
 
 fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String {
     let mut output = format!(
-        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\napproval_policy: {}\nscope_provenance: {}\nbubblewrap_executable_state: {}\nbubblewrap_probe_state: {}\nmanaged_home_state: {}\nmanaged_home_bytes: {}\nmanaged_home_active: {}\ntoolchains: {}\ntoolchain_state: {}\nnetwork_isolated: {}\nreload_freshness: {}\n",
+        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\napproval_policy: {}\nscope_provenance: {}\nbubblewrap_executable_state: {}\nsupplementary_groups: {}\nsupplementary_group_state: {}\nsupplementary_group_count: {}\nbubblewrap_probe_state: {}\nmanaged_home_state: {}\nmanaged_home_bytes: {}\nmanaged_home_active: {}\ntoolchains: {}\ntoolchain_state: {}\nnetwork_isolated: {}\nreload_freshness: {}\n",
         plan.project.canonical_root.display(),
         plan.project.input_source,
         plan.project.marker_kind,
@@ -1117,6 +1117,13 @@ fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String 
         plan.configured.approval_policy,
         plan.effective.scope_provenance,
         plan.effective.bubblewrap_executable_state,
+        if plan.configured.supplementary_groups.is_empty() {
+            "none".to_string()
+        } else {
+            plan.configured.supplementary_groups.join(",")
+        },
+        plan.effective.supplementary_group_state,
+        plan.effective.supplementary_group_count,
         plan.effective.bubblewrap_probe_state,
         plan.effective.managed_home_state,
         plan.effective.managed_home_bytes,

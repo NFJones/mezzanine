@@ -124,14 +124,8 @@ impl RuntimeSessionService {
             RunningShellTransactionKind::PathResolution { ref waiters, .. } => {
                 self.fail_path_resolution_transaction(marker, &transaction, &message)?;
                 if !waiters.is_empty() {
-                    self.fail_action_path_resolution_waiters(
-                        marker,
-                        &transaction,
-                        waiters,
-                        ActionStatus::Failed,
-                        "bubblewrap_path_resolution_protocol_violation",
-                        &format!("Bubblewrap action path resolution protocol violation: {message}"),
-                    )
+                    self.resume_action_path_resolution_waiters(waiters)?;
+                    Ok(1)
                 } else {
                     Ok(1)
                 }

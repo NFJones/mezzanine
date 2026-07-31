@@ -199,33 +199,37 @@ fn snapshot_resume_can_serve_restored_session_over_control_socket() {
 
     let socket = home.join("runtime").join("snapshot-serve.sock");
     let socket_for_server = socket.clone();
-    let server = thread::spawn(move || {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let result = run_with(
-            vec![
-                "mez".to_string(),
-                "-S".to_string(),
-                socket_for_server.to_string_lossy().to_string(),
-                "snapshot".to_string(),
-                "resume".to_string(),
-                "snap-serve".to_string(),
-                "--serve".to_string(),
-                "--no-aux-sockets".to_string(),
-                "--max-control-connections".to_string(),
-                "1".to_string(),
-            ],
-            env,
-            false,
-            &mut stdout,
-            &mut stderr,
-        );
-        (
-            result,
-            String::from_utf8(stdout).unwrap(),
-            String::from_utf8(stderr).unwrap(),
-        )
-    });
+    let server = thread::Builder::new()
+        .name("snapshot-resume-serve".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let result = run_with(
+                vec![
+                    "mez".to_string(),
+                    "-S".to_string(),
+                    socket_for_server.to_string_lossy().to_string(),
+                    "snapshot".to_string(),
+                    "resume".to_string(),
+                    "snap-serve".to_string(),
+                    "--serve".to_string(),
+                    "--no-aux-sockets".to_string(),
+                    "--max-control-connections".to_string(),
+                    "1".to_string(),
+                ],
+                env,
+                false,
+                &mut stdout,
+                &mut stderr,
+            );
+            (
+                result,
+                String::from_utf8(stdout).unwrap(),
+                String::from_utf8(stderr).unwrap(),
+            )
+        })
+        .unwrap();
 
     assert!(
         wait_for_path(&socket),

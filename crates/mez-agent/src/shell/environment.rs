@@ -7,6 +7,15 @@ use super::{AgentShellValidationError, AgentShellValidationResult, ShellClassifi
 use sha2::Digest;
 use std::collections::BTreeMap;
 
+/// One active supplementary group reported by the pane shell.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EnvironmentGroup {
+    /// Native group ID in the pane host's user namespace.
+    pub id: u32,
+    /// Canonical group name reported by the pane host.
+    pub name: String,
+}
+
 /// Carries Environment Signature state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -38,6 +47,12 @@ pub struct EnvironmentSignature {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub user: String,
+    /// Effective user ID reported by the pane shell.
+    pub user_id: Option<u32>,
+    /// Effective primary group ID reported by the pane shell.
+    pub primary_group_id: Option<u32>,
+    /// Active pane-shell groups, including the primary group, sorted by GID.
+    pub active_groups: Vec<EnvironmentGroup>,
     /// Canonical home directory reported by the pane shell when available.
     ///
     /// This value is retained for filesystem projection decisions and is not
@@ -120,6 +135,9 @@ impl EnvironmentSignature {
             kernel_version,
             host: host.into(),
             user: user.into(),
+            user_id: None,
+            primary_group_id: None,
+            active_groups: Vec::new(),
             home_directory,
             shell_path: shell_path.into(),
             shell_classification,
@@ -145,6 +163,39 @@ impl EnvironmentSignature {
         Ok(signature)
     }
 
+    /// Attaches validated process credentials collected by the pane bootstrap.
+    pub fn with_process_identity(
+        mut self,
+        user_id: u32,
+        primary_group_id: u32,
+        mut active_groups: Vec<EnvironmentGroup>,
+    ) -> AgentShellValidationResult<Self> {
+        active_groups.sort_by_key(|group| group.id);
+        if active_groups.is_empty()
+            || !active_groups
+                .iter()
+                .any(|group| group.id == primary_group_id)
+            || active_groups
+                .windows(2)
+                .any(|groups| groups[0].id == groups[1].id)
+            || active_groups.iter().any(|group| {
+                group.name.is_empty()
+                    || group
+                        .name
+                        .bytes()
+                        .any(|byte| byte.is_ascii_control() || matches!(byte, b':' | b'='))
+            })
+        {
+            return Err(AgentShellValidationError::invalid_args(
+                "pane process identity must contain one named entry per active GID, including the primary GID",
+            ));
+        }
+        self.user_id = Some(user_id);
+        self.primary_group_id = Some(primary_group_id);
+        self.active_groups = active_groups;
+        Ok(self)
+    }
+
     /// Runs the unknown operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -157,6 +208,9 @@ impl EnvironmentSignature {
             kernel_version: None,
             host: "unknown".to_string(),
             user: "unknown".to_string(),
+            user_id: None,
+            primary_group_id: None,
+            active_groups: Vec::new(),
             home_directory: None,
             shell_path: "/bin/sh".to_string(),
             shell_classification: ShellClassification::UnknownUnix,
@@ -206,6 +260,15 @@ impl EnvironmentSignature {
         }
         fields.push(format!("host={}", self.host));
         fields.push(format!("user={}", self.user));
+        if let Some(user_id) = self.user_id {
+            fields.push(format!("user_id={user_id}"));
+        }
+        if let Some(primary_group_id) = self.primary_group_id {
+            fields.push(format!("primary_group_id={primary_group_id}"));
+        }
+        for group in &self.active_groups {
+            fields.push(format!("active_group={}:{}", group.id, group.name));
+        }
         if let Some(ref home_directory) = self.home_directory {
             fields.push(format!("home_directory={home_directory}"));
         }

@@ -304,6 +304,7 @@ pub fn validate_config_text(
         ConfigFormat::Json => extract_json_paths(text),
     };
     let values = extract_config_values(format, text);
+    diagnostics.extend(validate_supplementary_groups_config(format, text));
     diagnostics.extend(validate_custom_toolchain_config(format, text, scope));
 
     let git_user_name = values.get("permissions.bubblewrap.git_user_name");
@@ -518,6 +519,71 @@ pub fn validate_config_text(
     diagnostics.sort_by(|left, right| left.path.cmp(&right.path));
     diagnostics.dedup();
     ConfigValidation::from_diagnostics(diagnostics)
+}
+
+/// Validates schema-v48 supplementary group names without consulting NSS.
+fn validate_supplementary_groups_config(format: ConfigFormat, text: &str) -> Vec<ConfigDiagnostic> {
+    let Ok(root) = parse_config_json_value(format, text) else {
+        return Vec::new();
+    };
+    let Some(value) = root
+        .get("permissions")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|permissions| permissions.get("bubblewrap"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|bubblewrap| bubblewrap.get("supplementary_groups"))
+    else {
+        return Vec::new();
+    };
+    let path = "permissions.bubblewrap.supplementary_groups";
+    let Some(groups) = value.as_array() else {
+        return vec![ConfigDiagnostic {
+            path: path.to_string(),
+            message: "supplementary_groups must be a string array".to_string(),
+        }];
+    };
+    if groups.len() > 64 {
+        return vec![ConfigDiagnostic {
+            path: path.to_string(),
+            message: "supplementary_groups must contain at most 64 names".to_string(),
+        }];
+    }
+    let mut diagnostics = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut encoded_bytes = 0usize;
+    for group in groups {
+        let Some(name) = group.as_str() else {
+            diagnostics.push(ConfigDiagnostic {
+                path: path.to_string(),
+                message: "supplementary_groups must contain only strings".to_string(),
+            });
+            continue;
+        };
+        encoded_bytes = encoded_bytes.saturating_add(name.len());
+        if name.is_empty() || name.chars().any(char::is_control) {
+            diagnostics.push(ConfigDiagnostic {
+                path: path.to_string(),
+                message: "supplementary group names must be non-empty printable text".to_string(),
+            });
+        } else if name.bytes().all(|byte| byte.is_ascii_digit()) {
+            diagnostics.push(ConfigDiagnostic {
+                path: path.to_string(),
+                message: "supplementary group names must not be numeric GIDs".to_string(),
+            });
+        } else if !seen.insert(name) {
+            diagnostics.push(ConfigDiagnostic {
+                path: path.to_string(),
+                message: "supplementary group names must not contain duplicates".to_string(),
+            });
+        }
+    }
+    if encoded_bytes > 8 * 1024 {
+        diagnostics.push(ConfigDiagnostic {
+            path: path.to_string(),
+            message: "supplementary_groups exceeds the 8 KiB input limit".to_string(),
+        });
+    }
+    diagnostics
 }
 
 /// Validates schema-v32 custom toolchain definitions without inspecting the

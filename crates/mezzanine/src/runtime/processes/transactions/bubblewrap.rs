@@ -95,19 +95,37 @@ impl RuntimeSessionService {
                     "pane environment is unavailable for Bubblewrap capability probing",
                 )
             })?;
-        let probe_plan = crate::security::sandbox::bubblewrap_capability_probe_plan(
-            &config,
-            &signature.shell_path,
+        let identity = crate::security::sandbox::resolve_sandbox_identity(
+            &config.supplementary_groups,
+            &signature,
         )
         .map_err(|error| crate::MezError::invalid_state(error.message()))?;
-        let cache_key = crate::security::sandbox::BubblewrapCapabilityCacheKey {
-            pane_id: turn.pane_id.clone(),
-            pane_environment_signature: signature.stable_hash(),
-            config_generation: self.session.config_generation,
-            executable: probe_plan.executable.clone(),
-            runtime_profile_version: crate::security::sandbox::BUBBLEWRAP_RUNTIME_PROFILE_VERSION,
-            probe_sha256: probe_plan.probe_sha256.clone(),
-        };
+        for warning in &identity.mapping_warnings {
+            self.append_sandbox_mapping_warning_once(
+                &turn.pane_id,
+                &format!(
+                    "{}:{}:{}",
+                    warning.mapping_kind, warning.configured_value, warning.reason
+                ),
+                &format!(
+                    "{} `{}` ({})",
+                    warning.mapping_kind, warning.configured_value, warning.reason
+                ),
+            )?;
+        }
+        let probe_plan = crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
+            &config,
+            &signature.shell_path,
+            &identity,
+        )
+        .map_err(|error| crate::MezError::invalid_state(error.message()))?;
+        let cache_key = crate::security::sandbox::bubblewrap_capability_cache_key(
+            &turn.pane_id,
+            &signature.stable_hash(),
+            self.session.config_generation,
+            &probe_plan,
+        )
+        .map_err(|error| crate::MezError::invalid_state(error.message()))?;
         if self
             .process
             .pane_bubblewrap_capabilities

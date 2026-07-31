@@ -7,7 +7,6 @@
 //! upgrading the activity lock. The helper never copies host-home content and
 //! rejects symlinked storage components.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -15,15 +14,22 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::fs::{FlockOperation, flock};
-use rustix::process::{getgid, getgroups, getuid};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{BUBBLEWRAP_RUNTIME_PROFILE_VERSION, SandboxCompileError, SandboxCompileErrorKind};
+#[cfg(test)]
+use super::resolve_sandbox_identity;
+use super::{
+    BUBBLEWRAP_RUNTIME_PROFILE_VERSION, ResolvedSandboxIdentity, SandboxCompileError,
+    SandboxCompileErrorKind,
+};
+#[cfg(test)]
+use crate::runtime::ConfiguredSandboxGroups;
 
 const MANAGED_HOME_METADATA_FILE: &str = "metadata.json";
 const MANAGED_HOME_LOCK_FILE: &str = ".active.lock";
 const MANAGED_HOME_PREPARATION_LOCK_FILE: &str = ".prepare.lock";
+const MANAGED_HOME_IDENTITIES_DIRECTORY: &str = "identities";
 const MANAGED_HOME_PASSWD_FILE: &str = "passwd";
 const MANAGED_HOME_GROUP_FILE: &str = "group";
 
@@ -106,19 +112,38 @@ pub(crate) struct BubblewrapManagedHome {
 }
 
 /// Creates or reuses one private managed home for a canonical trusted project.
+#[cfg(test)]
 pub(crate) fn prepare_bubblewrap_managed_home(
     config_root: &Path,
     project_root: &Path,
 ) -> Result<BubblewrapManagedHome, SandboxCompileError> {
-    let (home, _activity) =
-        prepare_bubblewrap_managed_home_for_workload(config_root, project_root)?;
+    let environment = super::identity::current_process_environment_signature()?;
+    let identity = resolve_sandbox_identity(&ConfiguredSandboxGroups::default(), &environment)?;
+    let (home, _activity) = prepare_bubblewrap_managed_home_for_workload_with_identity(
+        config_root,
+        project_root,
+        &identity,
+    )?;
     Ok(home)
 }
 
 /// Prepares one managed home and retains its shared lock for a workload.
+#[cfg(test)]
 pub(crate) fn prepare_bubblewrap_managed_home_for_workload(
     config_root: &Path,
     project_root: &Path,
+) -> Result<(BubblewrapManagedHome, BubblewrapManagedHomeActivityLock), SandboxCompileError> {
+    let environment = super::identity::current_process_environment_signature()?;
+    let identity = resolve_sandbox_identity(&ConfiguredSandboxGroups::default(), &environment)?;
+    prepare_bubblewrap_managed_home_for_workload_with_identity(config_root, project_root, &identity)
+}
+
+/// Prepares one managed home with immutable account records for an exact
+/// resolved sandbox identity and retains its shared workload lock.
+pub(crate) fn prepare_bubblewrap_managed_home_for_workload_with_identity(
+    config_root: &Path,
+    project_root: &Path,
+    identity: &ResolvedSandboxIdentity,
 ) -> Result<(BubblewrapManagedHome, BubblewrapManagedHomeActivityLock), SandboxCompileError> {
     if !config_root.is_absolute() || !project_root.is_absolute() {
         return Err(SandboxCompileError::new(
@@ -148,28 +173,28 @@ pub(crate) fn prepare_bubblewrap_managed_home_for_workload(
     ] {
         ensure_private_managed_directory(&directory)?;
     }
-    let passwd_path = project_directory.join(MANAGED_HOME_PASSWD_FILE);
-    let group_path = project_directory.join(MANAGED_HOME_GROUP_FILE);
-    let user_id = getuid().as_raw();
-    let group_id = getgid().as_raw();
-    let supplementary_group_ids = getgroups()
-        .map_err(|error| {
-            managed_home_error(format!("reading supplementary groups failed: {error}"))
-        })?
-        .into_iter()
-        .map(|group| group.as_raw())
-        .filter(|group| *group != group_id)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
+    let identities = project_directory.join(MANAGED_HOME_IDENTITIES_DIRECTORY);
+    ensure_private_managed_directory(&identities)?;
+    let identity_directory = identities.join(&identity.identity_sha256);
+    ensure_private_managed_directory(&identity_directory)?;
+    let passwd_path = identity_directory.join(MANAGED_HOME_PASSWD_FILE);
+    let group_path = identity_directory.join(MANAGED_HOME_GROUP_FILE);
+    let user_id = identity.user_id;
+    let group_id = identity.primary_group_id;
+    let supplementary_group_ids = identity
+        .supplementary_groups
+        .iter()
+        .map(|group| group.group_id)
         .collect::<Vec<_>>();
     write_private_managed_file(
         &passwd_path,
         format!("mez:x:{user_id}:{group_id}:Mezzanine sandbox user:/home/mez:/bin/sh\n").as_bytes(),
     )?;
-    let mut group_records = format!("mez:x:{group_id}:\n");
-    for supplementary_group_id in &supplementary_group_ids {
+    let mut group_records = format!("{}:x:{group_id}:\n", identity.primary_group_name);
+    for group in &identity.supplementary_groups {
         group_records.push_str(&format!(
-            "mez-supplementary-{supplementary_group_id}:x:{supplementary_group_id}:mez\n"
+            "{}:x:{}:mez\n",
+            group.canonical_name, group.group_id
         ));
     }
     write_private_managed_file(&group_path, group_records.as_bytes())?;
@@ -790,6 +815,10 @@ mod tests {
         fs::create_dir_all(&first_project).unwrap();
         fs::create_dir_all(&second_project).unwrap();
 
+        let environment =
+            crate::security::sandbox::identity::current_process_environment_signature().unwrap();
+        let identity =
+            resolve_sandbox_identity(&ConfiguredSandboxGroups::default(), &environment).unwrap();
         let first = prepare_bubblewrap_managed_home(&config_root, &first_project).unwrap();
         fs::write(first.host_path.join(".cache/persisted"), "cache").unwrap();
         let reused = prepare_bubblewrap_managed_home(&config_root, &first_project).unwrap();
@@ -811,13 +840,7 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(&first.group_path).unwrap(),
-            std::iter::once(format!("mez:x:{}:\n", first.group_id))
-                .chain(
-                    first.supplementary_group_ids.iter().map(|group_id| {
-                        format!("mez-supplementary-{group_id}:x:{group_id}:mez\n")
-                    })
-                )
-                .collect::<String>()
+            format!("{}:x:{}:\n", identity.primary_group_name, first.group_id)
         );
         for relative in [".cache", ".config", ".local/share", ".local/state"] {
             assert!(first.host_path.join(relative).is_dir());

@@ -63,22 +63,70 @@ fn pane_path_resolution_observes_symlinks_and_create_targets() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// Verifies malformed or incomplete resolver output fails closed instead of
-/// creating partially trusted authority from a subset of requested paths.
+/// Verifies structurally incomplete resolver output still fails closed rather
+/// than treating an unreported request as an unavailable mapping.
 #[test]
 fn pane_path_resolution_rejects_incomplete_protocol_output() {
     let request =
         PanePathResolutionRequest::new(vec![".".to_string()], Vec::new(), vec!["src".to_string()])
             .unwrap();
     let payload = base64::engine::general_purpose::STANDARD
-        .encode(br#"{"version":1,"current_directory":"/repo","entries":[]}"#);
+        .encode(br#"{"version":2,"current_directory":"/repo","entries":[]}"#);
     let error = parse_pane_path_resolution_output(
-        &format!("MEZ_PATH_RESOLUTION_V1\t{payload}\n"),
+        &format!("MEZ_PATH_RESOLUTION_V2\t{payload}\n"),
         &request,
     )
     .unwrap_err();
 
     assert_eq!(error.kind(), AgentShellValidationErrorKind::InvalidArgs);
+}
+
+/// Verifies one unavailable read mapping is omitted while an independently
+/// validated existing read and create-target write mapping remain effective.
+#[test]
+fn pane_path_resolution_returns_restrictive_partial_authority() {
+    let root = test_temp_dir("path-resolution-partial");
+    let existing = root.join("existing");
+    std::fs::create_dir_all(&existing).unwrap();
+    let request = PanePathResolutionRequest::new(
+        vec![
+            existing.to_string_lossy().into_owned(),
+            root.join("missing-read").to_string_lossy().into_owned(),
+        ],
+        vec![
+            root.join("created/write.txt")
+                .to_string_lossy()
+                .into_owned(),
+        ],
+        Vec::new(),
+    )
+    .unwrap();
+    let command = pane_path_resolution_command(&request, ShellClassification::PosixSh).unwrap();
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let parsed =
+        parse_pane_path_resolution_output(&String::from_utf8(output.stdout).unwrap(), &request)
+            .unwrap();
+    let outcome = parsed.into_outcome(&request).unwrap();
+
+    assert_eq!(outcome.scopes.write_scopes.len(), 1);
+    assert!(
+        outcome
+            .scopes
+            .read_scopes
+            .contains(&existing.to_string_lossy().into_owned())
+    );
+    assert!(
+        outcome
+            .unavailable_paths
+            .contains_key(&root.join("missing-read").to_string_lossy().into_owned())
+    );
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// Verifies POSIX path resolution selects only reviewed absolute Python

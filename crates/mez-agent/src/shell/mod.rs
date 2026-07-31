@@ -18,7 +18,9 @@ pub use bootstrap::{
     fish_tool_discovery_script, parse_bootstrap_env_output,
     readiness_probe_command_for_classification, tool_discovery_script,
 };
-pub use environment::{EnvironmentSignature, ToolDiscoveryCache, ToolInventory, ToolProbe};
+pub use environment::{
+    EnvironmentGroup, EnvironmentSignature, ToolDiscoveryCache, ToolInventory, ToolProbe,
+};
 pub use path_resolution::{
     PanePathResolutionRequest, PanePathResolutionResult, pane_path_resolution_command,
     parse_pane_path_resolution_output,

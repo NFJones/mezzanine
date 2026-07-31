@@ -225,11 +225,31 @@ impl RuntimeSessionService {
                         "pane environment is unavailable for Bubblewrap dispatch",
                     )
                 })?;
-            let probe_plan = crate::security::sandbox::bubblewrap_capability_probe_plan(
-                &config,
-                &signature.shell_path,
+            let identity = crate::security::sandbox::resolve_sandbox_identity(
+                &config.supplementary_groups,
+                &signature,
             )
             .map_err(|error| MezError::invalid_state(error.message()))?;
+            for warning in &identity.mapping_warnings {
+                self.append_sandbox_mapping_warning_once(
+                    &turn.pane_id,
+                    &format!(
+                        "{}:{}:{}",
+                        warning.mapping_kind, warning.configured_value, warning.reason
+                    ),
+                    &format!(
+                        "{} `{}` ({})",
+                        warning.mapping_kind, warning.configured_value, warning.reason
+                    ),
+                )?;
+            }
+            let probe_plan =
+                crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
+                    &config,
+                    &signature.shell_path,
+                    &identity,
+                )
+                .map_err(|error| MezError::invalid_state(error.message()))?;
             let cache_key = crate::security::sandbox::bubblewrap_capability_cache_key(
                 &turn.pane_id,
                 &signature.stable_hash(),
@@ -250,9 +270,10 @@ impl RuntimeSessionService {
             ) {
                 (Some(config_root), Some(project_root)) => {
                     let (home, activity_lock) =
-                        crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload(
+                        crate::security::sandbox::prepare_bubblewrap_managed_home_for_workload_with_identity(
                             config_root,
                             project_root,
+                            &identity,
                         )
                         .map_err(|error| MezError::invalid_state(error.message()))?;
                     managed_home_activity_lock = Some(activity_lock);
@@ -279,6 +300,7 @@ impl RuntimeSessionService {
             let launch_plan = match crate::security::sandbox::compile_bubblewrap_launch_plan(
                 crate::security::sandbox::BubblewrapCompileRequest {
                     config: &config,
+                    identity,
                     capability,
                     pane_environment_signature: &cache_key.pane_environment_signature,
                     network_policy: self.configured_permissions().resources.network_policy,
