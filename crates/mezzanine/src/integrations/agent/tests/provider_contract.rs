@@ -68,6 +68,7 @@ fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
         interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
         allowed_actions: mez_agent::AllowedActionSet::say_only(),
         stop: None,
+        recovery_input: None,
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::System,

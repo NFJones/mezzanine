@@ -208,6 +208,11 @@ pub(crate) struct RuntimeAgentComponent {
     /// chronology. Provider preparation projects it into a concise live-state
     /// flag only while the corresponding retry remains active.
     agent_turn_output_limit_recovery_attempts: BTreeMap<String, u32>,
+    /// Bounded safe partial provider state retained only for output-limit continuation.
+    ///
+    /// This request-local state is removed with the owning turn and never enters
+    /// durable chronology or action execution.
+    agent_turn_output_limit_states: BTreeMap<String, mez_agent::ProviderOutputLimitState>,
     /// Exceptional provider interaction selected for each active turn.
     agent_turn_interaction_kinds: BTreeMap<String, ModelInteractionKind>,
     /// Causal execution group keyed by turn and execution-scoped action id.

@@ -166,6 +166,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             allowed_actions: mez_agent::AllowedActionSet::for_capability(
                 mez_agent::AgentCapability::NetworkFetch,
             ),
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,

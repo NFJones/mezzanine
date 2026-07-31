@@ -8,9 +8,9 @@
 
 use super::{
     AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS, AgentActionPayload, AgentContext,
-    AgentId, AgentShellCommandOutcome, AgentTurnState, AllowedActionSet, ContextBlock,
-    ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope, MemorySource,
-    MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
+    AgentShellCommandOutcome, AgentTurnState, AllowedActionSet, ContextBlock, ContextSourceKind,
+    DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope, MemorySource, MezError,
+    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
     ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
     RuntimeAgentProviderDispatchProvider, RuntimeSessionService, TranscriptEntry, TranscriptRole,
@@ -19,7 +19,7 @@ use super::{
     model_context_text_word_count,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
-    resolve_provider_api, runtime_mezzanine_error_code,
+    resolve_provider_api,
 };
 use crate::integrations::agent::provider::{
     anthropic_provider_from_auth_store_with_provider_options,
@@ -228,66 +228,6 @@ impl RuntimeSessionService {
             ),
             visibility,
         })
-    }
-
-    /// Queues internal output-limit recovery compaction for a running turn.
-    ///
-    /// Provider `max_output_tokens` exhaustion can leave a running turn with a
-    /// request shape that repeatedly burns its output budget before producing a
-    /// valid MAAP batch. This helper uses the same model-backed conversation
-    /// compactor as `/compact`, but it is runtime-owned and resumes the active
-    /// turn after the compacted memory is written.
-    pub(crate) fn queue_agent_output_limit_recovery_compaction(
-        &mut self,
-        agent_id: &AgentId,
-        turn_id: &str,
-        error: &MezError,
-    ) -> Result<bool> {
-        let Some(turn) = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id)
-            .cloned()
-        else {
-            self.remove_pending_agent_provider_task(turn_id);
-            return Ok(false);
-        };
-        if turn.agent_id != agent_id.as_str() {
-            return Err(MezError::invalid_args(
-                "agent provider recovery agent id does not match turn",
-            ));
-        }
-        if turn.state != AgentTurnState::Running {
-            self.remove_pending_agent_provider_task(turn_id);
-            return Ok(false);
-        }
-        if self.agent_is_compacting(&turn.pane_id) {
-            return Ok(false);
-        }
-        let outcome = self.queue_agent_shell_compaction_with_model(
-            &turn.pane_id,
-            "provider-output-limit",
-            Some(turn_id),
-        )?;
-        self.remove_pending_agent_provider_task(turn_id);
-        self.append_agent_status_text_to_terminal_buffer(
-            &turn.pane_id,
-            &format!(
-                "agent: provider output-limit retries exhausted; compacting conversation before continuing error_kind={}",
-                runtime_mezzanine_error_code(error.kind())
-            ),
-        )?;
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            turn_id,
-            &format!(
-                "provider_request recovery_queued reason=provider_output_limit_compaction error_kind={} outcome={}",
-                runtime_mezzanine_error_code(error.kind()),
-                runtime_compaction_outcome_name(&outcome)
-            ),
-        )?;
-        Ok(matches!(outcome, AgentShellCommandOutcome::Mutated { .. }))
     }
 
     /// Queues model-backed compaction for one frozen active-turn context.
@@ -778,17 +718,6 @@ impl RuntimeSessionService {
     }
 }
 
-/// Returns a compact diagnostic name for a compaction queue outcome.
-fn runtime_compaction_outcome_name(outcome: &AgentShellCommandOutcome) -> &'static str {
-    match outcome {
-        AgentShellCommandOutcome::Mutated { .. } => "queued",
-        AgentShellCommandOutcome::Display { .. } | AgentShellCommandOutcome::Presented { .. } => {
-            "skipped"
-        }
-        AgentShellCommandOutcome::RequiresRuntime { .. } => "requires-runtime",
-    }
-}
-
 /// Builds the provider request used for model-authored conversation compaction.
 pub(super) fn runtime_model_compaction_request(
     profile: &ModelProfile,
@@ -823,6 +752,7 @@ pub(super) fn runtime_model_compaction_request(
                 issue_actions_enabled: true,
         interaction_kind: ModelInteractionKind::ActionExecution,
         allowed_actions: AllowedActionSet::say_only(),
+        recovery_input: None,
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::System,

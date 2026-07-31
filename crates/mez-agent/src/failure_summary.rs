@@ -298,6 +298,7 @@ mod tests {
             interaction_kind: ModelInteractionKind::ActionExecution,
             allowed_actions: AllowedActionSet::say_only(),
             stop: None,
+            recovery_input: None,
             messages: Vec::new(),
         }
     }

@@ -250,8 +250,6 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) side_effects: VecDeque<RuntimeSideEffect>,
     /// Adapter-owned timer scheduling and stale-generation state.
     pub(super) timers: RuntimeTimerTracker,
-    /// Turns that already used automatic output-limit compaction recovery.
-    pub(super) provider_output_limit_compaction_turns: HashSet<String>,
     /// Stores the side effect buffer value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

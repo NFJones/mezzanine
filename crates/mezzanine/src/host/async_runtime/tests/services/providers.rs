@@ -272,6 +272,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
             allowed_actions: mez_agent::AllowedActionSet::for_capability(
                 mez_agent::AgentCapability::Shell,
             ),
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
@@ -454,6 +455,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
             allowed_actions: mez_agent::AllowedActionSet::for_capability(
                 mez_agent::AgentCapability::NetworkFetch,
             ),
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
@@ -584,6 +586,7 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
             allowed_actions: mez_agent::AllowedActionSet::for_capability(
                 mez_agent::AgentCapability::NetworkFetch,
             ),
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,

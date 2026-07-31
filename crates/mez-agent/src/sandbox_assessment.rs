@@ -157,6 +157,7 @@ pub fn sandbox_failure_assessment_request(
         max_output_tokens: model_profile.max_output_tokens(),
         temperature: None,
         stop: None,
+        recovery_input: None,
         prompt_cache_session_id: None,
         prompt_cache_lineage_id: None,
         turn_id: turn.turn_id.clone(),

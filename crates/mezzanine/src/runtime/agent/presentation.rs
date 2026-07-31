@@ -498,6 +498,7 @@ mod tests {
                 issue_actions_enabled: true,
                 interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
                 allowed_actions: mez_agent::AllowedActionSet::action_execution_base(),
+                recovery_input: None,
                 messages: Vec::new(),
             },
             response: ModelResponse {
@@ -584,6 +585,7 @@ mod tests {
                 allowed_actions: mez_agent::AllowedActionSet::for_capability(
                     mez_agent::AgentCapability::RespondOnly,
                 ),
+                recovery_input: None,
                 messages: Vec::new(),
             },
             response: ModelResponse {
@@ -654,6 +656,7 @@ mod tests {
                 issue_actions_enabled: true,
                 interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
                 allowed_actions: mez_agent::AllowedActionSet::action_execution_base(),
+                recovery_input: None,
                 messages: Vec::new(),
             },
             response: ModelResponse {

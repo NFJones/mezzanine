@@ -609,6 +609,7 @@ mod tests {
             interaction_kind: crate::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::AllowedActionSet::respond_only(),
             stop: None,
+            recovery_input: None,
             messages: Vec::new(),
         }
     }

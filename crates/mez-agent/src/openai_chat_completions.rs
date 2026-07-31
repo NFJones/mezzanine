@@ -8,6 +8,7 @@
 use crate::{
     MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, ModelMessageRole,
     ModelRequest, ModelTokenUsage, ProviderErrorKind, ProviderMalformedOutputError,
+    ProviderOutputLimitContinuationDisposition, ProviderOutputLimitState,
     ProviderRequestAssemblyError, ProviderRequestAssemblyResult, ProviderResponseError,
     maap_action_batch_schema, openai_maap_current_action_batch_description,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
@@ -615,7 +616,22 @@ fn openai_chat_completions_finish_reason_error(
             })
             .to_string(),
         )
-        .with_provider_raw_text(provider_raw_text),
+        .with_provider_raw_text(provider_raw_text.clone())
+        .with_output_limit_state(ProviderOutputLimitState::new(
+            "openai_chat_completions",
+            "chat_completions",
+            "length",
+            None,
+            provider_raw_text,
+            0,
+            usize::from(parse_error.is_some()),
+            ModelTokenUsage::default(),
+            if parse_error.is_some() {
+                ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall
+            } else {
+                ProviderOutputLimitContinuationDisposition::ContinueVisibleText
+            },
+        )),
     )
 }
 
@@ -787,6 +803,7 @@ mod tests {
             interaction_kind: ModelInteractionKind::ActionExecution,
             allowed_actions: AllowedActionSet::say_only(),
             stop: None,
+            recovery_input: None,
             messages: vec![ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::DeveloperInstruction,

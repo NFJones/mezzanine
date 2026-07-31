@@ -133,6 +133,7 @@ pub(super) fn runtime_model_remember_request(
         interaction_kind: ModelInteractionKind::ActionExecution,
         allowed_actions: AllowedActionSet::say_only(),
         stop: None,
+        recovery_input: None,
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::System,

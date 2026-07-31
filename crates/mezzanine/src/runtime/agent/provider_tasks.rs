@@ -106,6 +106,19 @@ impl RuntimeSessionService {
             });
     }
 
+    /// Returns the next bounded output-limit recovery stage for one turn.
+    ///
+    /// The state is owned by the active turn, so duplicate or stale provider
+    /// failures cannot restart the continuation sequence after settlement.
+    pub(crate) fn next_agent_output_limit_recovery_attempt(&self, turn_id: &str) -> u32 {
+        self.agent
+            .agent_turn_output_limit_recovery_attempts
+            .get(turn_id)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(1)
+    }
+
     /// Returns provider turns whose progress is represented by retry policy state.
     pub(crate) fn agent_provider_retry_turn_ids(&self) -> impl Iterator<Item = &String> {
         self.agent.provider_retry_scheduler.turn_ids()

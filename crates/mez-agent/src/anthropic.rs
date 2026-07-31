@@ -11,6 +11,7 @@ use crate::{
     MAAP_ACTION_BATCH_TOOL_NAME, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
     MaapBatch, ModelMessageRole, ModelRequest, ModelTokenUsage, ProviderEndpointError,
     ProviderEndpointResult, ProviderErrorKind, ProviderMalformedOutputError,
+    ProviderOutputLimitContinuationDisposition, ProviderOutputLimitState,
     ProviderRequestAssemblyError, ProviderRequestAssemblyResult, ProviderResponseError,
     maap_action_batch_schema, openai_maap_current_action_batch_description,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
@@ -983,7 +984,22 @@ fn anthropic_stop_reason_response_error(
                 })
                 .to_string(),
             )
-            .with_provider_raw_text(raw_text),
+            .with_provider_raw_text(raw_text)
+            .with_output_limit_state(ProviderOutputLimitState::new(
+                "anthropic",
+                "messages",
+                "max_tokens",
+                None,
+                raw_text,
+                0,
+                usize::from(requires_maap),
+                ModelTokenUsage::default(),
+                if requires_maap {
+                    ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall
+                } else {
+                    ProviderOutputLimitContinuationDisposition::ContinueVisibleText
+                },
+            )),
         ),
         "model_context_window_exceeded" => Some(
             ProviderResponseError::invalid_state(
@@ -1054,6 +1070,7 @@ mod tests {
             interaction_kind: crate::ModelInteractionKind::ActionExecution,
             allowed_actions: crate::AllowedActionSet::say_only(),
             stop: None,
+            recovery_input: None,
             messages,
         }
     }

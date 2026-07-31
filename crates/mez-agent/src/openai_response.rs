@@ -10,7 +10,8 @@ use crate::http::{DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, parse_sse_events_with};
 #[cfg(test)]
 use crate::provider::ProviderResponseErrorKind;
 use crate::provider::{
-    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderResponseError,
+    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
+    ProviderOutputLimitContinuationDisposition, ProviderOutputLimitState, ProviderResponseError,
     ProviderResponseResult,
 };
 use crate::provider_diagnostics::provider_failure_event_json as openai_provider_failure_event_json;
@@ -179,13 +180,49 @@ pub fn parse_openai_responses_stream_body(
                     .with_provider_failure_json(openai_provider_failure_event_json(&value)));
                 }
                 "response.incomplete" => {
+                    let stop_reason = value
+                        .pointer("/response/incomplete_details/reason")
+                        .or_else(|| value.pointer("/incomplete_details/reason"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let safe_partial_text = if output_item_text.is_empty() {
+                        delta_text.clone()
+                    } else {
+                        output_item_text.clone()
+                    };
+                    let complete_native_items = function_calls
+                        .values()
+                        .filter(|call| call.complete_arguments.is_some())
+                        .count();
+                    let incomplete_native_items =
+                        function_calls.len().saturating_sub(complete_native_items);
+                    let continuation_disposition = if incomplete_native_items == 0 {
+                        ProviderOutputLimitContinuationDisposition::ContinueVisibleText
+                    } else {
+                        ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall
+                    };
                     return Err(ProviderResponseError::invalid_state(
                         openai_stream_event_error_detail(
                             &value,
                             "OpenAI stream returned an incomplete response",
                         ),
                     )
-                    .with_provider_failure_json(openai_provider_failure_event_json(&value)));
+                    .with_provider_failure_json(openai_provider_failure_event_json(&value))
+                    .with_output_limit_state(ProviderOutputLimitState::new(
+                        "openai",
+                        "responses",
+                        stop_reason,
+                        value
+                            .pointer("/response/id")
+                            .or_else(|| value.get("response_id"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                        safe_partial_text,
+                        complete_native_items,
+                        incomplete_native_items,
+                        usage,
+                        continuation_disposition,
+                    )));
                 }
                 "message" | "" => {
                     if let Some(text) = value.get("output_text").and_then(serde_json::Value::as_str)
@@ -613,6 +650,44 @@ mod tests {
         assert_eq!(controller_alias_usage.cached_input_tokens, Some(36));
         assert_eq!(multi_cached_usage.cached_input_tokens, Some(12));
         assert_eq!(stream_usage.cached_input_tokens, Some(12));
+    }
+
+    #[test]
+    /// Verifies an OpenAI output cutoff retains safe visible text and marks
+    /// streamed function-argument deltas as non-executable incomplete calls.
+    fn openai_stream_output_limit_retains_safe_partial_state() {
+        let stream_body = concat!(
+            r#"event: response.output_text.delta
+"#,
+            r#"data: {"type":"response.output_text.delta","delta":"partial visible text"}
+
+"#,
+            r#"event: response.function_call_arguments.delta
+"#,
+            r#"data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"actions\":[]"}
+
+"#,
+            r#"event: response.incomplete
+"#,
+            r#"data: {"type":"response.incomplete","response":{"id":"resp_cutoff","incomplete_details":{"reason":"max_output_tokens"},"usage":{"output_tokens":12}}}
+
+"#
+        );
+
+        let error = parse_openai_responses_stream_body(stream_body, "gpt-test").unwrap_err();
+        let state = error.output_limit_state().expect("output-limit state");
+        assert_eq!(state.provider, "openai");
+        assert_eq!(state.api, "responses");
+        assert_eq!(state.stop_reason, "max_output_tokens");
+        assert_eq!(state.response_id.as_deref(), Some("resp_cutoff"));
+        assert_eq!(state.safe_partial_text, "partial visible text");
+        assert_eq!(state.complete_native_items, 0);
+        assert_eq!(state.incomplete_native_items, 1);
+        assert_eq!(state.usage.output_tokens, 12);
+        assert_eq!(
+            state.continuation_disposition,
+            ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall
+        );
     }
 
     #[test]

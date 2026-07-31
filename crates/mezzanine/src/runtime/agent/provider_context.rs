@@ -18,6 +18,41 @@ use crate::runtime::RuntimeAutoSizingDecision;
 use mez_agent::{ContextRetention, ContextSemanticKind};
 use sha2::{Digest, Sha256};
 
+/// Renders the bounded safe state that follows an output-token cutoff.
+///
+/// Native argument fragments are deliberately absent. A cutoff containing an
+/// unfinished native call requires re-emission of one complete atomic call.
+fn output_limit_continuation_input(state: &mez_agent::ProviderOutputLimitState) -> String {
+    let instruction = match state.continuation_disposition {
+        mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText => {
+            "Continue the unfinished response from the safe assistant text below."
+        }
+        mez_agent::ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall => {
+            "No truncated action ran. Re-emit exactly one complete atomic action call; do not continue or rely on truncated arguments."
+        }
+    };
+    format!(
+        "[output-limit continuation]
+provider={}
+api={}
+stop_reason={}
+response_id={}
+complete_native_items={}
+incomplete_native_items={}
+{}
+[safe partial assistant text]
+{}",
+        state.provider,
+        state.api,
+        state.stop_reason,
+        state.response_id.as_deref().unwrap_or("unknown"),
+        state.complete_native_items,
+        state.incomplete_native_items,
+        instruction,
+        state.safe_partial_text,
+    )
+}
+
 impl RuntimeSessionService {
     /// Prepares the next provider request from durable chronology and a fresh
     /// allowlisted live-state suffix without mutating stored turn context.
@@ -38,6 +73,20 @@ impl RuntimeSessionService {
                         ContextSourceKind::RuntimeHint,
                         "runtime state",
                         format!("cwd={}", current_directory.to_string_lossy()),
+                    ),
+                    ContextSemanticKind::LiveState,
+                    ContextRetention::RequestLocal,
+                    false,
+                )
+                .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        }
+        if let Some(state) = self.agent.agent_turn_output_limit_states.get(&turn.turn_id) {
+            request_context
+                .insert_typed_block(
+                    ContextBlock::live_state(
+                        ContextSourceKind::RuntimeHint,
+                        "output-limit continuation",
+                        output_limit_continuation_input(state),
                     ),
                     ContextSemanticKind::LiveState,
                     ContextRetention::RequestLocal,
@@ -277,21 +326,14 @@ impl RuntimeSessionService {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
-        let Some(mut model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned()
-        else {
+        let Some(output_limit_state) = error.provider_output_limit_state().cloned() else {
+            return Ok(false);
+        };
+        if !self.agent.agent_turn_model_profiles.contains_key(turn_id) {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Err(MezError::invalid_state(
                 "runtime agent turn has no model profile",
             ));
-        };
-        let retry_tokens = (attempt > 1).then(|| model_profile.output_limit_retry_tokens());
-        if let Some(retry_tokens) = retry_tokens {
-            model_profile
-                .provider_options
-                .insert("max_output_tokens".to_string(), retry_tokens.to_string());
-            self.agent
-                .agent_turn_model_profiles
-                .insert(turn_id.to_string(), model_profile);
         }
 
         if !self.agent_turn_contexts().contains_key(turn_id) {
@@ -302,33 +344,31 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_output_limit_recovery_attempts
             .insert(turn_id.to_string(), attempt.max(1));
+        if attempt <= 1 {
+            self.agent
+                .agent_turn_output_limit_states
+                .insert(turn_id.to_string(), output_limit_state);
+        } else {
+            self.agent.agent_turn_output_limit_states.remove(turn_id);
+        }
         self.agent.agent_turn_interaction_kinds.insert(
             turn_id.to_string(),
             mez_agent::ModelInteractionKind::OutputLimitRetry,
         );
-        let status_text = if let Some(retry_tokens) = retry_tokens {
-            format!(
-                "agent: provider response hit output limit again; retrying compactly attempt={} max_output_tokens={}",
-                attempt.max(1),
-                retry_tokens
-            )
+        let status_text = if attempt <= 1 {
+            "agent: provider response hit output limit; continuing from safe partial output"
+                .to_string()
         } else {
-            format!(
-                "agent: provider response hit output limit; retrying with shorter-response guidance attempt={}",
-                attempt.max(1)
-            )
+            "agent: provider response hit output limit again; starting one fresh compact recovery request".to_string()
         };
         self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &status_text)?;
-        let trace_retry_tokens = retry_tokens
-            .map(|tokens| tokens.to_string())
-            .unwrap_or_else(|| "unchanged".to_string());
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
             &format!(
-                "provider_request recovery_applied reason=provider_output_limit attempt={} max_output_tokens={} error_kind={}",
+                "provider_request recovery_applied reason=provider_output_limit stage={} partial_state={} error_kind={}",
                 attempt.max(1),
-                trace_retry_tokens,
+                if attempt <= 1 { "continuation" } else { "fresh_compact" },
                 runtime_mezzanine_error_code(error.kind())
             ),
         )?;

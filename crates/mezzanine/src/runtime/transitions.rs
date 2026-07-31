@@ -322,6 +322,8 @@ pub enum AgentProviderEvent {
         provider_failure_json: Option<String>,
         /// Raw provider text when the provider produced malformed output.
         provider_raw_text: Option<String>,
+        /// Bounded safe state retained after provider output-token exhaustion.
+        provider_output_limit_state: Option<Box<mez_agent::ProviderOutputLimitState>>,
     },
 }
 

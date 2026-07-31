@@ -159,6 +159,7 @@ pub fn assemble_model_request_from_context(
         interaction_kind: ModelInteractionKind::CapabilityDecision,
         allowed_actions: AllowedActionSet::capability_decision(),
         stop: is_deepseek.then(|| vec!["\n}".to_string()]),
+        recovery_input: None,
         messages,
     };
     constrain_skill_actions_for_loaded_context(&mut request);

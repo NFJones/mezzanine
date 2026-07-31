@@ -224,6 +224,9 @@ impl From<mez_agent::ProviderResponseError> for MezError {
         if let Some(raw_text) = error.provider_raw_text() {
             product_error = product_error.with_provider_raw_text(raw_text.to_string());
         }
+        if let Some(state) = error.output_limit_state() {
+            product_error = product_error.with_provider_output_limit_state(state.clone());
+        }
         product_error
     }
 }
@@ -517,6 +520,11 @@ pub struct MezError {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     provider_failure_json: Option<String>,
+    /// Bounded provider output-limit state retained for request-local recovery.
+    ///
+    /// This state is distinct from diagnostic raw text and contains no
+    /// executable incomplete native-call arguments.
+    provider_output_limit_state: Option<Box<mez_agent::ProviderOutputLimitState>>,
 }
 
 impl MezError {
@@ -532,6 +540,7 @@ impl MezError {
             io_kind: None,
             provider_raw_text: None,
             provider_failure_json: None,
+            provider_output_limit_state: None,
         }
     }
 
@@ -645,6 +654,20 @@ impl MezError {
     pub fn provider_failure_json(&self) -> Option<&str> {
         self.provider_failure_json.as_deref()
     }
+
+    /// Attaches bounded output-limit continuation state to this product error.
+    pub fn with_provider_output_limit_state(
+        mut self,
+        state: mez_agent::ProviderOutputLimitState,
+    ) -> Self {
+        self.provider_output_limit_state = Some(Box::new(state));
+        self
+    }
+
+    /// Returns bounded output-limit continuation state when one was attached.
+    pub fn provider_output_limit_state(&self) -> Option<&mez_agent::ProviderOutputLimitState> {
+        self.provider_output_limit_state.as_deref()
+    }
 }
 
 impl From<io::Error> for MezError {
@@ -660,6 +683,7 @@ impl From<io::Error> for MezError {
             io_kind: Some(error.kind()),
             provider_raw_text: None,
             provider_failure_json: None,
+            provider_output_limit_state: None,
         }
     }
 }

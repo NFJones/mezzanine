@@ -7,6 +7,8 @@
 use sha2::Digest;
 use std::fmt;
 
+use crate::accounting::ModelTokenUsage;
+use crate::http::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
 use crate::openai_continuity::{OpenAiRequestContinuitySnapshot, OpenAiRequestMessageDigest};
 use crate::{ContextSourceKind, ModelMessage, ModelMessageRole, ProviderTranscriptEvent};
 
@@ -655,6 +657,89 @@ pub fn openai_routed_handoff_response_format() -> serde_json::Value {
 /// Result type returned while decoding one provider response.
 pub type ProviderResponseResult<T> = Result<T, ProviderResponseError>;
 
+/// Provider action required after an output-token cutoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderOutputLimitContinuationDisposition {
+    /// Continue ordinary visible assistant text.
+    ContinueVisibleText,
+    /// Re-emit one complete atomic native call because an incomplete call existed.
+    ReemitAtomicNativeCall,
+}
+
+/// Bounded, provider-neutral state retained after output-token exhaustion.
+///
+/// This state is separate from diagnostic raw output. It contains only safe
+/// visible text and native-item counts, so incomplete arguments cannot be
+/// executed or inserted into a continuation request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderOutputLimitState {
+    /// Provider implementation that produced the cutoff.
+    pub provider: String,
+    /// Provider API family that produced the cutoff.
+    pub api: String,
+    /// Provider stop reason.
+    pub stop_reason: String,
+    /// Provider response identifier when supplied.
+    pub response_id: Option<String>,
+    /// UTF-8-safe bounded visible assistant text.
+    pub safe_partial_text: String,
+    /// Number of native items that completed before the cutoff.
+    pub complete_native_items: usize,
+    /// Number of native items unfinished at the cutoff.
+    pub incomplete_native_items: usize,
+    /// Provider token usage observed before the cutoff.
+    pub usage: ModelTokenUsage,
+    /// Required continuation behavior.
+    pub continuation_disposition: ProviderOutputLimitContinuationDisposition,
+}
+
+impl ProviderOutputLimitState {
+    /// Creates bounded safe continuation state from provider response facts.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "provider parsers receive these independent response facts directly"
+    )]
+    pub fn new(
+        provider: impl Into<String>,
+        api: impl Into<String>,
+        stop_reason: impl Into<String>,
+        response_id: Option<String>,
+        safe_partial_text: impl Into<String>,
+        complete_native_items: usize,
+        incomplete_native_items: usize,
+        usage: ModelTokenUsage,
+        continuation_disposition: ProviderOutputLimitContinuationDisposition,
+    ) -> Self {
+        Self {
+            provider: provider.into(),
+            api: api.into(),
+            stop_reason: stop_reason.into(),
+            response_id,
+            safe_partial_text: bounded_utf8_prefix(
+                safe_partial_text.into(),
+                DEFAULT_PROVIDER_MAX_RESPONSE_BYTES,
+            ),
+            complete_native_items,
+            incomplete_native_items,
+            usage,
+            continuation_disposition,
+        }
+    }
+}
+
+/// Returns a UTF-8-safe bounded prefix without retaining excess provider text.
+fn bounded_utf8_prefix(mut text: String, limit_bytes: usize) -> String {
+    if text.len() <= limit_bytes {
+        return text;
+    }
+    let mut end = limit_bytes;
+    while !text.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    text.truncate(end);
+    text
+}
+
 /// Stable categories for provider response failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderResponseErrorKind {
@@ -669,6 +754,7 @@ pub struct ProviderResponseError {
     message: String,
     provider_failure_json: Option<String>,
     provider_raw_text: Option<String>,
+    output_limit_state: Option<Box<ProviderOutputLimitState>>,
 }
 
 impl ProviderResponseError {
@@ -679,6 +765,7 @@ impl ProviderResponseError {
             message: message.into(),
             provider_failure_json: None,
             provider_raw_text: None,
+            output_limit_state: None,
         }
     }
 
@@ -692,6 +779,17 @@ impl ProviderResponseError {
     pub fn with_provider_raw_text(mut self, raw_text: impl Into<String>) -> Self {
         self.provider_raw_text = Some(raw_text.into());
         self
+    }
+
+    /// Attaches bounded safe continuation state for output-token exhaustion.
+    pub fn with_output_limit_state(mut self, state: ProviderOutputLimitState) -> Self {
+        self.output_limit_state = Some(Box::new(state));
+        self
+    }
+
+    /// Returns bounded safe continuation state for output-token exhaustion.
+    pub fn output_limit_state(&self) -> Option<&ProviderOutputLimitState> {
+        self.output_limit_state.as_deref()
     }
 
     /// Returns the stable response failure category.

@@ -817,8 +817,6 @@ impl AsyncRuntimeSessionActor {
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.timers.provider_retry.remove(turn_id.as_str());
-                self.provider_output_limit_compaction_turns
-                    .remove(turn_id.as_str());
                 let mut transition = self
                     .service
                     .apply_routing_selected_transition(&agent_id, &turn_id, *selection)?;
@@ -837,6 +835,7 @@ impl AsyncRuntimeSessionActor {
                 message,
                 provider_failure_json,
                 provider_raw_text,
+                provider_output_limit_state,
             } => {
                 let claim_cancellations = self.provider_claim_cancel_timer_side_effects(&turn_id);
                 self.service.clear_claimed_agent_provider_task(&turn_id);
@@ -845,12 +844,50 @@ impl AsyncRuntimeSessionActor {
                     &message,
                     provider_failure_json.as_deref(),
                 );
-                let error = provider_event_error_from_parts(
+                let mut error = provider_event_error_from_parts(
                     &kind,
                     &message,
                     provider_failure_json.as_deref(),
                     provider_raw_text.as_deref(),
                 );
+                if let Some(state) = provider_output_limit_state {
+                    error = error.with_provider_output_limit_state(*state);
+                }
+                if matches!(retry_class, ProviderErrorRetryClass::OutputLimit) {
+                    let attempt = self
+                        .service
+                        .next_agent_output_limit_recovery_attempt(&turn_id);
+                    if attempt <= 2
+                        && self.service.recover_agent_provider_output_limit_failure(
+                            &agent_id, &turn_id, &error, attempt,
+                        )?
+                        && self
+                            .service
+                            .queue_agent_provider_retry_task(&turn_id, attempt)?
+                    {
+                        let mut side_effects =
+                            self.render_side_effects(RenderInvalidationReason::FullRedraw);
+                        side_effects.extend(self.pending_provider_dispatch_side_effects()?);
+                        side_effects.extend(claim_cancellations);
+                        return Ok(RuntimeTransition {
+                            applied: true,
+                            side_effects,
+                        });
+                    }
+                    self.service
+                        .clear_agent_provider_retry_attempt(turn_id.as_str());
+                    self.timers.provider_retry.remove(turn_id.as_str());
+                    let mut transition = self.service.apply_agent_provider_failed_transition(
+                        &agent_id,
+                        &turn_id,
+                        &kind,
+                        &message,
+                        provider_failure_json.as_deref(),
+                        provider_raw_text.as_deref(),
+                    )?;
+                    transition.side_effects.extend(claim_cancellations);
+                    return Ok(transition);
+                }
                 if let Some(mut application) =
                     self.service.schedule_agent_provider_retry_transition(
                         &agent_id,
@@ -869,33 +906,9 @@ impl AsyncRuntimeSessionActor {
                     application.side_effects.extend(claim_cancellations);
                     return Ok(application);
                 }
-                if matches!(retry_class, ProviderErrorRetryClass::OutputLimit)
-                    && !self
-                        .provider_output_limit_compaction_turns
-                        .contains(turn_id.as_str())
-                    && self
-                        .service
-                        .queue_agent_output_limit_recovery_compaction(&agent_id, &turn_id, &error)?
-                {
-                    self.service
-                        .clear_agent_provider_retry_attempt(turn_id.as_str());
-                    self.timers.provider_retry.remove(turn_id.as_str());
-                    self.provider_output_limit_compaction_turns
-                        .insert(turn_id.clone());
-                    let mut side_effects =
-                        self.render_side_effects(RenderInvalidationReason::FullRedraw);
-                    side_effects.extend(self.pending_provider_dispatch_side_effects()?);
-                    side_effects.extend(claim_cancellations);
-                    return Ok(RuntimeTransition {
-                        applied: true,
-                        side_effects,
-                    });
-                }
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.timers.provider_retry.remove(turn_id.as_str());
-                self.provider_output_limit_compaction_turns
-                    .remove(turn_id.as_str());
                 let mut transition = self.service.apply_agent_provider_failed_transition(
                     &agent_id,
                     &turn_id,
@@ -926,8 +939,6 @@ impl AsyncRuntimeSessionActor {
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.timers.provider_retry.remove(turn_id.as_str());
-                self.provider_output_limit_compaction_turns
-                    .remove(turn_id.as_str());
                 let mut transition = self
                     .service
                     .apply_agent_provider_completed_transition(&agent_id, &turn_id, *execution)

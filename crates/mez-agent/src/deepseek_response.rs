@@ -9,7 +9,8 @@
 use crate::deepseek::{DeepSeekMaapShimKind, deepseek_thinking_enabled_for_request};
 use crate::{
     MaapBatch, ModelRequest, ModelTokenUsage, ProviderErrorKind, ProviderMalformedOutputError,
-    ProviderResponseError, ProviderTranscriptEvent, parse_chat_completions_response_envelope,
+    ProviderOutputLimitContinuationDisposition, ProviderOutputLimitState, ProviderResponseError,
+    ProviderTranscriptEvent, parse_chat_completions_response_envelope,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
     parse_sse_events, provider_malformed_output_error,
 };
@@ -388,7 +389,22 @@ fn deepseek_completion_finish_reason_error(
             })
             .to_string(),
         )
-        .with_provider_raw_text(provider_raw_text),
+        .with_provider_raw_text(provider_raw_text.clone())
+        .with_output_limit_state(ProviderOutputLimitState::new(
+            "deepseek",
+            "chat_completions",
+            "length",
+            None,
+            provider_raw_text,
+            0,
+            usize::from(parse_error.is_some()),
+            ModelTokenUsage::default(),
+            if parse_error.is_some() {
+                ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall
+            } else {
+                ProviderOutputLimitContinuationDisposition::ContinueVisibleText
+            },
+        )),
     )
 }
 
@@ -685,6 +701,7 @@ mod tests {
             interaction_kind: ModelInteractionKind::ActionExecution,
             allowed_actions: AllowedActionSet::action_execution_base(),
             stop: None,
+            recovery_input: None,
             messages,
         }
     }

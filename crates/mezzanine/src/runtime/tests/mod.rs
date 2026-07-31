@@ -745,6 +745,7 @@ fn runtime_model_request_fixture_for_agent(
         issue_actions_enabled: true,
         interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
         allowed_actions: mez_agent::AllowedActionSet::capability_decision(),
+        recovery_input: None,
         messages: vec![mez_agent::ModelMessage {
             role: mez_agent::ModelMessageRole::User,
             source: ContextSourceKind::UserInstruction,
@@ -827,8 +828,19 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
             return Err(MezError::invalid_state(
                 "OpenAI stream returned an incomplete response: max_output_tokens",
             )
-            .with_provider_failure_json(
-                r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#,
+            .with_provider_failure_json(r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#)
+            .with_provider_output_limit_state(
+                mez_agent::ProviderOutputLimitState::new(
+                    "runtime-batch",
+                    "test",
+                    "max_output_tokens",
+                    None,
+                    "partial safe response",
+                    0,
+                    1,
+                    mez_agent::ModelTokenUsage::default(),
+                    mez_agent::ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall,
+                ),
             ));
         }
         Ok(mez_agent::ModelResponse {

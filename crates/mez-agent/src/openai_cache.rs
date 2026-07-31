@@ -34,6 +34,18 @@ pub(super) fn openai_render_request_messages(
             ),
         });
     }
+    if let Some(recovery_input) = request
+        .recovery_input
+        .as_deref()
+        .filter(|input| !input.is_empty())
+    {
+        messages.push(ModelMessage {
+            role: ModelMessageRole::Context,
+            source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::EphemeralTail,
+            content: recovery_input.to_string(),
+        });
+    }
     openai_render_messages(&messages)
 }
 
@@ -151,6 +163,7 @@ mod tests {
             max_output_tokens: None,
             temperature: None,
             stop: None,
+            recovery_input: None,
             prompt_cache_session_id: None,
             prompt_cache_lineage_id: None,
             turn_id: "turn-1".to_string(),

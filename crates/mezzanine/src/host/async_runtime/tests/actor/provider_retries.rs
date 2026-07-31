@@ -240,6 +240,7 @@ async fn async_actor_schedules_provider_retry_timer_for_retryable_failure() {
             message: "provider HTTP request failed: rate limited".to_string(),
             provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
             provider_raw_text: None,
+            provider_output_limit_state: None,
         }));
         let failure_report = handle.submit_runtime_events(failure).await.unwrap();
         assert_eq!(failure_report.accepted, 1);
@@ -353,6 +354,7 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
                 message: "provider HTTP request failed: rate limited".to_string(),
                 provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
                 provider_raw_text: None,
+                provider_output_limit_state: None,
             }));
             let failure_report = handle.submit_runtime_events(failure).await.unwrap();
             assert_eq!(failure_report.accepted, 1);
@@ -404,6 +406,7 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
             message: "provider HTTP request failed: rate limited".to_string(),
             provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
             provider_raw_text: None,
+            provider_output_limit_state: None,
         }));
         let exhausted_report = handle.submit_runtime_events(exhausted).await.unwrap();
         assert_eq!(exhausted_report.accepted, 1);
@@ -423,12 +426,11 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies provider output-limit failures use the retry timer path after
-/// mutating only active-turn retry guidance for the first retry.
+/// Verifies a typed provider output-limit failure immediately dispatches one
+/// safe-partial continuation instead of entering generic retry backoff.
 ///
-/// This protects OpenAI `response.incomplete/max_output_tokens` events from
-/// becoming terminal turn failures or context-compaction triggers before the
-/// later retry-budget escalation stage.
+/// The actor must preserve the safe partial state and make the continuation
+/// dispatchable without scheduling a retry timer or compaction.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_recovers_output_limit_failure_before_provider_retry() {
     let mut service = test_service();
@@ -487,53 +489,28 @@ max_output_tokens = 4096
                 r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#.to_string(),
             ),
             provider_raw_text: None,
+            provider_output_limit_state: Some(Box::new(mez_agent::ProviderOutputLimitState::new(
+                "openai",
+                "responses",
+                "max_output_tokens",
+                Some("resp-cutoff".to_string()),
+                "safe partial response",
+                0,
+                1,
+                mez_agent::ModelTokenUsage::default(),
+                mez_agent::ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall,
+            ))),
         }));
         let failure_report = handle.submit_runtime_events(failure).await.unwrap();
         assert_eq!(failure_report.accepted, 1);
         assert_eq!(failure_report.applied, 1);
-        assert!(
-            handle
-                .pending_agent_provider_tasks()
-                .await
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            handle
-                .drain_agent_provider_dispatch_side_effects(8)
-                .await
-                .unwrap()
-                .is_empty(),
-            "a delayed output-limit retry must not be redispatched before its timer fires"
-        );
-
-        let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
-        let retry_key = timer_effects
-            .iter()
-            .find_map(|effect| match effect {
-                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
-                    if key.kind == RuntimeTimerKind::ProviderRetry =>
-                {
-                    assert_eq!(*delay_ms, 1_000);
-                    Some(key.clone())
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("expected provider retry timer, got {timer_effects:?}"));
-        assert_eq!(retry_key.owner_id, expected_turn);
-
-        let mut retry = RuntimeEventBatch::new();
-        retry.push(RuntimeEvent::Timer(TimerEvent {
-            key: retry_key,
-            now_ms: 1_000,
-        }));
-        let retry_report = handle.submit_runtime_events(retry).await.unwrap();
-        assert_eq!(retry_report.accepted, 1);
-        assert_eq!(retry_report.applied, 1);
-
         let pending = handle.pending_agent_provider_tasks().await.unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].model_profile.max_output_tokens(), Some(4096));
+        assert!(
+            handle.drain_timer_side_effects(8).await.unwrap().is_empty(),
+            "output-limit continuation must not wait on a generic retry timer"
+        );
         let dispatches = handle
             .drain_agent_provider_dispatch_side_effects(8)
             .await
@@ -559,7 +536,8 @@ max_output_tokens = 4096
         .normal_content_lines()
         .join("\n");
     assert!(
-        pane_text.contains("provider response hit output limit; retrying with shorter-response"),
+        pane_text
+            .contains("provider response hit output limit; continuing from safe partial output"),
         "{pane_text}"
     );
     assert!(
@@ -656,8 +634,7 @@ context_window_tokens = 128000
         .unwrap();
 
     let client = async {
-        let retry_delays = [1_000, 2_000, 4_000, 8_000, 16_000];
-        for (index, expected_delay_ms) in retry_delays.into_iter().enumerate() {
+        for stage in 1..=2 {
             let mut failure = RuntimeEventBatch::new();
             failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
                 agent_id: expected_agent.clone(),
@@ -669,35 +646,23 @@ context_window_tokens = 128000
                     r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#.to_string(),
                 ),
                 provider_raw_text: None,
+                provider_output_limit_state: Some(Box::new(mez_agent::ProviderOutputLimitState::new(
+                    "openai",
+                    "responses",
+                    "max_output_tokens",
+                    Some(format!("resp-stage-{stage}")),
+                    "safe partial response",
+                    0,
+                    1,
+                    mez_agent::ModelTokenUsage::default(),
+                    mez_agent::ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall,
+                ))),
             }));
             let failure_report = handle.submit_runtime_events(failure).await.unwrap();
             assert_eq!(failure_report.accepted, 1);
             assert_eq!(failure_report.applied, 1);
 
-            let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
-            let retry_key = timer_effects
-                .iter()
-                .find_map(|effect| match effect {
-                    RuntimeSideEffect::ScheduleTimer { key, delay_ms }
-                        if key.kind == RuntimeTimerKind::ProviderRetry =>
-                    {
-                        assert_eq!(*delay_ms, expected_delay_ms);
-                        Some(key.clone())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("expected provider retry timer, got {timer_effects:?}"));
-            assert_eq!(retry_key.owner_id, expected_turn);
-            assert_eq!(retry_key.generation, (index + 1) as u64);
-
-            let mut retry = RuntimeEventBatch::new();
-            retry.push(RuntimeEvent::Timer(TimerEvent {
-                key: retry_key,
-                now_ms: expected_delay_ms,
-            }));
-            let retry_report = handle.submit_runtime_events(retry).await.unwrap();
-            assert_eq!(retry_report.accepted, 1);
-            assert_eq!(retry_report.applied, 1);
+            assert!(handle.drain_timer_side_effects(8).await.unwrap().is_empty());
 
             let dispatches = handle
                 .drain_agent_provider_dispatch_side_effects(8)
@@ -720,6 +685,17 @@ context_window_tokens = 128000
                 r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#.to_string(),
             ),
             provider_raw_text: None,
+            provider_output_limit_state: Some(Box::new(mez_agent::ProviderOutputLimitState::new(
+                "openai",
+                "responses",
+                "max_output_tokens",
+                Some("resp-exhausted".to_string()),
+                "safe partial response",
+                0,
+                1,
+                mez_agent::ModelTokenUsage::default(),
+                mez_agent::ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall,
+            ))),
         }));
         let exhausted_report = handle.submit_runtime_events(exhausted).await.unwrap();
         assert_eq!(exhausted_report.accepted, 1);
@@ -729,21 +705,13 @@ context_window_tokens = 128000
             "exhausted output-limit recovery should not schedule another retry timer"
         );
 
-        let dispatches = handle
-            .drain_agent_provider_dispatch_side_effects(8)
-            .await
-            .unwrap();
-        assert!(dispatches.iter().any(|effect| matches!(
-            effect,
-            RuntimeSideEffect::DispatchAgentCompaction { pane_id } if pane_id == "%1"
-        )));
         assert!(
             handle
                 .pending_agent_provider_tasks()
                 .await
                 .unwrap()
                 .is_empty(),
-            "provider work should wait until compaction completion refreshes context"
+            "terminal output-limit exhaustion must not queue another provider request"
         );
         assert_eq!(
             handle.shutdown().await.unwrap(),
@@ -759,17 +727,12 @@ context_window_tokens = 128000
         .normal_content_lines()
         .join("\n");
     assert!(
-        pane_text.contains("provider output-limit retries exhausted; compacting conversation"),
+        pane_text
+            .contains("provider response hit output limit again; starting one fresh compact re")
+            && pane_text.contains("covery request"),
         "{pane_text}"
     );
-    assert!(!pane_text.contains("agent: turn turn-"), "{pane_text}");
-    assert_eq!(
-        exit.service
-            .agent_shell_store()
-            .get("%1")
-            .and_then(|session| session.running_turn_id.as_deref()),
-        Some(expected_turn.as_str())
-    );
+    assert!(pane_text.contains("agent: turn turn-"), "{pane_text}");
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
@@ -815,6 +778,7 @@ async fn async_actor_idle_cleanup_preserves_turn_waiting_for_provider_retry_time
             message: "provider HTTP request failed: rate limited".to_string(),
             provider_failure_json: Some(r#"{"status_code":429}"#.to_string()),
             provider_raw_text: None,
+            provider_output_limit_state: None,
         }));
         let failure_report = handle.submit_runtime_events(failure).await.unwrap();
         assert_eq!(failure_report.accepted, 1);
@@ -962,6 +926,7 @@ async fn async_actor_schedules_provider_retry_timer_for_controller_retry_hint() 
                 .to_string(),
             ),
             provider_raw_text: None,
+            provider_output_limit_state: None,
         }));
         let failure_report = handle.submit_runtime_events(failure).await.unwrap();
         assert_eq!(failure_report.accepted, 1);
@@ -1030,6 +995,7 @@ async fn async_actor_fails_non_retryable_provider_failures_without_retry_timer()
             message: "OpenAI provider returned 401 Unauthorized: invalid token".to_string(),
             provider_failure_json: Some(r#"{"status_code":401}"#.to_string()),
             provider_raw_text: None,
+            provider_output_limit_state: None,
         }));
         let failure_report = handle.submit_runtime_events(failure).await.unwrap();
         assert_eq!(failure_report.accepted, 1);
@@ -1197,6 +1163,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
             allowed_actions: mez_agent::AllowedActionSet::for_capability(
                 mez_agent::AgentCapability::Shell,
             ),
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
@@ -1316,6 +1283,7 @@ async fn async_actor_retries_provider_overload_message_without_rate_limit_status
                     .to_string(),
             ),
             provider_raw_text: None,
+            provider_output_limit_state: None,
         }));
         let failure_report = handle.submit_runtime_events(failure).await.unwrap();
         assert_eq!(failure_report.accepted, 1);

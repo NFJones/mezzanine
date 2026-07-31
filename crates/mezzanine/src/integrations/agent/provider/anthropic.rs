@@ -398,6 +398,7 @@ mod tests {
             interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
             allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
+            recovery_input: None,
             messages: vec![
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::System,
@@ -463,6 +464,7 @@ mod tests {
             interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
             allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
@@ -508,6 +510,7 @@ mod tests {
             interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
             allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
+            recovery_input: None,
             messages: vec![
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::System,
@@ -572,6 +575,7 @@ mod tests {
             interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
             allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
+            recovery_input: None,
             messages: vec![
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::System,
@@ -618,6 +622,7 @@ mod tests {
             interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
             allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
@@ -669,6 +674,7 @@ mod tests {
             interaction_kind: mez_agent::ModelInteractionKind::AutoSizing,
             allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,

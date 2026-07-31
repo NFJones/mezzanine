@@ -120,7 +120,6 @@ impl AsyncRuntimeSessionActor {
                 lifecycle_state_tx,
                 side_effects: VecDeque::with_capacity(config.side_effect_buffer),
                 timers: Default::default(),
-                provider_output_limit_compaction_turns: Default::default(),
                 side_effect_buffer: config.side_effect_buffer,
                 commands_processed: 0,
                 metrics: Default::default(),

@@ -2462,6 +2462,11 @@ pub struct ModelRequest {
     pub allowed_actions: AllowedActionSet,
     /// Provider stop sequences, when configured.
     pub stop: Option<Vec<String>>,
+    /// Request-local recovery input appended after assembled context.
+    ///
+    /// This is never committed to durable chronology and may contain only
+    /// validated safe continuation state.
+    pub recovery_input: Option<String>,
     /// Ordered provider-independent messages.
     pub messages: Vec<ModelMessage>,
 }

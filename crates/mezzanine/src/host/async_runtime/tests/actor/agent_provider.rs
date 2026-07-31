@@ -146,6 +146,7 @@ async fn async_actor_applies_agent_provider_failure_events() {
             message: "provider worker failed before response".to_string(),
             provider_failure_json: None,
             provider_raw_text: None,
+            provider_output_limit_state: None,
         }));
 
         let report = handle.submit_runtime_events(batch).await.unwrap();
@@ -271,6 +272,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
             allowed_actions: mez_agent::AllowedActionSet::for_capability(
                 mez_agent::AgentCapability::RespondOnly,
             ),
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
@@ -451,6 +453,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
             allowed_actions: mez_agent::AllowedActionSet::for_capability(
                 mez_agent::AgentCapability::RespondOnly,
             ),
+            recovery_input: None,
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,

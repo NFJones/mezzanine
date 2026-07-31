@@ -483,6 +483,7 @@ fn provider_worker_event(
                 message: error.message().to_string(),
                 provider_failure_json: error.provider_failure_json().map(str::to_string),
                 provider_raw_text: error.provider_raw_text().map(str::to_string),
+                provider_output_limit_state: error.provider_output_limit_state().cloned().map(Box::new),
             }),
             false,
         ),
@@ -494,6 +495,7 @@ fn provider_worker_event(
                 message: format!("provider worker join failed: {error}"),
                 provider_failure_json: None,
                 provider_raw_text: None,
+                provider_output_limit_state: None,
             }),
             false,
         ),
@@ -1058,6 +1060,7 @@ mod tests {
             message,
             provider_failure_json,
             provider_raw_text,
+            provider_output_limit_state,
         }) = event
         else {
             panic!("provider panic should produce a failed event");
@@ -1068,5 +1071,6 @@ mod tests {
         assert!(message.contains("provider worker join failed"), "{message}");
         assert!(provider_failure_json.is_none());
         assert!(provider_raw_text.is_none());
+        assert!(provider_output_limit_state.is_none());
     }
 }

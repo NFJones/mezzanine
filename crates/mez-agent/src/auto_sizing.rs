@@ -432,6 +432,7 @@ pub fn auto_sizing_request(
         max_output_tokens: auto_sizing.router_profile.max_output_tokens(),
         temperature: None,
         stop: None,
+        recovery_input: None,
         prompt_cache_session_id: None,
         prompt_cache_lineage_id: None,
         turn_id: format!("{}:auto-sizing", turn.turn_id),

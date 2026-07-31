@@ -895,6 +895,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 allowed_actions: mez_agent::AllowedActionSet::for_capability(
                     mez_agent::AgentCapability::Shell,
                 ),
+                recovery_input: None,
                 messages: vec![mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,

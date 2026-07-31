@@ -220,6 +220,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 allowed_actions: mez_agent::AllowedActionSet::for_capability(
                     mez_agent::AgentCapability::Shell,
                 ),
+                recovery_input: None,
                 messages: vec![mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: ContextSourceKind::UserInstruction,

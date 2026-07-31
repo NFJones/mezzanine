@@ -66,6 +66,7 @@ mod tests {
             interaction_kind: ModelInteractionKind::CapabilityDecision,
             allowed_actions: AllowedActionSet::capability_decision(),
             stop: None,
+            recovery_input: None,
             messages: Vec::new(),
         }
     }
