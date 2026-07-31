@@ -94,8 +94,10 @@ pub(crate) struct BubblewrapManagedHome {
     pub(crate) user_id: u32,
     /// Native numeric primary group identity represented by the synthetic account files.
     pub(crate) group_id: u32,
-    /// Native supplementary groups represented in the synthetic group records
-    /// and required by the verified Bubblewrap runtime profile.
+    /// Native supplementary groups represented in the synthetic group records.
+    ///
+    /// Bubblewrap retains any supplementary credentials its host mapping can
+    /// establish; unmappable groups do not prevent the sandbox from starting.
     pub(crate) supplementary_group_ids: Vec<u32>,
     /// Stable non-secret project/profile key used for isolation and cleanup.
     pub(crate) project_key: String,

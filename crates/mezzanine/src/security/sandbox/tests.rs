@@ -642,7 +642,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     let plan = bubblewrap_capability_probe_plan(&config, "/bin/sh").unwrap();
 
     assert_eq!(plan.executable, "/usr/bin/bwrap");
-    assert_eq!(plan.expected_stdout, "mez-bubblewrap-capability-v2");
+    assert_eq!(plan.expected_stdout, "mez-bubblewrap-capability-v3");
     assert!(plan.arguments.contains(&"--unshare-net".to_string()));
     assert!(plan.arguments.contains(&"--uid".to_string()));
     assert!(plan.arguments.contains(&"--gid".to_string()));
@@ -651,7 +651,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     assert!(
         plan.arguments
             .last()
-            .is_some_and(|script| script.contains("/proc/self/gid_map"))
+            .is_some_and(|script| !script.contains("/proc/self/gid_map"))
     );
     assert!(
         plan.arguments
@@ -661,7 +661,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     assert!(
         plan.arguments
             .last()
-            .is_some_and(|script| script.contains("printf '%s' 'mez-bubblewrap-capability-v2'"))
+            .is_some_and(|script| script.contains("printf '%s' 'mez-bubblewrap-capability-v3'"))
     );
     let capability = parse_bubblewrap_capability_probe(
         "%1",
@@ -669,7 +669,7 @@ fn capability_probe_is_deterministic_and_environment_bound() {
         0,
         &plan,
         0,
-        "mez-bubblewrap-capability-v2",
+        "mez-bubblewrap-capability-v3",
     )
     .unwrap();
     assert_eq!(
@@ -685,10 +685,10 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     );
 
     for contaminated_output in [
-        "mez-bubblewrap-capability-v2\n",
-        "mez-bubblewrap-capability-v2\r\n",
-        "leading-mez-bubblewrap-capability-v2",
-        "mez-bubblewrap-capability-v2trailing",
+        "mez-bubblewrap-capability-v3\n",
+        "mez-bubblewrap-capability-v3\r\n",
+        "leading-mez-bubblewrap-capability-v3",
+        "mez-bubblewrap-capability-v3trailing",
         "",
     ] {
         assert_eq!(
