@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 use crate::control::ControlIdempotencyCache;
 use crate::protocol::event::EventLog;
-use crate::runtime::{CustomToolchainDefinition, CustomToolchainName, ToolchainSelection};
 use mez_agent::messaging::MessageService;
 
 /// Owns control replay, messaging, and event-fanout state.
@@ -18,34 +17,6 @@ pub(crate) struct RuntimeControlComponent {
     message_service: MessageService,
     event_log: Option<EventLog>,
     approval_bindings: BTreeMap<String, ApprovalBinding>,
-    pending_toolchain_mutations: BTreeMap<String, PendingToolchainMutation>,
-}
-
-/// Runtime-owned external toolchain mutation awaiting direct primary input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingToolchainMutation {
-    /// Opaque request identifier shown to the primary client.
-    pub(crate) id: String,
-    /// Canonical operation submitted by the external CLI.
-    pub(crate) operation: String,
-    /// Ordered typed selectors carried by the exact request.
-    pub(crate) selectors: Vec<ToolchainSelection>,
-    /// Custom identity carried by define/remove requests.
-    pub(crate) custom_name: Option<CustomToolchainName>,
-    /// Complete constrained definition carried by define requests.
-    pub(crate) definition: Option<CustomToolchainDefinition>,
-    /// Whether removal atomically disables an enabled custom selector.
-    pub(crate) disable: bool,
-    /// Digest of the normalized operation and selectors.
-    pub(crate) digest: String,
-    /// Config generation captured when the request was submitted.
-    pub(crate) config_generation: u64,
-    /// Active pane whose primary UI must settle the request.
-    pub(crate) pane_id: String,
-    /// Authenticated control client that submitted the request.
-    pub(crate) submitted_by_client_id: String,
-    /// Wall-clock expiry used to reject stale confirmations.
-    pub(crate) expires_at_unix_seconds: u64,
 }
 
 /// Runtime-owned facts captured when a pending approval is created.
@@ -71,30 +42,7 @@ impl RuntimeControlComponent {
             message_service,
             event_log,
             approval_bindings: BTreeMap::new(),
-            pending_toolchain_mutations: BTreeMap::new(),
         }
-    }
-
-    /// Stores one normalized external toolchain mutation request.
-    pub(crate) fn insert_pending_toolchain_mutation(&mut self, request: PendingToolchainMutation) {
-        self.pending_toolchain_mutations
-            .insert(request.id.clone(), request);
-    }
-
-    /// Returns one pending toolchain mutation without settling it.
-    pub(crate) fn pending_toolchain_mutation(
-        &self,
-        request_id: &str,
-    ) -> Option<&PendingToolchainMutation> {
-        self.pending_toolchain_mutations.get(request_id)
-    }
-
-    /// Removes one pending toolchain mutation after a terminal decision.
-    pub(crate) fn remove_pending_toolchain_mutation(
-        &mut self,
-        request_id: &str,
-    ) -> Option<PendingToolchainMutation> {
-        self.pending_toolchain_mutations.remove(request_id)
     }
 
     /// Returns the idempotency cache for read-only diagnostics.
@@ -159,6 +107,5 @@ impl RuntimeControlComponent {
     /// Clears runtime-only approval bindings during session replacement.
     pub(crate) fn clear_approval_bindings(&mut self) {
         self.approval_bindings.clear();
-        self.pending_toolchain_mutations.clear();
     }
 }

@@ -3,7 +3,7 @@
 //! This module owns the narrow `/sandbox` runtime hierarchy. Status and the
 //! default enable/disable operations act on only the invoking pane. Explicit
 //! `--global` mutations reuse the atomic persisted-config transaction, while
-//! trust and toolchain operations delegate to their established runtime owners.
+//! trust operations delegate to their established runtime owner.
 
 use super::shell::AgentShellCommandOrigin;
 use super::{
@@ -35,8 +35,6 @@ enum SandboxCommand {
     Disable(SandboxScope),
     /// Delegates to project trust handling.
     Trust,
-    /// Delegates to typed toolchain handling.
-    Toolchains,
 }
 
 impl RuntimeSessionService {
@@ -63,12 +61,6 @@ impl RuntimeSessionService {
             SandboxCommand::Trust => {
                 self.execute_agent_shell_trust_command(primary_client_id, pane_id, input)
             }
-            SandboxCommand::Toolchains => self.execute_agent_shell_toolchain_command(
-                primary_client_id,
-                pane_id,
-                input,
-                origin,
-            ),
             SandboxCommand::Status(scope) => Ok(AgentShellCommandOutcome::Presented {
                 command: "sandbox".to_string(),
                 body: self.render_sandbox_status(pane_id, scope),
@@ -255,12 +247,11 @@ fn parse_sandbox_command(input: &str) -> Result<SandboxCommand> {
         }
         ["disable", "--global", "--yes"] => Ok(SandboxCommand::Disable(SandboxScope::Global)),
         ["trust", ..] => Ok(SandboxCommand::Trust),
-        ["toolchains", ..] => Ok(SandboxCommand::Toolchains),
         ["enable", ..] | ["disable", ..] => Err(MezError::invalid_args(
             "sandbox enable and disable require exactly --yes and optionally --global",
         )),
         _ => Err(MezError::invalid_args(
-            "sandbox expects status, enable, disable, trust, or toolchains",
+            "sandbox expects status, enable, disable, or trust",
         )),
     }
 }
@@ -295,5 +286,6 @@ mod tests {
         );
         assert!(parse_sandbox_command("/sandbox enable").is_err());
         assert!(parse_sandbox_command("/sandbox profile export").is_err());
+        assert!(parse_sandbox_command("/sandbox toolchains").is_err());
     }
 }

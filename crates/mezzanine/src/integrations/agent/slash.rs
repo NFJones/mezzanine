@@ -23,8 +23,6 @@ use mez_agent::{
 pub enum AgentShellPresentation {
     /// Render the complete body in the command pager, even when it is one line.
     Pager,
-    /// Render a transient successful status-bar notice.
-    Notice,
     /// Render a transient recoverable error status-bar notice.
     ErrorNotice,
 }
@@ -34,7 +32,6 @@ impl AgentShellPresentation {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Pager => "pager",
-            Self::Notice => "notice",
             Self::ErrorNotice => "error_notice",
         }
     }

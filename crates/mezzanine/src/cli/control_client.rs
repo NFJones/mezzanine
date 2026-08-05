@@ -43,37 +43,6 @@ pub(super) fn run_control_request<W: Write>(
     Ok(())
 }
 
-/// Submits one request as a non-interactive automation client.
-///
-/// This path cannot acquire or impersonate the attached primary client. It is
-/// used for workflows whose final authorization must occur through a separate
-/// primary-terminal input event.
-pub(super) fn run_automation_control_request<W: Write>(
-    socket_selection: &SocketSelection,
-    method: &str,
-    params: &str,
-    output_format: CliOutputFormat,
-    stdout: &mut W,
-) -> Result<()> {
-    let socket_path = selected_socket_path(socket_selection);
-    let mut stream = UnixStream::connect(socket_path)?;
-    let initialize = r#"{"jsonrpc":"2.0","id":"cli-init","method":"control/initialize","params":{"client_name":"toolchain-cli","requested_version":1,"requested_role":"automation","client":{"name":"toolchain-cli","interactive":false}}}"#;
-    let request = format!(
-        r#"{{"jsonrpc":"2.0","id":"cli","method":"{}","params":{}}}"#,
-        json_escape(method),
-        params
-    );
-    let mut request_frames = encode_control_body(initialize);
-    request_frames.extend_from_slice(&encode_control_body(&request));
-    stream.write_all(&request_frames)?;
-    stream.flush()?;
-    let response = read_control_response_frames(&mut stream, 1024 * 1024, 2)?;
-    let (_, consumed) = decode_control_frame(&response, 1024 * 1024)?;
-    let (body, _) = decode_control_frame(&response[consumed..], 1024 * 1024)?;
-    write_control_response(stdout, output_format, &body)?;
-    Ok(())
-}
-
 /// Runs the read control response frames operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

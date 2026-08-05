@@ -17,7 +17,6 @@ use super::super::{
 use super::{
     TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER, runtime_expand_user_path, runtime_positional_args,
 };
-use crate::config::plan_config_mutations;
 use mez_mux::theme::{
     BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES, ui_theme_list_table_header,
     ui_theme_list_table_row,
@@ -411,43 +410,6 @@ pub(crate) fn runtime_apply_persisted_config_mutation_batch(
     mutations: &[ConfigMutation],
     event_source: &str,
 ) -> Result<RuntimePersistedConfigMutationBatchReport> {
-    runtime_apply_persisted_config_mutation_batch_with_validation(
-        service,
-        path,
-        mutations,
-        event_source,
-        false,
-    )
-}
-
-/// Applies related persisted mutations after validating only their complete
-/// final document, then reuses the ordinary atomic persistence and rollback
-/// path. This is required for custom definitions whose individual fields are
-/// intentionally invalid until the full definition has been composed.
-pub(crate) fn runtime_apply_persisted_config_mutation_batch_atomically(
-    service: &mut RuntimeSessionService,
-    path: PathBuf,
-    mutations: &[ConfigMutation],
-    event_source: &str,
-) -> Result<RuntimePersistedConfigMutationBatchReport> {
-    runtime_apply_persisted_config_mutation_batch_with_validation(
-        service,
-        path,
-        mutations,
-        event_source,
-        true,
-    )
-}
-
-/// Applies one config batch through either legacy intermediate validation or
-/// complete-document validation while sharing persistence and rollback.
-fn runtime_apply_persisted_config_mutation_batch_with_validation(
-    service: &mut RuntimeSessionService,
-    path: PathBuf,
-    mutations: &[ConfigMutation],
-    event_source: &str,
-    validate_complete_document_only: bool,
-) -> Result<RuntimePersistedConfigMutationBatchReport> {
     if mutations.is_empty() {
         return Err(MezError::invalid_args(
             "persisted config mutation batch requires at least one mutation",
@@ -461,22 +423,8 @@ fn runtime_apply_persisted_config_mutation_batch_with_validation(
         .find(|layer| layer.scope == ConfigScope::Primary && layer.path.as_ref() == Some(&path))
         .map(|layer| Ok(layer.text.clone()))
         .unwrap_or_else(|| fs::read_to_string(&path))?;
-    let batch = if validate_complete_document_only {
-        let plan = plan_config_mutations(
-            format,
-            &current_text,
-            ConfigScope::Primary,
-            mutations.to_vec(),
-        )?;
-        RuntimeConfigMutationBatch {
-            text: plan.text,
-            changed: plan.changed,
-            reload_required: plan.reload_required,
-            mutation_changed: Vec::new(),
-        }
-    } else {
-        runtime_plan_config_mutations(format, &current_text, ConfigScope::Primary, mutations)?
-    };
+    let batch =
+        runtime_plan_config_mutations(format, &current_text, ConfigScope::Primary, mutations)?;
     if batch.changed {
         let uses_adapter = service.persistence.config_uses_adapter();
         let previous_disk_text = if uses_adapter {

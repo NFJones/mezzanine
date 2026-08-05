@@ -59,7 +59,7 @@ pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         }
         "approval" => Some(" <ask|auto-allow|full-access|host-access>"),
         "approve" => Some(" <approval-id|latest> [once|session|project|global]"),
-        "sandbox" => Some(" <status|enable|disable|trust|toolchains>"),
+        "sandbox" => Some(" <status|enable|disable|trust>"),
         "model" => Some(" [--routing] <list|model> [reasoning]"),
         "latency" => Some(" <slow|default|fast>"),
         "routing" => Some(" <on|off|toggle|status|policy [--global] <subagent|in-place>>"),

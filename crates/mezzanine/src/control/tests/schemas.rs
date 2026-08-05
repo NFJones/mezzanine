@@ -34,6 +34,25 @@ fn baseline_control_methods_reject_unknown_params_outside_extensions() {
     assert!(accepted.contains(r#""window":"#));
 }
 
+/// Verifies the removed toolchain mutation action is no longer registered or
+/// authorized through any compatibility protocol surface.
+#[test]
+fn removed_toolchain_mutation_method_is_unknown() {
+    let (mut session, primary) = test_session();
+
+    let response = dispatch_control_request(
+        r#"{"jsonrpc":"2.0","id":1,"method":"toolchain/mutation/submit","params":{"idempotency_key":"removed"}}"#,
+        &mut session,
+        &primary,
+    );
+
+    assert!(response.contains(r#""mezzanine_code":"method_not_found""#));
+    assert!(
+        response.contains("unknown control method `toolchain/mutation/submit`"),
+        "{response}"
+    );
+}
+
 /// Verifies that advertised primary control methods are backed by the shared
 /// method registry that now owns dispatch and schema metadata. This prevents a
 /// future control method from being added to capabilities without a matching

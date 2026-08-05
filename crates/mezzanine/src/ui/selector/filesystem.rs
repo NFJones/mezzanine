@@ -93,17 +93,6 @@ pub(super) fn path_completion_allowed(
     surface: SelectorSurface,
     context: &SelectorTokenContext,
 ) -> bool {
-    if surface == SelectorSurface::AgentCommand
-        && context.tokens_before.first().is_some_and(|command| {
-            canonical_agent_command(command.trim_start_matches('/')) == "sandbox"
-                && context
-                    .tokens_before
-                    .get(1)
-                    .is_some_and(|token| token == "toolchains")
-        })
-    {
-        return false;
-    }
     if context.query.starts_with('-') {
         return false;
     }

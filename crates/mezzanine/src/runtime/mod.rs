@@ -248,21 +248,16 @@ mod config;
 pub(crate) use config::ConfiguredSandboxEnvironment;
 pub(crate) use config::{
     BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, ConfiguredSandboxGroups,
-    CustomToolchainDefinition, CustomToolchainName, CustomToolchainReference, NetworkPolicy,
-    SandboxConfig, SandboxEnvironmentPolicy, SandboxToolchainKind, SandboxUnavailablePolicy,
-    ToolchainSelection, runtime_configured_permissions_from_config,
+    CustomToolchainDefinition, CustomToolchainReference, NetworkPolicy, SandboxConfig,
+    SandboxEnvironmentPolicy, SandboxToolchainKind, SandboxUnavailablePolicy, ToolchainSelection,
+    runtime_configured_permissions_from_config,
 };
 /// Exposes the control module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod control;
-#[cfg(test)]
-pub(crate) use control::normalized_toolchain_mutation_digest;
-pub(crate) use control::{
-    RuntimeControlComponent, normalized_custom_toolchain_mutation_digest,
-    normalized_toolchain_selectors_digest,
-};
+pub(crate) use control::RuntimeControlComponent;
 /// Exposes deferred runtime side-effect value types.
 ///
 /// The nested module keeps side-effect planning records out of the central
@@ -437,8 +432,7 @@ pub(crate) use auto_sizing::runtime_execute_auto_sizing_with_provider;
 use commands_support::{
     execute_runtime_command_sequence, execute_runtime_command_sequence_async,
     runtime_add_command_rule, runtime_append_observer_decision_audit,
-    runtime_apply_persisted_config_mutation_batch,
-    runtime_apply_persisted_config_mutation_batch_atomically, runtime_approval_command,
+    runtime_apply_persisted_config_mutation_batch, runtime_approval_command,
     runtime_approval_policy_name, runtime_bypass_approvals_command,
     runtime_list_command_rules_display, runtime_mcp_retry_event_payload,
     runtime_parse_approval_policy, runtime_parse_permission_preset, runtime_paste_bytes,

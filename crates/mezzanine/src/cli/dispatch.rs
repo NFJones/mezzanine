@@ -55,8 +55,6 @@ pub struct CliEnv {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub mez: Option<OsString>,
-    /// Captured executable search path used by direct-user toolchain discovery.
-    pub path: Option<OsString>,
     /// Stores the runtime value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -75,7 +73,6 @@ impl CliEnv {
             home: std::env::var_os("HOME").map(PathBuf::from),
             shell: std::env::var_os("SHELL"),
             mez: std::env::var_os("MEZ"),
-            path: std::env::var_os("PATH"),
             runtime: RuntimeEnv::from_process(),
         }
     }
@@ -244,14 +241,7 @@ pub async fn run_with<W: Write, E: Write>(
             run_memory(args, env, output_format, stdout)?;
         }
         Some(CliCommand::Sandbox(args)) => {
-            exit_code = run_sandbox(
-                args,
-                &socket_selection,
-                env,
-                interactive,
-                output_format,
-                stdout,
-            )?;
+            exit_code = run_sandbox(args, env, interactive, output_format, stdout)?;
         }
     }
 

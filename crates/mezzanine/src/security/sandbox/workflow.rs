@@ -94,8 +94,6 @@ pub(crate) struct SandboxConfiguredState {
     pub(crate) group_whitelist: Vec<String>,
     /// Requested pane environment variable names; values are never serialized.
     pub(crate) env_whitelist: Vec<String>,
-    /// Direct-user-selected allowlisted toolchain kinds.
-    pub(crate) toolchains: Vec<String>,
 }
 
 /// Effective sandbox boundary and local read-only readiness evidence.
@@ -125,8 +123,6 @@ pub(crate) struct SandboxEffectiveState {
     pub(crate) managed_home_bytes: u64,
     /// Whether the selected managed home is currently mounted by a workload.
     pub(crate) managed_home_active: bool,
-    /// Standalone readiness state for configured toolchain projections.
-    pub(crate) toolchain_state: String,
     /// Whether Bubblewrap uses an isolated network namespace.
     pub(crate) network_isolated: bool,
     /// Stable restriction identifiers for the configured backend.
@@ -229,22 +225,6 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             }
         };
 
-    let configured_toolchains = match &request.permissions.sandbox {
-        SandboxConfig::PolicyOnly => Vec::new(),
-        SandboxConfig::Bubblewrap(config) => config
-            .toolchains
-            .iter()
-            .map(|toolchain| toolchain.as_str().to_string())
-            .collect::<Vec<_>>(),
-    };
-    let toolchain_state = if configured_toolchains.is_empty() {
-        "not-configured"
-    } else if approval_policy.bypasses_sandbox() {
-        "host-bypassed"
-    } else {
-        "pane-bootstrap-required"
-    };
-
     let (
         bubblewrap_executable,
         executable_state,
@@ -330,16 +310,8 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             id: "sandbox.minimal-path",
             severity: SandboxDiagnosticSeverity::Info,
             summary: "Bubblewrap uses a minimal executable path".to_string(),
-            details: if configured_toolchains.is_empty() {
-                "Only system runtime paths are projected because no typed toolchain is configured."
-                    .to_string()
-            } else {
-                format!(
-                    "Configured typed toolchains are resolved from canonical pane bootstrap evidence: {}.",
-                    configured_toolchains.join(",")
-                )
-            },
-            remedy: "As the direct user, enable only the typed read-only toolchains required by the project.".to_string(),
+            details: "The sandbox PATH is fixed to /usr/bin:/bin; scoped executables outside those directories require an absolute path or command-local PATH.".to_string(),
+            remedy: "Use narrow read scopes for external executable roots and invoke those tools explicitly without changing the sandbox-wide PATH.".to_string(),
             affected_path: None,
             source: "bubblewrap",
         });
@@ -395,7 +367,6 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
                 SandboxConfig::PolicyOnly => Vec::new(),
                 SandboxConfig::Bubblewrap(config) => config.env_whitelist.requested_names.clone(),
             },
-            toolchains: configured_toolchains,
         },
         effective: SandboxEffectiveState {
             sandbox: effective_sandbox,
@@ -418,7 +389,6 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
             managed_home_state: managed_home_state.to_string(),
             managed_home_bytes,
             managed_home_active,
-            toolchain_state: toolchain_state.to_string(),
             network_isolated,
             restrictions: if matches!(request.permissions.sandbox, SandboxConfig::Bubblewrap(_)) {
                 BUBBLEWRAP_RESTRICTION_IDS
@@ -534,8 +504,6 @@ mod tests {
         assert_eq!(plan.effective.managed_home_state, "absent");
         assert_eq!(plan.effective.managed_home_bytes, 0);
         assert!(!plan.effective.managed_home_active);
-        assert!(plan.configured.toolchains.is_empty());
-        assert_eq!(plan.effective.toolchain_state, "not-configured");
         assert!(!config_root.exists());
         let _ = fs::remove_dir_all(root);
     }
@@ -616,10 +584,8 @@ mod tests {
             env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
             git_user_name: None,
             git_user_email: None,
-            toolchains: vec![crate::runtime::SandboxToolchainKind::Rust],
-            toolchain_selections: vec![crate::runtime::ToolchainSelection::BuiltIn(
-                crate::runtime::SandboxToolchainKind::Rust,
-            )],
+            toolchains: Vec::new(),
+            toolchain_selections: Vec::new(),
             custom_toolchains: std::collections::BTreeMap::new(),
         });
         let discovery = ProjectRootDiscovery {
@@ -640,9 +606,6 @@ mod tests {
             read_scopes_source: "primary",
             write_scopes_source: "default",
         });
-
-        assert_eq!(plan.configured.toolchains, vec!["rust"]);
-        assert_eq!(plan.effective.toolchain_state, "host-bypassed");
 
         assert_eq!(plan.configured.sandbox, "bubblewrap");
         assert_eq!(plan.effective.sandbox, "host");

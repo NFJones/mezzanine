@@ -355,7 +355,6 @@ fn explicit_agent_shell_presentation_serializes_for_runtime_decoding() {
 
     for (presentation, expected) in [
         (AgentShellPresentation::Pager, "pager"),
-        (AgentShellPresentation::Notice, "notice"),
         (AgentShellPresentation::ErrorNotice, "error_notice"),
     ] {
         let response = crate::runtime::runtime_agent_shell_command_response_json(

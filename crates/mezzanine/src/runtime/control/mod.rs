@@ -69,7 +69,7 @@ use crate::control::{
     validate_control_method_params_schema,
 };
 use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
-pub(crate) use component::{PendingToolchainMutation, RuntimeControlComponent};
+pub(crate) use component::RuntimeControlComponent;
 pub(crate) use context::runtime_local_message_context_content;
 use context::{
     runtime_agent_transcript_context_blocks, runtime_context_block_is_compaction_refresh_owned,
@@ -77,11 +77,6 @@ use context::{
 use mez_agent::{
     SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
     parse_skill_prompt_invocation, set_project_guidance_context, skill_context_text,
-};
-#[cfg(test)]
-pub(crate) use mutations::normalized_toolchain_mutation_digest;
-pub(crate) use mutations::{
-    normalized_custom_toolchain_mutation_digest, normalized_toolchain_selectors_digest,
 };
 use protocol::{
     pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,

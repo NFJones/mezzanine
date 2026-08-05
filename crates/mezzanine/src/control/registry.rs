@@ -98,8 +98,6 @@ pub(super) enum ControlDispatchKind {
     AgentShellVisibility { visible: bool },
     /// Submit text to the pane agent shell.
     AgentShellCommand,
-    /// Submit an external toolchain mutation for direct primary confirmation.
-    ToolchainMutationSubmit,
     /// List events.
     EventList,
     /// List approvals.
@@ -447,24 +445,6 @@ pub(super) const CONTROL_METHOD_REGISTRY: &[ControlMethodSpec] = &[
         method: "agent/shell/command",
         dispatch: ControlDispatchKind::AgentShellCommand,
         params_schema: ControlParamsSchema::Allowed(&["input", "idempotency_key"]),
-    },
-    ControlMethodSpec {
-        method: "toolchain/mutation/submit",
-        dispatch: ControlDispatchKind::ToolchainMutationSubmit,
-        params_schema: ControlParamsSchema::Allowed(&[
-            "operation",
-            "kind",
-            "selectors",
-            "name",
-            "description",
-            "roots",
-            "path_entries",
-            "required_executables",
-            "environment",
-            "disable",
-            "request_digest",
-            "idempotency_key",
-        ]),
     },
     ControlMethodSpec {
         method: "event/list",

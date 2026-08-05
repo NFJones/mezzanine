@@ -139,15 +139,15 @@ fn clap_renders_config_help_for_help_flag_and_empty_command() {
     let _ = fs::remove_dir_all(home);
 }
 
-/// Verifies command-local toolchain help exposes custom management grammar
-/// and distinguishes submission consent from authenticated approval.
+/// Verifies the removed standalone toolchain hierarchy is rejected by the
+/// typed command parser instead of retaining a deprecated alias.
 #[test]
-fn clap_renders_custom_toolchain_management_help() {
+fn clap_rejects_removed_toolchain_commands() {
     let (env, home) = test_env("toolchain-help");
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    run_with_plain(
+    let error = run_with_plain(
         vec![
             "mez".to_string(),
             "sandbox".to_string(),
@@ -161,24 +161,14 @@ fn clap_renders_custom_toolchain_management_help() {
         &mut stdout,
         &mut stderr,
     )
-    .unwrap();
+    .unwrap_err();
 
-    let output = String::from_utf8(stdout).unwrap();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
     assert!(
-        output.contains("Usage: mez sandbox toolchains custom define"),
-        "{output}"
+        error.message().contains("unrecognized subcommand"),
+        "{error}"
     );
-    for flag in [
-        "--root",
-        "--path",
-        "--require",
-        "--env-root",
-        "--description",
-        "--yes",
-    ] {
-        assert!(output.contains(flag), "missing {flag} in {output}");
-    }
-    assert!(output.contains("primary client must approve"), "{output}");
+    assert!(stdout.is_empty());
     assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);

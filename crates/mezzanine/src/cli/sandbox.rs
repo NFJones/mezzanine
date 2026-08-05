@@ -15,47 +15,22 @@ use rustix::fs::{FlockOperation, flock};
 use serde::Deserialize;
 
 use super::{
-    CliEnv, CliOutputFormat, MezError, ProjectTrustCliArgs, Result, Serialize, SocketSelection,
-    cli_idempotency_key, run_automation_control_request, run_project_trust, serialize_json,
+    CliEnv, CliOutputFormat, MezError, ProjectTrustCliArgs, Result, Serialize, run_project_trust,
+    serialize_json,
 };
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigScope, DEFAULT_CONFIG_TOML, compose_effective_config, persist_config_text,
     plan_config_mutations,
 };
-use crate::runtime::{
-    ConfiguredPermissions, CustomToolchainDefinition, CustomToolchainName, SandboxConfig,
-    SandboxToolchainKind, ToolchainSelection, normalized_custom_toolchain_mutation_digest,
-    normalized_toolchain_selectors_digest, runtime_configured_permissions_from_config,
-    runtime_effective_config_value,
-};
+use crate::runtime::{runtime_configured_permissions_from_config, runtime_effective_config_value};
 use crate::security::project::{
     ProjectRootInputSource, ProjectRootMarkerKind, ProjectTrustStore, TrustDecision,
     default_trust_database_path, discover_existing_overlays, discover_project_root_with_metadata,
 };
 use crate::security::sandbox::{
-    BubblewrapManagedHomeMaintenance, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH,
-    SANDBOX_CMAKE_PATH, SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH,
-    SANDBOX_ERLANG_ELIXIR_PATH, SANDBOX_ERLANG_PATH, SANDBOX_GCC_PATH, SANDBOX_GHC_CABAL_PATH,
-    SANDBOX_GHC_PATH, SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_GRADLE_PATH,
-    SANDBOX_JDK_MAVEN_PATH, SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_LLVM_PATH,
-    SANDBOX_MESON_PATH, SANDBOX_NINJA_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH,
-    SANDBOX_PHP_PATH, SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH,
-    SANDBOX_SWIFT_PATH, SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS,
-    SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
-    clear_bubblewrap_managed_home, discover_bun_from_search_path, discover_cabal_from_search_path,
-    discover_cmake_from_search_path, discover_composer_from_search_path,
-    discover_dart_from_search_path, discover_deno_from_search_path,
-    discover_dotnet_from_search_path, discover_elixir_from_search_path,
-    discover_erlang_from_search_path, discover_gcc_from_search_path, discover_ghc_from_search_path,
-    discover_go_from_search_path, discover_gradle_from_search_path, discover_jdk_from_search_path,
-    discover_jvm_project_wrapper, discover_kotlin_from_search_path, discover_llvm_from_search_path,
-    discover_maven_from_search_path, discover_meson_from_search_path,
-    discover_ninja_from_search_path, discover_node_from_search_path,
-    discover_ocaml_project_environment, discover_php_from_search_path,
-    discover_python_from_search_path, discover_ruby_from_search_path, discover_rust_from_home,
-    discover_stack_from_search_path, discover_swift_from_search_path,
-    discover_zig_from_search_path, inspect_bubblewrap_managed_home, parse_sandbox_toolchain_kind,
+    BubblewrapManagedHomeMaintenance, SandboxDiagnosticSeverity, SandboxWorkflowPlan,
+    SandboxWorkflowRequest, clear_bubblewrap_managed_home, inspect_bubblewrap_managed_home,
     plan_sandbox_workflow, prune_bubblewrap_managed_homes,
 };
 
@@ -98,12 +73,6 @@ enum SandboxCliCommand {
     Disable(SandboxMutationArgs),
     /// Inspects or changes project trust records.
     Trust(ProjectTrustCliArgs),
-    /// Detects or enables allowlisted read-only developer toolchains.
-    Toolchains {
-        /// Toolchain workflow to run.
-        #[command(subcommand)]
-        command: SandboxToolchainsCommand,
-    },
     /// Inspects or safely removes Mezzanine-managed Bubblewrap homes.
     Cache {
         /// Managed-home cache workflow to run.
@@ -231,9 +200,6 @@ struct SandboxProfileRecipe {
     preset: String,
     /// Local authority strategy, never a host path.
     authority: String,
-    /// Allowlisted typed toolchain kinds.
-    #[serde(default)]
-    toolchains: Vec<String>,
 }
 
 /// Normalized guided setup operation dispatched to the transactional owner.
@@ -246,7 +212,7 @@ enum SandboxSetupCommand {
     /// Selects policy-only execution while retaining other settings.
     Disable(SandboxMutationArgs),
     /// Imports one reviewed sanitized profile.
-    ProfileImport(SandboxSetupArgs, Vec<String>),
+    ProfileImport(SandboxSetupArgs),
 }
 
 /// Stable preview and application result for guided sandbox setup.
@@ -264,94 +230,9 @@ struct SandboxSetupResult {
     warning: Option<String>,
 }
 
-/// Direct-user typed toolchain discovery and activation commands.
-#[derive(Debug, Clone, Subcommand)]
-enum SandboxToolchainsCommand {
-    /// Lists supported built-in kinds and configured custom identities.
-    List,
-    /// Reports configured toolchain selections and definitions without mutation.
-    Status {
-        /// Optional built-in or `custom:<name>` selector to inspect.
-        selector: Option<String>,
-        /// Project path used to load the applicable read-only configuration.
-        path: Option<PathBuf>,
-    },
-    /// Detects canonical allowlisted toolchain roots without changing config.
-    Detect {
-        /// Allowlisted kind to inspect; omitted for backwards-compatible Rust detection.
-        #[arg(long, default_value = "rust")]
-        kind: String,
-        /// Project path reported with the detection result.
-        path: Option<PathBuf>,
-    },
-    /// Submits ordered typed toolchain selectors for activation.
-    Enable {
-        /// Built-in or `custom:<name>` selectors in projection order.
-        #[arg(required = true, num_args = 1..)]
-        selectors: Vec<String>,
-        /// Confirms the read-only host path projection.
-        #[arg(long)]
-        yes: bool,
-    },
-    /// Submits ordered typed toolchain selectors for deactivation.
-    Disable {
-        /// Built-in or `custom:<name>` selectors to remove.
-        #[arg(required = true, num_args = 1..)]
-        selectors: Vec<String>,
-        /// Confirms the persisted selection change.
-        #[arg(long)]
-        yes: bool,
-    },
-    /// Defines or removes constrained custom toolchains.
-    Custom {
-        #[command(subcommand)]
-        command: SandboxCustomToolchainCommand,
-    },
-}
-
-/// Direct-user custom toolchain definition commands.
-#[derive(Debug, Clone, Subcommand)]
-enum SandboxCustomToolchainCommand {
-    /// Defines or atomically replaces one constrained custom toolchain.
-    Define {
-        /// Stable custom identity without the `custom:` prefix.
-        name: String,
-        /// Absolute host root made available read-only.
-        #[arg(long = "root", required = true)]
-        roots: Vec<String>,
-        /// Root-relative PATH reference in `<root-index>:<path>` form.
-        #[arg(long = "path", required = true)]
-        path_entries: Vec<String>,
-        /// Required executable reference in `<root-index>:<path>` form.
-        #[arg(long = "require")]
-        required_executables: Vec<String>,
-        /// Synthesized environment entry in `NAME=<root-index>:<path>` form.
-        #[arg(long = "env-root")]
-        environment: Vec<String>,
-        /// Optional printable description.
-        #[arg(long)]
-        description: Option<String>,
-        /// Consents to submission; the attached primary client must approve.
-        #[arg(long)]
-        yes: bool,
-    },
-    /// Removes one custom definition, optionally disabling it atomically.
-    Remove {
-        /// Stable custom identity with or without the `custom:` prefix.
-        name: String,
-        /// Also remove the selector from the enabled projection.
-        #[arg(long)]
-        disable: bool,
-        /// Consents to submission; the attached primary client must approve.
-        #[arg(long)]
-        yes: bool,
-    },
-}
-
 /// Runs one read-only sandbox workflow command and returns its process status.
 pub(super) fn run_sandbox<W: Write>(
     args: SandboxCliArgs,
-    socket_selection: &SocketSelection,
     env: CliEnv,
     interactive: bool,
     output_format: CliOutputFormat,
@@ -360,16 +241,6 @@ pub(super) fn run_sandbox<W: Write>(
     let (path, input_source, verbose) = match args.command {
         Some(SandboxCliCommand::Cache { command }) => {
             return run_sandbox_cache(command, env, output_format, stdout);
-        }
-        Some(SandboxCliCommand::Toolchains { command }) => {
-            return run_sandbox_toolchains(
-                command,
-                socket_selection,
-                env,
-                interactive,
-                output_format,
-                stdout,
-            );
         }
         Some(SandboxCliCommand::Profile { command }) => {
             return run_sandbox_profile(command, env, interactive, output_format, stdout);
@@ -693,16 +564,9 @@ fn run_sandbox_profile<W: Write>(
             )?;
             let structured = runtime_effective_config_value(&layers)?;
             let permissions = runtime_configured_permissions_from_config(&structured)?;
-            let (preset, authority, toolchains) = match permissions.sandbox {
-                crate::runtime::SandboxConfig::PolicyOnly => ("off", "explicit-scope", Vec::new()),
-                crate::runtime::SandboxConfig::Bubblewrap(config) => {
-                    if config.toolchain_selections.iter().any(|selection| {
-                        matches!(selection, crate::runtime::ToolchainSelection::Custom(_))
-                    }) {
-                        return Err(MezError::invalid_args(
-                            "sandbox profile export cannot include custom toolchains or host roots",
-                        ));
-                    }
+            let (preset, authority) = match permissions.sandbox {
+                crate::runtime::SandboxConfig::PolicyOnly => ("off", "explicit-scope"),
+                crate::runtime::SandboxConfig::Bubblewrap(_) => {
                     let preset = if permissions.resources.write_scopes.is_empty()
                         && !permissions.resources.read_scopes.is_empty()
                     {
@@ -721,19 +585,13 @@ fn run_sandbox_profile<W: Write>(
                     } else {
                         "explicit-scope"
                     };
-                    let toolchains = config
-                        .toolchain_selections
-                        .iter()
-                        .map(|selection| selection.as_str().to_string())
-                        .collect();
-                    (preset, authority, toolchains)
+                    (preset, authority)
                 }
             };
             let recipe = SandboxProfileRecipe {
-                version: 1,
+                version: 2,
                 preset: preset.to_string(),
                 authority: authority.to_string(),
-                toolchains,
             };
             writeln!(stdout, "{}", serialize_json(&recipe)?)?;
             Ok(0)
@@ -750,16 +608,13 @@ fn run_sandbox_profile<W: Write>(
             })?;
             validate_sandbox_profile_recipe(&recipe)?;
             run_sandbox_setup(
-                SandboxSetupCommand::ProfileImport(
-                    SandboxSetupArgs {
-                        preset: recipe.preset,
-                        authority: Some(recipe.authority),
-                        path,
-                        dry_run,
-                        yes,
-                    },
-                    recipe.toolchains,
-                ),
+                SandboxSetupCommand::ProfileImport(SandboxSetupArgs {
+                    preset: recipe.preset,
+                    authority: Some(recipe.authority),
+                    path,
+                    dry_run,
+                    yes,
+                }),
                 env,
                 interactive,
                 output_format,
@@ -770,8 +625,8 @@ fn run_sandbox_profile<W: Write>(
 }
 
 fn validate_sandbox_profile_recipe(recipe: &SandboxProfileRecipe) -> Result<()> {
-    if recipe.version != 1 {
-        return Err(MezError::invalid_args("sandbox profile version must be 1"));
+    if recipe.version != 2 {
+        return Err(MezError::invalid_args("sandbox profile version must be 2"));
     }
     if !matches!(
         recipe.preset.as_str(),
@@ -789,18 +644,6 @@ fn validate_sandbox_profile_recipe(recipe: &SandboxProfileRecipe) -> Result<()> 
             "sandbox profile contains an unsupported authority",
         ));
     }
-    let mut selected = Vec::new();
-    for name in &recipe.toolchains {
-        let kind = parse_sandbox_toolchain_kind(name).ok_or_else(|| {
-            MezError::invalid_args("sandbox profile contains an unsupported toolchain kind")
-        })?;
-        if selected.contains(&kind) {
-            return Err(MezError::invalid_args(
-                "sandbox profile contains duplicate toolchain kinds",
-            ));
-        }
-        selected.push(kind);
-    }
     Ok(())
 }
 
@@ -812,49 +655,44 @@ fn run_sandbox_setup<W: Write>(
     output_format: CliOutputFormat,
     stdout: &mut W,
 ) -> Result<u8> {
-    let (preset, authority, path, dry_run, yes, force_read_only, trust_only, profile_toolchains) =
-        match command {
-            SandboxSetupCommand::Plan(args) => (
-                args.preset,
-                args.authority,
-                args.path,
-                true,
-                false,
-                true,
-                false,
-                None,
-            ),
-            SandboxSetupCommand::Enable(args) => (
-                args.preset,
-                args.authority,
-                args.path,
-                args.dry_run,
-                args.yes,
-                false,
-                false,
-                None,
-            ),
-            SandboxSetupCommand::Disable(args) => (
-                "off".to_string(),
-                Some("retained".to_string()),
-                None,
-                args.dry_run,
-                args.yes,
-                false,
-                false,
-                None,
-            ),
-            SandboxSetupCommand::ProfileImport(args, toolchains) => (
-                args.preset,
-                args.authority,
-                args.path,
-                args.dry_run,
-                args.yes,
-                false,
-                false,
-                Some(toolchains),
-            ),
-        };
+    let (preset, authority, path, dry_run, yes, force_read_only, trust_only) = match command {
+        SandboxSetupCommand::Plan(args) => (
+            args.preset,
+            args.authority,
+            args.path,
+            true,
+            false,
+            true,
+            false,
+        ),
+        SandboxSetupCommand::Enable(args) => (
+            args.preset,
+            args.authority,
+            args.path,
+            args.dry_run,
+            args.yes,
+            false,
+            false,
+        ),
+        SandboxSetupCommand::Disable(args) => (
+            "off".to_string(),
+            Some("retained".to_string()),
+            None,
+            args.dry_run,
+            args.yes,
+            false,
+            false,
+        ),
+        SandboxSetupCommand::ProfileImport(args) => (
+            args.preset,
+            args.authority,
+            args.path,
+            args.dry_run,
+            args.yes,
+            false,
+            false,
+        ),
+    };
     let path = path.unwrap_or(std::env::current_dir()?);
     let discovery = discover_project_root_with_metadata(
         &path,
@@ -875,17 +713,11 @@ fn run_sandbox_setup<W: Write>(
     };
     let project = discovery.canonical_root.to_string_lossy().into_owned();
     let mut trust_current_project = trust_only;
-    let mut mutations = if trust_only {
+    let mutations = if trust_only {
         Vec::new()
     } else {
         sandbox_setup_mutations(&preset, &authority, &project, &mut trust_current_project)?
     };
-    if let Some(toolchains) = profile_toolchains {
-        mutations.push(ConfigMutation {
-            path: "permissions.bubblewrap.toolchains".to_string(),
-            operation: ConfigMutationOperation::Set(ConfigMutationValue::StringArray(toolchains)),
-        });
-    }
     let paths = env.config_paths()?;
     let config_path = paths
         .select_primary_file()?
@@ -1107,7 +939,7 @@ fn write_setup_result<W: Write>(
 
 fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String {
     let mut output = format!(
-        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\napproval_policy: {}\nscope_provenance: {}\nbubblewrap_executable_state: {}\ngroup_whitelist: {}\nenv_whitelist: {}\nenvironment_forwarding_state: {}\nsupplementary_group_state: {}\nsupplementary_group_count: {}\nbubblewrap_probe_state: {}\nmanaged_home_state: {}\nmanaged_home_bytes: {}\nmanaged_home_active: {}\ntoolchains: {}\ntoolchain_state: {}\nnetwork_isolated: {}\nreload_freshness: {}\n",
+        "project_root: {}\nproject_source: {}\nproject_marker: {}\ntrust_state: {}\nsandbox_configured: {}\nsandbox_effective: {}\napproval_policy: {}\nscope_provenance: {}\nbubblewrap_executable_state: {}\ngroup_whitelist: {}\nenv_whitelist: {}\nenvironment_forwarding_state: {}\nsupplementary_group_state: {}\nsupplementary_group_count: {}\nbubblewrap_probe_state: {}\nmanaged_home_state: {}\nmanaged_home_bytes: {}\nmanaged_home_active: {}\nnetwork_isolated: {}\nreload_freshness: {}\n",
         plan.project.canonical_root.display(),
         plan.project.input_source,
         plan.project.marker_kind,
@@ -1138,12 +970,6 @@ fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String 
         plan.effective.managed_home_state,
         plan.effective.managed_home_bytes,
         plan.effective.managed_home_active,
-        if plan.configured.toolchains.is_empty() {
-            "none".to_string()
-        } else {
-            plan.configured.toolchains.join(",")
-        },
-        plan.effective.toolchain_state,
         plan.effective.network_isolated,
         plan.effective.reload_freshness,
     );
@@ -1161,1403 +987,4 @@ fn sandbox_plan_plain_text(plan: &SandboxWorkflowPlan, verbose: bool) -> String 
         }
     }
     output
-}
-
-/// Stable direct-user projection for typed toolchain detection and activation.
-#[derive(Debug, Serialize)]
-struct SandboxToolchainResult {
-    version: u32,
-    project_root: PathBuf,
-    kind: &'static str,
-    available: bool,
-    cargo_bin: Option<PathBuf>,
-    rustup_home: Option<PathBuf>,
-    zig_root: Option<PathBuf>,
-    go_root: Option<PathBuf>,
-    deno_root: Option<PathBuf>,
-    bun_root: Option<PathBuf>,
-    node_root: Option<PathBuf>,
-    python_root: Option<PathBuf>,
-    jdk_root: Option<PathBuf>,
-    maven_root: Option<PathBuf>,
-    gradle_root: Option<PathBuf>,
-    dotnet_root: Option<PathBuf>,
-    dart_root: Option<PathBuf>,
-    kotlin_root: Option<PathBuf>,
-    ruby_root: Option<PathBuf>,
-    php_root: Option<PathBuf>,
-    composer_root: Option<PathBuf>,
-    erlang_root: Option<PathBuf>,
-    elixir_root: Option<PathBuf>,
-    ghc_root: Option<PathBuf>,
-    cabal_root: Option<PathBuf>,
-    stack_root: Option<PathBuf>,
-    ocaml_root: Option<PathBuf>,
-    llvm_root: Option<PathBuf>,
-    gcc_root: Option<PathBuf>,
-    cmake_root: Option<PathBuf>,
-    ninja_root: Option<PathBuf>,
-    meson_root: Option<PathBuf>,
-    swift_root: Option<PathBuf>,
-    sandbox_path: String,
-    read_only: bool,
-    applied: bool,
-    confirmation_required: bool,
-    message: String,
-}
-
-fn run_sandbox_toolchains<W: Write>(
-    command: SandboxToolchainsCommand,
-    socket_selection: &SocketSelection,
-    env: CliEnv,
-    interactive: bool,
-    output_format: CliOutputFormat,
-    stdout: &mut W,
-) -> Result<u8> {
-    match command {
-        SandboxToolchainsCommand::List => {
-            write_toolchain_list(&env, output_format, stdout)?;
-            Ok(0)
-        }
-        SandboxToolchainsCommand::Status { selector, path } => {
-            write_toolchain_status(&env, selector.as_deref(), path, output_format, stdout)?;
-            Ok(0)
-        }
-        SandboxToolchainsCommand::Detect { kind, path } => {
-            let kind = parse_sandbox_toolchain_kind(&kind).ok_or_else(|| {
-                MezError::invalid_args("sandbox toolchains detect received an unsupported kind")
-            })?;
-            let input_source = if path.is_some() {
-                ProjectRootInputSource::ExplicitPath
-            } else {
-                ProjectRootInputSource::CurrentDirectory
-            };
-            let path = path.unwrap_or(std::env::current_dir()?);
-            let project = discover_project_root_with_metadata(&path, input_source)?;
-            let detection = detect_direct_toolchain(kind, &env, Some(&project.canonical_root))?;
-            let result = toolchain_result(project.canonical_root, detection, false, false);
-            write_toolchain_result(stdout, output_format, &result)?;
-            Ok(0)
-        }
-        SandboxToolchainsCommand::Enable { selectors, yes } => submit_toolchain_selectors(
-            socket_selection,
-            &env,
-            interactive,
-            output_format,
-            stdout,
-            ToolchainSelectorMutation {
-                operation: "enable",
-                selector_names: selectors,
-                yes,
-            },
-        ),
-        SandboxToolchainsCommand::Disable { selectors, yes } => submit_toolchain_selectors(
-            socket_selection,
-            &env,
-            interactive,
-            output_format,
-            stdout,
-            ToolchainSelectorMutation {
-                operation: "disable",
-                selector_names: selectors,
-                yes,
-            },
-        ),
-        SandboxToolchainsCommand::Custom { command } => submit_custom_toolchain_mutation(
-            socket_selection,
-            interactive,
-            output_format,
-            stdout,
-            command,
-        ),
-    }
-}
-
-/// Loads typed toolchain configuration without mutating trust, config, or
-/// managed runtime state.
-fn read_toolchain_permissions(
-    env: &CliEnv,
-    path: Option<PathBuf>,
-) -> Result<(PathBuf, ConfiguredPermissions)> {
-    let current = std::env::current_dir()?;
-    let path = path.unwrap_or_else(|| current.clone());
-    let source = if path == current {
-        ProjectRootInputSource::CurrentDirectory
-    } else {
-        ProjectRootInputSource::ExplicitPath
-    };
-    let discovery = discover_project_root_with_metadata(&path, source)?;
-    let paths = env.config_paths()?;
-    let layers = load_read_only_config_layers(
-        &paths,
-        &discovery.canonical_root,
-        &discovery.canonical_start,
-        false,
-    )?;
-    let structured = runtime_effective_config_value(&layers)?;
-    let permissions = runtime_configured_permissions_from_config(&structured)?;
-    Ok((discovery.canonical_root, permissions))
-}
-
-/// Writes supported built-ins and configured custom identities without host
-/// probing or configuration mutation.
-fn write_toolchain_list<W: Write>(
-    env: &CliEnv,
-    output_format: CliOutputFormat,
-    stdout: &mut W,
-) -> Result<()> {
-    let (_, permissions) = read_toolchain_permissions(env, None)?;
-    let custom = match &permissions.sandbox {
-        SandboxConfig::PolicyOnly => Vec::new(),
-        SandboxConfig::Bubblewrap(config) => {
-            config.custom_toolchains.keys().cloned().collect::<Vec<_>>()
-        }
-    };
-    let built_ins = SUPPORTED_SANDBOX_TOOLCHAIN_KINDS
-        .iter()
-        .map(|kind| kind.as_str())
-        .collect::<Vec<_>>();
-    if output_format.is_json() {
-        writeln!(
-            stdout,
-            "{}",
-            serde_json::json!({
-                "version": 1,
-                "built_ins": built_ins,
-                "custom": custom.iter().map(|name| format!("custom:{name}")).collect::<Vec<_>>(),
-            })
-        )?;
-    } else {
-        writeln!(stdout, "built_ins: {}", built_ins.join(","))?;
-        writeln!(
-            stdout,
-            "custom: {}",
-            if custom.is_empty() {
-                "none".to_string()
-            } else {
-                custom
-                    .iter()
-                    .map(|name| format!("custom:{name}"))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            }
-        )?;
-    }
-    Ok(())
-}
-
-/// Writes configured selection and custom-definition metadata without probing
-/// arbitrary host paths or changing runtime state.
-fn write_toolchain_status<W: Write>(
-    env: &CliEnv,
-    requested: Option<&str>,
-    path: Option<PathBuf>,
-    output_format: CliOutputFormat,
-    stdout: &mut W,
-) -> Result<()> {
-    let requested = requested
-        .map(ToolchainSelection::parse)
-        .transpose()
-        .map_err(|error| MezError::invalid_args(error.message()))?;
-    let (project_root, permissions) = read_toolchain_permissions(env, path)?;
-    let (configured, definitions) = match &permissions.sandbox {
-        SandboxConfig::PolicyOnly => (Vec::new(), std::collections::BTreeMap::new()),
-        SandboxConfig::Bubblewrap(config) => (
-            config
-                .toolchain_selections
-                .iter()
-                .map(ToolchainSelection::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>(),
-            config.custom_toolchains.clone(),
-        ),
-    };
-    let identities = if let Some(selection) = requested {
-        vec![selection.as_str().to_string()]
-    } else {
-        SUPPORTED_SANDBOX_TOOLCHAIN_KINDS
-            .iter()
-            .map(|kind| kind.as_str().to_string())
-            .chain(definitions.keys().map(|name| format!("custom:{name}")))
-            .collect::<Vec<_>>()
-    };
-    let entries = identities
-        .iter()
-        .map(|identity| {
-            let custom_name = identity.strip_prefix("custom:");
-            let definition = custom_name.and_then(|name| definitions.get(name));
-            serde_json::json!({
-                "identity": identity,
-                "source": if custom_name.is_some() { "custom" } else { "built-in" },
-                "configured": configured.iter().any(|value| value == identity),
-                "defined": custom_name.is_none() || definition.is_some(),
-                "description": definition.and_then(|value| value.description.as_deref()),
-                "roots": definition.map(|value| value.roots.clone()).unwrap_or_default(),
-                "path_entries": definition.map(|value| value.path_entries.iter().map(|reference| reference.as_str()).collect::<Vec<_>>()).unwrap_or_default(),
-                "required_executables": definition.map(|value| value.required_executables.iter().map(|reference| reference.as_str()).collect::<Vec<_>>()).unwrap_or_default(),
-                "environment": definition.map(|value| value.environment.iter().map(|(name, reference)| (name.clone(), reference.as_str())).collect::<std::collections::BTreeMap<_, _>>()).unwrap_or_default(),
-            })
-        })
-        .collect::<Vec<_>>();
-    if output_format.is_json() {
-        writeln!(
-            stdout,
-            "{}",
-            serde_json::json!({
-                "version": 1,
-                "project_root": project_root,
-                "sandbox": permissions.sandbox.as_str(),
-                "configured": configured,
-                "toolchains": entries,
-            })
-        )?;
-    } else {
-        writeln!(stdout, "project_root: {}", project_root.display())?;
-        writeln!(stdout, "sandbox: {}", permissions.sandbox.as_str())?;
-        for entry in entries {
-            writeln!(
-                stdout,
-                "toolchain: {} source={} configured={} defined={}",
-                entry["identity"].as_str().unwrap_or("unknown"),
-                entry["source"].as_str().unwrap_or("unknown"),
-                entry["configured"].as_bool().unwrap_or(false),
-                entry["defined"].as_bool().unwrap_or(false),
-            )?;
-        }
-    }
-    Ok(())
-}
-
-/// Operation-specific fields for one ordered selector mutation submission.
-struct ToolchainSelectorMutation {
-    operation: &'static str,
-    selector_names: Vec<String>,
-    yes: bool,
-}
-
-/// Validates and submits one exact ordered selector mutation. Built-in enable
-/// requests retain direct-user discovery as an early diagnostic; custom
-/// selectors are preflighted by the live pane runtime before confirmation.
-fn submit_toolchain_selectors<W: Write>(
-    socket_selection: &SocketSelection,
-    env: &CliEnv,
-    interactive: bool,
-    output_format: CliOutputFormat,
-    stdout: &mut W,
-    mutation: ToolchainSelectorMutation,
-) -> Result<u8> {
-    let ToolchainSelectorMutation {
-        operation,
-        selector_names,
-        yes,
-    } = mutation;
-    let mut selectors = Vec::with_capacity(selector_names.len());
-    for name in selector_names {
-        let selector = ToolchainSelection::parse(&name)
-            .map_err(|error| MezError::invalid_args(error.message()))?;
-        if selectors.contains(&selector) {
-            return Err(MezError::invalid_args(
-                "sandbox toolchains mutation received a duplicate selector",
-            ));
-        }
-        selectors.push(selector);
-    }
-    if operation == "enable" {
-        let project_root = if selectors.iter().any(|selector| {
-            matches!(
-                selector,
-                ToolchainSelection::BuiltIn(SandboxToolchainKind::Ocaml)
-            )
-        }) {
-            let current = std::env::current_dir()?;
-            Some(
-                discover_project_root_with_metadata(
-                    &current,
-                    ProjectRootInputSource::CurrentDirectory,
-                )?
-                .canonical_root,
-            )
-        } else {
-            None
-        };
-        for selector in &selectors {
-            if let ToolchainSelection::BuiltIn(kind) = selector {
-                let detection = detect_direct_toolchain(*kind, env, project_root.as_deref())?;
-                if !detection.available() {
-                    return Err(MezError::invalid_state(format!(
-                        "{} toolchain detection did not find a canonical distribution",
-                        kind.as_str()
-                    )));
-                }
-            }
-        }
-    }
-    let selector_values = selectors
-        .iter()
-        .map(ToolchainSelection::as_str)
-        .collect::<Vec<_>>();
-    if !yes {
-        let message = if interactive {
-            format!(
-                "Review the {} selector request [{}] and rerun with --yes; the attached primary client must still approve it.",
-                operation,
-                selector_values.join(", ")
-            )
-        } else {
-            "Noninteractive toolchain mutation requires --yes.".to_string()
-        };
-        match output_format {
-            CliOutputFormat::Json => writeln!(
-                stdout,
-                "{}",
-                serde_json::json!({
-                    "operation": operation,
-                    "selectors": selector_values,
-                    "confirmation_required": true,
-                    "applied": false,
-                    "message": message,
-                })
-            )?,
-            CliOutputFormat::Plain => writeln!(stdout, "{message}")?,
-        }
-        return Ok(1);
-    }
-    let digest = normalized_toolchain_selectors_digest(operation, &selectors);
-    let params = serde_json::json!({
-        "operation": operation,
-        "selectors": selector_values,
-        "request_digest": digest,
-        "idempotency_key": cli_idempotency_key("toolchain-mutation-submit"),
-    })
-    .to_string();
-    run_automation_control_request(
-        socket_selection,
-        "toolchain/mutation/submit",
-        &params,
-        output_format,
-        stdout,
-    )?;
-    Ok(0)
-}
-
-/// Validates and submits one constrained custom toolchain definition or
-/// removal for authenticated settlement by the attached primary client.
-fn submit_custom_toolchain_mutation<W: Write>(
-    socket_selection: &SocketSelection,
-    interactive: bool,
-    output_format: CliOutputFormat,
-    stdout: &mut W,
-    command: SandboxCustomToolchainCommand,
-) -> Result<u8> {
-    let (operation, name, definition, disable, yes) = match command {
-        SandboxCustomToolchainCommand::Define {
-            name,
-            roots,
-            path_entries,
-            required_executables,
-            environment,
-            description,
-            yes,
-        } => {
-            let name = CustomToolchainName::parse(&name)
-                .map_err(|error| MezError::invalid_args(error.message()))?;
-            let mut environment_values = std::collections::BTreeMap::new();
-            for entry in environment {
-                let (variable, reference) = entry.split_once('=').ok_or_else(|| {
-                    MezError::invalid_args(
-                        "custom toolchain --env-root must use NAME=<root-index>:<path>",
-                    )
-                })?;
-                if environment_values
-                    .insert(variable.to_string(), reference.to_string())
-                    .is_some()
-                {
-                    return Err(MezError::invalid_args(
-                        "custom toolchain definition contains a duplicate environment variable",
-                    ));
-                }
-            }
-            let definition = CustomToolchainDefinition::new(
-                description,
-                roots,
-                path_entries,
-                required_executables,
-                environment_values,
-            )
-            .map_err(|error| MezError::invalid_args(error.message()))?;
-            ("define", name, Some(definition), false, yes)
-        }
-        SandboxCustomToolchainCommand::Remove { name, disable, yes } => {
-            let name = CustomToolchainName::parse(name.strip_prefix("custom:").unwrap_or(&name))
-                .map_err(|error| MezError::invalid_args(error.message()))?;
-            ("remove", name, None, disable, yes)
-        }
-    };
-    let digest =
-        normalized_custom_toolchain_mutation_digest(operation, &name, definition.as_ref(), disable);
-    let definition_json = definition.as_ref().map(|definition| {
-        serde_json::json!({
-            "description": definition.description,
-            "roots": definition.roots,
-            "path_entries": definition.path_entries.iter().map(|reference| reference.as_str()).collect::<Vec<_>>(),
-            "required_executables": definition.required_executables.iter().map(|reference| reference.as_str()).collect::<Vec<_>>(),
-            "environment": definition.environment.iter().map(|(variable, reference)| (variable.clone(), reference.as_str())).collect::<std::collections::BTreeMap<_, _>>(),
-        })
-    });
-    if !yes {
-        let message = if interactive {
-            format!(
-                "Review the {operation} request for {} and rerun with --yes; the attached primary client must still approve it.",
-                name.selector(),
-            )
-        } else {
-            "Noninteractive custom toolchain mutation requires --yes.".to_string()
-        };
-        if output_format.is_json() {
-            writeln!(
-                stdout,
-                "{}",
-                serde_json::json!({
-                    "operation": operation,
-                    "selector": name.selector(),
-                    "definition": definition_json,
-                    "disable": disable,
-                    "request_digest": digest,
-                    "confirmation_required": true,
-                    "applied": false,
-                    "message": message,
-                })
-            )?;
-        } else {
-            writeln!(stdout, "{message}")?;
-        }
-        return Ok(1);
-    }
-    let mut params = serde_json::json!({
-        "operation": operation,
-        "name": name.name(),
-        "disable": disable,
-        "request_digest": digest,
-        "idempotency_key": cli_idempotency_key("toolchain-custom-mutation-submit"),
-    });
-    if let Some(definition) = definition_json {
-        let object = params.as_object_mut().ok_or_else(|| {
-            MezError::invalid_state("custom toolchain request must be a JSON object")
-        })?;
-        let definition = definition.as_object().ok_or_else(|| {
-            MezError::invalid_state("custom toolchain definition must be a JSON object")
-        })?;
-        object.extend(definition.clone());
-    }
-    run_automation_control_request(
-        socket_selection,
-        "toolchain/mutation/submit",
-        &params.to_string(),
-        output_format,
-        stdout,
-    )?;
-    Ok(0)
-}
-
-#[derive(Debug)]
-struct RustToolchainDetection {
-    discovery: RustToolchainHomeDiscovery,
-}
-
-#[derive(Debug)]
-enum DirectToolchainDetection {
-    Rust(RustToolchainDetection),
-    Zig(Option<PathBuf>),
-    Go(Option<PathBuf>),
-    Deno(Option<PathBuf>),
-    Bun(Option<PathBuf>),
-    Node(Option<PathBuf>),
-    Python(Option<PathBuf>),
-    Jdk(Option<PathBuf>),
-    Maven(Option<PathBuf>),
-    Gradle(Option<PathBuf>),
-    Dotnet(Option<PathBuf>),
-    Dart(Option<PathBuf>),
-    Kotlin(Option<PathBuf>),
-    Ruby(Option<PathBuf>),
-    Php(Option<PathBuf>),
-    Composer(Option<PathBuf>),
-    Erlang(Option<PathBuf>),
-    Elixir(Option<PathBuf>),
-    Ghc(Option<PathBuf>),
-    Cabal(Option<PathBuf>),
-    Stack(Option<PathBuf>),
-    Ocaml(Option<PathBuf>),
-    Llvm(Option<PathBuf>),
-    Gcc(Option<PathBuf>),
-    Cmake(Option<PathBuf>),
-    Ninja(Option<PathBuf>),
-    Meson(Option<PathBuf>),
-    Swift(Option<PathBuf>),
-}
-
-impl DirectToolchainDetection {
-    fn available(&self) -> bool {
-        match self {
-            Self::Rust(detection) => detection.discovery.available(),
-            Self::Zig(root) => root.is_some(),
-            Self::Go(root) => root.is_some(),
-            Self::Deno(root) => root.is_some(),
-            Self::Bun(root) => root.is_some(),
-            Self::Node(root) => root.is_some(),
-            Self::Python(root) => root.is_some(),
-            Self::Jdk(root) => root.is_some(),
-            Self::Maven(root) => root.is_some(),
-            Self::Gradle(root) => root.is_some(),
-            Self::Dotnet(root) => root.is_some(),
-            Self::Dart(root) => root.is_some(),
-            Self::Kotlin(root) => root.is_some(),
-            Self::Ruby(root) => root.is_some(),
-            Self::Php(root) => root.is_some(),
-            Self::Composer(root) => root.is_some(),
-            Self::Erlang(root) => root.is_some(),
-            Self::Elixir(root) => root.is_some(),
-            Self::Ghc(root) => root.is_some(),
-            Self::Cabal(root) => root.is_some(),
-            Self::Stack(root) => root.is_some(),
-            Self::Ocaml(root) => root.is_some(),
-            Self::Llvm(root) => root.is_some(),
-            Self::Gcc(root) => root.is_some(),
-            Self::Cmake(root) => root.is_some(),
-            Self::Ninja(root) => root.is_some(),
-            Self::Meson(root) => root.is_some(),
-            Self::Swift(root) => root.is_some(),
-        }
-    }
-
-    const fn kind(&self) -> SandboxToolchainKind {
-        match self {
-            Self::Rust(_) => SandboxToolchainKind::Rust,
-            Self::Zig(_) => SandboxToolchainKind::Zig,
-            Self::Go(_) => SandboxToolchainKind::Go,
-            Self::Deno(_) => SandboxToolchainKind::Deno,
-            Self::Bun(_) => SandboxToolchainKind::Bun,
-            Self::Node(_) => SandboxToolchainKind::Node,
-            Self::Python(_) => SandboxToolchainKind::Python,
-            Self::Jdk(_) => SandboxToolchainKind::Jdk,
-            Self::Maven(_) => SandboxToolchainKind::Maven,
-            Self::Gradle(_) => SandboxToolchainKind::Gradle,
-            Self::Dotnet(_) => SandboxToolchainKind::Dotnet,
-            Self::Dart(_) => SandboxToolchainKind::Dart,
-            Self::Kotlin(_) => SandboxToolchainKind::Kotlin,
-            Self::Ruby(_) => SandboxToolchainKind::Ruby,
-            Self::Php(_) => SandboxToolchainKind::Php,
-            Self::Composer(_) => SandboxToolchainKind::Composer,
-            Self::Erlang(_) => SandboxToolchainKind::Erlang,
-            Self::Elixir(_) => SandboxToolchainKind::Elixir,
-            Self::Ghc(_) => SandboxToolchainKind::Ghc,
-            Self::Cabal(_) => SandboxToolchainKind::Cabal,
-            Self::Stack(_) => SandboxToolchainKind::Stack,
-            Self::Ocaml(_) => SandboxToolchainKind::Ocaml,
-            Self::Llvm(_) => SandboxToolchainKind::Llvm,
-            Self::Gcc(_) => SandboxToolchainKind::Gcc,
-            Self::Cmake(_) => SandboxToolchainKind::Cmake,
-            Self::Ninja(_) => SandboxToolchainKind::Ninja,
-            Self::Meson(_) => SandboxToolchainKind::Meson,
-            Self::Swift(_) => SandboxToolchainKind::Swift,
-        }
-    }
-}
-
-fn detect_direct_toolchain(
-    kind: SandboxToolchainKind,
-    env: &CliEnv,
-    project_root: Option<&Path>,
-) -> Result<DirectToolchainDetection> {
-    match kind {
-        SandboxToolchainKind::Rust => discover_rust_from_home(env.home.as_deref())
-            .map(|discovery| DirectToolchainDetection::Rust(RustToolchainDetection { discovery }))
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Zig => discover_zig_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Zig)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Go => discover_go_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Go)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Deno => discover_deno_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Deno)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Bun => discover_bun_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Bun)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Node => discover_node_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Node)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Python => discover_python_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Python)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Jdk => discover_jdk_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Jdk)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Maven => {
-            if let Some(project_root) = project_root
-                && let Some(wrapper) = discover_jvm_project_wrapper(project_root, kind)
-                    .map_err(|error| MezError::invalid_state(error.to_string()))?
-            {
-                return Ok(DirectToolchainDetection::Maven(Some(wrapper.host_path)));
-            }
-            discover_maven_from_search_path(env.path.as_deref())
-                .map(DirectToolchainDetection::Maven)
-                .map_err(|error| MezError::invalid_state(error.to_string()))
-        }
-        SandboxToolchainKind::Gradle => {
-            if let Some(project_root) = project_root
-                && let Some(wrapper) = discover_jvm_project_wrapper(project_root, kind)
-                    .map_err(|error| MezError::invalid_state(error.to_string()))?
-            {
-                return Ok(DirectToolchainDetection::Gradle(Some(wrapper.host_path)));
-            }
-            discover_gradle_from_search_path(env.path.as_deref())
-                .map(DirectToolchainDetection::Gradle)
-                .map_err(|error| MezError::invalid_state(error.to_string()))
-        }
-        SandboxToolchainKind::Dotnet => discover_dotnet_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Dotnet)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Dart => discover_dart_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Dart)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Kotlin => discover_kotlin_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Kotlin)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Ruby => discover_ruby_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Ruby)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Php => discover_php_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Php)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Composer => discover_composer_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Composer)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Erlang => discover_erlang_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Erlang)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Elixir => discover_elixir_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Elixir)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Ghc => discover_ghc_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Ghc)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Cabal => discover_cabal_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Cabal)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Stack => discover_stack_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Stack)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Ocaml => {
-            let project_root = project_root.ok_or_else(|| {
-                MezError::invalid_state("OCaml detection requires a canonical project root")
-            })?;
-            discover_ocaml_project_environment(project_root)
-                .map(|environment| {
-                    DirectToolchainDetection::Ocaml(
-                        environment.map(|environment| environment.host_path),
-                    )
-                })
-                .map_err(|error| MezError::invalid_state(error.message()))
-        }
-        SandboxToolchainKind::Llvm => discover_llvm_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Llvm)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Gcc => discover_gcc_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Gcc)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Cmake => discover_cmake_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Cmake)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Ninja => discover_ninja_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Ninja)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Meson => discover_meson_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Meson)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-        SandboxToolchainKind::Swift => discover_swift_from_search_path(env.path.as_deref())
-            .map(DirectToolchainDetection::Swift)
-            .map_err(|error| MezError::invalid_state(error.to_string())),
-    }
-}
-
-fn toolchain_result(
-    project_root: PathBuf,
-    detection: DirectToolchainDetection,
-    applied: bool,
-    confirmation_required: bool,
-) -> SandboxToolchainResult {
-    let available = detection.available();
-    let kind = detection.kind();
-    let jdk_root = match &detection {
-        DirectToolchainDetection::Jdk(root) => root.clone(),
-        _ => None,
-    };
-    let maven_root = match &detection {
-        DirectToolchainDetection::Maven(root) => root.clone(),
-        _ => None,
-    };
-    let gradle_root = match &detection {
-        DirectToolchainDetection::Gradle(root) => root.clone(),
-        _ => None,
-    };
-    let dotnet_root = match &detection {
-        DirectToolchainDetection::Dotnet(root) => root.clone(),
-        _ => None,
-    };
-    let dart_root = match &detection {
-        DirectToolchainDetection::Dart(root) => root.clone(),
-        _ => None,
-    };
-    let kotlin_root = match &detection {
-        DirectToolchainDetection::Kotlin(root) => root.clone(),
-        _ => None,
-    };
-    let ruby_root = match &detection {
-        DirectToolchainDetection::Ruby(root) => root.clone(),
-        _ => None,
-    };
-    let php_root = match &detection {
-        DirectToolchainDetection::Php(root) => root.clone(),
-        _ => None,
-    };
-    let composer_root = match &detection {
-        DirectToolchainDetection::Composer(root) => root.clone(),
-        _ => None,
-    };
-    let erlang_root = match &detection {
-        DirectToolchainDetection::Erlang(root) => root.clone(),
-        _ => None,
-    };
-    let elixir_root = match &detection {
-        DirectToolchainDetection::Elixir(root) => root.clone(),
-        _ => None,
-    };
-    let ghc_root = match &detection {
-        DirectToolchainDetection::Ghc(root) => root.clone(),
-        _ => None,
-    };
-    let cabal_root = match &detection {
-        DirectToolchainDetection::Cabal(root) => root.clone(),
-        _ => None,
-    };
-    let stack_root = match &detection {
-        DirectToolchainDetection::Stack(root) => root.clone(),
-        _ => None,
-    };
-    let ocaml_root = match &detection {
-        DirectToolchainDetection::Ocaml(root) => root.clone(),
-        _ => None,
-    };
-    let llvm_root = match &detection {
-        DirectToolchainDetection::Llvm(root) => root.clone(),
-        _ => None,
-    };
-    let gcc_root = match &detection {
-        DirectToolchainDetection::Gcc(root) => root.clone(),
-        _ => None,
-    };
-    let cmake_root = match &detection {
-        DirectToolchainDetection::Cmake(root) => root.clone(),
-        _ => None,
-    };
-    let ninja_root = match &detection {
-        DirectToolchainDetection::Ninja(root) => root.clone(),
-        _ => None,
-    };
-    let meson_root = match &detection {
-        DirectToolchainDetection::Meson(root) => root.clone(),
-        _ => None,
-    };
-    let swift_root = match &detection {
-        DirectToolchainDetection::Swift(root) => root.clone(),
-        _ => None,
-    };
-    let (
-        cargo_bin,
-        rustup_home,
-        zig_root,
-        go_root,
-        deno_root,
-        bun_root,
-        node_root,
-        python_root,
-        sandbox_path,
-    ) = match detection {
-        DirectToolchainDetection::Rust(detection) => (
-            detection.discovery.cargo_bin,
-            detection.discovery.rustup_home,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_RUST_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Zig(root) => (
-            None,
-            None,
-            root,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_ZIG_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Go(root) => (
-            None,
-            None,
-            None,
-            root,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_GO_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Deno(root) => (
-            None,
-            None,
-            None,
-            None,
-            root,
-            None,
-            None,
-            None,
-            SANDBOX_DENO_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Bun(root) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            root,
-            None,
-            None,
-            SANDBOX_BUN_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Node(root) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            root,
-            None,
-            SANDBOX_NODE_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Python(root) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            root,
-            SANDBOX_PYTHON_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Jdk(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_JDK_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Maven(root) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            if root.as_deref() == Some(project_root.as_path()) {
-                SANDBOX_JDK_PATH.to_string()
-            } else {
-                SANDBOX_JDK_MAVEN_PATH.to_string()
-            },
-        ),
-        DirectToolchainDetection::Gradle(root) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            if root.as_deref() == Some(project_root.as_path()) {
-                SANDBOX_JDK_PATH.to_string()
-            } else {
-                SANDBOX_JDK_GRADLE_PATH.to_string()
-            },
-        ),
-        DirectToolchainDetection::Dotnet(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_DOTNET_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Dart(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_DART_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Kotlin(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_KOTLIN_JDK_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Ruby(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_RUBY_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Php(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_PHP_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Composer(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_PHP_COMPOSER_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Erlang(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_ERLANG_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Elixir(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_ERLANG_ELIXIR_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Ghc(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_GHC_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Cabal(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_GHC_CABAL_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Stack(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_GHC_STACK_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Ocaml(root) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            root.as_deref()
-                .map_or_else(|| "_opam".to_string(), |path| path.display().to_string()),
-        ),
-        DirectToolchainDetection::Llvm(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_LLVM_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Gcc(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_GCC_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Cmake(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_CMAKE_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Ninja(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_NINJA_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Meson(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_MESON_PATH.to_string(),
-        ),
-        DirectToolchainDetection::Swift(_) => (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            SANDBOX_SWIFT_PATH.to_string(),
-        ),
-    };
-    SandboxToolchainResult {
-        version: 1,
-        project_root,
-        kind: kind.as_str(),
-        available,
-        cargo_bin,
-        rustup_home,
-        zig_root,
-        go_root,
-        deno_root,
-        bun_root,
-        node_root,
-        python_root,
-        jdk_root,
-        maven_root,
-        gradle_root,
-        dotnet_root,
-        dart_root,
-        kotlin_root,
-        ruby_root,
-        php_root,
-        composer_root,
-        erlang_root,
-        elixir_root,
-        ghc_root,
-        cabal_root,
-        stack_root,
-        ocaml_root,
-        llvm_root,
-        gcc_root,
-        cmake_root,
-        ninja_root,
-        meson_root,
-        swift_root,
-        sandbox_path,
-        read_only: true,
-        applied,
-        confirmation_required,
-        message: if applied {
-            format!(
-                "{} toolchain projection enabled; live sessions require reload.",
-                kind.as_str()
-            )
-        } else {
-            format!(
-                "{} toolchain detection completed without changing configuration.",
-                kind.as_str()
-            )
-        },
-    }
-}
-
-fn write_toolchain_result<W: Write>(
-    stdout: &mut W,
-    output_format: CliOutputFormat,
-    result: &SandboxToolchainResult,
-) -> Result<()> {
-    if output_format.is_json() {
-        writeln!(stdout, "{}", serialize_json(result)?)?;
-    } else {
-        writeln!(stdout, "kind: {}", result.kind)?;
-        writeln!(stdout, "available: {}", result.available)?;
-        writeln!(
-            stdout,
-            "cargo_bin: {}",
-            result
-                .cargo_bin
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "rustup_home: {}",
-            result
-                .rustup_home
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "zig_root: {}",
-            result
-                .zig_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "go_root: {}",
-            result
-                .go_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "deno_root: {}",
-            result
-                .deno_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "bun_root: {}",
-            result
-                .bun_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "node_root: {}",
-            result
-                .node_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "python_root: {}",
-            result
-                .python_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "jdk_root: {}",
-            result
-                .jdk_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "dotnet_root: {}",
-            result
-                .dotnet_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "dart_root: {}",
-            result
-                .dart_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "kotlin_root: {}",
-            result
-                .kotlin_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "ruby_root: {}",
-            result
-                .ruby_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "php_root: {}",
-            result
-                .php_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "composer_root: {}",
-            result
-                .composer_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "erlang_root: {}",
-            result
-                .erlang_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "elixir_root: {}",
-            result
-                .elixir_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "ghc_root: {}",
-            result
-                .ghc_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "cabal_root: {}",
-            result
-                .cabal_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "stack_root: {}",
-            result
-                .stack_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        writeln!(
-            stdout,
-            "ocaml_root: {}",
-            result
-                .ocaml_root
-                .as_deref()
-                .map_or_else(|| "none".to_string(), |path| path.display().to_string())
-        )?;
-        for (name, root) in [
-            ("llvm_root", result.llvm_root.as_deref()),
-            ("gcc_root", result.gcc_root.as_deref()),
-            ("cmake_root", result.cmake_root.as_deref()),
-            ("ninja_root", result.ninja_root.as_deref()),
-            ("meson_root", result.meson_root.as_deref()),
-            ("swift_root", result.swift_root.as_deref()),
-            ("maven_root", result.maven_root.as_deref()),
-            ("gradle_root", result.gradle_root.as_deref()),
-        ] {
-            writeln!(
-                stdout,
-                "{name}: {}",
-                root.map_or_else(|| "none".to_string(), |path| path.display().to_string())
-            )?;
-        }
-        writeln!(stdout, "sandbox_path: {}", result.sandbox_path)?;
-        writeln!(stdout, "read_only: {}", result.read_only)?;
-        writeln!(stdout, "applied: {}", result.applied)?;
-        writeln!(
-            stdout,
-            "confirmation_required: {}",
-            result.confirmation_required
-        )?;
-        writeln!(stdout, "message: {}", result.message)?;
-    }
-    Ok(())
 }

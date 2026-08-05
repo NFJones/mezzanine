@@ -439,7 +439,7 @@ pub(super) fn agent_argument_candidates(
 /// Builds parser-aligned candidates for one `/sandbox` argument position.
 fn sandbox_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
     let Some(operation) = context.tokens_before.get(1).map(String::as_str) else {
-        return value_candidates(&["status", "enable", "disable", "trust", "toolchains"]);
+        return value_candidates(&["status", "enable", "disable", "trust"]);
     };
     match operation {
         "status" if context.tokens_before.len() == 2 => flag_candidates(&["--global"]),
@@ -451,84 +451,6 @@ fn sandbox_argument_candidates(context: &SelectorTokenContext) -> Vec<SelectorCa
         "trust" if context.tokens_before.len() == 2 => {
             value_candidates(&["latest", "list", "pending"])
         }
-        "toolchains" => toolchain_argument_candidates(context, 2),
-        _ => Vec::new(),
-    }
-}
-
-/// Builds parser-aligned candidates for nested sandbox toolchain arguments.
-fn toolchain_argument_candidates(
-    context: &SelectorTokenContext,
-    operation_index: usize,
-) -> Vec<SelectorCandidate> {
-    const BUILT_INS: &[&str] = &[
-        "rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "maven", "gradle", "dotnet",
-        "dart", "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack",
-        "ocaml", "llvm", "gcc", "cmake", "ninja", "meson", "swift",
-    ];
-    let Some(operation) = context
-        .tokens_before
-        .get(operation_index)
-        .map(String::as_str)
-    else {
-        return value_candidates(&[
-            "status", "list", "detect", "define", "enable", "disable", "remove", "reload",
-        ]);
-    };
-    match operation {
-        "status" | "detect" if context.tokens_before.len() == operation_index + 1 => {
-            value_candidates(BUILT_INS)
-        }
-        "enable" | "disable"
-            if context.tokens_before.len() > operation_index
-                && !context.tokens_before.iter().any(|token| token == "--yes") =>
-        {
-            let mut candidates = BUILT_INS
-                .iter()
-                .filter(|selector| {
-                    !context
-                        .tokens_before
-                        .iter()
-                        .any(|token| token == **selector)
-                })
-                .flat_map(|selector| value_candidates(&[*selector]))
-                .collect::<Vec<_>>();
-            if context.tokens_before.len() > operation_index + 1 {
-                candidates.extend(flag_candidates(&["--yes"]));
-            }
-            candidates
-        }
-        "define" if context.tokens_before.len() >= operation_index + 2 => {
-            if context.tokens_before.last().is_some_and(|token| {
-                matches!(
-                    token.as_str(),
-                    "--root" | "--path" | "--require" | "--env-root" | "--description"
-                )
-            }) {
-                return Vec::new();
-            }
-            let singleton_flags = ["--description", "--yes"];
-            [
-                "--root",
-                "--path",
-                "--require",
-                "--env-root",
-                "--description",
-                "--yes",
-            ]
-            .into_iter()
-            .filter(|flag| {
-                !singleton_flags.contains(flag)
-                    || !context.tokens_before.iter().any(|token| token == flag)
-            })
-            .flat_map(|flag| flag_candidates(&[flag]))
-            .collect()
-        }
-        "remove" if context.tokens_before.len() >= operation_index + 2 => ["--disable", "--yes"]
-            .into_iter()
-            .filter(|flag| !context.tokens_before.iter().any(|token| token == flag))
-            .flat_map(|flag| flag_candidates(&[flag]))
-            .collect(),
         _ => Vec::new(),
     }
 }

@@ -77,31 +77,6 @@ impl SelectorExtraCandidate {
             candidate,
         }
     }
-
-    /// Builds a candidate restricted to a nested subcommand argument.
-    pub fn after_nested_subcommand(
-        surface: SelectorSurface,
-        command: impl Into<String>,
-        subcommand: impl Into<String>,
-        nested_subcommand: impl Into<String>,
-        token_bounds: (usize, Option<usize>),
-        terminal_token: Option<&str>,
-        candidate: SelectorCandidate,
-    ) -> Self {
-        Self {
-            surface,
-            command: command.into(),
-            preceding_option: None,
-            subcommand_slot: Some(SelectorExtraCandidateSubcommandSlot {
-                subcommand: subcommand.into(),
-                nested_subcommand: Some(nested_subcommand.into()),
-                minimum_tokens_before: token_bounds.0,
-                maximum_tokens_before: token_bounds.1,
-                terminal_token: terminal_token.map(str::to_string),
-            }),
-            candidate,
-        }
-    }
 }
 
 /// Starts active selection from one product-authored plan.
@@ -307,7 +282,7 @@ fn parameter_shadow_hint(
 fn sandbox_parameter_shadow_text(context: &SelectorTokenContext) -> Option<String> {
     let arguments = context.tokens_before.get(1..)?;
     match arguments {
-        [] => Some(" <status|enable|disable|trust|toolchains>".to_string()),
+        [] => Some(" <status|enable|disable|trust>".to_string()),
         [operation] if operation == "status" => Some(" [--global]".to_string()),
         [operation] if operation == "enable" || operation == "disable" => {
             Some(" --yes [--global]".to_string())
@@ -321,74 +296,6 @@ fn sandbox_parameter_shadow_text(context: &SelectorTokenContext) -> Option<Strin
         [operation] if operation == "trust" => {
             Some(" [project-root|latest|list|pending]".to_string())
         }
-        [operation, ..] if operation == "toolchains" => toolchain_parameter_shadow_text(context, 2),
-        _ => None,
-    }
-}
-
-/// Returns a position-sensitive hint for nested sandbox toolchain grammar.
-fn toolchain_parameter_shadow_text(
-    context: &SelectorTokenContext,
-    operation_index: usize,
-) -> Option<String> {
-    let arguments = context.tokens_before.get(operation_index..)?;
-    match arguments {
-        [] => Some(
-            " <status|list|detect|define|enable|disable|remove|reload>".to_string(),
-        ),
-        [operation] if operation == "status" || operation == "detect" => {
-            Some(" [SELECTOR]".to_string())
-        }
-        [operation] if operation == "enable" || operation == "disable" => {
-            Some(" <SELECTOR...> --yes".to_string())
-        }
-        [operation, rest @ ..]
-            if (operation == "enable" || operation == "disable")
-                && !rest.iter().any(|token| token == "--yes") =>
-        {
-            Some(" [SELECTOR...] --yes".to_string())
-        }
-        [operation] if operation == "define" => Some(
-            " <NAME> --root <PATH> --path <REF> [--require <REF>] [--env-root <NAME=REF>] [--description <TEXT>] --yes"
-                .to_string(),
-        ),
-        [operation, _name, rest @ ..] if operation == "define" => {
-            match rest.last().map(String::as_str) {
-                Some("--root") => Some(" <absolute-path>".to_string()),
-                Some("--path" | "--require") => {
-                    Some(" <root-index:relative-path>".to_string())
-                }
-                Some("--env-root") => {
-                    Some(" <NAME=root-index:relative-path>".to_string())
-                }
-                Some("--description") => Some(" <text>".to_string()),
-                Some("--yes") => None,
-                _ => {
-                    let mut flags = vec!["--root", "--path", "--require", "--env-root"];
-                    if !rest.iter().any(|token| token == "--description") {
-                        flags.push("--description");
-                    }
-                    if !rest.iter().any(|token| token == "--yes") {
-                        flags.push("--yes");
-                    }
-                    (!flags.is_empty()).then(|| format!(" <{}>", flags.join("|")))
-                }
-            }
-        }
-        [operation] if operation == "remove" => {
-            Some(" <custom:NAME> [--disable] --yes".to_string())
-        }
-        [operation, _selector, rest @ ..] if operation == "remove" => {
-            let disable = !rest.iter().any(|token| token == "--disable");
-            let yes = !rest.iter().any(|token| token == "--yes");
-            match (disable, yes) {
-                (true, true) => Some(" [--disable] --yes".to_string()),
-                (true, false) => Some(" [--disable]".to_string()),
-                (false, true) => Some(" --yes".to_string()),
-                (false, false) => None,
-            }
-        }
-        [operation] if operation == "list" || operation == "reload" => None,
         _ => None,
     }
 }
