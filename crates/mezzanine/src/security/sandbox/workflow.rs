@@ -476,9 +476,6 @@ mod tests {
             env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
             git_user_name: None,
             git_user_email: None,
-            toolchains: Vec::new(),
-            toolchain_selections: Vec::new(),
-            custom_toolchains: std::collections::BTreeMap::new(),
         });
         let discovery = ProjectRootDiscovery {
             canonical_start: project.clone(),
@@ -534,9 +531,6 @@ mod tests {
                 env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
                 git_user_name: None,
                 git_user_email: None,
-                toolchains: Vec::new(),
-                toolchain_selections: Vec::new(),
-                custom_toolchains: std::collections::BTreeMap::new(),
             }),
             ..ConfiguredPermissions::default()
         };
@@ -584,9 +578,6 @@ mod tests {
             env_whitelist: crate::runtime::ConfiguredSandboxEnvironment::default(),
             git_user_name: None,
             git_user_email: None,
-            toolchains: Vec::new(),
-            toolchain_selections: Vec::new(),
-            custom_toolchains: std::collections::BTreeMap::new(),
         });
         let discovery = ProjectRootDiscovery {
             canonical_start: root.to_path_buf(),

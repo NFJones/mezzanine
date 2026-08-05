@@ -10,6 +10,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::linux::net::SocketAddrExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use std::os::unix::net::{SocketAddr, UnixListener};
 use std::path::{Path, PathBuf};
@@ -287,7 +288,6 @@ fn real_plan(
         command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
         managed_home: None,
         pane_home_directory: None,
-        toolchain_projection: None,
         stateful: false,
         interactive: false,
     })
@@ -355,6 +355,48 @@ fn real_bubblewrap_enforces_maximum_authority_and_isolation() {
         "visible\n"
     );
     assert!(!fixture.host_home.join("inside.txt").exists());
+}
+
+/// Proves a generic external SDK granted only read authority can execute its
+/// binary by absolute path without gaining write access to the SDK root.
+#[test]
+fn real_bubblewrap_executes_read_scoped_binary_by_absolute_path() {
+    let config = config();
+    let Some(capability) = verified_capability(&config) else {
+        return;
+    };
+    let fixture = RealBubblewrapFixture::new("read-scoped-executable");
+    let sdk_root = fixture.root.join("external-sdk");
+    let sdk_bin = sdk_root.join("bin");
+    let executable = sdk_bin.join("acme");
+    fs::create_dir_all(&sdk_bin).unwrap();
+    fs::write(&executable, "#!/bin/sh\nprintf '%s\\n' ACME_SDK_OK\n").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut unknown = effects();
+    unknown.unknown = true;
+    let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
+    let authority = fixture.authority_with_additional_reads(&[sdk_root.as_path()]);
+    let plan = real_plan(&config, capability, &authority, &evaluation);
+    let command = format!(
+        "set -eu\n\
+         test \"$PATH\" = /usr/bin:/bin\n\
+         {}\n\
+         if printf forbidden > {}/forbidden.txt 2>/dev/null; then exit 41; fi\n\
+         printf '%s\\n' REAL_BWRAP_SCOPED_EXECUTABLE_OK",
+        shell_quote(&executable),
+        shell_quote(&sdk_root),
+    );
+
+    let output = execute_plan(plan, &command);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ACME_SDK_OK") && stdout.contains("REAL_BWRAP_SCOPED_EXECUTABLE_OK"),
+        "status={:?} stdout={stdout:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!sdk_root.join("forbidden.txt").exists());
 }
 
 /// Proves a configured exact Unix socket beneath the protected user-runtime
@@ -500,95 +542,6 @@ fn real_bubblewrap_authorized_network_uses_connected_profile() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("REAL_BWRAP_CONNECTED_OK"),
-        "status={:?} stdout={stdout:?} stderr={:?}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-/// Proves the production Bubblewrap launch can execute the selected host Rust
-/// toolchain while Cargo credentials and configuration remain outside the
-/// projected filesystem.
-fn real_bubblewrap_projects_read_only_rust_toolchain() {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        eprintln!("skipping real Bubblewrap Rust test: HOME is unavailable");
-        return;
-    };
-    let cargo_bin = home.join(".cargo/bin");
-    let rustup_home = home.join(".rustup");
-    if !cargo_bin.join("cargo").exists() || !rustup_home.is_dir() {
-        eprintln!("skipping real Bubblewrap Rust test: rustup-managed Cargo is unavailable");
-        return;
-    }
-    let Ok(cargo_bin) = cargo_bin.canonicalize() else {
-        eprintln!("skipping real Bubblewrap Rust test: Cargo bin cannot be canonicalized");
-        return;
-    };
-    let Ok(rustup_home) = rustup_home.canonicalize() else {
-        eprintln!("skipping real Bubblewrap Rust test: Rustup home cannot be canonicalized");
-        return;
-    };
-    let mut config = config();
-    config.toolchains = vec![SandboxToolchainKind::Rust];
-    let Some(capability) = verified_capability(&config) else {
-        return;
-    };
-    let fixture = RealBubblewrapFixture::new("rust-toolchain");
-    let mut unknown = effects();
-    unknown.unknown = true;
-    let evaluation = evaluation(EffectCompleteness::Unknown, unknown);
-    let managers = [
-        format!("cargo-bin:{}", cargo_bin.display()),
-        format!("rustup:{}", rustup_home.display()),
-    ];
-    let projection = resolve_toolchain_projection(&config.toolchains, &managers, "linux")
-        .unwrap()
-        .unwrap();
-    let authority =
-        fixture.authority_with_additional_reads(&[cargo_bin.as_path(), rustup_home.as_path()]);
-    let environment = identity::current_process_environment_signature().unwrap();
-    let plan = compile_bubblewrap_launch_plan(BubblewrapCompileRequest {
-        config: &config,
-        identity: resolve_sandbox_identity(&config.group_whitelist, &environment).unwrap(),
-        capability,
-        pane_environment_signature: "real-linux-pane-environment",
-        environment_evidence: Box::leak(Box::new(
-            mez_agent::shell::PaneEnvironmentEvidence::restrictive(
-                &mez_agent::shell::PaneEnvironmentRequest::new(
-                    config.env_whitelist.requested_names.clone(),
-                )
-                .unwrap(),
-                "test_default",
-            ),
-        )),
-        network_policy: NetworkPolicy::Prompt,
-        maximum_authority: &authority,
-        permission_evaluation: &evaluation,
-        preserve_maximum_authority: false,
-        child_shell_path: "/bin/sh",
-        command_file_host_path: BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
-        managed_home: None,
-        pane_home_directory: None,
-        toolchain_projection: Some(&projection),
-        stateful: false,
-        interactive: false,
-    })
-    .unwrap();
-    let output = execute_plan(
-        plan,
-        "set -eu\n\
-         cargo --version\n\
-         rustc --version\n\
-         test \"$CARGO_HOME\" = /home/mez/.cargo\n\
-         test \"$RUSTUP_HOME\" = /opt/mez/toolchains/rust/rustup\n\
-         test ! -e \"$CARGO_HOME/credentials.toml\"\n\
-         test ! -e \"$CARGO_HOME/config.toml\"\n\
-         printf '%s\\n' REAL_BWRAP_RUST_TOOLCHAIN_OK",
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("REAL_BWRAP_RUST_TOOLCHAIN_OK"),
         "status={:?} stdout={stdout:?} stderr={:?}",
         output.status,
         String::from_utf8_lossy(&output.stderr)

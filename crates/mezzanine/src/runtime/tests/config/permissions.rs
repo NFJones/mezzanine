@@ -87,86 +87,6 @@ fn runtime_materializes_only_paired_sanitized_git_identity() {
     assert!(error.message().contains("must be configured together"));
 }
 
-/// Verifies Bubblewrap accepts every allowlisted typed toolchain while
-/// rejecting unsupported and duplicate entries.
-#[test]
-fn runtime_materializes_only_allowlisted_unique_toolchains() {
-    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
-        "permissions": {
-            "sandbox": "bubblewrap",
-            "bubblewrap": {"toolchains": ["rust", "zig", "go", "deno", "bun", "node", "python"]}
-        }
-    }))
-    .unwrap();
-    let SandboxConfig::Bubblewrap(bubblewrap) = configured.sandbox else {
-        panic!("expected Bubblewrap configuration");
-    };
-    assert_eq!(bubblewrap.toolchains.len(), 7);
-    assert_eq!(bubblewrap.toolchains[0].as_str(), "rust");
-    assert_eq!(bubblewrap.toolchains[1].as_str(), "zig");
-    assert_eq!(bubblewrap.toolchains[2].as_str(), "go");
-    assert_eq!(bubblewrap.toolchains[3].as_str(), "deno");
-    assert_eq!(bubblewrap.toolchains[4].as_str(), "bun");
-    assert_eq!(bubblewrap.toolchains[5].as_str(), "node");
-    assert_eq!(bubblewrap.toolchains[6].as_str(), "python");
-
-    for toolchains in [
-        serde_json::json!(["unknown"]),
-        serde_json::json!(["rust", "rust"]),
-    ] {
-        let error = runtime_configured_permissions_from_config(&serde_json::json!({
-            "permissions": {
-                "sandbox": "bubblewrap",
-                "bubblewrap": {"toolchains": toolchains}
-            }
-        }))
-        .unwrap_err();
-        assert!(
-            error.message().contains("unsupported kind")
-                || error.message().contains("must not contain duplicate kinds"),
-            "{error}"
-        );
-    }
-}
-
-/// Verifies schema-v32 custom selections retain closed built-in identities and
-/// materialize bounded root references without consulting the filesystem.
-#[test]
-fn runtime_materializes_typed_custom_toolchain_definitions() {
-    let configured = runtime_configured_permissions_from_config(&serde_json::json!({
-        "permissions": {
-            "sandbox": "bubblewrap",
-            "bubblewrap": {
-                "toolchains": ["rust", "custom:acme"],
-                "custom_toolchains": {
-                    "acme": {
-                        "description": "Acme compiler SDK",
-                        "roots": ["/opt/acme-sdk"],
-                        "path_entries": ["0:bin", "0:tools/bin"],
-                        "required_executables": ["0:bin/acme"],
-                        "environment": {"ACME_HOME": "0:."}
-                    }
-                }
-            }
-        }
-    }))
-    .unwrap();
-    let SandboxConfig::Bubblewrap(bubblewrap) = configured.sandbox else {
-        panic!("expected Bubblewrap configuration");
-    };
-
-    assert_eq!(bubblewrap.toolchains.len(), 1);
-    assert_eq!(bubblewrap.toolchains[0].as_str(), "rust");
-    assert_eq!(bubblewrap.toolchain_selections.len(), 2);
-    assert_eq!(bubblewrap.toolchain_selections[0].as_str(), "rust");
-    assert_eq!(bubblewrap.toolchain_selections[1].as_str(), "custom:acme");
-    let definition = bubblewrap.custom_toolchains.get("acme").unwrap();
-    assert_eq!(definition.roots, vec!["/opt/acme-sdk"]);
-    assert_eq!(definition.path_entries[0].root_index, 0);
-    assert_eq!(definition.path_entries[0].relative_path, "bin");
-    assert_eq!(definition.environment["ACME_HOME"].relative_path, ".");
-}
-
 /// Verifies configured Bubblewrap remains active for full access but becomes
 /// ineffective only while the primary-user host-access policy is selected.
 #[test]
@@ -997,7 +917,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_dir = root.join(".mezzanine");
     fs::create_dir_all(&overlay_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(&overlay_path, "version = 50\n[history]\nlines = 7\n").unwrap();
+    fs::write(&overlay_path, "version = 51\n[history]\nlines = 7\n").unwrap();
     let trust_path = root.join("trust.tsv");
     service.set_project_trust_store(ProjectTrustStore::default(), Some(trust_path.clone()));
     let initial_report = service
@@ -1188,7 +1108,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_dir = root.join(".mezzanine");
     fs::create_dir_all(&overlay_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(&overlay_path, "version = 50\n[history]\nlines = 11\n").unwrap();
+    fs::write(&overlay_path, "version = 51\n[history]\nlines = 11\n").unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);
     let initial_report = service
         .replace_config_layers(vec![

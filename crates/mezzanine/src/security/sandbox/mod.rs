@@ -24,7 +24,6 @@ use mez_agent::permissions::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::runtime::SandboxToolchainKind;
 use crate::runtime::{
     BubblewrapConfig, BubblewrapNetworkMode, NetworkPolicy, SandboxEnvironmentPolicy,
     SandboxUnavailablePolicy,
@@ -32,7 +31,6 @@ use crate::runtime::{
 
 mod identity;
 mod managed_home;
-mod toolchains;
 mod workflow;
 
 pub(crate) use identity::{ResolvedSandboxIdentity, resolve_sandbox_identity};
@@ -47,48 +45,13 @@ pub(crate) use managed_home::{
     prepare_bubblewrap_managed_home_for_workload_with_identity, prune_bubblewrap_managed_homes,
     remove_bubblewrap_managed_home,
 };
-pub(crate) use toolchains::{
-    ResolvedToolchainProjection, RustToolchainHomeDiscovery, SANDBOX_BUN_PATH, SANDBOX_CMAKE_PATH,
-    SANDBOX_DART_PATH, SANDBOX_DENO_PATH, SANDBOX_DOTNET_PATH, SANDBOX_ERLANG_ELIXIR_PATH,
-    SANDBOX_ERLANG_PATH, SANDBOX_GCC_PATH, SANDBOX_GHC_CABAL_PATH, SANDBOX_GHC_PATH,
-    SANDBOX_GHC_STACK_PATH, SANDBOX_GO_PATH, SANDBOX_JDK_GRADLE_PATH, SANDBOX_JDK_MAVEN_PATH,
-    SANDBOX_JDK_PATH, SANDBOX_KOTLIN_JDK_PATH, SANDBOX_LLVM_PATH, SANDBOX_MESON_PATH,
-    SANDBOX_NINJA_PATH, SANDBOX_NODE_PATH, SANDBOX_PHP_COMPOSER_PATH, SANDBOX_PHP_PATH,
-    SANDBOX_PYTHON_PATH, SANDBOX_RUBY_PATH, SANDBOX_RUST_PATH, SANDBOX_SWIFT_PATH,
-    SANDBOX_ZIG_PATH, SUPPORTED_SANDBOX_TOOLCHAIN_KINDS, ToolchainDescriptor, ToolchainPlatform,
-    discover_bun_from_search_path, discover_cabal_from_search_path,
-    discover_cmake_from_search_path, discover_composer_from_search_path,
-    discover_dart_from_search_path, discover_deno_from_search_path,
-    discover_dotnet_from_search_path, discover_elixir_from_search_path,
-    discover_erlang_from_search_path, discover_gcc_from_search_path, discover_ghc_from_search_path,
-    discover_go_from_search_path, discover_gradle_from_search_path, discover_jdk_from_search_path,
-    discover_jvm_project_wrapper, discover_kotlin_from_search_path, discover_llvm_from_search_path,
-    discover_maven_from_search_path, discover_meson_from_search_path,
-    discover_ninja_from_search_path, discover_node_from_search_path,
-    discover_ocaml_project_environment, discover_php_from_search_path,
-    discover_python_from_search_path, discover_ruby_from_search_path,
-    discover_rust_from_environment_managers, discover_rust_from_home,
-    discover_stack_from_search_path, discover_swift_from_search_path,
-    discover_zig_from_search_path, parse_sandbox_toolchain_kind,
-    resolve_configured_toolchain_projection_for_project, resolve_toolchain_projection,
-    resolve_toolchain_projection_for_project, toolchain_descriptor,
-};
-#[cfg(test)]
-pub(crate) use toolchains::{
-    SANDBOX_BUN_ROOT, SANDBOX_CABAL_ROOT, SANDBOX_COMPOSER_ROOT, SANDBOX_DART_ROOT,
-    SANDBOX_DENO_ROOT, SANDBOX_DOTNET_ROOT, SANDBOX_ELIXIR_ROOT, SANDBOX_ERLANG_ROOT,
-    SANDBOX_GHC_CABAL_STACK_PATH, SANDBOX_GHC_ROOT, SANDBOX_GO_ROOT, SANDBOX_GRADLE_ROOT,
-    SANDBOX_JDK_ROOT, SANDBOX_KOTLIN_ROOT, SANDBOX_MAVEN_ROOT, SANDBOX_NODE_ROOT, SANDBOX_PHP_ROOT,
-    SANDBOX_PYTHON_ROOT, SANDBOX_RUBY_ROOT, SANDBOX_RUST_CARGO_BIN, SANDBOX_RUSTUP_HOME,
-    SANDBOX_STACK_ROOT, SANDBOX_SWIFT_ROOT, SANDBOX_ZIG_ROOT, ToolchainAuthorityClass,
-};
 pub(crate) use workflow::{
     SandboxDiagnosticSeverity, SandboxWorkflowPlan, SandboxWorkflowRequest,
     effective_sandbox_boundary, plan_sandbox_workflow,
 };
 
 /// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v12";
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v13";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -148,8 +111,6 @@ pub(crate) struct BubblewrapCompileRequest<'a> {
     pub(crate) managed_home: Option<&'a managed_home::BubblewrapManagedHome>,
     /// Canonical pane home whose authorized descendants map below `/home/mez`.
     pub(crate) pane_home_directory: Option<&'a Path>,
-    /// Descriptor-composed toolchain projection resolved from pane bootstrap.
-    pub(crate) toolchain_projection: Option<&'a ResolvedToolchainProjection>,
     /// Whether the command must mutate persistent shell state.
     pub(crate) stateful: bool,
     /// Whether the command requires direct terminal interaction.
@@ -366,8 +327,6 @@ pub(crate) enum SandboxCompileErrorKind {
     UnresolvedEffectPath,
     /// A complete effect requested access outside maximum authority.
     EffectOutsideAuthority,
-    /// A selected toolchain root falls outside maximum read authority.
-    ToolchainOutsideAuthority,
     /// Configuration would expose a forbidden host path.
     ForbiddenHostPath,
     /// The command requires an unsupported sandbox capability.
@@ -392,7 +351,6 @@ impl SandboxCompileErrorKind {
             Self::UnresolvedAuthority => "unresolved_authority",
             Self::UnresolvedEffectPath => "unresolved_effect_path",
             Self::EffectOutsideAuthority => "effect_outside_authority",
-            Self::ToolchainOutsideAuthority => "toolchain_outside_authority",
             Self::ForbiddenHostPath => "forbidden_host_path",
             Self::UnsupportedRequirement => "unsupported_requirement",
             Self::InvalidInput => "invalid_input",
@@ -720,12 +678,6 @@ fn validate_request(request: &BubblewrapCompileRequest<'_>) -> Result<(), Sandbo
     }
     if let Some(home) = request.pane_home_directory {
         validate_canonical_path(&home.to_string_lossy(), "pane home directory")?;
-    }
-    if let Some(toolchains) = request.toolchain_projection {
-        toolchains.validate()?;
-        let effective_read_authority =
-            toolchains.extend_read_authority(request.maximum_authority)?;
-        toolchains.validate_authority(&effective_read_authority)?;
     }
     if !Path::new(request.child_shell_path).starts_with("/bin")
         && !Path::new(request.child_shell_path).starts_with("/usr")
@@ -1217,17 +1169,6 @@ fn bubblewrap_arguments(
         arguments.push("--tmpfs".to_string());
         arguments.push(sandbox_home.clone());
     }
-    if let Some(toolchains) = request.toolchain_projection {
-        for directory in &toolchains.sandbox_directories {
-            arguments.push("--dir".to_string());
-            arguments.push((*directory).to_string());
-        }
-        for root in &toolchains.roots {
-            arguments.push("--ro-bind".to_string());
-            arguments.push(root.host_path.to_string_lossy().into_owned());
-            arguments.push(root.sandbox_destination.to_string());
-        }
-    }
     for mount in &policy.mounts {
         arguments.push(
             match mount.access {
@@ -1288,41 +1229,7 @@ fn bubblewrap_arguments(
                 .map(str::to_string),
         );
     }
-    let executable_path = request
-        .toolchain_projection
-        .map(ResolvedToolchainProjection::executable_path)
-        .unwrap_or_else(|| MINIMAL_PATH.to_string());
-    if let Some(toolchains) = request.toolchain_projection {
-        for (name, value) in &toolchains.environment {
-            arguments.extend(
-                [
-                    "--setenv",
-                    name.as_str(),
-                    rehome_managed_path(value, &sandbox_home).as_str(),
-                ]
-                .into_iter()
-                .map(str::to_string),
-            );
-        }
-        for environment in &toolchains.project_environments {
-            let variable = match environment.kind {
-                SandboxToolchainKind::Python => "VIRTUAL_ENV",
-                SandboxToolchainKind::Ocaml => "OPAM_SWITCH_PREFIX",
-                _ => continue,
-            };
-            arguments.extend(
-                ["--setenv", variable, environment.sandbox_path.as_str()]
-                    .into_iter()
-                    .map(str::to_string),
-            );
-        }
-    }
-    let executable_path = request
-        .environment_evidence
-        .values
-        .get("PATH")
-        .map(String::as_str)
-        .unwrap_or(executable_path.as_str());
+    let executable_path = MINIMAL_PATH;
     arguments.extend(
         [
             "--chdir",

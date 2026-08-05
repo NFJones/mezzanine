@@ -248,8 +248,7 @@ mod config;
 pub(crate) use config::ConfiguredSandboxEnvironment;
 pub(crate) use config::{
     BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, ConfiguredSandboxGroups,
-    CustomToolchainDefinition, CustomToolchainReference, NetworkPolicy, SandboxConfig,
-    SandboxEnvironmentPolicy, SandboxToolchainKind, SandboxUnavailablePolicy, ToolchainSelection,
+    NetworkPolicy, SandboxConfig, SandboxEnvironmentPolicy, SandboxUnavailablePolicy,
     runtime_configured_permissions_from_config,
 };
 /// Exposes the control module boundary.

@@ -68,8 +68,7 @@ pub(super) use model::{
 pub(crate) use permissions::ConfiguredSandboxEnvironment;
 pub(crate) use permissions::{
     BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, ConfiguredSandboxGroups,
-    CustomToolchainDefinition, CustomToolchainReference, NetworkPolicy, SandboxConfig,
-    SandboxEnvironmentPolicy, SandboxToolchainKind, SandboxUnavailablePolicy, ToolchainSelection,
+    NetworkPolicy, SandboxConfig, SandboxEnvironmentPolicy, SandboxUnavailablePolicy,
     bubblewrap_applies_to_policy, runtime_approval_decision_name_to_kind,
     runtime_blocked_approval_request, runtime_config_permission_preset,
     runtime_configured_permissions_from_config, runtime_message_recipient,
