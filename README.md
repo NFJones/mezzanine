@@ -318,7 +318,7 @@ Useful slash commands include:
 | `/list-mcp`    | List configured MCP tools.                            |
 | `/list-personalities` | Browse configured personalities and select one for the active pane. |
 | `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions; persistent memory is enabled by default. |
-| `/sandbox`     | Inspect or change sandbox state for the current pane; use `--global` for persisted enable/disable changes, or the nested `trust` and `toolchains` commands. |
+| `/sandbox`     | Inspect or change sandbox state for the current pane; use `--global` for persisted enable/disable changes, or the nested `trust` command. |
 | `/show-context` | Browse the current pane conversation in transcript order, open individual entries, and delete the selected entry with `d`. |
 | `/show-issues` | Browse open project issues, filter issue records, open details, delete with `d` when no open issue depends on the selection, and save the rendered Markdown view. |
 | `/show-memories` | Browse project-scoped persistent memories, filter records, open details, delete the selection with `d`, and save the rendered Markdown view. |
@@ -436,11 +436,12 @@ Current support reflects behavior implemented in the repository today.
   already-running services at their next trust-sensitive configuration or
   agent operation. Code-owned presets provide safe, automatic, read-only, and
   off modes without exposing these policy changes to agents.
-- `mez sandbox profile export` emits a deterministic versioned JSON recipe
-  containing only a code-owned preset, authority strategy, and allowlisted
-  toolchains. `profile import FILE` previews against an independently resolved
-  local project and requires `--yes`; recipes never carry host paths, trust,
-  credentials, execution controls, arbitrary mounts, or provider state.
+- `mez sandbox profile export` emits a deterministic version-2 JSON recipe
+  containing exactly a code-owned preset and authority strategy. `profile
+  import FILE` previews against an independently resolved local project and
+  requires `--yes`; it rejects version-1, toolchain-bearing, and other unknown
+  fields. Recipes never carry host paths, trust, credentials, execution
+  controls, arbitrary mounts, or provider state.
 - Trusted-project Bubblewrap runs reuse a private Mezzanine-managed home with
   persistent XDG cache, config, data, and state directories. Homes are isolated
   by project and sandbox profile, support overlapping same-project workloads,
@@ -460,10 +461,12 @@ Current support reflects behavior implemented in the repository today.
   overflow GID even though its kernel credential remains active.
 - `permissions.bubblewrap.env_whitelist` selects environment variable names to
   read from the active pane process, including remote panes. It defaults to
-  `["PATH"]`; set it explicitly to `[]` to retain the fixed command-search path.
+  `["PATH"]` for schema compatibility, but forwarded `PATH` cannot replace the
+  fixed `/usr/bin:/bin` command-search path. Set it explicitly to `[]` when no
+  optional pane variables are needed.
   Each unavailable or unsafe value is omitted with a redacted warning while
   Bubblewrap continues with reduced environment data. Values never appear in
-  status or logs and cannot override Mez-owned HOME, XDG, locale,
+  status or logs and cannot override Mez-owned PATH, HOME, XDG, locale,
   identity, shell, or Git isolation variables. Internal semantic `apply_patch`
   phases intentionally use the fixed sandbox environment without resolving or
   forwarding these optional pane values.
@@ -475,71 +478,15 @@ Current support reflects behavior implemented in the repository today.
   a paired sanitized Git name and email; only those identity values are
   projected, while credential helpers, signing keys, includes, URL rewrites,
   hooks, and other host Git settings remain excluded.
-- `mez sandbox toolchains list`, `status [SELECTOR] [PATH]`, and
-  `detect [--kind rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift] [PATH]` inspect effective
-  toolchain configuration and canonical built-in roots without mutation.
-  `enable SELECTOR... --yes` and `disable SELECTOR... --yes` preserve ordered
-  built-in or `custom:<name>` selections. `custom define NAME ... --yes` and
-  `custom remove NAME [--disable] --yes` submit constrained custom-definition
-  changes. Mutations submit an exact digest-bound request to a live service for
-  confirmation in the attached primary client; they do not edit configuration
-  offline or approve their own request. Rust mounts Cargo and Rustup read-only;
-  Zig, Go, Deno, Bun, Node.js, Python, JDK, .NET, Dart, Kotlin/JVM, Ruby, PHP,
-  Composer, Erlang/OTP, Elixir, GHC, Cabal, and Stack mount one
-  self-contained distribution, SDK, or runtime read-only. OCaml projects only
-  project the direct trusted-project `_opam` local switch read-only, prepend its
-  `bin` directory to PATH, and set `OPAM_SWITCH_PREFIX`; global opam state and
-  `opam env` are never used. LLVM/Clang, GCC, CMake, Ninja, and Meson accept
-  only validated standalone roots, mount them read-only at fixed paths, and do
-  not inherit compiler/linker flags or package-manager prefixes. Swift accepts
-  only a validated standalone Linux toolchain, redirects SwiftPM state beneath
-  the managed home, and excludes Apple SDK, signing, simulator, manager,
-  credential, and unrelated native-tool state. JDK projection synthesizes
-  `JAVA_HOME` and includes only the selected SDK. Maven and Gradle require that
-  JDK, prefer validated repository `mvnw` and `gradlew` wrappers, fall back to
-  exact standalone pane evidence, and isolate user homes, caches, wrapper
-  distributions, and daemon state beneath the pane user's synthetic home.
-  Host settings,
-  properties, init scripts, credentials, signing keys, manager homes, and
-  existing daemons remain hidden. Wrapper downloads still use normal sandbox
-  network policy and are never performed during detection. .NET
-  projection synthesizes `DOTNET_ROOT`, redirects CLI and NuGet package state
-  into the managed home, and disables telemetry and first-time setup. It does
-  not expose host NuGet configuration or credentials, global tools, workloads,
-  diagnostic/startup hooks, or unrelated SDKs. Dart redirects `PUB_CACHE` into
-  the managed home and excludes host Pub credentials, globally activated
-  executables, Flutter artifacts, manager state, and unrelated SDKs. Kotlin/JVM
-  requires the selected JDK, mounts only the standalone compiler distribution,
-  and excludes SDKMAN/asdf/mise state, Gradle and Android state, credentials,
-  unrelated compiler versions, and Kotlin/Native or Kotlin/JS tooling. Ruby
-  redirects RubyGems and Bundler state beneath the managed home and excludes
-  host gem credentials, global Bundler configuration, manager state, gemsets,
-  user executable bins, and unrelated runtimes. Composer requires the selected
-  PHP runtime, redirects its home, cache, and vendor state beneath the managed
-  home, and excludes host authentication, global configuration and packages,
-  certificates, private keys, manager state, and unrelated PHP installations.
-  Elixir requires the selected Erlang/OTP runtime, redirects Mix, Hex, and
-  Rebar state beneath the managed home, and excludes host Hex credentials,
-  archives, global Mix tasks, manager state, and unrelated BEAM installations.
-  Cabal and Stack require the selected GHC compiler, redirect package and build
-  state beneath the managed home, disable inherited GHC environment files, and
-  exclude GHCup state, host package stores, Hackage credentials, user bins, and
-  unrelated compiler installations.
-  Enabled custom roots are added to effective read authority and projected
-  read-only only at fixed sandbox paths; they do not add write authority or
-  generic mounts at their original host paths.
-  Writable cache and package state is redirected beneath
-  the pane user's synthetic home; host credentials, caches, Deno authentication and certificate
-  settings, Bun global tools and configuration, npm credentials and global
-  packages, Python package credentials and host caches, `GOBIN`, and
-  `GOPATH/bin` remain hidden. Node.js does not
-  implicitly add repository `node_modules/.bin` to PATH.
-  After submission, enter the displayed
-  `/sandbox toolchains confirm REQUEST DIGEST --yes` command directly in the
-  attached primary client, or reject it with
-  `/sandbox toolchains reject REQUEST DIGEST`. Requests fail closed when the
-  primary is absent, the digest or pane differs, configuration changed, the
-  request expired, or it was already settled.
+- External runtimes and SDKs use ordinary filesystem and environment controls.
+  Add every required installation, loader, or library root to
+  `permissions.read_scopes`; those paths are mounted read-only at their
+  canonical locations. Add only required variable names to
+  `permissions.bubblewrap.env_whitelist`; their values must already exist in
+  the active pane and remain redacted. Tools outside `/usr/bin` and `/bin` must
+  be invoked by absolute path or with a command-local `PATH`. Scoping one SDK
+  does not implicitly expose credentials, host caches, manager state, sockets,
+  dependency roots, or any writable package state.
 - In the agent shell, `/sandbox` and `/sandbox status` report the effective
   backend and its pane-override or global-default provenance. `/sandbox enable
   --yes` and `/sandbox disable --yes` affect only the current pane and do not
@@ -547,25 +494,6 @@ Current support reflects behavior implemented in the repository today.
   panes without local overrides. `/sandbox status --global` inspects only that
   persisted default. Advanced setup, profile, and cache workflows remain
   available only through the `mez sandbox` CLI.
-- `/sandbox toolchains` and `/sandbox toolchains status` report supported,
-  configured, discoverable, and effective toolchain state for the active pane.
-  `/sandbox toolchains detect [rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]`
-  is read-only and uses
-  active-pane bootstrap evidence or the pane's trusted project root for OCaml
-  and Maven/Gradle wrappers.
-  `/sandbox toolchains define NAME ... --yes`, ordered
-  `/sandbox toolchains enable SELECTOR... --yes`,
-  `/sandbox toolchains disable SELECTOR... --yes`,
-  and `/sandbox toolchains remove custom:NAME [--disable] --yes` require direct
-  authenticated primary input. They atomically persist and hot-apply real
-  changes to subsequent sandboxed actions. Existing interactive shells
-  and already-running actions are unchanged. `/sandbox toolchains reload`
-  performs a full disk-backed configuration reload rather than reloading only
-  the toolchain field. Status, list, and detection open structured Markdown in
-  the searchable, copyable command pager. Mutations and reloads use concise
-  transient notices, failures use transient error notices, and
-  `/sandbox toolchains` output is never appended to pane history. Toolchains
-  remain a typed allowlist, not arbitrary PATH or host-mount configuration.
 - Actions can be logged, approved, denied, or interrupted.
 
 ## Advanced Tasks

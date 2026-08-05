@@ -2989,8 +2989,8 @@ logs. Internal semantic `apply_patch` phases MUST NOT resolve or forward these
 optional values; their capability probe and workload compilation MUST use the
 same deterministic digest-bound no-forwarding profile. The fixed sandbox HOME,
 XDG, locale, identity, shell, and Git isolation variables MUST NOT be
-overridden. Forwarded `PATH` MAY replace the fixed command-search fallback for
-ordinary actions. Forwarding MUST NOT grant filesystem, socket, network, group, or
+overridden. Forwarded `PATH` MUST NOT replace the fixed `/usr/bin:/bin`
+command-search path for ordinary actions. Forwarding MUST NOT grant filesystem, socket, network, group, or
 credential authority. The active pane
 shell's primary group MUST remain automatic and MUST NOT be listed. Entries
 MUST be non-empty printable non-numeric group names; duplicate configured
@@ -3145,12 +3145,12 @@ project overlays, macros, and skills; explicit-scope mode MUST NOT change trust.
 The `off` preset MUST retain trust, scopes, approval policy, and managed caches.
 Agents MUST NOT apply these policy mutations through `config_change`.
 
-Sandbox profile export MUST emit a deterministic versioned recipe containing
-only a code-owned preset, an authority strategy, and allowlisted typed
-toolchains. It MUST exclude host paths, trust records, Bubblewrap executable
+Sandbox profile export MUST emit a deterministic version-2 recipe containing
+exactly `version`, a code-owned `preset`, and an `authority` strategy. It MUST exclude host paths, trust records, Bubblewrap executable
 paths, credentials, environment values, command rules, hooks, provider or MCP
 state, arbitrary mounts, and `host-access`. Profile import MUST reject unknown
-or unsupported fields, independently resolve the local project, preview the
+or unsupported fields, including version-1 or toolchain-bearing recipes,
+independently resolve the local project, preview the
 normal guided setup transaction, and require direct-user confirmation with
 `--yes` for noninteractive or JSON mutation. Repository-provided profiles MUST
 never auto-apply, including for trusted projects, and agents MUST NOT import,
@@ -3167,421 +3167,45 @@ When the pair is omitted, repository-local identity MAY remain effective.
 Schema v23 to v24 migration MUST preserve omission and MUST NOT discover or
 invent identity values.
 
-Schema v25 MAY configure an allowlisted read-only toolchain selection. The
-initial supported kind is `rust`. Configuration MUST persist only the typed
-kind and MUST NOT persist arbitrary host paths. `mez sandbox toolchains detect
-[PATH]` MUST be read-only. Enabling a toolchain MUST require direct-user
-confirmation, and noninteractive or JSON mutation MUST require `--yes`.
-Schema v26 adds the allowlisted `zig` kind. Schema v25 to v26 migration MUST
-preserve an existing selection or omission and MUST NOT discover or enable Zig.
-Schema v27 adds the allowlisted `go` kind. Schema v26 to v27 migration MUST
-preserve an existing selection or omission and MUST NOT discover or enable Go.
-Schema v28 adds the allowlisted `deno` kind. Schema v27 to v28 migration MUST
-preserve an existing selection or omission and MUST NOT discover or enable
-Deno. Schema v29 adds the allowlisted `bun` kind. Schema v28 to v29 migration
-MUST preserve an existing selection or omission and MUST NOT discover or
-enable Bun. Schema v30 adds the allowlisted `node` kind. Schema v29 to v30
-migration MUST preserve an existing selection or omission and MUST NOT
-discover or enable Node.js. Schema v31 adds the allowlisted `python` kind.
-Schema v30 to v31 migration MUST preserve an existing selection or omission
-and MUST NOT discover or enable Python. Direct-user detection MUST accept
-`--kind rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift`; omission MUST retain the existing Rust
-default. Active-pane detection, enablement, and status MUST use bootstrap
-evidence rather than ambient service process state, except that OCaml
-detection MUST use only the active pane's trusted project root.
-Schema v32 MAY define constrained custom toolchains in the primary user layer
-under `permissions.bubblewrap.custom_toolchains.<name>` and select them with
-`custom:<name>`. Names MUST match `[a-z][a-z0-9_-]{0,31}` and MUST exclude
-built-in and reserved identities. A definition MUST contain one to eight
-absolute printable roots and one to sixteen root-relative PATH references in
-`<root-index>:<relative-path>` form. It MAY contain up to sixteen required
-executable references, a bounded printable description, and up to sixteen
-synthesized environment references. `0:.` denotes the declared root.
-References MUST reject absolute paths, lexical traversal, invalid root indexes,
-and control characters. Environment names MUST reject `PATH`, `HOME`, `SHELL`,
-`BASH_ENV`, `ENV`, `LD_*`, `DYLD_*`, `GIT_*`, `SSH_*`, and Mezzanine-owned
-variables. Commands, shell hooks, inherited host environment, user-selected
-sandbox destinations, writable mounts, network controls, devices, sockets,
-credentials, and raw Bubblewrap arguments MUST NOT be representable.
-Schema v33 adds the allowlisted `jdk` kind. Schema v32 to v33 migration MUST
-preserve existing built-in and custom selections or omission and MUST NOT
-discover or enable a JDK. Direct-user discovery MUST use only the captured
-search path and accept a non-symlink executable `javac` exactly at
-`<canonical-root>/bin/javac`. Active-pane discovery MUST use exact
-`jdk-runtime:<canonical-root>` bootstrap evidence without invoking SDKMAN,
-asdf, mise, jenv, or other manager hooks and without accepting manager shims.
-The selected root MUST be a complete JDK with real executable `bin/java`,
-`bin/javac`, and `bin/jar` entries plus the expected `lib` directory; JRE-only,
-malformed, symlinked, overlapping, or authority-exceeding roots MUST fail
-closed. The root MUST be mounted read-only at
-`/opt/mez/toolchains/jdk/root`; PATH MUST be exactly
-`/opt/mez/toolchains/jdk/root/bin:/usr/bin:/bin`, and `JAVA_HOME` MUST be
-synthesized as `/opt/mez/toolchains/jdk/root`. Java manager homes, unrelated
-JDKs, preferences, credentials, Maven and Gradle state, arbitrary inherited
-environment, and shell hooks MUST remain excluded.
-Schema v34 adds the allowlisted `dotnet` kind. Schema v33 to v34 migration MUST
-preserve existing built-in and custom selections or omission and MUST NOT
-discover or enable a .NET SDK. Direct-user discovery MUST use only the captured
-search path and accept a non-symlink executable exactly at
-`<canonical-root>/dotnet`. Active-pane discovery MUST use exact
-`dotnet-sdk:<canonical-root>` bootstrap evidence without invoking asdf, mise,
-or other manager hooks and without accepting manager shims. The selected root
-MUST contain a real executable `dotnet` host and real `sdk`, `shared`, and
-`packs` directories. Runtime-only, malformed, symlinked, overlapping, or
-authority-exceeding roots MUST fail closed. The root MUST be mounted read-only
-at `/opt/mez/toolchains/dotnet/root`; PATH MUST be exactly
-`/opt/mez/toolchains/dotnet/root:/usr/bin:/bin`, and `DOTNET_ROOT` MUST name the
-fixed sandbox root. `DOTNET_CLI_HOME` and `NUGET_PACKAGES` MUST point beneath
-the managed home, while telemetry and first-time setup MUST be disabled. Host
-NuGet configuration and credentials, global tools, workloads, diagnostic and
-startup hooks, additional dependency/store paths, inherited environment, and
-unrelated SDKs MUST remain excluded.
-Schema v35 adds the allowlisted `dart` kind. Schema v34 to v35 migration MUST
-preserve existing built-in and custom selections or omission and MUST NOT
-discover or enable a Dart SDK. Direct-user discovery MUST use only the captured
-search path and accept a non-symlink executable exactly at
-`<canonical-root>/bin/dart`. Active-pane discovery MUST use exact
-`dart-sdk:<canonical-root>` bootstrap evidence without invoking asdf, mise,
-Flutter, or other manager hooks and without accepting manager shims. The
-selected root MUST contain a real executable `bin/dart` and a real `lib`
-directory. Incomplete, malformed, symlinked, overlapping, or
-authority-exceeding roots MUST fail closed. The root MUST be mounted read-only
-at `/opt/mez/toolchains/dart/root`; PATH MUST be exactly
-`/opt/mez/toolchains/dart/root/bin:/usr/bin:/bin`, and `PUB_CACHE` MUST point to
-`/home/mez/.cache/dart-pub` in the managed home. Host Pub credentials, globally
-activated executables, Flutter artifacts, manager state, inherited
-environment, and unrelated SDKs MUST remain excluded.
-Schema v36 adds the allowlisted `kotlin` kind for standalone Kotlin/JVM compiler
-distributions. Schema v35 to v36 migration MUST preserve existing built-in and
-custom selections or omission and MUST NOT discover or enable Kotlin. Direct-user
-discovery MUST use only the captured search path and accept a non-symlink
-executable exactly at `<canonical-root>/bin/kotlinc`. Active-pane discovery MUST
-use exact `kotlin-jvm:<canonical-root>` bootstrap evidence without invoking
-SDKMAN, asdf, mise, or other manager hooks and without accepting manager shims.
-The selected root MUST contain real executable `bin/kotlinc` and `bin/kotlin`
-entries and a real `lib` directory. Incomplete, malformed, symlinked,
-overlapping, or authority-exceeding roots MUST fail closed. Selecting `kotlin`
-MUST also require selecting `jdk`; no ambient or `/usr/bin` Java runtime may
-satisfy that dependency. The Kotlin root MUST be mounted read-only at
-`/opt/mez/toolchains/kotlin/root`, the JDK MUST retain its fixed read-only mount,
-PATH MUST be exactly
-`/opt/mez/toolchains/jdk/root/bin:/opt/mez/toolchains/kotlin/root/bin:/usr/bin:/bin`,
-and `JAVA_HOME` MUST remain `/opt/mez/toolchains/jdk/root`. SDKMAN, asdf, and mise
-state; Gradle and Android state; credentials; inherited environment; unrelated
-compiler versions; and Kotlin/Native or Kotlin/JS tooling MUST remain excluded.
-Schema v37 adds the allowlisted `ruby` kind. Schema v36 to v37 migration MUST
-preserve existing built-in and custom selections or omission and MUST NOT
-discover or enable Ruby. Direct-user discovery MUST use only the captured
-search path and accept a non-symlink executable exactly at
-`<canonical-root>/bin/ruby`. Active-pane discovery MUST use exact
-`ruby-runtime:<canonical-root>` bootstrap evidence without invoking rbenv,
-RVM, asdf, mise, or shell hooks and without accepting manager shims. The
-selected root MUST contain real executable `bin/ruby`, `bin/gem`, and
-`bin/bundle` entries and a real `lib/ruby` directory. Incomplete, malformed,
-symlinked, overlapping, or authority-exceeding roots MUST fail closed. The
-root MUST be mounted read-only at `/opt/mez/toolchains/ruby/root`; PATH MUST be
-exactly `/opt/mez/toolchains/ruby/root/bin:/usr/bin:/bin`. `GEM_HOME`,
-`GEM_PATH`, `BUNDLE_USER_HOME`, `BUNDLE_USER_CACHE`, `BUNDLE_USER_CONFIG`, and
-`BUNDLE_USER_PLUGIN` MUST point beneath the managed home. Host gem credentials,
-global Bundler configuration, manager metadata, unrelated versions and
-gemsets, user executable bins, inherited environment, and host caches MUST
-remain excluded. Repository `.bundle/config` remains project-controlled input
-and MUST NOT expand host authority.
-Schema v38 adds the allowlisted `php` and `composer` kinds. Schema v37 to v38
-migration MUST preserve existing built-in and custom selections or omission
-and MUST NOT discover or enable either kind. Direct-user discovery MUST use
-only the captured search path and accept non-symlink executables exactly at
-`<canonical-php-root>/bin/php` and
-`<canonical-composer-root>/bin/composer`. Active-pane discovery MUST use exact
-`php-runtime:<canonical-root>` and `composer-runtime:<canonical-root>`
-bootstrap evidence without invoking asdf, mise, Composer configuration, or
-shell hooks and without accepting manager shims. The PHP root MUST contain a
-real executable `bin/php` and real `lib/php` directory; the Composer root MUST
-contain a real executable `bin/composer`. Incomplete, malformed, symlinked,
-overlapping, or authority-exceeding roots MUST fail closed. Selecting
-`composer` MUST also require selecting `php`; no ambient PHP runtime may
-satisfy that dependency. The roots MUST be mounted read-only at
-`/opt/mez/toolchains/php/root` and `/opt/mez/toolchains/composer/root`; their
-composed PATH MUST be exactly
-`/opt/mez/toolchains/php/root/bin:/opt/mez/toolchains/composer/root/bin:/usr/bin:/bin`.
-`COMPOSER_HOME`, `COMPOSER_CACHE_DIR`, and `COMPOSER_VENDOR_DIR` MUST point
-beneath the managed home. Host `auth.json`, tokens, global Composer
-configuration and packages, certificates, private keys, manager state,
-inherited environment, and unrelated PHP installations MUST remain excluded.
-Schema v39 adds the allowlisted `erlang` and `elixir` kinds. Schema v38 to v39
-migration MUST preserve existing built-in and custom selections or omission
-and MUST NOT discover or enable either kind. Direct-user discovery MUST use
-only the captured search path and accept non-symlink executables exactly at
-`<canonical-erlang-root>/bin/erl` and `<canonical-elixir-root>/bin/elixir`.
-Active-pane discovery MUST use exact `erlang-otp:<canonical-root>` and
-`elixir-runtime:<canonical-root>` bootstrap evidence without invoking asdf,
-mise, shell hooks, Hex, Mix, or Rebar and without accepting manager shims. The
-Erlang root MUST contain real executable `bin/erl`, `bin/erlc`, and
-`bin/escript` entries plus a real `lib/erlang` directory. The Elixir root MUST
-contain real executable `bin/elixir`, `bin/elixirc`, and `bin/mix` entries plus
-a real `lib/elixir` directory. Incomplete, malformed, symlinked, overlapping,
-or authority-exceeding roots MUST fail closed. Selecting `elixir` MUST also
-require selecting `erlang`; no ambient Erlang runtime may satisfy that
-dependency. The roots MUST be mounted read-only at
-`/opt/mez/toolchains/erlang/root` and `/opt/mez/toolchains/elixir/root`; their
-composed PATH MUST be exactly
-`/opt/mez/toolchains/erlang/root/bin:/opt/mez/toolchains/elixir/root/bin:/usr/bin:/bin`.
-`MIX_HOME`, `HEX_HOME`, and `REBAR_CACHE_DIR` MUST point beneath the managed
-home. Host Hex credentials, archives, global Mix tasks, signing material,
-manager state, inherited environment, and unrelated BEAM installations MUST
-remain excluded.
-Schema v40 adds the allowlisted `ghc`, `cabal`, and `stack` kinds. Schema v39
-to v40 migration MUST preserve existing built-in and custom selections or
-omission and MUST NOT discover or enable any Haskell toolchain kind.
-Direct-user discovery MUST use only the captured search path and accept
-non-symlink executables exactly at `<canonical-ghc-root>/bin/ghc`,
-`<canonical-cabal-root>/bin/cabal`, and `<canonical-stack-root>/bin/stack`.
-Active-pane discovery MUST use exact `ghc-compiler:<canonical-root>`,
-`cabal-companion:<canonical-root>`, and `stack-companion:<canonical-root>`
-bootstrap evidence without invoking GHCup, Stack, asdf, mise, shell hooks, or
-package-manager configuration and without accepting manager shims. The GHC
-root MUST contain real executable `bin/ghc`, `bin/ghci`, `bin/runghc`, and
-`bin/ghc-pkg` entries plus a real `lib/ghc` directory. Cabal and Stack roots
-MUST contain their corresponding real executable. Incomplete, malformed,
-symlinked, overlapping, or authority-exceeding roots MUST fail closed.
-Selecting `cabal` or `stack` MUST also require selecting `ghc`; no ambient GHC
-compiler may satisfy that dependency. Roots MUST be mounted read-only at their
-fixed `/opt/mez/toolchains/<kind>/root` destinations, with GHC first, Cabal
-second, Stack third, and `/usr/bin:/bin` last in composed PATH. `CABAL_DIR` and
-`STACK_ROOT` MUST point beneath the managed home, and `GHC_ENVIRONMENT` MUST
-disable inherited environment files. Host package databases, Hackage
-credentials, signing material, GHCup metadata, user executable bins, inherited
-environment, and unrelated compiler installations MUST remain excluded.
-Schema v41 adds the allowlisted `ocaml` kind. Schema v40 to v41 migration MUST
-preserve existing built-in and custom selections or omission and MUST NOT
-discover or enable OCaml. OCaml projection MUST accept only the direct
-`<canonical-trusted-project>/_opam` local switch. It MUST NOT execute `opam
-env`, inspect global `~/.opam` state, accept an unrelated switch, or derive a
-switch from ambient PATH or service environment state. The `_opam` root and
-its `bin`, `lib`, and `share` directories MUST be real contained directories;
-`bin/ocaml`, `bin/ocamlc`, `bin/ocamlopt`, and `bin/dune` MUST be contained
-regular executable files. Symlinked roots, directories, executables, malformed
-layouts, absent trusted-project authority, and authority-exceeding paths MUST
-fail closed. The switch MUST be mounted read-only at its canonical project
-path. Its composed PATH MUST be exactly
-`<canonical-trusted-project>/_opam/bin:/usr/bin:/bin`, and
-`OPAM_SWITCH_PREFIX` MUST equal `<canonical-trusted-project>/_opam`.
-Schema v42 adds the allowlisted `llvm`, `gcc`, `cmake`, `ninja`, and `meson`
-kinds. Schema v41 to v42 migration MUST preserve existing built-in and custom
-selections or omission and MUST NOT discover or enable native tooling. Direct
-discovery MUST accept only real executables inside validated standalone roots;
-active-pane discovery MUST use exact `llvm-toolchain`, `gcc-toolchain`,
-`cmake-toolchain`, `ninja-toolchain`, and `meson-toolchain` bootstrap evidence.
-The roots MUST contain their descriptor-required executables and distribution
-directories and remain non-overlapping. Enabling a selected root MUST add it to
-effective read authority only for its fixed read-only
-`/opt/mez/toolchains/<kind>/root` projection.
-Explicit multi-kind selection MUST compose PATH in descriptor order followed
-by `/usr/bin:/bin`. Mezzanine MUST NOT inherit `CC`, `CXX`, `CFLAGS`,
-`CPPFLAGS`, `LDFLAGS`, plugin or sysroot variables, Homebrew/Linuxbrew state,
-Conan/vcpkg state, package-manager credentials, or unrelated user tools.
-Schema v43 adds the allowlisted `swift` kind. Schema v42 to v43 migration MUST
-preserve existing built-in and custom selections or omission and MUST NOT
-discover or enable Swift. Swift projection MUST support Linux only and MUST use
-an exact `swift-toolchain` active-pane bootstrap root or direct captured-PATH
-discovery. Its canonical standalone root MUST contain real executable
-`bin/swift`, `bin/swiftc`, `bin/swift-package`, and `bin/sourcekit-lsp` files
-and a real `lib/swift/linux` directory. It MUST be mounted read-only at
-`/opt/mez/toolchains/swift/root`, and its PATH MUST be exactly
-`/opt/mez/toolchains/swift/root/bin:/usr/bin:/bin`. SwiftPM mutable state MUST
-be redirected beneath the managed home. Apple/Xcode SDKs, signing and simulator
-state, swiftenv/asdf/mise homes, host package credentials, arbitrary inherited
-compiler or linker flags, unrelated native prefixes, and discovered host roots
-MUST NOT be exposed or persisted.
-Schema v44 adds the allowlisted `maven` and `gradle` kinds. Schema v43 to v44
-migration MUST preserve existing built-in and custom selections or omission and
-MUST NOT discover or enable either build tool. Both kinds MUST require an
-explicitly selected JDK. Detection MUST prefer a real executable repository-root
-`mvnw` or `gradlew` under trusted project authority with its real wrapper
-
 Schema v45 removes the inert `permissions.trusted_directories` and
 `permissions.trusted_projects` fields. The v44 to v45 primary-config migration
 MUST remove both fields without creating or altering durable project-trust
 records.
-properties file and one credential-free HTTPS `distributionUrl`. Symlinks,
-malformed or duplicate URLs, embedded credentials, fragments, and missing
-metadata MUST fail closed. Detection MUST NOT download wrapper distributions or
-grant network access. If no wrapper exists, exact `maven-runtime` or
-`gradle-runtime` pane evidence and captured-PATH discovery MAY select a validated
-standalone distribution mounted read-only at its fixed root. Maven local state
-MUST use `/home/mez/.m2`; Gradle user, cache, wrapper, and daemon state MUST use
-`/home/mez/.gradle`, and Gradle daemon reuse MUST be disabled. Host Maven
-settings/security, Gradle properties/init/enterprise configuration, repository
-credentials, signing keys, manager homes, host caches, and existing daemons MUST
-remain hidden. Persistence MUST contain only typed kind names.
-Custom definitions and `custom:*` selections MUST be rejected from project
-overlays and live/model-authored configuration layers. Portable sandbox profile
-export MUST fail when a custom selection is enabled and MUST NOT serialize its
-host roots; profile import MUST reject custom selectors. Structural validation
-MUST NOT inspect ambient state. Filesystem existence, canonicalization,
-symlink containment, executable checks, forbidden canonical roots, and
-pane-resolved maximum-authority enforcement belong to runtime projection.
-Runtime projection MUST require every custom root to be an existing canonical
-real directory, reject root symlinks, complete user homes, broad system roots,
-credential paths, and Mezzanine configuration/control/runtime roots, and
-resolve every reference within its declared canonical root. Required
-executables MUST be contained regular executable files. Selected built-in and
-custom projections MUST compose in configured order, deduplicate identical
-PATH entries, reject overlapping host roots and conflicting environment
-values, and append `/usr/bin:/bin`. Custom roots MUST be mounted read-only only
-at `/opt/mez/toolchains/custom/<name>/roots/<index>`; synthesized values MUST
-use those sandbox paths. Enabling a custom toolchain MUST add each validated
-canonical root to the issuing pane's effective read authority for its fixed
-read-only projection only. It MUST NOT add write authority or a generic mount
-at the root's original host path. The resolved projection MUST be integrity-bound into the generated
-Bubblewrap launch plan, and schema-v32 custom projection support MUST advance
-the fixed Bubblewrap runtime profile so stale capability evidence is rejected.
-Schema v31 to v32 migration MUST preserve built-in selections and omission and
-MUST NOT infer roots, definitions, or custom selections.
-Toolchain projection MUST be descriptor-driven. Each supported kind MUST own
-code-defined evidence names, structural root validation, fixed read-only
-sandbox destinations, deterministic PATH entries, synthesized child
-environment, managed-state locations, platform constraints, forbidden
-credential/configuration descendants, and required or optional companion
-kinds. Runtime/SDK roots, project environments, separately confirmed user-tool
-bins, managed writable state, and credentials MUST remain distinct authority
-classes. Selection of one class MUST NOT implicitly authorize another.
-Descriptor composition MUST reject duplicate kinds, ambiguous evidence,
-overlapping host roots unless explicitly modeled, duplicate fixed
-destinations, conflicting PATH entries, conflicting synthesized variables, and
-managed state outside `/home/mez`. Final launch compilation MUST revalidate the
-composed projection and require every enabled host root to be present in the
-effective read authority. Toolchain configuration MUST NOT become
-an arbitrary PATH, environment-variable, mount, version-manager-hook, or
-credential-import surface.
-The agent shell `/sandbox toolchains` command and `/sandbox toolchains status [SELECTOR]` MUST
-report supported, configured, discoverable, and effective state for the active
-pane. `/sandbox toolchains list` MUST include configured custom identities.
-`/sandbox toolchains detect [SELECTOR]` MUST be read-only and MUST use active-pane
-bootstrap evidence rather than ambient service environment state. Ordered
-`/sandbox toolchains enable SELECTOR... --yes`, `/sandbox toolchains disable SELECTOR... --yes`,
-`/sandbox toolchains define NAME ... --yes`, and `/sandbox toolchains remove custom:NAME
-[--disable] --yes` MUST require authenticated primary-client input and apply
-real changes to subsequent sandboxed actions without rewriting existing
-interactive shells or actions that are already running. Built-in selections
-MUST persist only typed kinds; custom definitions MUST remain constrained to
-the schema-v32 representation. Text supplied through control, automation,
-agent, hook, macro, MCP, or assistant output MUST NOT acquire this provenance.
-Repeating an already-satisfied mutation MUST be a no-op and MUST NOT advance
-configuration generation. `/sandbox toolchains reload` MUST
-perform the existing full disk-backed configuration reload, not a field-only
-toolchain reload, and MUST disclose that all changed configuration was
-reapplied. Status, list, and detection results MUST use the searchable and
-copyable command pager with structured descriptor-derived Markdown, regardless
-of rendered line count. Successful mutations and reloads MUST use one concise
-transient notice, and usage, discovery, persistence, and reload failures MUST
-use one transient error notice. No `/sandbox toolchains` result may append visible
-output to pane history. Standalone `mez sandbox toolchains enable SELECTOR...
---yes`, `disable SELECTOR... --yes`, `custom define NAME ... --yes`, and
-`custom remove NAME [--disable] --yes` invocations MUST submit normalized,
-digest-bound requests to a live service as an automation client and MUST NOT
-edit primary configuration themselves. Read-only `list`, `status`, and
-`detect` operations MUST remain available without a live service. `--yes` MUST
-consent only to submission; it MUST NOT approve the mutation. Submission MUST
-fail closed without an attached primary client. The service MUST expose the
-exact request id, operation, normalized selector or custom definition digest,
-pane, captured configuration generation, and expiry to the primary client.
-Only matching authenticated primary-client input MAY confirm or reject the
-request. Confirmation MUST fail
-closed for a wrong pane, expired request, changed configuration generation,
-digest mismatch, unsupported operation, or replay. Ordinary Bubblewrap actions
-MUST NOT expose the Mezzanine config root or control/runtime sockets. Explicit
-`host-access` is a visible same-UID boundary bypass and is not privilege
-separation.
-The same detect, enable, and disable grammar MUST accept `zig`. Zig evidence
-MUST identify one canonical self-contained distribution containing a real
-executable `zig` file and real `lib` directory. Mezzanine MUST reject missing,
-non-executable, symlinked, shim, malformed, duplicate, and out-of-authority Zig
-roots. The distribution MUST be mounted read-only at
-`/opt/mez/toolchains/zig`, that path MUST precede `/usr/bin:/bin`, and
-`ZIG_GLOBAL_CACHE_DIR` MUST be `/home/mez/.cache/zig`. Project `.zig-cache` and
-`zig-out` remain ordinary project state. Selection MUST NOT import a host Zig
-cache, manager metadata, credentials, unrelated versions, or authority for
-native SDKs and system integrations.
-The same detect, enable, and disable grammar MUST accept `go`. Go evidence MUST
-identify one canonical SDK containing a real executable `bin/go` file and real
-`src` directory. The SDK MUST be mounted read-only at
-`/opt/mez/toolchains/go/root`; its `bin` directory MUST precede
-`/usr/bin:/bin`; and `GOROOT` MUST name that fixed destination. `GOPATH`,
-`GOMODCACHE`, and `GOCACHE` MUST resolve beneath `/home/mez`. Selection MUST
-NOT import host module/build caches, `GOBIN`, `GOPATH/bin`, private-module
-configuration, credentials, unrelated SDK versions, or version-manager state.
-The same detect, enable, and disable grammar MUST accept `deno`. Deno evidence
-MUST identify one canonical runtime root containing a real executable `deno`
-file selected by the active pane. Mezzanine MUST reject missing,
-non-executable, symlinked, shim, malformed, duplicate, and out-of-authority
-Deno roots. The runtime MUST be mounted read-only at
-`/opt/mez/toolchains/deno`, that path MUST precede `/usr/bin:/bin`, and
-`DENO_DIR` MUST be `/home/mez/.cache/deno`. Selection MUST NOT import host
-caches, authentication tokens, configuration, certificate or private-key
-paths, installed scripts, npm credentials, unrelated runtimes, Node.js, or
-version-manager state. Deno permission flags MUST NOT weaken Mezzanine's outer
-Bubblewrap or network policy.
-The same detect, enable, and disable grammar MUST accept `bun`. Bun evidence
-MUST identify one canonical distribution root containing a real executable
-`bin/bun` file selected by the active pane. Mezzanine MUST reject missing,
-non-executable, symlinked, shim, malformed, duplicate, and out-of-authority Bun
-roots. The distribution MUST be mounted read-only at
-`/opt/mez/toolchains/bun/root`; its `bin` directory MUST precede
-`/usr/bin:/bin`; `BUN_INSTALL` MUST name that fixed destination; and
-`BUN_INSTALL_CACHE_DIR` MUST be `/home/mez/.cache/bun`. Selection MUST NOT
-import host package caches, global packages or executables, credentials,
-configuration, installation metadata, npm state, Node.js, unrelated runtimes,
-or version-manager state. Repository `node_modules/.bin` remains a separate
-project-environment authority and MUST NOT be implied by selecting Bun.
-The same detect, enable, and disable grammar MUST accept `node`. Node.js
-evidence MUST identify one canonical distribution root containing a real
-executable `bin/node` file and real `lib` directory selected by the active
-pane. Mezzanine MUST reject missing, non-executable, symlinked, shim,
-malformed, duplicate, and out-of-authority Node.js roots. The distribution
-MUST be mounted read-only at `/opt/mez/toolchains/node/root`, and its `bin`
-directory MUST precede `/usr/bin:/bin`. Bundled `npm`, `npx`, and `corepack`
-MAY be exposed only when they are contained in that selected distribution.
-`NPM_CONFIG_CACHE` MUST be `/home/mez/.cache/npm`, and `COREPACK_HOME` MUST be
-`/home/mez/.cache/node/corepack`. Selection MUST NOT import host `.npmrc`
-files, registry tokens, package-manager caches, global package prefixes or
-executables, manager roots or shims, unrelated runtime versions, or arbitrary
-Node environment variables. Repository `node_modules/.bin` remains a separate
-project-controlled authority and MUST NOT be implied by selecting Node.js.
-Corepack downloads and package-manager network activity remain subject to the
-normal action network policy.
-The same detect, enable, and disable grammar MUST accept `python`. Python
-evidence MUST identify one canonical base runtime containing a real executable
-`bin/python3` file and real `lib` directory selected by the active pane. The
-runtime MUST be mounted read-only at `/opt/mez/toolchains/python/root`, and its
-`bin` directory MUST precede `/usr/bin:/bin`. `PIP_CACHE_DIR` and
-`UV_CACHE_DIR` MUST resolve beneath `/home/mez`, and `PYTHONNOUSERSITE` MUST be
-enabled. Host `PYTHONHOME`, `PYTHONPATH`, user site packages, pip
-configuration, package-index credentials, keyrings, caches, manager state, and
-unrelated virtual environments MUST remain hidden. When Python is selected and
-the active pane has a trusted canonical project containing a real `.venv`
-directory, Mezzanine MAY prepend that contained `.venv/bin` and synthesize
-`VIRTUAL_ENV`. The environment MUST contain real `pyvenv.cfg`, `bin`, and
-executable `bin/python` entries, remain directly inside the trusted project,
-and reuse existing project authority rather than adding another host mount.
-Missing `.venv` state MUST leave the base runtime usable; malformed, symlinked,
-external, or out-of-authority environments MUST fail closed. Detection MUST
-never execute activation scripts or manager hooks, and Mezzanine MUST NOT
-create, install into, or otherwise mutate a virtual environment automatically.
-Project trust MUST NOT implicitly enable toolchains. For Rust, Mezzanine MUST
-derive a canonical Cargo executable directory and Rustup root from local discovery or pane-bootstrap
-evidence, reject missing, symlinked, overlapping, unexpected, credential, and
-runtime roots, and mount only those roots read-only at fixed sandbox paths.
-Enabling Rust MUST add both roots to effective read authority for those fixed
-read-only projections only and MUST NOT add write authority or generic mounts
-at their original host paths.
-Only Cargo's `bin` directory MAY be mounted; Cargo credentials, registry
-configuration, and caches MUST remain hidden. Cargo binaries MUST precede
-`/usr/bin:/bin` deterministically. The projection
-MUST NOT expose a complete home, credentials, sockets, user runtime paths, or
-unrelated configuration. Host-access MUST remain visibly distinct because it
-bypasses the configured Bubblewrap projection. Schema v24 to v25 migration
-MUST preserve omission and MUST NOT infer a toolchain from ambient state.
+
+Schema v51 removes `permissions.bubblewrap.toolchains` and
+`permissions.bubblewrap.custom_toolchains`. The v50 to v51 primary-config
+migration MUST remove both paths for TOML, YAML, and JSON documents after all
+required historical migrations have run. Current-schema primary configuration
+and project overlays MUST reject either removed field; no deprecated selector,
+custom definition, command alias, projection path, or compatibility shim may
+remain.
+
+Bubblewrap filesystem access to installed runtimes, SDKs, compilers, package
+managers, and other external tools MUST use the same generic
+`permissions.read_scopes` and `permissions.write_scopes` authority as every
+other host path. Canonical read scopes MUST be mounted read-only at the same
+sandbox paths, and write scopes MUST remain the only way to grant write
+authority. Scoping one root MUST NOT implicitly expose credentials, manager
+state, caches, sockets, loaders, libraries, dependency roots, or unrelated
+installations. Every required external root MUST be authorized explicitly.
+
+The sandbox command-search `PATH` MUST remain exactly `/usr/bin:/bin` after
+optional pane environment forwarding. `permissions.bubblewrap.env_whitelist`
+MUST NOT override `PATH`, `HOME`, `SHELL`, XDG paths, locale, identity, Git
+isolation, or any other Mezzanine-owned invariant. Binaries outside the fixed
+search path MUST be invoked by absolute path or by a command-local `PATH`
+assignment. Forwarded variables MUST already exist in the active pane, MUST
+remain value-redacted from status, warnings, telemetry, snapshots, and audit,
+and MUST NOT grant filesystem, socket, network, group, or credential
+authority.
+
+Mezzanine MUST NOT discover named runtime or SDK roots during shell bootstrap,
+synthesize runtime-specific environment variables, create fixed tool
+projection destinations, import package-manager credentials, or redirect
+runtime-specific caches as a consequence of generic scope configuration.
+Historical schema v24 through v44 migrations MUST remain available only so old
+primary configurations can advance to v51 before the removed fields are
+stripped.
 
 When Bubblewrap authority comes from a trusted project and a private Mezzanine
 configuration root is available, Mezzanine MUST create or reuse a private
@@ -6402,7 +6026,7 @@ The baseline command capabilities are:
   approval id, `latest`, or the only pending approval for the active pane, and
   it MUST support `once`, `session`, `project`, and `global` approval scopes.
 - `/sandbox`: Inspect and manage sandbox state through exactly `status`,
-  `enable`, `disable`, `trust`, and `toolchains` subcommands. No argument MUST
+  `enable`, `disable`, and `trust` subcommands. No argument MUST
   behave as `status`. `status` MUST report the effective backend for the active
   pane, whether a pane override exists, and whether the effective value came
   from that override or the persisted global default. `status --global` MUST
@@ -6431,24 +6055,6 @@ The baseline command capabilities are:
   working directory, accept `latest` or the only pending project trust request
   for the live session, and provide a list view for pending project trust
   requests.
-
-  `/sandbox toolchains` MUST inspect and manage typed sandbox toolchain
-  projections for the active pane. It MUST accept no argument or `status`, `list`,
-  `detect [rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift]`, `enable KIND --yes`, `disable KIND
-  --yes`, and `reload`, where `KIND` is `rust`, `zig`, `go`, `deno`, `bun`, or
-  `node`, `python`, `jdk`, `maven`, `gradle`, `dotnet`, `dart`, `kotlin`, `ruby`, `php`, or
-  `composer`, `erlang`, `elixir`, `ghc`, `cabal`, `stack`, `ocaml`, `llvm`,
-  `gcc`, `cmake`, `ninja`, `meson`, or `swift`. Unknown kinds,
-  missing confirmation, duplicate confirmation, and
-  extra arguments MUST
-  produce a pane-local usage error without mutation. Status MUST distinguish
-  active, selected-but-inactive, selected-but-unavailable,
-  available-but-disabled, and disabled-and-unavailable states. Detection MUST
-  be read-only. Enable and disable MUST preserve typed kind-only persistence,
-  apply only to subsequent sandboxed actions, and leave existing shells and
-  already-running actions unchanged. Reload MUST run the complete disk-backed
-  config reload. Toolchain commands MUST NOT become a general PATH,
-  environment-variable, or arbitrary host-mount configuration surface.
 - Bare `/resume`: Show resumable saved agent sessions in the shared interactive
   record-browser table keyed by conversation UUID. The table MUST include name,
   last activity, directory, transcript entry count, and latest prompt columns.

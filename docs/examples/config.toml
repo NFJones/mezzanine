@@ -467,13 +467,19 @@ sandbox = "policy-only"
 # placed in read_scopes for an explicitly trusted service endpoint; a read-only
 # mount does not make requests sent through that socket read-only.
 # read_scopes = ["/var/run/docker.sock"]
+# Installed SDKs use the same generic authority. Every required loader or
+# library root must be listed explicitly; read scopes never grant write access.
+# read_scopes = ["/opt/acme-sdk"]
 # Optional sanitized Git identity for Bubblewrap commits. Configure both fields;
 # Mezzanine never imports the host global Git configuration.
 # [permissions.bubblewrap]
 # Exact host supplementary groups to project. The primary group is automatic;
 # an empty list strips all ambient supplementary groups.
 # group_whitelist = []
-# env_whitelist = ["PATH"]
+# Optional variable names are read from the active pane and always redacted.
+# They cannot override the fixed /usr/bin:/bin command-search path or grant
+# filesystem authority. External tools run by absolute path or command-local PATH.
+# env_whitelist = ["ACME_HOME"]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
 command_rules = []

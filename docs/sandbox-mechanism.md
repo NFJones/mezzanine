@@ -106,10 +106,12 @@ Bubblewrap projects only the authority needed by the compiled plan:
   helpers, signing keys, includes, hooks, URL rewrites, and other host Git
   settings are excluded.
 
-Selected built-in toolchains and constrained custom toolchains are additional
-read-only projections at fixed sandbox paths. They are an allowlist, not a
-general mount or PATH configuration mechanism. Toolchain roots add only their
-validated read authority and do not grant write access at their host paths.
+Installed runtimes, SDKs, and compilers use ordinary scope authority. A
+configured read scope is mounted read-only at its canonical path; only a write
+scope grants write access. Every required loader, library, or dependency root
+must be scoped explicitly. Optional environment names may be allowlisted, but
+their values do not grant path authority and cannot override `/usr/bin:/bin`.
+External binaries therefore run by absolute path or a command-local `PATH`.
 
 ## Network boundary
 
@@ -169,4 +171,4 @@ The agent-shell `/sandbox` and `/permissions` commands show the effective
 pane-local state. `/sandbox enable --yes` and `/sandbox disable --yes` change
 only the current pane unless `--global` is supplied. See the configuration
 reference for presets, profile import/export, managed-home maintenance, and
-toolchain commands.
+generic scope and environment configuration.

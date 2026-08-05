@@ -707,8 +707,6 @@ Provider options under a model profile:
 | `permissions.bubblewrap.env_whitelist` | string array | `[]` | Schema-v50 primary-user-only portable variable names read from the active pane process for ordinary sandboxed actions. Values are best-effort, bounded, universally redacted from status/logs, and cannot override fixed sandbox environment invariants. Internal semantic `apply_patch` phases intentionally use the fixed environment without forwarding these optional values. |
 | `permissions.bubblewrap.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
-| `permissions.bubblewrap.toolchains` | string array | omitted | Ordered direct-user-selected read-only built-in or `custom:<name>` toolchains. Built-in selectors persist identity rather than discovered host paths. |
-| `permissions.bubblewrap.custom_toolchains.<name>` | table | omitted | Schema-v32 primary-user constrained custom definition with `roots`, `path_entries`, optional `required_executables`, `description`, and synthesized root-relative `environment` values. Enabling the definition adds its validated roots to read authority only for fixed read-only projections; it adds no write authority or generic host-path mounts. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
 | `permissions.session_command_rules` | array | `[]` | Session-scoped command rule entries. |
 | `permissions.global_command_rules` | array | `[]` | Global command rule entries. |
@@ -795,16 +793,16 @@ choose `trusted-project` or `explicit-scope` authority. Trusted-project mode
 can activate applicable project overlays, macros, and skills, while
 explicit-scope mode does not change project trust.
 
-`mez sandbox profile export [--path PATH]` emits a deterministic JSON recipe
-with exactly `version`, `preset`, `authority`, and `toolchains`. Export derives
-only safe preset-equivalent state; it omits host paths, trust records,
+`mez sandbox profile export [--path PATH]` emits a deterministic version-2 JSON
+recipe with exactly `version`, `preset`, and `authority`. Export derives only
+safe preset-equivalent state; it omits host paths, trust records,
 Bubblewrap executable and identity fields, environment values, command rules,
 hooks, provider/MCP state, arbitrary mounts, credentials, and `host-access`.
 `mez sandbox profile import FILE [--path PATH] [--dry-run] [--yes]` strictly
-rejects unknown or unsupported fields, independently discovers the local
-project, and uses the same atomic guided-setup transaction. Import previews by
-default and never auto-applies a repository profile, even when that repository
-is already trusted.
+rejects version-1 recipes and unknown or unsupported fields, including the
+removed toolchain field. It independently discovers the local project and uses
+the same atomic guided-setup transaction. Import previews by default and never
+auto-applies a repository profile, even when that repository is already trusted.
 
 Bubblewrap disables system and global Git configuration. When both sanitized
 identity fields are configured, Mezzanine projects only `user.name` and
@@ -813,63 +811,28 @@ over repository-local identity. It never imports credential helpers, signing
 keys, includes, URL rewrites, hooks, or arbitrary host Git settings. When the
 fields are omitted, repository-local Git identity may still apply.
 
-`mez sandbox toolchains list` and `status [SELECTOR] [PATH]` load effective
-configuration without mutation, while `detect [--kind KIND] [PATH]` performs
-read-only built-in discovery. Ordered `enable SELECTOR... --yes`, `disable
-SELECTOR... --yes`, `custom define NAME ... --yes`, and `custom remove NAME
-[--disable] --yes` submit digest-bound requests to a live service as a
-non-primary automation client. They do not persist or approve the request.
-The displayed `/toolchain confirm REQUEST DIGEST --yes` command must then be
-entered directly in the attached primary client; missing, stale, tampered,
-expired, wrong-pane, and replayed confirmations fail closed. Custom roots must
-be canonical existing directories within the issuing pane's resolved read
-authority; required executables and root-relative references are preflighted
-before one atomic disk/live update. At execution time Mezzanine uses
-canonical pane-bootstrap evidence, mounts only Cargo's executable directory
-and the Rustup root read-only below `/opt/mez/toolchains/rust`, and sets PATH to Cargo binaries
-before `/usr/bin:/bin`. It does not mount the complete home, credentials,
-sockets, runtime directories, Cargo credentials/configuration, the Mezzanine
-config root, or unrelated configuration. Project trust alone never enables a
-toolchain. Explicit `host-access` bypasses the configured projection and is not
-a same-UID privilege boundary.
+Schema v51 removes `permissions.bubblewrap.toolchains` and
+`permissions.bubblewrap.custom_toolchains`. Primary configurations migrating
+from v50 lose both fields; current primary and project configuration rejects
+them. There is no replacement selector or discovery command.
 
-Schema v33 adds the built-in `jdk` selector without changing existing
-selections during v32 migration. Direct discovery accepts only a real
-`javac` at `<canonical-root>/bin/javac` from the captured search path, while
-active-pane discovery consumes exact `jdk-runtime:<canonical-root>` evidence;
-neither path invokes SDKMAN, asdf, mise, jenv, or other manager hooks. A JDK
-must provide real executable `bin/java`, `bin/javac`, and `bin/jar` entries and
-the expected `lib` directory. Mezzanine mounts that one root read-only at
-`/opt/mez/toolchains/jdk/root`, sets PATH to
-`/opt/mez/toolchains/jdk/root/bin:/usr/bin:/bin`, and synthesizes
-`JAVA_HOME=/opt/mez/toolchains/jdk/root`. Manager homes, unrelated JDKs, Java
-preferences and credentials, Maven and Gradle state, inherited environment,
-and shell hooks remain excluded.
+Use ordinary scopes and environment forwarding for an installed SDK:
 
-Schema v34 adds the built-in `dotnet` selector without changing existing
-selections during v33 migration. Direct discovery accepts only a real `dotnet`
-host at `<canonical-root>/dotnet` from the captured search path, while
-active-pane discovery consumes exact `dotnet-sdk:<canonical-root>` evidence;
-neither path invokes asdf, mise, or other manager hooks. A complete SDK must
-provide the real host plus `sdk`, `shared`, and `packs` directories. Mezzanine
-mounts that root read-only at `/opt/mez/toolchains/dotnet/root`, sets PATH to
-`/opt/mez/toolchains/dotnet/root:/usr/bin:/bin`, and synthesizes `DOTNET_ROOT`.
-`DOTNET_CLI_HOME` and `NUGET_PACKAGES` use project-isolated managed-home paths;
-telemetry and first-time setup are disabled. Host NuGet configuration and
-credentials, global tools, workloads, diagnostics and startup hooks, inherited
-environment, and unrelated SDKs remain excluded.
+```toml
+[permissions]
+read_scopes = ["/opt/acme-sdk"]
 
-Schema v35 adds the built-in `dart` selector without changing existing
-selections during v34 migration. Direct discovery accepts only a real
-`<canonical-root>/bin/dart` from the captured search path, while active-pane
-discovery consumes exact `dart-sdk:<canonical-root>` evidence; neither path
-invokes asdf, mise, Flutter, or other manager hooks. A complete SDK must
-provide the real executable and a `lib` directory. Mezzanine mounts that root
-read-only at `/opt/mez/toolchains/dart/root`, sets PATH to
-`/opt/mez/toolchains/dart/root/bin:/usr/bin:/bin`, and redirects
-`PUB_CACHE=/home/mez/.cache/dart-pub` into project-isolated managed state. Host
-Pub credentials, globally activated executables, Flutter artifacts, inherited
-environment, and unrelated SDKs remain excluded.
+[permissions.bubblewrap]
+env_whitelist = ["ACME_HOME"]
+```
+
+`/opt/acme-sdk` is mounted read-only at the same path. `ACME_HOME` must already
+exist in the active pane, its value remains redacted from status and audit, and
+it grants no filesystem authority. The sandbox command-search path remains
+`/usr/bin:/bin`, even when `PATH` is allowlisted, so external binaries must be
+invoked by absolute path or with a command-local `PATH`. Scope every required
+loader, library, or dependency root explicitly; scoping the SDK does not expose
+credentials, host caches, manager state, sockets, or unrelated installations.
 
 For a trusted project, Bubblewrap uses a persistent managed home below
 `<config-root>/sandbox/cache-homes/<project-profile-key>/home`. The key hashes
