@@ -18,8 +18,8 @@ fn discovery_script_uses_shell_command_lookup() {
     assert!(script.contains("--version"));
     assert!(script.contains("date +%s"));
     assert!(script.contains("tool\\t"));
-    assert!(script.contains("python3"));
     assert!(script.contains("rg"));
+    assert!(!script.contains("python3"));
 }
 
 #[test]
@@ -132,7 +132,7 @@ fn tool_cache_requires_bootstrap_after_signature_change() {
     assert!(cache.requires_bootstrap(&first));
     cache.record(
         first.clone(),
-        ToolInventory::parse_bootstrap_output("sed=1\ngrep=1\npython=1\nrg=1\n"),
+        ToolInventory::parse_bootstrap_output("sed=1\ngrep=1\nrg=1\n"),
     );
 
     assert!(!cache.requires_bootstrap(&first));
@@ -152,7 +152,7 @@ fn tool_cache_requires_bootstrap_for_unknown_signature_even_if_recorded() {
     assert!(cache.requires_bootstrap(&signature));
     cache.record(
         signature.clone(),
-        ToolInventory::parse_bootstrap_output("sed=1\ngrep=1\npython=1\nrg=1\n"),
+        ToolInventory::parse_bootstrap_output("sed=1\ngrep=1\nrg=1\n"),
     );
 
     assert!(cache.requires_bootstrap(&signature));
@@ -169,14 +169,12 @@ fn tool_inventory_parses_bootstrap_output() {
     let inventory = ToolInventory::parse_bootstrap_output(
         "tool\tsed\t1\t/usr/bin/sed\tGNU sed 4.9\tcommand -v sed\t0\t/usr/bin/sed --version\t0\t1714500000\n\
          tool\tgrep\t1\t/usr/bin/grep\tGNU grep 3.11\tcommand -v grep\t0\t/usr/bin/grep --version\t0\t1714500000\n\
-         tool\tpython\t1\t/usr/bin/python3\tPython 3.12.3\tcommand -v python3 || command -v python\t0\t/usr/bin/python3 --version\t0\t1714500000\n\
          tool\trg\t0\t\t\tcommand -v rg\t1\t\t\t1714500000\n\
          fd=1\n",
     );
 
     assert!(inventory.sed);
     assert!(inventory.grep);
-    assert!(inventory.python);
     assert!(!inventory.rg);
     assert_eq!(inventory.modern_tools, vec!["fd"]);
     let sed = inventory.tools.get("sed").unwrap();

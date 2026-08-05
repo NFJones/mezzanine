@@ -418,11 +418,6 @@ pub struct ToolInventory {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub grep: bool,
-    /// Stores the python value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub python: bool,
     /// Stores the rg value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -450,7 +445,6 @@ impl ToolInventory {
         let mut inventory = Self {
             sed: false,
             grep: false,
-            python: false,
             rg: false,
             modern_tools: Vec::new(),
             tools: BTreeMap::new(),
@@ -501,7 +495,6 @@ impl ToolInventory {
         match probe.name.as_str() {
             "sed" => self.sed = probe.available,
             "grep" => self.grep = probe.available,
-            "python" => self.python = probe.available,
             "rg" => self.rg = probe.available,
             tool if probe.available => self.modern_tools.push(tool.to_string()),
             _ => {}

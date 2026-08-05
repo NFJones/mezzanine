@@ -186,11 +186,10 @@ impl RuntimeSessionService {
             }
             if let Some(inventory) = self.agent_tool_inventory(signature) {
                 env_lines.push(format!(
-                    "available_tools={} sed={} grep={} python={} rg={}",
+                    "available_tools={} sed={} grep={} rg={}",
                     inventory.tools.len(),
                     inventory.sed,
                     inventory.grep,
-                    inventory.python,
                     inventory.rg
                 ));
                 if !inventory.modern_tools.is_empty() {

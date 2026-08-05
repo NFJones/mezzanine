@@ -6,7 +6,8 @@
 use super::*;
 
 #[test]
-/// Verifies bootstrap script is valid shell.
+/// Verifies the POSIX bootstrap retains generic pane discovery while omitting
+/// named runtime and SDK installation probes.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
@@ -25,42 +26,32 @@ fn bootstrap_script_is_valid_shell() {
     assert!(script.contains(".git"));
     assert!(script.contains("VIRTUAL_ENV"));
     assert!(script.contains("CONDA_PREFIX"));
-    assert!(script.contains("command -v zig"));
-    assert!(script.contains("env_manager \"zig:"));
-    assert!(script.contains("command -v go"));
-    assert!(script.contains("env_manager \"go:"));
-    assert!(script.contains("command -v deno"));
-    assert!(script.contains("env_manager \"deno:"));
-    assert!(script.contains("command -v bun"));
-    assert!(script.contains("env_manager \"bun:"));
-    assert!(script.contains("command -v node"));
-    assert!(script.contains("env_manager \"node-runtime:"));
-    assert!(script.contains("command -v python3"));
-    assert!(script.contains("env_manager \"python-runtime:"));
-    assert!(script.contains("command -v javac"));
-    assert!(script.contains("env_manager \"jdk-runtime:"));
-    assert!(script.contains("command -v dotnet"));
-    assert!(script.contains("env_manager \"dotnet-sdk:"));
-    assert!(script.contains("command -v dart"));
-    assert!(script.contains("env_manager \"dart-sdk:"));
-    assert!(script.contains("command -v kotlinc"));
-    assert!(script.contains("env_manager \"kotlin-jvm:"));
-    assert!(script.contains("command -v ruby"));
-    assert!(script.contains("env_manager \"ruby-runtime:"));
-    assert!(script.contains("command -v php"));
-    assert!(script.contains("env_manager \"php-runtime:"));
-    assert!(script.contains("command -v composer"));
-    assert!(script.contains("env_manager \"composer-runtime:"));
-    assert!(script.contains("command -v erl"));
-    assert!(script.contains("env_manager \"erlang-otp:"));
-    assert!(script.contains("command -v elixir"));
-    assert!(script.contains("env_manager \"elixir-runtime:"));
-    assert!(script.contains("command -v ghc"));
-    assert!(script.contains("env_manager \"ghc-compiler:"));
-    assert!(script.contains("command -v cabal"));
-    assert!(script.contains("env_manager \"cabal-companion:"));
-    assert!(script.contains("command -v stack"));
-    assert!(script.contains("env_manager \"stack-companion:"));
+    assert!(script.contains("NIX_PROFILES"));
+    assert!(script.contains("NODE_VIRTUAL_ENV"));
+    for forbidden in [
+        "RUSTUP_HOME",
+        "CARGO_HOME",
+        "command -v zig",
+        "command -v go",
+        "command -v deno",
+        "command -v bun",
+        "command -v node",
+        "command -v python3",
+        "command -v javac",
+        "command -v dotnet",
+        "command -v dart",
+        "command -v kotlinc",
+        "command -v ruby",
+        "command -v php",
+        "command -v composer",
+        "command -v erl",
+        "command -v elixir",
+        "command -v ghc",
+        "command -v cabal",
+        "command -v stack",
+    ] {
+        assert!(!script.contains(forbidden), "unexpected probe: {forbidden}");
+    }
     assert!(script.contains("bootstrap"));
     assert!(script.contains("complete"));
     assert!(script.contains("AGENTS.md"));
@@ -70,8 +61,8 @@ fn bootstrap_script_is_valid_shell() {
 }
 
 #[test]
-/// Verifies that Fish bootstrap discovery has a Fish-native script surface with
-/// the same output markers as the POSIX bootstrap script.
+/// Verifies Fish bootstrap retains the generic pane protocol while omitting
+/// the same named runtime and SDK discovery removed from POSIX bootstrap.
 fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     let script = bootstrap_script_for_classification(ShellClassification::Fish);
 
@@ -84,42 +75,34 @@ fn fish_bootstrap_script_emits_bootstrap_and_instruction_markers() {
     assert!(script.contains("bootstrap\\tcomplete"));
     assert!(script.contains("function mez_probe_tool"));
     assert!(script.contains("tool\\t%s"));
-    assert!(script.contains("command -s zig"));
-    assert!(script.contains("env_manager \"zig:"));
-    assert!(script.contains("command -s go"));
-    assert!(script.contains("env_manager \"go:"));
-    assert!(script.contains("command -s deno"));
-    assert!(script.contains("env_manager \"deno:"));
-    assert!(script.contains("command -s bun"));
-    assert!(script.contains("env_manager \"bun:"));
-    assert!(script.contains("command -s node"));
-    assert!(script.contains("env_manager \"node-runtime:"));
-    assert!(script.contains("command -s python3"));
-    assert!(script.contains("env_manager \"python-runtime:"));
-    assert!(script.contains("command -s javac"));
-    assert!(script.contains("env_manager \"jdk-runtime:"));
-    assert!(script.contains("command -s dotnet"));
-    assert!(script.contains("env_manager \"dotnet-sdk:"));
-    assert!(script.contains("command -s dart"));
-    assert!(script.contains("env_manager \"dart-sdk:"));
-    assert!(script.contains("command -s kotlinc"));
-    assert!(script.contains("env_manager \"kotlin-jvm:"));
-    assert!(script.contains("command -s ruby"));
-    assert!(script.contains("env_manager \"ruby-runtime:"));
-    assert!(script.contains("command -s php"));
-    assert!(script.contains("env_manager \"php-runtime:"));
-    assert!(script.contains("command -s composer"));
-    assert!(script.contains("env_manager \"composer-runtime:"));
-    assert!(script.contains("command -s erl"));
-    assert!(script.contains("env_manager \"erlang-otp:"));
-    assert!(script.contains("command -s elixir"));
-    assert!(script.contains("env_manager \"elixir-runtime:"));
-    assert!(script.contains("command -s ghc"));
-    assert!(script.contains("env_manager \"ghc-compiler:"));
-    assert!(script.contains("command -s cabal"));
-    assert!(script.contains("env_manager \"cabal-companion:"));
-    assert!(script.contains("command -s stack"));
-    assert!(script.contains("env_manager \"stack-companion:"));
+    assert!(script.contains("VIRTUAL_ENV"));
+    assert!(script.contains("CONDA_PREFIX"));
+    assert!(script.contains("NIX_PROFILES"));
+    assert!(script.contains("NODE_VIRTUAL_ENV"));
+    for forbidden in [
+        "RUSTUP_HOME",
+        "CARGO_HOME",
+        "command -s zig",
+        "command -s go",
+        "command -s deno",
+        "command -s bun",
+        "command -s node",
+        "command -s python3",
+        "command -s javac",
+        "command -s dotnet",
+        "command -s dart",
+        "command -s kotlinc",
+        "command -s ruby",
+        "command -s php",
+        "command -s composer",
+        "command -s erl",
+        "command -s elixir",
+        "command -s ghc",
+        "command -s cabal",
+        "command -s stack",
+    ] {
+        assert!(!script.contains(forbidden), "unexpected probe: {forbidden}");
+    }
 }
 
 #[test]
@@ -232,8 +215,7 @@ env\tenv_manager\trustup:/home/me/.rustup\n\
 env\tenv_manager\tcargo-bin:/home/me/.cargo/bin\n\
 bootstrap\tcomplete\t1714500000\n\
 tool\tsed\t1\t/usr/bin/sed\tGNU sed 4.9\tcommand -v sed\t0\t/usr/bin/sed --version\t0\t1714500000\n\
-tool\tgrep\t1\t/usr/bin/grep\tGNU grep 3.11\tcommand -v grep\t0\t/usr/bin/grep --version\t0\t1714500000\n\
-tool\tpython\t1\t/usr/bin/python3\tPython 3.12.3\tcommand -v python3 || command -v python\t0\t/usr/bin/python3 --version\t0\t1714500000\n";
+tool\tgrep\t1\t/usr/bin/grep\tGNU grep 3.11\tcommand -v grep\t0\t/usr/bin/grep --version\t0\t1714500000\n";
 
     let (signature, inventory, instruction_files) =
         parse_bootstrap_env_output(output, Path::new("/bin/bash"));
@@ -283,7 +265,6 @@ tool\tpython\t1\t/usr/bin/python3\tPython 3.12.3\tcommand -v python3 || command 
     let inv = inventory.expect("inventory should be parsed");
     assert!(inv.sed);
     assert!(inv.grep);
-    assert!(inv.python);
 
     assert!(
         instruction_files.is_empty(),
