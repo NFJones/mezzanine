@@ -238,14 +238,12 @@ mod tests {
 
     #[test]
     /// Verifies the sandbox hierarchy is a queueable policy mutation and
-    /// preserves its nested arguments for product-owned runtime parsing.
+    /// preserves supported nested arguments for product-owned runtime parsing.
     fn slash_parser_registers_sandbox_as_queueable_policy_mutation() {
-        let invocation = parse_slash_command("/sandbox toolchains status")
-            .unwrap()
-            .unwrap();
+        let invocation = parse_slash_command("/sandbox trust list").unwrap().unwrap();
 
         assert_eq!(invocation.name, "sandbox");
-        assert_eq!(invocation.args, "toolchains status");
+        assert_eq!(invocation.args, "trust list");
         assert_eq!(invocation.effect, SlashCommandEffect::PolicyMutation);
         assert!(invocation.queueable_while_running);
         assert_eq!(

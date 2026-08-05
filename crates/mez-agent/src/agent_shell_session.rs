@@ -857,7 +857,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         }
         "approve" => "approve a pending pane-local agent action.",
         "sandbox" => {
-            "inspect or change pane-local sandbox state; use --global for persisted enable/disable changes, and manage trust or typed toolchains through nested subcommands."
+            "inspect or change pane-local sandbox state; use --global for persisted enable/disable changes, and manage project trust through the nested trust subcommand."
         }
         "list-macros" => "list available macros and their #macro prompt names.",
         "name-session" => "assign or replace the current conversation's durable display name.",
@@ -1090,14 +1090,14 @@ mod tests {
     }
 
     /// Verifies the sandbox hierarchy is the sole configuration entry for
-    /// pane sandbox, trust, and toolchain management.
+    /// pane sandbox and project-trust management.
     #[test]
     fn agent_shell_help_lists_sandbox_command_only() {
         let help = agent_shell_help_display();
 
         assert!(help.contains("`/sandbox`"), "{help}");
         assert!(help.contains("pane-local sandbox state"), "{help}");
-        assert!(help.contains("nested subcommands"), "{help}");
+        assert!(help.contains("nested trust subcommand"), "{help}");
         assert!(!help.contains("`/trust`"), "{help}");
         assert!(!help.contains("`/toolchain`"), "{help}");
     }
