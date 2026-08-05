@@ -4073,21 +4073,18 @@ fn rust_toolchain_home_discovery_preserves_partial_state_and_rejects_symlinks() 
     let _ = std::fs::remove_dir_all(external);
 }
 
-/// Effective pane evidence is projected exactly and omitted names never become
-/// Bubblewrap environment arguments.
+/// Default PATH evidence reaches Bubblewrap while values outside the configured
+/// whitelist remain absent from its environment arguments.
 #[test]
-fn pane_environment_evidence_projects_only_effective_values() {
-    let mut config = config();
-    config.env_whitelist = ConfiguredSandboxEnvironment {
-        requested_names: vec!["CI".to_string(), "UNSET_VALUE".to_string()],
-    };
+fn default_pane_environment_forwards_path_only() {
+    let config = config();
     let environment_request =
         mez_agent::shell::PaneEnvironmentRequest::new(config.env_whitelist.requested_names.clone())
             .unwrap();
     let environment_evidence = mez_agent::shell::PaneEnvironmentEvidence::from_parts(
         &environment_request,
-        BTreeMap::from([("CI".to_string(), "pane-ci".to_string())]),
-        BTreeMap::from([("UNSET_VALUE".to_string(), "unset".to_string())]),
+        BTreeMap::from([("PATH".to_string(), "/opt/tools:/usr/bin".to_string())]),
+        BTreeMap::new(),
     )
     .unwrap();
     let identity = resolve_sandbox_identity(
@@ -4122,7 +4119,7 @@ fn pane_environment_evidence_projects_only_effective_values() {
     assert!(
         plan.arguments
             .windows(3)
-            .any(|arguments| arguments == ["--setenv", "CI", "pane-ci"])
+            .any(|arguments| arguments == ["--setenv", "PATH", "/opt/tools:/usr/bin"])
     );
     assert!(
         !plan
@@ -4130,5 +4127,5 @@ fn pane_environment_evidence_projects_only_effective_values() {
             .iter()
             .any(|argument| argument == "UNSET_VALUE")
     );
-    assert!(!plan.arguments.iter().any(|argument| argument == "unset"));
+    assert!(!plan.arguments.iter().any(|argument| argument == "pane-ci"));
 }

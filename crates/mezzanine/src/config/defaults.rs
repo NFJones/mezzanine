@@ -485,7 +485,7 @@ sandbox = "policy-only"
 # Exact host supplementary groups to project. The primary group is automatic;
 # an empty list strips all ambient supplementary groups.
 # group_whitelist = []
-# env_whitelist = []
+# env_whitelist = ["PATH"]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
 # Opt-in read-only Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, Maven, Gradle, .NET, Dart, Kotlin/JVM, Ruby, PHP, Composer, Erlang/OTP, Elixir, GHC, Cabal, Stack, OCaml, LLVM, GCC, CMake, Ninja, Meson, or Swift projections;

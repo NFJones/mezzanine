@@ -248,7 +248,6 @@ impl RuntimeSessionService {
                             matches!(
                                 name.as_str(),
                                 "HOME"
-                                    | "PATH"
                                     | "TMPDIR"
                                     | "LANG"
                                     | "LC_ALL"

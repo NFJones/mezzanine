@@ -222,10 +222,19 @@ impl ConfiguredSandboxGroups {
 }
 
 /// Primary-user-selected pane environment variable names.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredSandboxEnvironment {
     /// Ordered configured names retained without reading controller environment state.
     pub(crate) requested_names: Vec<String>,
+}
+
+impl Default for ConfiguredSandboxEnvironment {
+    /// Selects the active pane command-search path when no explicit list exists.
+    fn default() -> Self {
+        Self {
+            requested_names: vec!["PATH".to_string()],
+        }
+    }
 }
 
 impl ConfiguredSandboxEnvironment {
@@ -1075,7 +1084,7 @@ pub(crate) fn runtime_configured_permissions_from_config(
                 runtime_json_string_array(
                     bubblewrap.and_then(|config| config.get("env_whitelist")),
                 )?
-                .unwrap_or_default(),
+                .unwrap_or_else(|| ConfiguredSandboxEnvironment::default().requested_names),
             )?;
             let git_user_name = bubblewrap
                 .and_then(|config| runtime_json_string(config.get("git_user_name")))

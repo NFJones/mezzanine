@@ -410,7 +410,8 @@ fn configure_path_resolution_bubblewrap(service: &mut RuntimeSessionService) {
                     "executable": "/usr/bin/bwrap",
                     "unavailable": "fail",
                     "network": "isolated",
-                    "environment": "minimal"
+                    "environment": "minimal",
+                    "env_whitelist": []
                 }
             }
         }))
@@ -457,7 +458,8 @@ fn configure_trusted_project_bubblewrap(service: &mut RuntimeSessionService) {
                     "executable": "/usr/bin/bwrap",
                     "unavailable": "fail",
                     "network": "isolated",
-                    "environment": "minimal"
+                    "environment": "minimal",
+                    "env_whitelist": []
                 }
             }
         }))

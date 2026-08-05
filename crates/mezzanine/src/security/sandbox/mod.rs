@@ -1251,7 +1251,12 @@ fn bubblewrap_arguments(
         .into_iter()
         .map(str::to_string),
     );
-    for (name, value) in &request.environment_evidence.values {
+    for (name, value) in request
+        .environment_evidence
+        .values
+        .iter()
+        .filter(|(name, _)| name.as_str() != "PATH")
+    {
         arguments.extend(
             ["--setenv", name.as_str(), value.as_str()]
                 .into_iter()
@@ -1312,6 +1317,12 @@ fn bubblewrap_arguments(
             );
         }
     }
+    let executable_path = request
+        .environment_evidence
+        .values
+        .get("PATH")
+        .map(String::as_str)
+        .unwrap_or(executable_path.as_str());
     arguments.extend(
         [
             "--chdir",
@@ -1333,7 +1344,7 @@ fn bubblewrap_arguments(
             xdg_state_home.as_str(),
             "--setenv",
             "PATH",
-            executable_path.as_str(),
+            executable_path,
             "--setenv",
             "TMPDIR",
             "/tmp",

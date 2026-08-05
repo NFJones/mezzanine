@@ -2975,8 +2975,9 @@ configuration that defines both names. The canonical setting MUST default to
 an empty mapping.
 
 Schema v50 adds the primary-user-only
-`permissions.bubblewrap.env_whitelist` string array. It MUST default to empty,
-and migration from v49 MUST write `[]`. Names MUST match
+`permissions.bubblewrap.env_whitelist` string array. An omitted setting MUST
+default to `["PATH"]`, while an explicit `[]` remains an opt-out. Migration
+from v49 MUST write `[]`. Names MUST match
 `[A-Za-z_][A-Za-z0-9_]*`, be unique, contain at most 128 entries, and total at
 most 16 KiB. Values MUST be discovered only from the active pane process using
 a bounded framed protocol. Unset, malformed, non-text, oversized, reserved, or
@@ -2987,8 +2988,9 @@ identity, and MUST never appear in status, warnings, telemetry, snapshots, or
 logs. Internal semantic `apply_patch` phases MUST NOT resolve or forward these
 optional values; their capability probe and workload compilation MUST use the
 same deterministic digest-bound no-forwarding profile. The fixed sandbox HOME,
-PATH, XDG, locale, identity, shell, and Git isolation variables MUST NOT be
-overridden. Forwarding MUST NOT grant filesystem, socket, network, group, or
+XDG, locale, identity, shell, and Git isolation variables MUST NOT be
+overridden. Forwarded `PATH` MAY replace the fixed command-search fallback for
+ordinary actions. Forwarding MUST NOT grant filesystem, socket, network, group, or
 credential authority. The active pane
 shell's primary group MUST remain automatic and MUST NOT be listed. Entries
 MUST be non-empty printable non-numeric group names; duplicate configured
