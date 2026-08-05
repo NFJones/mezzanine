@@ -366,17 +366,6 @@ pub(super) const BUBBLEWRAP_PERMISSION_KEYS: &[&str] = &[
     "env_whitelist",
     "git_user_name",
     "git_user_email",
-    "toolchains",
-    "custom_toolchains",
-];
-
-/// Defines fields accepted by one constrained custom toolchain definition.
-pub(super) const CUSTOM_TOOLCHAIN_DEFINITION_KEYS: &[&str] = &[
-    "description",
-    "roots",
-    "path_entries",
-    "required_executables",
-    "environment",
 ];
 
 /// Reports whether a permission path controls sandbox confinement or authority.

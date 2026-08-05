@@ -343,13 +343,15 @@ fn config_mutation_batch_validates_only_the_final_document() {
     );
 }
 
-/// Verifies constrained custom-toolchain fields may be composed through one
-/// final-document batch without exposing an invalid partial definition.
+/// Verifies configuration mutation rejects removed nested custom-toolchain
+/// paths before constructing a final document for persistence.
 #[test]
-fn config_mutation_batch_supports_custom_toolchain_definition_paths() {
-    let plan = crate::config::plan_config_mutations(
+fn config_mutation_batch_rejects_removed_custom_toolchain_definition_paths() {
+    let error = crate::config::plan_config_mutations(
         ConfigFormat::Toml,
-        "version = 32\n[permissions]\nsandbox = \"bubblewrap\"\n",
+        &format!(
+            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n"
+        ),
         ConfigScope::Primary,
         vec![
             set_string_array(
@@ -370,18 +372,13 @@ fn config_mutation_batch_supports_custom_toolchain_definition_paths() {
             ),
         ],
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert!(plan.changed);
-    assert!(plan.validation.valid);
-    let values = extract_config_values(ConfigFormat::Toml, &plan.text);
-    assert_eq!(
-        values.get("permissions.bubblewrap.custom_toolchains.acme.roots"),
-        Some(&r#"["/opt/acme"]"#.to_string())
-    );
-    assert_eq!(
-        values.get("permissions.bubblewrap.custom_toolchains.acme.environment.ACME_HOME"),
-        Some(&"0:.".to_string())
+    assert!(
+        error
+            .to_string()
+            .contains("configuration mutation supports only scalar paths up to three segments"),
+        "{error}"
     );
 }
 

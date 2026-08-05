@@ -7,13 +7,12 @@
 use super::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BTreeMap,
     BUBBLEWRAP_PERMISSION_KEYS, COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS,
-    CUSTOM_TOOLCHAIN_DEFINITION_KEYS, ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS,
-    HOOK_KEYS, INSTRUCTION_KEYS, ISSUE_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS,
-    LAYOUT_KEYS, MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS,
-    MODEL_PROFILE_KEYS, PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS,
-    RUNTIME_KEYS, SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS,
-    THEME_KEYS, WINDOW_FRAME_KEYS, exact_command_sha256, normalize_exact_command_text,
-    parse_config_json_value_best_effort,
+    ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS, HOOK_KEYS, INSTRUCTION_KEYS,
+    ISSUE_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS,
+    MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS,
+    PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, RUNTIME_KEYS, SESSION_KEYS,
+    SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
+    exact_command_sha256, normalize_exact_command_text, parse_config_json_value_best_effort,
 };
 use mez_mux::theme::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
 
@@ -792,29 +791,6 @@ pub(super) fn validate_permissions_path(path: &str) -> Option<String> {
         }
         if !BUBBLEWRAP_PERMISSION_KEYS.contains(&segments[2]) {
             return Some("unknown Bubblewrap configuration key".to_string());
-        }
-        if segments[2] == "custom_toolchains" {
-            if segments.len() <= 4 {
-                return None;
-            }
-            if !CUSTOM_TOOLCHAIN_DEFINITION_KEYS.contains(&segments[4]) {
-                return Some("unknown custom toolchain configuration key".to_string());
-            }
-            if segments[4] == "environment" {
-                if segments.len() > 6 {
-                    return Some(
-                        "custom toolchain environment setting must not contain nested keys"
-                            .to_string(),
-                    );
-                }
-                return None;
-            }
-            if segments.len() > 5 {
-                return Some(
-                    "custom toolchain definition setting must not contain nested keys".to_string(),
-                );
-            }
-            return None;
         }
         if segments.len() > 3 {
             return Some("Bubblewrap setting must not contain nested keys".to_string());

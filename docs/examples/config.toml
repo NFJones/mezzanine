@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 50
+version = 51
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -476,27 +476,6 @@ sandbox = "policy-only"
 # env_whitelist = ["PATH"]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
-# Opt-in read-only Rust, Zig, Go, Deno, Bun, Node.js, Python, JDK, Maven, Gradle, .NET, Dart, Kotlin/JVM, Ruby, PHP, Composer, Erlang/OTP, Elixir, GHC, Cabal, Stack, OCaml, LLVM, GCC, CMake, Ninja, Meson, or Swift projections;
-# detect with `--kind rust|zig|go|deno|bun|node|python|jdk|maven|gradle|dotnet|dart|kotlin|ruby|php|composer|erlang|elixir|ghc|cabal|stack|ocaml|llvm|gcc|cmake|ninja|meson|swift`, then enable ordered
-# built-in or `custom:<name>` selectors with
-# `mez sandbox toolchains enable SELECTOR... --yes`.
-# Existing services then require `/sandbox toolchains reload`, `config/reload`,
-# or a restart; `/sandbox toolchains enable KIND --yes` hot-applies subsequent actions.
-# toolchains = ["rust", "zig", "go", "deno", "bun", "node", "python", "jdk", "maven", "gradle", "dotnet", "dart", "kotlin", "ruby", "php", "composer", "erlang", "elixir", "ghc", "cabal", "stack", "ocaml", "llvm", "gcc", "cmake", "ninja", "meson", "swift"]
-# Custom toolchains are primary-user constrained definitions. They may be
-# managed with `mez sandbox toolchains custom define/remove`, but every CLI
-# mutation still requires authenticated confirmation in the attached primary
-# client. They are disabled by default and portable sandbox profiles reject
-# them to avoid serializing host roots. Runtime projection also requires
-# read authority only when enabled and only for fixed read-only projections;
-# they never grant write authority or generic mounts at original host paths.
-# [permissions.bubblewrap.custom_toolchains.acme]
-# description = "Acme compiler SDK"
-# roots = ["/home/user/.local/share/acme-sdk"]
-# path_entries = ["0:bin"]
-# required_executables = ["0:bin/acme"]
-# [permissions.bubblewrap.custom_toolchains.acme.environment]
-# ACME_HOME = "0:."
 command_rules = []
 session_command_rules = []
 global_command_rules = []

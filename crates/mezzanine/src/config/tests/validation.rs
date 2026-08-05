@@ -921,85 +921,32 @@ fn validates_paired_sanitized_bubblewrap_git_identity() {
     }));
 }
 
-/// Verifies schema v32 accepts one structurally bounded primary custom
-/// toolchain while rejecting the same host-authority declaration from a
-/// trusted project overlay.
+/// Verifies the current schema rejects removed built-in and custom toolchain
+/// keys in both primary configuration and project overlays.
 #[test]
-fn custom_toolchains_are_structurally_validated_and_primary_only() {
-    let text = format!(
-        "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n\
-         [permissions]\n\
-         sandbox = \"bubblewrap\"\n\
-         [permissions.bubblewrap]\n\
-         toolchains = [\"rust\", \"custom:acme\"]\n\
-         [permissions.bubblewrap.custom_toolchains.acme]\n\
-         description = \"Acme compiler SDK\"\n\
-         roots = [\"/opt/acme-sdk\"]\n\
-         path_entries = [\"0:bin\", \"0:tools/bin\"]\n\
-         required_executables = [\"0:bin/acme\"]\n\
-         [permissions.bubblewrap.custom_toolchains.acme.environment]\n\
-         ACME_HOME = \"0:.\"\n"
-    );
-
-    let primary = validate_config_text(ConfigFormat::Toml, &text, ConfigScope::Primary);
-    assert!(primary.valid, "{:?}", primary.diagnostics);
-
-    let overlay = validate_config_text(ConfigFormat::Toml, &text, ConfigScope::ProjectOverlay);
-    assert!(!overlay.valid);
-    assert!(overlay.diagnostics.iter().any(|diagnostic| {
-        diagnostic
-            .path
-            .starts_with("permissions.bubblewrap.custom_toolchains")
-            && diagnostic
-                .message
-                .starts_with("primary_user_only_custom_toolchain:")
-    }));
-    assert!(overlay.diagnostics.iter().any(|diagnostic| {
-        diagnostic.path == "permissions.bubblewrap.toolchains"
-            && diagnostic
-                .message
-                .starts_with("primary_user_only_custom_toolchain:")
-    }));
-}
-
-/// Verifies custom toolchain names, references, roots, and environment names
-/// fail closed before runtime filesystem discovery can occur.
-#[test]
-fn rejects_malformed_custom_toolchain_structure() {
-    let validation = validate_config_text(
-        ConfigFormat::Toml,
-        &format!(
-            "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n\
-             [permissions]\n\
-             sandbox = \"bubblewrap\"\n\
-             [permissions.bubblewrap]\n\
-             toolchains = [\"custom:Bad.Name\", \"custom:missing\"]\n\
-             [permissions.bubblewrap.custom_toolchains.\"Bad.Name\"]\n\
-             roots = [\"relative/root\"]\n\
-             path_entries = [\"4:../bin\"]\n\
-             required_executables = [\"0:/absolute\"]\n\
-             [permissions.bubblewrap.custom_toolchains.\"Bad.Name\".environment]\n\
-             PATH = \"0:.\"\n"
-        ),
-        ConfigScope::Primary,
-    );
-
-    assert!(!validation.valid);
-    for expected in [
-        "custom toolchain name",
-        "absolute printable root",
-        "root-relative reference",
-        "reserved environment",
-        "missing custom toolchain definition",
-    ] {
-        assert!(
-            validation
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.message.contains(expected)),
-            "missing `{expected}` in {:?}",
-            validation.diagnostics
-        );
+fn rejects_removed_toolchain_configuration() {
+    for scope in [ConfigScope::Primary, ConfigScope::ProjectOverlay] {
+        for (key, value) in [
+            ("toolchains", "[\"rust\"]"),
+            (
+                "custom_toolchains",
+                "{ acme = { roots = [\"/opt/acme\"] } }",
+            ),
+        ] {
+            let text = format!(
+                "version = {CURRENT_CONFIG_SCHEMA_VERSION}\n[permissions]\nsandbox = \"bubblewrap\"\n[permissions.bubblewrap]\n{key} = {value}\n"
+            );
+            let validation = validate_config_text(ConfigFormat::Toml, &text, scope);
+            let path = format!("permissions.bubblewrap.{key}");
+            assert!(!validation.valid, "{scope:?} accepted {path}");
+            assert!(
+                validation.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.path == path && diagnostic.message.contains("unknown")
+                }),
+                "missing removed-key diagnostic for {path}: {:?}",
+                validation.diagnostics
+            );
+        }
     }
 }
 
