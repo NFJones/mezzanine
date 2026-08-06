@@ -598,6 +598,45 @@ fn typed_child_launch_quotes_arguments_without_shell_fragments() {
 }
 
 #[test]
+/// Verifies a long typed POSIX child argument is split across bounded physical
+/// wrapper lines while preserving its one-argument argv boundary at execution.
+/// Forwarded sandbox environment values can exceed terminal line-discipline
+/// limits, so the wrapper must remain executable after source-line splitting.
+fn typed_child_launch_bounds_long_posix_argument_lines() {
+    let long_argument = "sandbox-path-segment:".repeat(200);
+    let launch = ShellChildLaunch::new(
+        "/bin/sh",
+        vec![
+            ShellChildArgument::Literal("-c".to_string()),
+            ShellChildArgument::Literal("test \"$2\" = \"$3\"".to_string()),
+            ShellChildArgument::Literal("sh".to_string()),
+            ShellChildArgument::MaterializedCommandFile,
+            ShellChildArgument::Literal(long_argument.clone()),
+            ShellChildArgument::Literal(long_argument),
+        ],
+    )
+    .unwrap();
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), "true")
+            .unwrap()
+            .with_child_launch(launch);
+    let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
+
+    assert!(
+        input.wrapper.lines().all(|line| line.len() <= 1024),
+        "{}",
+        input.wrapper
+    );
+    let output = run_sh_transaction(&input, "");
+    assert!(
+        output.status.success(),
+        "status={:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 /// Verifies typed child launches reject control data and ambiguous command
 /// file substitution before shell source is rendered.
 fn typed_child_launch_rejects_invalid_argv_contracts() {

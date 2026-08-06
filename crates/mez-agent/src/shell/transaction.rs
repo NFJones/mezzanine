@@ -717,11 +717,41 @@ fn fish_child_command_line(
 fn posix_typed_child_launch_words(launch: &ShellChildLaunch) -> String {
     std::iter::once(shell_quote(&launch.executable))
         .chain(launch.arguments.iter().map(|argument| match argument {
-            ShellChildArgument::Literal(value) => shell_quote(value),
+            ShellChildArgument::Literal(value) => posix_shell_quoted_argument(value),
             ShellChildArgument::MaterializedCommandFile => "\"$MEZ_COMMAND_FILE\"".to_string(),
         }))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Renders one POSIX argument without creating an oversized physical source line.
+///
+/// The transaction wrapper travels through a PTY before the shell reads it. Long
+/// forwarded environment values must therefore remain below conservative line
+/// discipline limits. Adjacent quoted words preserve one argument, while the
+/// escaped newline separates the generated source into bounded physical lines.
+fn posix_shell_quoted_argument(value: &str) -> String {
+    const MAX_QUOTED_ARGUMENT_LINE_BYTES: usize = 512;
+
+    if shell_quote(value).len() <= MAX_QUOTED_ARGUMENT_LINE_BYTES {
+        return shell_quote(value);
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for character in value.chars() {
+        current.push(character);
+        if shell_quote(&current).len() > MAX_QUOTED_ARGUMENT_LINE_BYTES {
+            let split_at = current.len() - character.len_utf8();
+            let remainder = current.split_off(split_at);
+            chunks.push(shell_quote(&current));
+            current = remainder;
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(shell_quote(&current));
+    }
+    chunks.join("\\\n")
 }
 
 /// Renders one typed child launch as Fish shell words.
