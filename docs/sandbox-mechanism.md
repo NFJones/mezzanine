@@ -98,8 +98,9 @@ Bubblewrap projects only the authority needed by the compiled plan:
   `apply_patch` phases instead use a deterministic no-forwarding profile and do
   not start pane-environment evidence transactions. Capability probing and
   workload compilation must use the same profile and evidence digest.
-- The default runtime environment is rebuilt from a fixed non-secret set with
-  a minimal PATH. Debian-style executable alternatives at `/etc/alternatives`
+- The default runtime environment is rebuilt from a fixed non-secret set. A
+  successfully resolved whitelisted `PATH` is forwarded unchanged; otherwise
+  the command-search path falls back to `/usr/bin:/bin`. Debian-style executable alternatives at `/etc/alternatives`
   are projected read-only so system compiler symlinks resolve. Host system and
   global Git configuration are disabled. A
   configured paired Git author name and email may be projected, but credential
@@ -110,8 +111,8 @@ Installed runtimes, SDKs, and compilers use ordinary scope authority. A
 configured read scope is mounted read-only at its canonical path; only a write
 scope grants write access. Every required loader, library, or dependency root
 must be scoped explicitly. Optional environment names may be allowlisted, but
-their values do not grant path authority and cannot override `/usr/bin:/bin`.
-External binaries therefore run by absolute path or a command-local `PATH`.
+their values do not grant path authority. A whitelisted `PATH` controls command
+lookup only; external runtime roots still require explicit read scopes.
 
 ## Network boundary
 

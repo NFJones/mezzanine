@@ -461,13 +461,14 @@ Current support reflects behavior implemented in the repository today.
   overflow GID even though its kernel credential remains active.
 - `permissions.bubblewrap.env_whitelist` selects environment variable names to
   read from the active pane process, including remote panes. It defaults to
-  `["PATH"]` for schema compatibility, but forwarded `PATH` cannot replace the
-  fixed `/usr/bin:/bin` command-search path. Set it explicitly to `[]` when no
+  `["PATH"]` for schema compatibility. When successfully resolved, a
+  whitelisted `PATH` is forwarded unchanged for command lookup; otherwise the
+  sandbox falls back to `/usr/bin:/bin`. Set it explicitly to `[]` when no
   optional pane variables are needed.
   Each unavailable or unsafe value is omitted with a redacted warning while
   Bubblewrap continues with reduced environment data. Values never appear in
-  status or logs and cannot override Mez-owned PATH, HOME, XDG, locale,
-  identity, shell, or Git isolation variables. Internal semantic `apply_patch`
+  status or logs and cannot override Mez-owned HOME, XDG, locale, identity,
+  shell, or Git isolation variables. Internal semantic `apply_patch`
   phases intentionally use the fixed sandbox environment without resolving or
   forwarding these optional pane values.
   `mez sandbox cache status [PATH]` reports usage without creating storage.
@@ -483,10 +484,9 @@ Current support reflects behavior implemented in the repository today.
   `permissions.read_scopes`; those paths are mounted read-only at their
   canonical locations. Add only required variable names to
   `permissions.bubblewrap.env_whitelist`; their values must already exist in
-  the active pane and remain redacted. Tools outside `/usr/bin` and `/bin` must
-  be invoked by absolute path or with a command-local `PATH`. Scoping one SDK
-  does not implicitly expose credentials, host caches, manager state, sockets,
-  dependency roots, or any writable package state.
+  the active pane and remain redacted. A whitelisted `PATH` controls command
+  lookup only; scoping one SDK does not implicitly expose credentials, host
+  caches, manager state, sockets, dependency roots, or writable package state.
 - In the agent shell, `/sandbox` and `/sandbox status` report the effective
   backend and its pane-override or global-default provenance. `/sandbox enable
   --yes` and `/sandbox disable --yes` affect only the current pane and do not

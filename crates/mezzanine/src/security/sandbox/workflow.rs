@@ -309,9 +309,9 @@ pub(crate) fn plan_sandbox_workflow(request: SandboxWorkflowRequest<'_>) -> Sand
         diagnostics.push(SandboxWorkflowDiagnostic {
             id: "sandbox.minimal-path",
             severity: SandboxDiagnosticSeverity::Info,
-            summary: "Bubblewrap uses a minimal executable path".to_string(),
-            details: "The sandbox PATH is fixed to /usr/bin:/bin; scoped executables outside those directories require an absolute path or command-local PATH.".to_string(),
-            remedy: "Use narrow read scopes for external executable roots and invoke those tools explicitly without changing the sandbox-wide PATH.".to_string(),
+            summary: "Bubblewrap uses a controlled executable path".to_string(),
+            details: "A successfully resolved whitelisted PATH controls sandbox command lookup; otherwise Bubblewrap falls back to /usr/bin:/bin.".to_string(),
+            remedy: "Use narrow read scopes for external executable roots and include PATH in permissions.bubblewrap.env_whitelist when command lookup requires it.".to_string(),
             affected_path: None,
             source: "bubblewrap",
         });

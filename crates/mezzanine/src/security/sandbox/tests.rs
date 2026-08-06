@@ -163,6 +163,60 @@ fn capability(config: &BubblewrapConfig) -> BubblewrapCapability {
         .unwrap()
 }
 
+/// Builds a capability whose digest is bound to the supplied pane environment
+/// evidence, matching the production probe and launch sequence.
+fn capability_with_environment(
+    config: &BubblewrapConfig,
+    environment_evidence: &mez_agent::shell::PaneEnvironmentEvidence,
+) -> BubblewrapCapability {
+    let identity = resolve_sandbox_identity(
+        &config.group_whitelist,
+        &identity::current_process_environment_signature().unwrap(),
+    )
+    .unwrap();
+    let plan = bubblewrap_capability_probe_plan_for_identity(
+        config,
+        "/bin/sh",
+        &identity,
+        environment_evidence,
+    )
+    .unwrap();
+    parse_bubblewrap_capability_probe("%1", "pane-env-sha256", 0, &plan, 0, plan.expected_stdout)
+        .unwrap()
+}
+
+/// Verifies a verified PATH named by the environment whitelist reaches both
+/// the capability profile and the ordinary sandbox workload unchanged.
+#[test]
+fn sandbox_compiler_forwards_whitelisted_path() {
+    let mut config = config();
+    config.env_whitelist = ConfiguredSandboxEnvironment {
+        requested_names: vec!["PATH".to_string()],
+    };
+    let environment_request =
+        mez_agent::shell::PaneEnvironmentRequest::new(config.env_whitelist.requested_names.clone())
+            .unwrap();
+    let environment_evidence = mez_agent::shell::PaneEnvironmentEvidence::from_parts(
+        &environment_request,
+        BTreeMap::from([(
+            "PATH".to_string(),
+            "/home/mez/.cargo/bin:/usr/bin:/bin".to_string(),
+        )]),
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let authority = authority();
+    let evaluation = evaluation(EffectCompleteness::Unknown, effects());
+    let mut compile_request = request(&config, &authority, &evaluation);
+    compile_request.capability = capability_with_environment(&config, &environment_evidence);
+    compile_request.environment_evidence = &environment_evidence;
+
+    let plan = compile_bubblewrap_launch_plan(compile_request).unwrap();
+    assert!(plan.arguments.windows(3).any(|arguments| {
+        arguments == ["--setenv", "PATH", "/home/mez/.cargo/bin:/usr/bin:/bin"]
+    }));
+}
+
 /// Prompt evaluations may compile for sandbox-first execution, while hard
 /// forbids remain terminal and cannot produce a Bubblewrap launch plan.
 #[test]
@@ -1111,10 +1165,11 @@ fn omitted_git_identity_does_not_invent_author_values() {
     }));
 }
 
-/// Default PATH evidence cannot override Bubblewrap's fixed minimal path, and
-/// values outside the configured whitelist remain absent from its environment.
+/// Verified default PATH evidence reaches the Bubblewrap command-search path,
+/// while values outside the configured whitelist remain absent from its
+/// environment.
 #[test]
-fn default_pane_environment_uses_fixed_minimal_path() {
+fn default_pane_environment_forwards_whitelisted_path() {
     let config = config();
     let environment_request =
         mez_agent::shell::PaneEnvironmentRequest::new(config.env_whitelist.requested_names.clone())
@@ -1157,7 +1212,7 @@ fn default_pane_environment_uses_fixed_minimal_path() {
     assert!(
         plan.arguments
             .windows(3)
-            .any(|arguments| arguments == ["--setenv", "PATH", "/usr/bin:/bin"])
+            .any(|arguments| arguments == ["--setenv", "PATH", "/opt/tools:/usr/bin"])
     );
     assert!(
         !plan

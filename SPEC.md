@@ -2989,8 +2989,10 @@ logs. Internal semantic `apply_patch` phases MUST NOT resolve or forward these
 optional values; their capability probe and workload compilation MUST use the
 same deterministic digest-bound no-forwarding profile. The fixed sandbox HOME,
 XDG, locale, identity, shell, and Git isolation variables MUST NOT be
-overridden. Forwarded `PATH` MUST NOT replace the fixed `/usr/bin:/bin`
-command-search path for ordinary actions. Forwarding MUST NOT grant filesystem, socket, network, group, or
+overridden. When `PATH` is successfully resolved through the whitelist, it MUST
+be used unchanged as the command-search path for ordinary actions. When `PATH`
+is absent or omitted, the command-search path MUST fall back to `/usr/bin:/bin`.
+Forwarding MUST NOT grant filesystem, socket, network, group, or
 credential authority. The active pane
 shell's primary group MUST remain automatic and MUST NOT be listed. Entries
 MUST be non-empty printable non-numeric group names; duplicate configured
@@ -3189,12 +3191,11 @@ authority. Scoping one root MUST NOT implicitly expose credentials, manager
 state, caches, sockets, loaders, libraries, dependency roots, or unrelated
 installations. Every required external root MUST be authorized explicitly.
 
-The sandbox command-search `PATH` MUST remain exactly `/usr/bin:/bin` after
-optional pane environment forwarding. `permissions.bubblewrap.env_whitelist`
-MUST NOT override `PATH`, `HOME`, `SHELL`, XDG paths, locale, identity, Git
-isolation, or any other Mezzanine-owned invariant. Binaries outside the fixed
-search path MUST be invoked by absolute path or by a command-local `PATH`
-assignment. Forwarded variables MUST already exist in the active pane, MUST
+The sandbox command-search `PATH` MUST equal the successfully resolved pane
+`PATH` when `PATH` is listed in `permissions.bubblewrap.env_whitelist`; it MUST
+otherwise fall back to `/usr/bin:/bin`. `permissions.bubblewrap.env_whitelist`
+MUST NOT override `HOME`, `SHELL`, XDG paths, locale, identity, Git isolation,
+or any other Mezzanine-owned invariant. Forwarded variables MUST already exist in the active pane, MUST
 remain value-redacted from status, warnings, telemetry, snapshots, and audit,
 and MUST NOT grant filesystem, socket, network, group, or credential
 authority.

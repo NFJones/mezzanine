@@ -50,8 +50,8 @@ pub(crate) use workflow::{
     effective_sandbox_boundary, plan_sandbox_workflow,
 };
 
-/// Version of the fixed runtime projection emitted by this compiler.
-pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v13";
+/// Version of the runtime projection emitted by this compiler.
+pub(crate) const BUBBLEWRAP_RUNTIME_PROFILE_VERSION: &str = "bubblewrap-v14";
 /// Runtime-owned descriptor used for Bubblewrap lifecycle status documents.
 pub(crate) const BUBBLEWRAP_STATUS_FD: u8 = 3;
 
@@ -476,6 +476,7 @@ pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
     let user_id = identity.user_id;
     let group_id = identity.primary_group_id;
     let sandbox_home = sandbox_home_path(&identity.user_name);
+    let executable_path = sandbox_command_path(environment_evidence);
     let expected_stdout = "mez-bubblewrap-capability-v6";
     let probe_script = format!(
         "test ! -e /etc/passwd && test \"$(id -u)\" = '{user_id}' && test \"$(id -g)\" = '{group_id}' && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
@@ -526,7 +527,7 @@ pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
         sandbox_home.as_str(),
         "--setenv",
         "PATH",
-        MINIMAL_PATH,
+        executable_path,
         "--setenv",
         "TMPDIR",
         "/tmp",
@@ -1192,12 +1193,7 @@ fn bubblewrap_arguments(
         .into_iter()
         .map(str::to_string),
     );
-    for (name, value) in request
-        .environment_evidence
-        .values
-        .iter()
-        .filter(|(name, _)| name.as_str() != "PATH")
-    {
+    for (name, value) in &request.environment_evidence.values {
         arguments.extend(
             ["--setenv", name.as_str(), value.as_str()]
                 .into_iter()
@@ -1229,7 +1225,7 @@ fn bubblewrap_arguments(
                 .map(str::to_string),
         );
     }
-    let executable_path = MINIMAL_PATH;
+    let executable_path = sandbox_command_path(request.environment_evidence);
     arguments.extend(
         [
             "--chdir",
@@ -1278,6 +1274,16 @@ fn bubblewrap_arguments(
         .map(str::to_string),
     );
     arguments
+}
+
+/// Selects the verified pane command-search path or the minimal fallback when
+/// PATH was not configured or could not be safely resolved.
+fn sandbox_command_path(environment_evidence: &mez_agent::shell::PaneEnvironmentEvidence) -> &str {
+    environment_evidence
+        .values
+        .get("PATH")
+        .map(String::as_str)
+        .unwrap_or(MINIMAL_PATH)
 }
 
 fn launch_plan_sha256(executable: &str, arguments: &[String]) -> String {
