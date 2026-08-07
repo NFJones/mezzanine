@@ -507,6 +507,37 @@ impl RuntimeSessionService {
             }
         }
 
+        if path_resolution_required {
+            match self.pane_readiness_state(&turn.pane_id) {
+                PaneReadinessState::Ready => {}
+                PaneReadinessState::Unknown
+                | PaneReadinessState::PromptCandidate
+                | PaneReadinessState::Degraded => {
+                    if !self.turn_has_running_readiness_probe(&turn.turn_id) {
+                        self.dispatch_readiness_probe_to_pane(&turn)?;
+                    }
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        "provider_task deferred reason=path_resolution_readiness_probe",
+                    )?;
+                    return Ok(None);
+                }
+                PaneReadinessState::Probing => {
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        "provider_task deferred reason=path_resolution_readiness_probe_pending",
+                    )?;
+                    return Ok(None);
+                }
+                PaneReadinessState::Busy
+                | PaneReadinessState::FullScreen
+                | PaneReadinessState::PasswordPrompt
+                | PaneReadinessState::InteractiveBlocked => {}
+            }
+        }
+
         let resolved_primary_path_scopes = if let Some(request) = primary_path_resolution_request {
             match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {
                 Some(scopes) => Some(scopes),

@@ -115,6 +115,182 @@ fn selected_routed_loop(
     (service, parent_turn_id, worker_turn)
 }
 
+/// Verifies concurrent routed workers spawned by independent parent panes can
+/// share one subagent bucket without sharing bootstrap or readiness ownership.
+///
+/// The second worker exercises the existing-window split path that differs
+/// from the first worker's new-window path. Both panes must retain independent
+/// bounded bootstrap transactions before either provider is allowed to run.
+#[test]
+fn runtime_concurrent_routed_workers_share_bucket_with_independent_bootstraps() {
+    let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(2)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    let second_parent_pane = service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    service.session.select_pane(&primary, "%1").unwrap();
+    for pane_id in ["%1", second_parent_pane.as_str()] {
+        let mut screen = TerminalScreen::new(Size::new(40, 12).unwrap(), 20).unwrap();
+        screen.feed(b"ready\n");
+        service.set_pane_screen(pane_id.to_string(), screen);
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume(pane_id)
+            .unwrap();
+        service
+            .execute_agent_shell_loop_command(pane_id, "/loop inspect shared routed startup")
+            .unwrap();
+    }
+
+    let parent_turns = ["%1", second_parent_pane.as_str()].map(|pane_id| {
+        service
+            .agent_loop_turns_for_tests()
+            .iter()
+            .find(|(_, loop_turn)| loop_turn.pane_id == pane_id)
+            .map(|(turn_id, _)| turn_id.clone())
+            .expect("each parent pane should own a routed loop turn")
+    });
+    let mut worker_turns = Vec::new();
+    for (pane_id, parent_turn_id) in ["%1", second_parent_pane.as_str()]
+        .into_iter()
+        .zip(parent_turns)
+    {
+        let worker_profile = service
+            .agent_turn_model_profile(&parent_turn_id)
+            .cloned()
+            .expect("parent profile should exist");
+        service
+            .apply_routing_selected_transition(
+                &AgentId::opaque(format!("agent-{pane_id}")).unwrap(),
+                &parent_turn_id,
+                AutoSizingRoutingSelection {
+                    selected_profile: worker_profile,
+                    selected_profile_name: "default".to_string(),
+                    routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                    decision_summary: None,
+                    fallback: None,
+                },
+            )
+            .unwrap();
+        let worker_turn_id = service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .and_then(|workflow| workflow.child_turn_id.clone())
+            .expect("routing selection should create a worker turn");
+        worker_turns.push(
+            service
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .find(|turn| turn.turn_id == worker_turn_id)
+                .cloned()
+                .expect("worker turn should remain in the ledger"),
+        );
+    }
+
+    let worker_windows = worker_turns
+        .iter()
+        .map(|turn| {
+            service
+                .find_pane_descriptor(&turn.pane_id)
+                .expect("worker pane should remain in the layout")
+                .window_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(worker_windows[0], worker_windows[1]);
+    assert_ne!(worker_turns[0].pane_id, worker_turns[1].pane_id);
+    for worker in &worker_turns {
+        assert!(service.pane_bootstrap_is_pending_for_tests(&worker.pane_id));
+        assert!(service.pane_bootstrap_has_bounded_progress_owner(&worker.pane_id));
+        assert!(
+            service
+                .running_shell_transactions_for_tests()
+                .values()
+                .any(|transaction| transaction.pane_id == worker.pane_id
+                    && transaction.kind == RunningShellTransactionKind::Bootstrap)
+        );
+    }
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a routed provider claim defers path resolution while its worker
+/// pane is only a prompt candidate instead of failing the worker lifecycle.
+///
+/// Prompt-candidate is explicitly probeable readiness. A provider prerequisite
+/// must retain the pending provider task behind a bounded readiness probe so a
+/// later successful probe can retry canonical path resolution.
+#[test]
+fn runtime_routed_worker_provider_probes_before_prompt_candidate_path_resolution() {
+    let root = temp_root("runtime-routed-worker-provider-prompt-candidate");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 recover routed prompt candidate");
+    configure_routed_path_resolution_bubblewrap(&mut service, &root);
+    service.set_pane_environment_signature_for_tests(
+        &worker_turn.pane_id,
+        routed_path_resolution_environment(&root),
+    );
+    let bootstrap_markers = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .filter(|(_, transaction)| {
+            transaction.pane_id == worker_turn.pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap
+        })
+        .map(|(marker, _)| marker.clone())
+        .collect::<Vec<_>>();
+    for marker in bootstrap_markers {
+        service
+            .running_shell_transactions_mut_for_tests()
+            .remove(&marker);
+        service.clear_shell_transaction_protocol_state(&marker);
+    }
+    service.set_pane_readiness(&worker_turn.pane_id, PaneReadinessState::PromptCandidate);
+    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    assert!(service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| transaction.pane_id == worker_turn.pane_id
+                && transaction.turn_id == worker_turn.turn_id
+                && transaction.kind == RunningShellTransactionKind::ReadinessProbe)
+    );
+    assert_eq!(
+        service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult)
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies restart metadata retains only the durable routed parent and never
 /// restores its managed worker as an ordinary session on the parent transcript.
 #[test]
