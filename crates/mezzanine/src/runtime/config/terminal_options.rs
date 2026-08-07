@@ -54,6 +54,57 @@ pub(crate) fn runtime_pane_spawn_directory_policy_from_config(
     }
 }
 
+/// Selects the surface shown after an ordinary pane process is created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaneSpawnViewPolicy {
+    /// Leave the retained process shell visible.
+    Shell,
+    /// Enter the pane-local agent shell after retaining the process shell.
+    Agent,
+}
+
+/// Groups the policies applied only to future ordinary pane creation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaneSpawnPolicy {
+    /// Starting-directory behavior when creation omits an explicit directory.
+    pub(crate) directory: PaneSpawnDirectoryPolicy,
+    /// Surface shown after the retained process shell has started.
+    pub(crate) view: PaneSpawnViewPolicy,
+}
+
+impl Default for PaneSpawnPolicy {
+    fn default() -> Self {
+        Self {
+            directory: PaneSpawnDirectoryPolicy::Home,
+            view: PaneSpawnViewPolicy::Shell,
+        }
+    }
+}
+
+/// Reads the configured initial surface policy for ordinary pane creation.
+pub(crate) fn runtime_pane_spawn_view_policy_from_config(
+    root: &Value,
+) -> Result<PaneSpawnViewPolicy> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(PaneSpawnViewPolicy::Shell);
+    };
+    let Some(value) = terminal.get("pane_spawn_view") else {
+        return Ok(PaneSpawnViewPolicy::Shell);
+    };
+    let Some(policy) = runtime_json_string(Some(value)) else {
+        return Err(MezError::config(
+            "terminal.pane_spawn_view must be a string",
+        ));
+    };
+    match policy {
+        "shell" => Ok(PaneSpawnViewPolicy::Shell),
+        "agent" => Ok(PaneSpawnViewPolicy::Agent),
+        _ => Err(MezError::config(
+            "terminal.pane_spawn_view must be shell or agent",
+        )),
+    }
+}
+
 /// Runs the runtime history limit from config operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

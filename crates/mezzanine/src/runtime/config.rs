@@ -79,9 +79,10 @@ pub(super) use providers::{
     runtime_recommended_model_for_provider,
 };
 pub(super) use terminal_options::{
-    PaneSpawnDirectoryPolicy, runtime_history_limit_from_config,
-    runtime_history_rotate_lines_from_config, runtime_host_clipboard_from_config,
-    runtime_pane_spawn_directory_policy_from_config, runtime_saved_agent_session_limit_from_config,
+    PaneSpawnDirectoryPolicy, PaneSpawnPolicy, PaneSpawnViewPolicy,
+    runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
+    runtime_host_clipboard_from_config, runtime_pane_spawn_directory_policy_from_config,
+    runtime_pane_spawn_view_policy_from_config, runtime_saved_agent_session_limit_from_config,
     runtime_terminal_agent_wrap_column_cap_from_config, runtime_terminal_clipboard_from_config,
     runtime_terminal_completion_attention_flashing_from_config,
     runtime_terminal_cursor_blink_from_config,

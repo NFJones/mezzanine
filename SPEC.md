@@ -218,9 +218,12 @@ the terminal output for harness-initiated transactions. The default model
 context MUST NOT include passive snapshots of the pane's visible terminal
 buffer or bounded history.
 
-The agent harness MUST always be available for every pane. Mezzanine MUST NOT
-enter the agent shell by default when creating or attaching to a pane; the user
-MUST explicitly enter it with the configured agent shell key binding or command.
+The agent harness MUST always be available for every pane. Attaching to a pane
+MUST NOT change its current surface. Ordinary pane creation MUST initially show
+the process shell by default, but MAY enter the agent shell immediately when
+configured by `terminal.pane_spawn_view`. The process shell MUST still be
+created and retained so the existing agent-shell switching mechanisms restore
+it and can re-enter the same agent session.
 
 Each pane MUST launch or attach to a Unix-like shell from the resolved shell
 path as the initial primary process unless it is attaching to an already-live
@@ -2612,7 +2615,7 @@ an actionable diagnostic. Users who want a pane to run a command instead of an
 interactive shell MUST provide that command explicitly through pane or window
 creation.
 
-The `terminal` table MUST support `profile`, `term`, `pane_spawn_directory`, `true_color`, `mouse`,
+The `terminal` table MUST support `profile`, `term`, `pane_spawn_directory`, `pane_spawn_view`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
 `clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_multiplexer`,
 `passthrough`, `emoji_width`, `reduced_motion`, `completion_attention_flashing`, `resize_debounce_ms`,
@@ -2634,6 +2637,18 @@ fall back to the daemon working directory. If home is unavailable or unusable,
 creation MUST fail before layout mutation. Reloading this setting affects only
 future spawns. Initial session launch, snapshot restoration, and subagent
 placement retain their separately specified directory behavior.
+
+`terminal.pane_spawn_view` MUST default to `shell` and MUST accept `shell` or
+`agent`. For ordinary pane, window, and group creation, `shell` MUST leave the
+retained process shell visible. `agent` MUST first create that same process
+shell and retained process surface, then enter the existing pane-local agent
+shell before reporting creation success. Existing agent-shell hide, show, and
+toggle mechanisms MUST restore the retained process surface and re-enter the
+same agent session. Reloading this setting affects only future ordinary pane
+creation. Initial session launch, attach or reattach, snapshot restoration,
+explicit resume and approval flows, and subagent creation retain their
+separately specified view behavior. If policy-driven agent entry fails, pane
+creation MUST roll back the new process, pane-local runtime state, and layout.
 
 `terminal.reduced_motion` MUST default to false. When true, optional
 frame/status animations MUST render as static UI while preserving the same
@@ -3200,6 +3215,10 @@ remain.
 Schema v52 adds `terminal.pane_spawn_directory`. The v51 to v52 primary-config
 migration MUST add `terminal.pane_spawn_directory = "home"` when absent for
 TOML, YAML, and JSON documents and MUST preserve an existing explicit value.
+
+Schema v53 adds `terminal.pane_spawn_view`. The v52 to v53 primary-config
+migration MUST add `terminal.pane_spawn_view = "shell"` when absent for TOML,
+YAML, and JSON documents and MUST preserve an existing explicit value.
 
 Bubblewrap filesystem access to installed runtimes, SDKs, compilers, package
 managers, and other external tools MUST use the same generic

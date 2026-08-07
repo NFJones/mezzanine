@@ -848,6 +848,7 @@ pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "terminal.term"
                 | "terminal.profile"
                 | "terminal.pane_spawn_directory"
+                | "terminal.pane_spawn_view"
                 | "terminal.cursor_style"
                 | "terminal.cursor_blink"
                 | "terminal.cursor_blink_interval_ms"

@@ -135,7 +135,7 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 52"));
+    assert!(plan.text.contains("version = 53"));
     assert!(plan.text.contains("emoji_width = \"wide\""));
     assert!(plan.text.contains("agent_wrap_column_cap = 120"));
     assert!(!plan.text.contains("detach_behavior"));
@@ -215,7 +215,10 @@ approval = "legacy-fast-approval"
     assert_eq!(plan.from_version, 13);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert_eq!(values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert_eq!(
         values.get("auth.provider_refresh_leeway_seconds"),
         Some(&"3600".to_string())
@@ -334,7 +337,10 @@ fn migrates_json_primary_config_to_current_schema() {
 
     let plan = migrate_config_text(ConfigFormat::Json, legacy).unwrap();
     let values = extract_config_values(ConfigFormat::Json, &plan.text);
-    assert_eq!(values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -409,7 +415,10 @@ context_window_tokens = 524288
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -457,7 +466,10 @@ fn migrates_json_deepseek_v4_context_defaults_to_current_schema() {
 
     assert_eq!(plan.from_version, 6);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert_eq!(
         values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -488,7 +500,10 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
-    assert_eq!(missing_values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        missing_values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert_eq!(
         missing_values.get("terminal.emoji_width"),
         Some(&"wide".to_string())
@@ -500,7 +515,10 @@ fn migrates_terminal_emoji_width_default_to_current_schema() {
     )
     .unwrap();
     let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
-    assert_eq!(explicit_values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        explicit_values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert_eq!(
         explicit_values.get("terminal.emoji_width"),
         Some(&"narrow".to_string())
@@ -527,7 +545,10 @@ fn migrates_agent_wrap_column_cap_default_to_current_schema() {
     )
     .unwrap();
     let missing_values = extract_config_values(ConfigFormat::Toml, &missing.text);
-    assert_eq!(missing_values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        missing_values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert_eq!(
         missing_values.get("terminal.agent_wrap_column_cap"),
         Some(&"120".to_string())
@@ -539,7 +560,10 @@ fn migrates_agent_wrap_column_cap_default_to_current_schema() {
     )
     .unwrap();
     let explicit_values = extract_config_values(ConfigFormat::Toml, &explicit.text);
-    assert_eq!(explicit_values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        explicit_values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert_eq!(
         explicit_values.get("terminal.agent_wrap_column_cap"),
         Some(&"96".to_string())
@@ -573,7 +597,10 @@ fn migrates_schema_19_implementation_pressure_setting_to_schema_20() {
         assert_eq!(plan.from_version, 19);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         assert!(plan.changed);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert_eq!(values.get("agents.loop_limit"), Some(&"9".to_string()));
         assert!(!values.contains_key("agents.implementation_pressure_after_shell_actions"));
     }
@@ -592,7 +619,10 @@ fn migrates_schema_20_permissions_without_inferred_authority() {
 
     assert_eq!(plan.from_version, 20);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert_eq!(
         values.get("permissions.sandbox"),
         Some(&"policy-only".to_string())
@@ -619,7 +649,10 @@ fn migrates_schema_23_without_inventing_git_identity() {
 
     assert_eq!(plan.from_version, 23);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert!(!values.contains_key("permissions.bubblewrap.git_user_name"));
     assert!(!values.contains_key("permissions.bubblewrap.git_user_email"));
 }
@@ -637,7 +670,10 @@ fn migrates_schema_24_without_enabling_toolchains() {
 
     assert_eq!(plan.from_version, 24);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-    assert_eq!(values.get("version"), Some(&"52".to_string()));
+    assert_eq!(
+        values.get("version"),
+        Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+    );
     assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
 }
 
@@ -654,7 +690,10 @@ fn migrates_schema_25_without_enabling_zig() {
 
         assert_eq!(plan.from_version, 25);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("zig"));
@@ -674,7 +713,10 @@ fn migrates_schema_26_without_enabling_go() {
 
         assert_eq!(plan.from_version, 26);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("go"));
@@ -694,7 +736,10 @@ fn migrates_schema_27_without_enabling_deno() {
 
         assert_eq!(plan.from_version, 27);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("deno"));
@@ -714,7 +759,10 @@ fn migrates_schema_28_without_enabling_bun() {
 
         assert_eq!(plan.from_version, 28);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("bun"));
@@ -734,7 +782,10 @@ fn migrates_schema_29_without_enabling_node() {
 
         assert_eq!(plan.from_version, 29);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("node"));
@@ -754,7 +805,10 @@ fn migrates_schema_30_without_enabling_python() {
 
         assert_eq!(plan.from_version, 30);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("python"));
@@ -774,7 +828,10 @@ fn migrates_schema_31_without_enabling_custom_toolchains() {
 
         assert_eq!(plan.from_version, 31);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
@@ -795,7 +852,10 @@ fn migrates_schema_32_without_enabling_jdk() {
 
         assert_eq!(plan.from_version, 32);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("jdk"));
@@ -815,7 +875,10 @@ fn migrates_schema_33_without_enabling_dotnet() {
 
         assert_eq!(plan.from_version, 33);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("dotnet"));
@@ -835,7 +898,10 @@ fn migrates_schema_34_without_enabling_dart() {
 
         assert_eq!(plan.from_version, 34);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("dart"));
@@ -855,7 +921,10 @@ fn migrates_schema_35_without_enabling_kotlin() {
 
         assert_eq!(plan.from_version, 35);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("kotlin"));
@@ -875,7 +944,10 @@ fn migrates_schema_36_without_enabling_ruby() {
 
         assert_eq!(plan.from_version, 36);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("ruby"));
@@ -895,7 +967,10 @@ fn migrates_schema_37_without_enabling_php_or_composer() {
 
         assert_eq!(plan.from_version, 37);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("php"));
@@ -916,7 +991,10 @@ fn migrates_schema_38_without_enabling_erlang_or_elixir() {
 
         assert_eq!(plan.from_version, 38);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("erlang"));
@@ -937,7 +1015,10 @@ fn migrates_schema_39_without_enabling_haskell_toolchains() {
 
         assert_eq!(plan.from_version, 39);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("ghc"));
@@ -959,7 +1040,10 @@ fn migrates_schema_40_without_enabling_ocaml() {
 
         assert_eq!(plan.from_version, 40);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("ocaml"));
@@ -979,7 +1063,10 @@ fn migrates_schema_41_without_enabling_native_toolchains() {
 
         assert_eq!(plan.from_version, 41);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         for kind in ["llvm", "gcc", "cmake", "ninja", "meson"] {
@@ -1001,7 +1088,10 @@ fn migrates_schema_42_without_enabling_swift() {
 
         assert_eq!(plan.from_version, 42);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("swift"));
@@ -1021,7 +1111,10 @@ fn migrates_schema_43_without_enabling_jvm_build_tools() {
 
         assert_eq!(plan.from_version, 43);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.bubblewrap.toolchains"));
         assert!(!plan.text.contains("custom_toolchains"));
         assert!(!plan.text.contains("maven"));
@@ -1052,7 +1145,10 @@ fn migrates_schema_44_by_removing_inert_permission_trust_lists() {
 
         assert_eq!(plan.from_version, 44);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(!values.contains_key("permissions.trusted_directories"));
         assert!(!values.contains_key("permissions.trusted_projects"));
         assert_eq!(
@@ -1085,7 +1181,10 @@ fn migrates_schema_45_with_completion_attention_flashing_enabled() {
 
         assert_eq!(plan.from_version, 45);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert_eq!(
             values.get("terminal.completion_attention_flashing"),
             Some(&"true".to_string())
@@ -1123,7 +1222,10 @@ fn migrates_schema_46_with_two_runtime_workers() {
 
         assert_eq!(plan.from_version, 46);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert_eq!(values.get("runtime.cpu_count"), Some(&"2".to_string()));
         assert_eq!(values.get("terminal.mouse"), Some(&"true".to_string()));
     }
@@ -1153,7 +1255,10 @@ fn migrates_schema_47_with_empty_group_whitelist() {
 
         assert_eq!(plan.from_version, 47);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert_eq!(
             values.get("permissions.bubblewrap.group_whitelist"),
             Some(&"[]".to_string())
@@ -1184,7 +1289,10 @@ fn migrates_schema_48_group_whitelist_name() {
 
         assert_eq!(plan.from_version, 48);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert!(plan.text.contains("group_whitelist"), "{}", plan.text);
         assert!(plan.text.contains("sudo"), "{}", plan.text);
         assert!(plan.text.contains("docker"), "{}", plan.text);
@@ -1240,7 +1348,10 @@ fn migrates_schema_49_with_empty_env_whitelist() {
         let values = extract_config_values(format, &plan.text);
         assert_eq!(plan.from_version, 49);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert_eq!(
             values.get("permissions.bubblewrap.env_whitelist"),
             Some(&"[]".to_string())
@@ -1271,7 +1382,10 @@ fn migrates_schema_50_without_toolchain_configuration() {
         let migrated = parse_config_json_value(format, &plan.text).unwrap();
         assert_eq!(plan.from_version, 50);
         assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert_eq!(
             migrated
                 .pointer("/permissions/bubblewrap/env_whitelist")
@@ -1314,7 +1428,10 @@ fn migrates_schema_51_with_pane_spawn_directory_policy() {
         let missing_values = extract_config_values(format, &missing_plan.text);
         assert_eq!(missing_plan.from_version, 51);
         assert_eq!(missing_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(missing_values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            missing_values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert_eq!(
             missing_values.get("terminal.pane_spawn_directory"),
             Some(&"home".to_string())
@@ -1324,10 +1441,54 @@ fn migrates_schema_51_with_pane_spawn_directory_policy() {
         let explicit_values = extract_config_values(format, &explicit_plan.text);
         assert_eq!(explicit_plan.from_version, 51);
         assert_eq!(explicit_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
-        assert_eq!(explicit_values.get("version"), Some(&"52".to_string()));
+        assert_eq!(
+            explicit_values.get("version"),
+            Some(&CURRENT_CONFIG_SCHEMA_VERSION.to_string())
+        );
         assert_eq!(
             explicit_values.get("terminal.pane_spawn_directory"),
             Some(&"same-directory".to_string())
+        );
+    }
+}
+
+/// Verifies schema v53 backfills shell view in every supported format while
+/// preserving an explicit request to show the agent surface after pane spawn.
+#[test]
+fn migrates_schema_52_with_pane_spawn_view_policy() {
+    for (format, missing, explicit) in [
+        (
+            ConfigFormat::Toml,
+            "version = 52\n[terminal]\nterm = \"screen-256color\"\n",
+            "version = 52\n[terminal]\npane_spawn_view = \"agent\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":52,"terminal":{"term":"screen-256color"}}"#,
+            r#"{"version":52,"terminal":{"pane_spawn_view":"agent"}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 52\nterminal:\n  term: screen-256color\n",
+            "version: 52\nterminal:\n  pane_spawn_view: agent\n",
+        ),
+    ] {
+        let missing_plan = migrate_config_text(format, missing).unwrap();
+        let missing_values = extract_config_values(format, &missing_plan.text);
+        assert_eq!(missing_plan.from_version, 52);
+        assert_eq!(missing_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            missing_values.get("terminal.pane_spawn_view"),
+            Some(&"shell".to_string())
+        );
+
+        let explicit_plan = migrate_config_text(format, explicit).unwrap();
+        let explicit_values = extract_config_values(format, &explicit_plan.text);
+        assert_eq!(explicit_plan.from_version, 52);
+        assert_eq!(explicit_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            explicit_values.get("terminal.pane_spawn_view"),
+            Some(&"agent".to_string())
         );
     }
 }

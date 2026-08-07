@@ -413,6 +413,7 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
     "profile",
     "term",
     "pane_spawn_directory",
+    "pane_spawn_view",
     "true_color",
     "mouse",
     "bracketed_paste",

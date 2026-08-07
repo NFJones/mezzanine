@@ -808,7 +808,7 @@ fn rejects_invalid_terminal_term_and_profile_values() {
 fn rejects_invalid_terminal_presentation_values() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[terminal]\npane_spawn_directory = \"daemon\"\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nemoji_width = \"auto\"\nreduced_motion = \"sometimes\"\ncompletion_attention_flashing = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\nrender_rate_limit_fps = -1\n",
+        "[terminal]\npane_spawn_directory = \"daemon\"\npane_spawn_view = \"editor\"\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nemoji_width = \"auto\"\nreduced_motion = \"sometimes\"\ncompletion_attention_flashing = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\nrender_rate_limit_fps = -1\n",
         ConfigScope::Primary,
     );
 
@@ -816,6 +816,10 @@ fn rejects_invalid_terminal_presentation_values() {
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.pane_spawn_directory"
             && diagnostic.message == "terminal.pane_spawn_directory must be home or same-directory"
+    }));
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "terminal.pane_spawn_view"
+            && diagnostic.message == "terminal.pane_spawn_view must be shell or agent"
     }));
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.cursor_style"

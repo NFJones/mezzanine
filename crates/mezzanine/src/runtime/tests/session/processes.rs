@@ -1123,6 +1123,140 @@ fn runtime_pane_spawn_directory_policy_falls_back_and_preserves_explicit_precede
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies ordinary pane creation retains shell view by default and a live
+/// policy refresh makes only later panes enter the agent surface. The process
+/// screen must remain present so hiding the agent restores the shell view.
+#[test]
+fn runtime_pane_spawn_view_policy_applies_to_future_spawns() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let shell_started = service
+        .create_window_with_pane_process(&primary, "shell", true, Some("cat >/dev/null"))
+        .unwrap();
+    assert!(
+        service
+            .process_pane_screen(&shell_started.pane_id)
+            .is_some()
+    );
+    assert!(service.agent_pane_screen(&shell_started.pane_id).is_none());
+    assert!(
+        service
+            .agent_shell_store()
+            .get(&shell_started.pane_id)
+            .is_none()
+    );
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\npane_spawn_view = \"agent\"\n".to_string(),
+        }])
+        .unwrap();
+    let agent_started = service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .unwrap();
+    assert!(
+        service
+            .process_pane_screen(&agent_started.pane_id)
+            .is_some()
+    );
+    assert!(service.agent_pane_screen(&agent_started.pane_id).is_some());
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(&agent_started.pane_id)
+            .map(|session| session.visibility),
+        Some(AgentShellVisibility::Visible)
+    );
+    assert_eq!(
+        service.presented_pane_surface(&agent_started.pane_id),
+        PaneSurfaceKind::Agent
+    );
+
+    service
+        .agent_shell_store_mut()
+        .request_exit(&agent_started.pane_id)
+        .unwrap();
+    assert_eq!(
+        service.presented_pane_surface(&agent_started.pane_id),
+        PaneSurfaceKind::Process
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies the agent spawn-view policy covers ordinary window and group
+/// creation without stealing focus when selection is disabled. Initial pane
+/// startup remains shell-view because it is outside ordinary creation.
+#[test]
+fn runtime_pane_spawn_view_policy_covers_ordinary_creation_only() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\npane_spawn_view = \"agent\"\n".to_string(),
+        }])
+        .unwrap();
+
+    let initial = service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    assert!(service.agent_shell_store().get(&initial.pane_id).is_none());
+    let active_window_id = service.session().active_window().unwrap().id.clone();
+
+    let window_started = service
+        .create_window_with_pane_process(&primary, "agent-window", false, Some("cat >/dev/null"))
+        .unwrap();
+    assert_eq!(
+        service.session().active_window().unwrap().id,
+        active_window_id
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(&window_started.pane_id)
+            .map(|session| session.visibility),
+        Some(AgentShellVisibility::Visible)
+    );
+
+    let group_started = service
+        .create_group_with_pane_process(
+            &primary,
+            "agent-group",
+            false,
+            Some("cat >/dev/null"),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        service.session().active_window().unwrap().id,
+        active_window_id
+    );
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(&group_started.pane_id)
+            .map(|session| session.visibility),
+        Some(AgentShellVisibility::Visible)
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies the initial pane process starts in the caller's launch directory.
 ///
 /// This regression protects the detached-daemon startup handoff: the process

@@ -8,9 +8,9 @@
 
 use super::{
     EventKind, MezError, PaneDescriptor, PaneId, PaneProcessStart, PaneResizeUpdate, PaneSizeSpec,
-    PaneSpawnDirectoryPolicy, Path, PathBuf, Result, RuntimeSessionService, RuntimeSideEffect,
-    Size, SplitDirection, WindowId, current_unix_seconds, json_escape, new_window_pane_size,
-    validate_pane_size,
+    PaneSpawnDirectoryPolicy, PaneSpawnViewPolicy, Path, PathBuf, Result, RuntimeSessionService,
+    RuntimeSideEffect, Size, SplitDirection, WindowId, current_unix_seconds, json_escape,
+    new_window_pane_size, validate_pane_size,
 };
 use crate::runtime::PaneProcessIoEffect;
 
@@ -122,6 +122,18 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
+        if let Err(error) = self.apply_ordinary_pane_spawn_view(&started.pane_id) {
+            let termination = self.terminate_runtime_pane_process(&started.pane_id, true);
+            self.session = previous_session;
+            let cleanup = self.cleanup_removed_pane_runtime_state(&started.pane_id);
+            let resize_sync = self.sync_tracked_pty_sizes().map(|_| ());
+            if let Err(rollback_error) = termination.and(cleanup).and(resize_sync) {
+                return Err(MezError::invalid_state(format!(
+                    "pane spawn view initialization failed: {error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
+        }
         self.append_lifecycle_event(
             EventKind::WindowChanged,
             format!(
@@ -305,6 +317,18 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
+        if let Err(error) = self.apply_ordinary_pane_spawn_view(&started.pane_id) {
+            let termination = self.terminate_runtime_pane_process(&started.pane_id, true);
+            self.session = previous_session;
+            let cleanup = self.cleanup_removed_pane_runtime_state(&started.pane_id);
+            let resize_sync = self.sync_tracked_pty_sizes().map(|_| ());
+            if let Err(rollback_error) = termination.and(cleanup).and(resize_sync) {
+                return Err(MezError::invalid_state(format!(
+                    "pane spawn view initialization failed: {error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
+        }
         self.append_lifecycle_event(
             EventKind::WindowChanged,
             format!(
@@ -391,18 +415,31 @@ impl RuntimeSessionService {
                 ));
             }
         };
-        match self.start_pane_process_with_start_directory(
+        let started = match self.start_pane_process_with_start_directory(
             descriptor,
             explicit_command,
             Some(resolved_start_directory.as_path()),
         ) {
-            Ok(started) => Ok(started),
+            Ok(started) => started,
             Err(error) => {
                 self.session = previous_session;
                 let _ = self.sync_tracked_pty_sizes();
-                Err(error)
+                return Err(error);
             }
+        };
+        if let Err(error) = self.apply_ordinary_pane_spawn_view(&started.pane_id) {
+            let termination = self.terminate_runtime_pane_process(&started.pane_id, true);
+            self.session = previous_session;
+            let cleanup = self.cleanup_removed_pane_runtime_state(&started.pane_id);
+            let resize_sync = self.sync_tracked_pty_sizes().map(|_| ());
+            if let Err(rollback_error) = termination.and(cleanup).and(resize_sync) {
+                return Err(MezError::invalid_state(format!(
+                    "pane spawn view initialization failed: {error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
         }
+        Ok(started)
     }
 
     /// Splits a target window and starts a process in the created pane.
@@ -805,7 +842,7 @@ impl RuntimeSessionService {
             validate_runtime_start_directory(Some(explicit_directory))?;
             return Ok(explicit_directory.to_path_buf());
         }
-        if self.process.settings.pane_spawn_directory_policy
+        if self.process.settings.pane_spawn_policy.directory
             == PaneSpawnDirectoryPolicy::SameDirectory
             && let Some(source_directory) = source_pane_id
                 .and_then(|pane_id| self.pane_current_working_directory(pane_id))
@@ -823,6 +860,14 @@ impl RuntimeSessionService {
             ))
         })?;
         Ok(home_directory)
+    }
+
+    /// Applies the configured initial surface after an ordinary pane shell starts.
+    fn apply_ordinary_pane_spawn_view(&mut self, pane_id: &str) -> Result<()> {
+        if self.process.settings.pane_spawn_policy.view == PaneSpawnViewPolicy::Agent {
+            self.enter_agent_mode_for_pane(pane_id)?;
+        }
+        Ok(())
     }
 
     /// Refreshes retained copy-mode viewport heights after pane geometry changes.

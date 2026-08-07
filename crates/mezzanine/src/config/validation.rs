@@ -734,6 +734,13 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
                 Some("terminal.pane_spawn_directory must be home or same-directory".to_string())
             }
         }
+        "terminal.pane_spawn_view" => {
+            if matches!(value, "shell" | "agent") {
+                None
+            } else {
+                Some("terminal.pane_spawn_view must be shell or agent".to_string())
+            }
+        }
         "terminal.cursor_style" => {
             if matches!(value, "block" | "underline" | "bar") {
                 None
