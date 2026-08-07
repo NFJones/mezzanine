@@ -444,15 +444,38 @@ fn audit_helpers_include_required_metadata_and_redact_secrets() {
         "fs",
         "read_file",
         "call1",
-        r#"{"token":"token=secret"}"#,
+        r#"{"path":"README.md","auth":{"api_key":"opaque-key","headers":[{"Authorization":"opaque-header"}]},"items":[{"password":"opaque-password"},{"label":"safe"}],"note":"Bearer embedded-secret"}"#,
         "succeeded",
     );
     assert_event(&mcp, "external_integration", "mcp_call", "succeeded");
     assert_metadata(&mcp, "server_id", "fs");
     assert_metadata(&mcp, "tool_name", "read_file");
     assert_metadata(&mcp, "call_id", "call1");
-    assert_metadata(&mcp, "arguments_json", "[REDACTED]");
-    assert!(mcp.redactions.contains(&"metadata".to_string()));
+    assert_metadata(
+        &mcp,
+        "arguments_json",
+        r#"{"path":"README.md","auth":{"api_key":"[REDACTED]","headers":[{"Authorization":"[REDACTED]"}]},"items":[{"password":"[REDACTED]"},{"label":"safe"}],"note":"[REDACTED]"}"#,
+    );
+    assert!(
+        mcp.redactions
+            .contains(&"metadata.arguments_json".to_string())
+    );
+
+    let malformed = AuditRecord::mcp_call(
+        "$1",
+        actor(),
+        "fs",
+        "read_file",
+        "call2",
+        "not-json",
+        "failed",
+    );
+    assert_metadata(&malformed, "arguments_json", "[REDACTED]");
+    assert!(
+        malformed
+            .redactions
+            .contains(&"metadata.arguments_json".to_string())
+    );
 
     let provider =
         AuditRecord::provider_request("$1", actor(), "openai", "gpt-test", "turn-1", "succeeded");

@@ -5,7 +5,10 @@
 
 use std::collections::BTreeMap;
 
-use super::redaction::{redact_optional_record_field, redact_record_field, redact_secret_like};
+use super::redaction::{
+    redact_optional_record_field, redact_record_field, redact_secret_like,
+    sanitize_mcp_arguments_json,
+};
 use super::time::current_timestamp;
 use super::types::{AuditActor, AuditRecord};
 
@@ -220,11 +223,18 @@ impl AuditRecord {
         arguments_json: impl Into<String>,
         outcome: impl Into<String>,
     ) -> Self {
+        let (arguments_json, arguments_redacted) =
+            sanitize_mcp_arguments_json(&arguments_json.into());
         let mut record = Self::new(session_id, actor, "external_integration", "mcp_call")
             .with_metadata("server_id", server_id)
             .with_metadata("tool_name", tool_name)
             .with_metadata("call_id", call_id)
             .with_metadata("arguments_json", arguments_json);
+        if arguments_redacted {
+            record
+                .redactions
+                .push("metadata.arguments_json".to_string());
+        }
         record.outcome = outcome.into();
         record.sanitized()
     }
