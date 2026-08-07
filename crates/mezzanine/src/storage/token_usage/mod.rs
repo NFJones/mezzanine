@@ -15,7 +15,7 @@ mod store;
 pub(crate) use store::{TokenUsageEvent, TokenUsageStore};
 
 /// Exact rolling windows displayed by `/status --extended`.
-pub(crate) const TOKEN_USAGE_WINDOWS_DAYS: [u16; 4] = [7, 30, 60, 90];
+pub(crate) const TOKEN_USAGE_WINDOWS_DAYS: [u16; 5] = [1, 7, 30, 60, 90];
 
 /// Raw-event retention, including one day of boundary safety margin.
 pub(crate) const TOKEN_USAGE_RETENTION_DAYS: u64 = 91;

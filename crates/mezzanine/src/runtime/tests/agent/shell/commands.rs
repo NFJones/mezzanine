@@ -410,7 +410,7 @@ fn runtime_agent_shell_extended_status_persists_rolling_token_usage() {
         r#"{"jsonrpc":"2.0","id":"extended-status","method":"agent/shell/command","params":{"idempotency_key":"extended-status","input":"/status --extended"}}"#,
         &primary,
     );
-    let headings = [7, 30, 60, 90].map(|days| {
+    let headings = [1, 7, 30, 60, 90].map(|days| {
         extended
             .find(&format!("### {days}-Day Token Usage"))
             .expect("rolling window heading should be present")
@@ -478,7 +478,7 @@ fn runtime_agent_shell_extended_status_handles_empty_and_degraded_stores() {
         r#"{"jsonrpc":"2.0","id":"empty-extended","method":"agent/shell/command","params":{"idempotency_key":"empty-extended","input":"/status --extended"}}"#,
         &primary,
     );
-    for days in [7, 30, 60, 90] {
+    for days in [1, 7, 30, 60, 90] {
         assert!(
             empty.contains(&format!("### {days}-Day Token Usage")),
             "{empty}"
