@@ -132,6 +132,8 @@ pub mod schema;
 pub mod semantic_patch;
 /// Deterministic semantic-patch matching and shell transaction planning.
 pub mod semantic_patch_planning;
+/// Secret screening for hidden model-authored continuation notes.
+pub mod sensitive_text;
 /// Provider-independent shell-source construction helpers.
 pub mod shell;
 /// Provider-independent shell-wrapper filtering and observation cleanup.
@@ -441,6 +443,7 @@ pub use schema::{
     normalize_openai_strict_schema,
 };
 pub use semantic_patch::{is_mez_patch_payload, validate_apply_patch_payload};
+pub use sensitive_text::sanitize_hidden_model_note;
 pub use shell::{
     AgentShellValidationError, AgentShellValidationErrorKind, AgentShellValidationResult,
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentGroup,

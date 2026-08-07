@@ -262,10 +262,12 @@ fn assistant_transcript_rationale_lines(label: &str, text: &str) -> Vec<String> 
 /// providers can distinguish immediate intent from longer-lived learning.
 fn assistant_transcript_durable_thinking_lines(batch: &MaapBatch) -> Vec<String> {
     let mut lines = Vec::new();
-    if let Some(thought) = batch.thought.as_deref()
-        && !thought.trim().is_empty()
+    if let Some(thought) = batch
+        .thought
+        .as_deref()
+        .and_then(crate::sanitize_hidden_model_note)
     {
-        lines.extend(assistant_transcript_thinking_lines(thought));
+        lines.extend(assistant_transcript_thinking_lines(&thought));
     }
     lines
 }
@@ -947,6 +949,47 @@ mod tests {
         assert!(content.contains("action rationale a1 (shell_command): inspect"));
         assert!(content.contains("action a1: shell_command"));
         assert!(!content.contains("\"actions\""));
+    }
+
+    #[test]
+    /// Verifies secret-bearing hidden thought is omitted from both durable
+    /// transcript projection and future provider context.
+    fn assistant_context_drops_secret_bearing_hidden_thought() {
+        let batch = MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "Continue the issue workflow".to_string(),
+            thought: Some("api_key = sk-hidden-thought-secret".to_string()),
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            actions: vec![shell_action()],
+            final_turn: false,
+        };
+        let execution = execution(
+            vec![message(
+                ContextSourceKind::UserInstruction,
+                "user",
+                "continue",
+            )],
+            String::new(),
+            Some(batch),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let content = assistant_context_content_for_execution(&execution);
+        let entries =
+            transcript_entries_for_execution("conv1", 1, 200, &turn(), &execution).unwrap();
+        let persisted = entries
+            .iter()
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!content.contains("sk-hidden-thought-secret"));
+        assert!(!content.contains("thinking: api_key"));
+        assert!(!persisted.contains("sk-hidden-thought-secret"));
+        assert!(!persisted.contains("thinking: api_key"));
+        assert!(content.contains("rationale: Continue the issue workflow"));
     }
 
     #[test]

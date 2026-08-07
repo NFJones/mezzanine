@@ -1131,10 +1131,7 @@ fn parse_maap_action_batch_value(
             "maap field rationale must not be empty",
         ));
     }
-    let thought = optional_string(object, "thought")?
-        .map(str::trim)
-        .filter(|thought| !thought.is_empty())
-        .map(str::to_string);
+    let thought = optional_string(object, "thought")?.and_then(crate::sanitize_hidden_model_note);
     let turn_id = optional_string(object, "turn_id")?
         .map(str::to_string)
         .or_else(|| identity.map(|(turn_id, _)| turn_id.to_string()))

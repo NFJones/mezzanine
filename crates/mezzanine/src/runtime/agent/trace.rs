@@ -884,10 +884,14 @@ pub(super) fn runtime_maap_batch_trace_json(
     batch: &MaapBatch,
     preserve_command_fields: bool,
 ) -> serde_json::Value {
+    let thought = batch
+        .thought
+        .as_deref()
+        .and_then(mez_agent::sanitize_hidden_model_note);
     serde_json::json!({
         "protocol": batch.protocol,
         "rationale": batch.rationale,
-        "thought": batch.thought,
+        "thought": thought,
         "turn_id": batch.turn_id,
         "agent_id": batch.agent_id,
         "final": batch.final_turn,
@@ -1250,5 +1254,39 @@ mod tests {
             trace["latest_request_usage"]["cached_input_tokens_reported"],
             true
         );
+    }
+
+    #[test]
+    /// Verifies trace serialization drops secret-bearing hidden thought while
+    /// retaining the rest of the accepted batch shape.
+    fn provider_response_trace_drops_secret_bearing_hidden_thought() {
+        let response = mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "continue".to_string(),
+                thought: Some("password: opaque-hidden-secret".to_string()),
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                actions: vec![mez_agent::AgentAction {
+                    id: "action-1".to_string(),
+                    rationale: String::new(),
+                    payload: mez_agent::AgentActionPayload::Complete,
+                }],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        };
+
+        let trace = runtime_model_response_trace_json(&response, Default::default(), true);
+
+        assert!(trace["action_batch"]["thought"].is_null());
+        assert!(!trace.to_string().contains("opaque-hidden-secret"));
+        assert_eq!(trace["action_batch"]["rationale"], "continue");
     }
 }

@@ -159,10 +159,12 @@ impl RuntimeSessionService {
             self.append_agent_thinking_text_to_terminal_buffer(pane_id, batch.rationale.trim())?;
         }
         if self.agent_verbose_enabled(pane_id)
-            && let Some(thought) = batch.thought.as_deref()
-            && !thought.trim().is_empty()
+            && let Some(thought) = batch
+                .thought
+                .as_deref()
+                .and_then(mez_agent::sanitize_hidden_model_note)
         {
-            self.append_agent_thinking_text_to_terminal_buffer(pane_id, thought.trim())?;
+            self.append_agent_thinking_text_to_terminal_buffer(pane_id, &thought)?;
         }
         let mut emitted_user_visible_action = false;
         let mut pending_runtime_visible_action = false;

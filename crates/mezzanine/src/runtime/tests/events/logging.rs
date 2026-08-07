@@ -609,7 +609,7 @@ fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() 
 /// diagnostics.
 #[test]
 fn runtime_batch_thought_is_hidden_until_verbose_logging() {
-    fn pane_text_after_thought_response(level: AgentLogLevel) -> String {
+    fn pane_text_after_thought_response(level: AgentLogLevel, thought: &str) -> String {
         let mut service = test_runtime_service();
         let primary = service
             .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -641,9 +641,7 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
                 action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "respond with the final message".to_string(),
-                    thought: Some(
-                        "The durable note should only be visible in verbose logs.".to_string(),
-                    ),
+                    thought: Some(thought.to_string()),
                     turn_id: "turn-1".to_string(),
                     agent_id: "agent-%1".to_string(),
                     actions: vec![mez_agent::AgentAction {
@@ -677,7 +675,10 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
         pane_text
     }
 
-    let normal_text = pane_text_after_thought_response(AgentLogLevel::Normal);
+    let normal_text = pane_text_after_thought_response(
+        AgentLogLevel::Normal,
+        "The durable note should only be visible in verbose logs.",
+    );
     assert!(
         normal_text.contains("thinking: respond with the final message"),
         "{normal_text}"
@@ -685,7 +686,10 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
     assert!(!normal_text.contains("durable note"), "{normal_text}");
     assert!(normal_text.contains("Done."), "{normal_text}");
 
-    let verbose_text = pane_text_after_thought_response(AgentLogLevel::Verbose);
+    let verbose_text = pane_text_after_thought_response(
+        AgentLogLevel::Verbose,
+        "The durable note should only be visible in verbose logs.",
+    );
     assert!(
         verbose_text.contains("thinking: respond with the final message"),
         "{verbose_text}"
@@ -695,4 +699,12 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
         "{verbose_text}"
     );
     assert!(verbose_text.contains("Done."), "{verbose_text}");
+
+    let secret_text = pane_text_after_thought_response(
+        AgentLogLevel::Verbose,
+        "access_token = sk-hidden-presentation-secret",
+    );
+    assert!(!secret_text.contains("sk-hidden-presentation-secret"));
+    assert!(!secret_text.contains("thinking: access_token"));
+    assert!(secret_text.contains("Done."), "{secret_text}");
 }
