@@ -412,6 +412,7 @@ pub(super) const RUNTIME_KEYS: &[&str] = &["cpu_count"];
 pub(super) const TERMINAL_KEYS: &[&str] = &[
     "profile",
     "term",
+    "pane_spawn_directory",
     "true_color",
     "mouse",
     "bracketed_paste",

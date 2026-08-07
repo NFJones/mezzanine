@@ -28,6 +28,7 @@ use super::{
     runtime_terminal_emoji_width_from_config,
     runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
 };
+use crate::runtime::config::runtime_pane_spawn_directory_policy_from_config;
 
 impl RuntimeSessionService {
     /// Returns the configuration layers currently applied to the runtime.
@@ -275,6 +276,8 @@ impl RuntimeSessionService {
         let terminal_history_rotate_lines = runtime_history_rotate_lines_from_config(&structured)?;
         let saved_agent_session_limit = runtime_saved_agent_session_limit_from_config(&structured)?;
         let terminal_term = runtime_terminal_term_from_config(&structured)?;
+        let pane_spawn_directory_policy =
+            runtime_pane_spawn_directory_policy_from_config(&structured)?;
         let presentation_settings =
             RuntimePresentationSettings::from_config(&structured, &effective)?;
         let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
@@ -296,6 +299,7 @@ impl RuntimeSessionService {
             terminal_history_limit,
             terminal_history_rotate_lines,
             terminal_term,
+            pane_spawn_directory_policy,
             terminal_emoji_width,
             terminal_shell_output_preview_lines,
         )?;

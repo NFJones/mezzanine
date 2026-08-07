@@ -1020,6 +1020,109 @@ fn runtime_terminal_pane_move_commands_apply_resize_effects() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies ordinary pane creation defaults to home and a live policy refresh
+/// makes later panes inherit the source pane's tracked working directory.
+#[test]
+fn runtime_pane_spawn_directory_policy_applies_to_future_spawns() {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+    assert!(home.is_dir());
+    let source = temp_root("runtime-pane-spawn-same-directory");
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let home_started = service
+        .create_window_with_pane_process(&primary, "home", true, Some("true"))
+        .unwrap();
+    assert_eq!(
+        service
+            .pane_current_working_directory(&home_started.pane_id)
+            .as_deref(),
+        Some(home.as_path())
+    );
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\npane_spawn_directory = \"same-directory\"\n".to_string(),
+        }])
+        .unwrap();
+    service.set_pane_current_working_directory(home_started.pane_id.clone(), source.clone());
+    let inherited = service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("true"))
+        .unwrap();
+    assert_eq!(
+        service
+            .pane_current_working_directory(&inherited.pane_id)
+            .as_deref(),
+        Some(source.as_path())
+    );
+
+    poll_until_exit(&mut service);
+    let _ = fs::remove_dir_all(source);
+}
+
+/// Verifies stale source directories fall back to home and an explicit spawn
+/// directory takes precedence over either configured policy.
+#[test]
+fn runtime_pane_spawn_directory_policy_falls_back_and_preserves_explicit_precedence() {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+    assert!(home.is_dir());
+    let root = temp_root("runtime-pane-spawn-explicit-directory");
+    let explicit = root.join("explicit");
+    fs::create_dir_all(&explicit).unwrap();
+    let stale = root.join("missing");
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\npane_spawn_directory = \"same-directory\"\n".to_string(),
+        }])
+        .unwrap();
+    service.set_pane_current_working_directory("%1".to_string(), stale);
+
+    let fallback = service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("true"))
+        .unwrap();
+    assert_eq!(
+        service
+            .pane_current_working_directory(&fallback.pane_id)
+            .as_deref(),
+        Some(home.as_path())
+    );
+    let explicit_started = service
+        .create_window_with_pane_process_with_options(
+            &primary,
+            "explicit",
+            true,
+            Some("true"),
+            Some(&explicit),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .pane_current_working_directory(&explicit_started.pane_id)
+            .as_deref(),
+        Some(explicit.as_path())
+    );
+
+    poll_until_exit(&mut service);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies the initial pane process starts in the caller's launch directory.
 ///
 /// This regression protects the detached-daemon startup handoff: the process

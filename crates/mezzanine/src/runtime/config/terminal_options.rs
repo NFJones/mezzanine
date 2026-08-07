@@ -20,6 +20,40 @@ use mez_terminal::{
 
 use super::{runtime_json_object, runtime_json_string, validate_runtime_terminal_term};
 
+/// Selects the starting directory for ordinary pane creation when the caller
+/// does not provide one explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaneSpawnDirectoryPolicy {
+    /// Start new panes in the user's usable home directory.
+    Home,
+    /// Start new panes in the source pane's tracked directory when usable.
+    SameDirectory,
+}
+
+/// Reads the configured implicit pane-spawn directory policy.
+pub(crate) fn runtime_pane_spawn_directory_policy_from_config(
+    root: &Value,
+) -> Result<PaneSpawnDirectoryPolicy> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(PaneSpawnDirectoryPolicy::Home);
+    };
+    let Some(value) = terminal.get("pane_spawn_directory") else {
+        return Ok(PaneSpawnDirectoryPolicy::Home);
+    };
+    let Some(policy) = runtime_json_string(Some(value)) else {
+        return Err(MezError::config(
+            "terminal.pane_spawn_directory must be a string",
+        ));
+    };
+    match policy {
+        "home" => Ok(PaneSpawnDirectoryPolicy::Home),
+        "same-directory" => Ok(PaneSpawnDirectoryPolicy::SameDirectory),
+        _ => Err(MezError::config(
+            "terminal.pane_spawn_directory must be home or same-directory",
+        )),
+    }
+}
+
 /// Runs the runtime history limit from config operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

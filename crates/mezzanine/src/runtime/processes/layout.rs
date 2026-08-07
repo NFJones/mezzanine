@@ -8,8 +8,9 @@
 
 use super::{
     EventKind, MezError, PaneDescriptor, PaneId, PaneProcessStart, PaneResizeUpdate, PaneSizeSpec,
-    Path, Result, RuntimeSessionService, RuntimeSideEffect, Size, SplitDirection, WindowId,
-    current_unix_seconds, json_escape, new_window_pane_size, validate_pane_size,
+    PaneSpawnDirectoryPolicy, Path, PathBuf, Result, RuntimeSessionService, RuntimeSideEffect,
+    Size, SplitDirection, WindowId, current_unix_seconds, json_escape, new_window_pane_size,
+    validate_pane_size,
 };
 use crate::runtime::PaneProcessIoEffect;
 
@@ -54,7 +55,12 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        validate_runtime_start_directory(start_directory)?;
+        let source_pane_id = self
+            .session
+            .active_window()
+            .map(|window| window.active_pane().id.to_string());
+        let resolved_start_directory =
+            self.resolve_pane_spawn_start_directory(start_directory, source_pane_id.as_deref())?;
         let requested_size = requested_size
             .map(|spec| new_window_pane_size(self.session.authoritative_size, spec))
             .transpose()?;
@@ -108,7 +114,7 @@ impl RuntimeSessionService {
         let started = match self.start_pane_process_with_start_directory(
             descriptor,
             explicit_command,
-            start_directory,
+            Some(resolved_start_directory.as_path()),
         ) {
             Ok(started) => started,
             Err(error) => {
@@ -257,7 +263,12 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        validate_runtime_start_directory(start_directory)?;
+        let source_pane_id = self
+            .session
+            .active_window()
+            .map(|window| window.active_pane().id.to_string());
+        let resolved_start_directory =
+            self.resolve_pane_spawn_start_directory(start_directory, source_pane_id.as_deref())?;
         let previous_session = self.session.clone();
         let (group_id, window_id) = self.session.new_group(primary_client_id, name, select)?;
         self.session
@@ -286,7 +297,7 @@ impl RuntimeSessionService {
         let started = match self.start_pane_process_with_start_directory(
             descriptor,
             explicit_command,
-            start_directory,
+            Some(resolved_start_directory.as_path()),
         ) {
             Ok(started) => started,
             Err(error) => {
@@ -345,7 +356,12 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        validate_runtime_start_directory(start_directory)?;
+        let source_pane_id = self
+            .session
+            .active_window()
+            .map(|window| window.active_pane().id.to_string());
+        let resolved_start_directory =
+            self.resolve_pane_spawn_start_directory(start_directory, source_pane_id.as_deref())?;
         let previous_session = self.session.clone();
         let pane_id = match requested_size {
             Some(spec) => self.session.split_active_pane_with_size_spec_select(
@@ -378,7 +394,7 @@ impl RuntimeSessionService {
         match self.start_pane_process_with_start_directory(
             descriptor,
             explicit_command,
-            start_directory,
+            Some(resolved_start_directory.as_path()),
         ) {
             Ok(started) => Ok(started),
             Err(error) => {
@@ -777,6 +793,36 @@ impl RuntimeSessionService {
             ),
         )?;
         Ok(updates)
+    }
+
+    /// Resolves the start directory for ordinary pane creation before layout mutation.
+    fn resolve_pane_spawn_start_directory(
+        &self,
+        explicit_directory: Option<&Path>,
+        source_pane_id: Option<&str>,
+    ) -> Result<PathBuf> {
+        if let Some(explicit_directory) = explicit_directory {
+            validate_runtime_start_directory(Some(explicit_directory))?;
+            return Ok(explicit_directory.to_path_buf());
+        }
+        if self.process.settings.pane_spawn_directory_policy
+            == PaneSpawnDirectoryPolicy::SameDirectory
+            && let Some(source_directory) = source_pane_id
+                .and_then(|pane_id| self.pane_current_working_directory(pane_id))
+                .filter(|directory| validate_runtime_start_directory(Some(directory)).is_ok())
+        {
+            return Ok(source_directory);
+        }
+        let home_directory = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+            .ok_or_else(|| MezError::invalid_state("HOME is unavailable for pane creation"))?;
+        validate_runtime_start_directory(Some(&home_directory)).map_err(|error| {
+            MezError::invalid_state(format!(
+                "home directory cannot be used for pane creation: {error}"
+            ))
+        })?;
+        Ok(home_directory)
     }
 
     /// Refreshes retained copy-mode viewport heights after pane geometry changes.

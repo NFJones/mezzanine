@@ -1522,6 +1522,10 @@ using a documented, lossless quoting algorithm before applying `exec`. The
 command form actually used MUST be visible in diagnostics and audit records
 when audit logging is enabled.
 
+When `-c` is omitted, `new-window`, `new-group`, and `split-window` MUST resolve
+the starting directory from `terminal.pane_spawn_directory` before changing
+the layout. An explicit `-c` directory MUST take precedence over that policy.
+
 The command language MUST include commands equivalent to:
 
 - `new-window`
@@ -2608,7 +2612,7 @@ an actionable diagnostic. Users who want a pane to run a command instead of an
 interactive shell MUST provide that command explicitly through pane or window
 creation.
 
-The `terminal` table MUST support `profile`, `term`, `true_color`, `mouse`,
+The `terminal` table MUST support `profile`, `term`, `pane_spawn_directory`, `true_color`, `mouse`,
 `bracketed_paste`, `clipboard`, `clipboard_copy_command`,
 `clipboard_paste_command`, `alternate_screen`, `focus_events`, `nested_multiplexer`,
 `passthrough`, `emoji_width`, `reduced_motion`, `completion_attention_flashing`, `resize_debounce_ms`,
@@ -2619,6 +2623,17 @@ The `terminal` table MUST support `profile`, `term`, `true_color`, `mouse`,
 `narrow`. `wide` MUST preserve the default Unicode emoji-presentation width
 behavior. `narrow` MUST select the one-cell text-fallback status-glyph policy
 defined by the active terminal compatibility settings.
+
+`terminal.pane_spawn_directory` MUST default to `home` and MUST accept `home`
+or `same-directory`. For ordinary pane, window, and group creation without an
+explicit start directory, `home` MUST use a usable `HOME` directory and
+`same-directory` MUST use the source pane's tracked current working directory
+when that directory remains usable. A missing, stale, inaccessible, or
+non-directory source value MUST fall back to usable home. Mezzanine MUST NOT
+fall back to the daemon working directory. If home is unavailable or unusable,
+creation MUST fail before layout mutation. Reloading this setting affects only
+future spawns. Initial session launch, snapshot restoration, and subagent
+placement retain their separately specified directory behavior.
 
 `terminal.reduced_motion` MUST default to false. When true, optional
 frame/status animations MUST render as static UI while preserving the same
@@ -3181,6 +3196,10 @@ required historical migrations have run. Current-schema primary configuration
 and project overlays MUST reject either removed field; no deprecated selector,
 custom definition, command alias, projection path, or compatibility shim may
 remain.
+
+Schema v52 adds `terminal.pane_spawn_directory`. The v51 to v52 primary-config
+migration MUST add `terminal.pane_spawn_directory = "home"` when absent for
+TOML, YAML, and JSON documents and MUST preserve an existing explicit value.
 
 Bubblewrap filesystem access to installed runtimes, SDKs, compilers, package
 managers, and other external tools MUST use the same generic
@@ -6807,12 +6826,12 @@ The baseline control methods are:
 | `observer/reject` | `{ "observer_request_id": string, "reason": string \| null, "idempotency_key": string }` | `{ "observer": ObserverState }` | Primary-only mutating method. |
 | `observer/revoke` | `{ "client_id": string, "reason": string \| null, "idempotency_key": string }` | `{ "revoked": boolean }` | Primary-only mutating method. |
 | `window/list` | `{ "target": SessionTarget }` | `{ "windows": [WindowState] }` | Read-only and naturally idempotent. |
-| `window/create` | `{ "target": SessionTarget, "name": string \| null, "start_directory": string \| null, "shell_command": string \| [string] \| null, "select": boolean, "idempotency_key": string }` | `{ "window": WindowState, "pane": PaneState }` | Mutating. `shell_command`, when present, MUST follow pane creation command semantics. |
+| `window/create` | `{ "target": SessionTarget, "name": string \| null, "start_directory": string \| null, "shell_command": string \| [string] \| null, "select": boolean, "idempotency_key": string }` | `{ "window": WindowState, "pane": PaneState }` | Mutating. `shell_command`, when present, MUST follow pane creation command semantics. An omitted `start_directory` MUST use `terminal.pane_spawn_directory`; an explicit value MUST take precedence. |
 | `window/rename` | `{ "target": WindowTarget, "name": string, "idempotency_key": string }` | `{ "window": WindowState }` | Naturally idempotent when the target and name are unchanged. |
 | `window/select` | `{ "target": WindowTarget, "idempotency_key": string }` | `{ "active_window_id": string }` | Mutating client/session focus. |
 | `window/close` | `{ "target": WindowTarget, "force": boolean, "idempotency_key": string }` | `{ "closed": boolean }` | Mutating and destructive. |
 | `pane/list` | `{ "target": WindowTarget \| SessionTarget }` | `{ "panes": [PaneState] }` | Read-only and naturally idempotent. |
-| `pane/create` | `{ "target": PaneTarget \| WindowTarget, "split": "vertical" \| "horizontal" \| "window", "start_directory": string \| null, "shell_command": string \| [string] \| null, "size": SizeSpec \| null, "select": boolean, "idempotency_key": string }` | `{ "pane": PaneState, "layout": LayoutState }` | Mutating. `shell_command`, when present, MUST follow pane creation command semantics. |
+| `pane/create` | `{ "target": PaneTarget \| WindowTarget, "split": "vertical" \| "horizontal" \| "window", "start_directory": string \| null, "shell_command": string \| [string] \| null, "size": SizeSpec \| null, "select": boolean, "idempotency_key": string }` | `{ "pane": PaneState, "layout": LayoutState }` | Mutating. `shell_command`, when present, MUST follow pane creation command semantics. An omitted `start_directory` MUST use `terminal.pane_spawn_directory` with the selected source pane; an explicit value MUST take precedence. |
 | `pane/select` | `{ "target": PaneTarget, "idempotency_key": string }` | `{ "active_pane_id": string }` | Mutating client/session focus. |
 | `pane/resize` | `{ "target": PaneTarget, "size": SizeSpec, "idempotency_key": string }` | `{ "pane": PaneState, "layout": LayoutState }` | Mutating. |
 | `pane/move` | `{ "source": PaneTarget, "destination": WindowTarget \| PaneTarget, "position": string \| null, "idempotency_key": string }` | `{ "pane": PaneState, "layout": LayoutState }` | Mutating. |

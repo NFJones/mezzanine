@@ -35,6 +35,7 @@ use super::{
     runtime_random_marker_token, shell_command_result_content, validate_pane_size,
 };
 use crate::host::terminal::parse_mez_shell_transaction_osc;
+use crate::runtime::config::PaneSpawnDirectoryPolicy;
 use crate::runtime::service_state::ProgramOwnedPaneTitle;
 use crate::runtime::{
     PaneEvent, PaneForegroundProcessObservation, PaneProcessInstance, PaneProcessIoEffect,
@@ -431,6 +432,8 @@ struct RuntimeProcessSettings {
     terminal_history_rotate_lines: usize,
     /// TERM value exported to pane processes and attached clients.
     terminal_term: String,
+    /// Policy used when ordinary pane creation omits a start directory.
+    pane_spawn_directory_policy: PaneSpawnDirectoryPolicy,
     /// Emoji-width policy represented by the currently modeled pane screens.
     terminal_emoji_width: mez_terminal::TerminalEmojiWidth,
     /// Hidden shell output tail lines retained in action previews.
@@ -443,6 +446,7 @@ impl Default for RuntimeProcessSettings {
             terminal_history_limit: mez_terminal::DEFAULT_HISTORY_LIMIT,
             terminal_history_rotate_lines: mez_terminal::DEFAULT_HISTORY_ROTATE_LINES,
             terminal_term: mez_terminal::DEFAULT_PANE_TERM.to_string(),
+            pane_spawn_directory_policy: PaneSpawnDirectoryPolicy::Home,
             terminal_emoji_width: mez_terminal::TerminalEmojiWidth::Wide,
             terminal_shell_output_preview_lines: 5,
         }
@@ -641,6 +645,7 @@ impl RuntimeSessionService {
         history_limit: usize,
         history_rotate_lines: usize,
         terminal_term: String,
+        pane_spawn_directory_policy: PaneSpawnDirectoryPolicy,
         terminal_emoji_width: mez_terminal::TerminalEmojiWidth,
         shell_output_preview_lines: usize,
     ) -> Result<()> {
@@ -651,6 +656,7 @@ impl RuntimeSessionService {
             terminal_history_limit: history_limit,
             terminal_history_rotate_lines: history_rotate_lines,
             terminal_term,
+            pane_spawn_directory_policy,
             terminal_emoji_width,
             terminal_shell_output_preview_lines: shell_output_preview_lines,
         };

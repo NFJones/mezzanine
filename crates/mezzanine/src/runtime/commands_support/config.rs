@@ -847,6 +847,7 @@ pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "frames.pane.visible_fields"
                 | "terminal.term"
                 | "terminal.profile"
+                | "terminal.pane_spawn_directory"
                 | "terminal.cursor_style"
                 | "terminal.cursor_blink"
                 | "terminal.cursor_blink_interval_ms"

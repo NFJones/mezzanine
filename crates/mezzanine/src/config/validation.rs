@@ -727,6 +727,13 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
                 Some("unsupported terminal profile".to_string())
             }
         }
+        "terminal.pane_spawn_directory" => {
+            if matches!(value, "home" | "same-directory") {
+                None
+            } else {
+                Some("terminal.pane_spawn_directory must be home or same-directory".to_string())
+            }
+        }
         "terminal.cursor_style" => {
             if matches!(value, "block" | "underline" | "bar") {
                 None
