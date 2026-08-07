@@ -190,6 +190,7 @@ pub(super) fn apply_patch_write_command_prelude(boundary: &ApplyPatchPathBoundar
         "mez_apply_patch_resolve_checked() {".to_string(),
         "MEZ_APPLY_PATH=$1".to_string(),
         "MEZ_APPLY_EXPECTED_RESOLVED=$2".to_string(),
+        "MEZ_APPLY_RESOLVED=".to_string(),
         "MEZ_APPLY_RESOLVED=$(realpath -m -- \"$MEZ_APPLY_PATH\" 2>/dev/null) || { printf '%s\\n' \"apply_patch: failed to resolve path: $MEZ_APPLY_PATH\" >&2; return 1; }".to_string(),
     ];
     let diagnostic = match boundary {
@@ -225,7 +226,7 @@ pub(super) fn apply_patch_write_change_command(
     let mut lines = vec![
         format!("{function_name}() {{"),
         format!(
-            "mez_apply_patch_resolve_checked {} {}",
+            "mez_apply_patch_resolve_checked {} {} || return 1",
             shell_quote(&change.path),
             shell_quote(&change.resolved_path)
         ),
@@ -283,6 +284,11 @@ pub(super) fn apply_patch_write_change_command(
             &old_path,
             &format!("\"${new_var}\""),
         ));
+        lines.push(format!(
+            "mez_apply_patch_resolve_checked {} {} || return 1",
+            shell_quote(&change.path),
+            shell_quote(&change.resolved_path)
+        ));
         lines.push("mkdir -p -- \"$(dirname -- \"$MEZ_APPLY_RESOLVED\")\" || return 1".to_string());
         lines.push(format!(
             "mv -f -- \"${new_var}\" \"$MEZ_APPLY_RESOLVED\" || return 1"
@@ -294,6 +300,11 @@ pub(super) fn apply_patch_write_change_command(
             "/dev/null",
             &format!("\"${expected_var}\""),
             &shell_quote("/dev/null"),
+        ));
+        lines.push(format!(
+            "mez_apply_patch_resolve_checked {} {} || return 1",
+            shell_quote(&change.path),
+            shell_quote(&change.resolved_path)
         ));
         lines.push("rm -f -- \"$MEZ_APPLY_RESOLVED\" || return 1".to_string());
     }

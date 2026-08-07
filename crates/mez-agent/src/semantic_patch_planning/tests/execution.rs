@@ -175,3 +175,132 @@ fn semantic_apply_patch_command_reports_partial_late_failure_per_file() {
 
     std::fs::remove_dir_all(temp).unwrap();
 }
+
+#[test]
+/// Verifies a target retargeted through a symlink after snapshotting cannot
+/// reuse failed path-resolution state to mutate a file outside the boundary.
+#[cfg(unix)]
+fn semantic_apply_patch_rejects_symlink_retarget_before_write() {
+    let root = test_temp_dir("semantic-patch-symlink-retarget");
+    let cwd = root.join("cwd");
+    let outside = root.join("outside.txt");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::write(cwd.join("note.txt"), "old\n").unwrap();
+    std::fs::write(&outside, "old\n").unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch";
+    let read_plan = apply_patch_plan(patch, None).unwrap();
+    let read_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&read_plan.command)
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert!(read_output.status.success());
+    let write_plan = apply_patch_write_plan_from_read_output(
+        patch,
+        &String::from_utf8_lossy(&read_output.stdout),
+    )
+    .unwrap();
+    std::fs::remove_file(cwd.join("note.txt")).unwrap();
+    std::os::unix::fs::symlink("../outside.txt", cwd.join("note.txt")).unwrap();
+
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&write_plan.command)
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("resolved path"), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "old\n");
+    assert!(
+        std::fs::symlink_metadata(cwd.join("note.txt"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+/// Verifies write transactions resolve the target again immediately before
+/// mutation and reject an identity change after their initial preconditions.
+#[cfg(unix)]
+fn semantic_apply_patch_revalidates_target_immediately_before_write() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = test_temp_dir("semantic-patch-final-revalidation");
+    let cwd = root.join("cwd");
+    let outside = root.join("outside.txt");
+    let fake_bin = root.join("bin");
+    let count_path = root.join("realpath-count");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    std::fs::write(cwd.join("note.txt"), "old\n").unwrap();
+    std::fs::write(&outside, "old\n").unwrap();
+    let patch = "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch";
+    let read_plan = apply_patch_plan(patch, None).unwrap();
+    let read_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&read_plan.command)
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert!(read_output.status.success());
+    let write_plan = apply_patch_write_plan_from_read_output(
+        patch,
+        &String::from_utf8_lossy(&read_output.stdout),
+    )
+    .unwrap();
+    let realpath_output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("command -v realpath")
+        .output()
+        .unwrap();
+    assert!(realpath_output.status.success());
+    let realpath = String::from_utf8(realpath_output.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    let fake_realpath = fake_bin.join("realpath");
+    std::fs::write(
+        &fake_realpath,
+        format!(
+            "#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=$arg; done\nif [ \"$last\" = note.txt ]; then\n  count=$(cat {count} 2>/dev/null || printf 0)\n  count=$((count + 1))\n  printf '%s' \"$count\" > {count}\n  if [ \"$count\" = 2 ]; then\n    rm -f -- note.txt\n    ln -s ../outside.txt note.txt\n  fi\nfi\nexec {realpath} \"$@\"\n",
+            count = count_path.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_realpath, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&write_plan.command)
+        .current_dir(&cwd)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("resolved path is outside current working directory"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_to_string(&count_path).unwrap(), "2");
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "old\n");
+    assert!(
+        std::fs::symlink_metadata(cwd.join("note.txt"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
