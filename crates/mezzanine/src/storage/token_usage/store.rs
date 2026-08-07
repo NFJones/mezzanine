@@ -166,6 +166,23 @@ impl TokenUsageStore {
         Ok(aggregates)
     }
 
+    /// Returns the oldest stored event at or before the supplied time.
+    pub(crate) fn oldest_observed_at(&self, now_unix_seconds: u64) -> Result<Option<u64>> {
+        let connection = self.open()?;
+        let oldest = connection.query_row(
+            "SELECT MIN(observed_at) FROM token_usage_events WHERE observed_at <= ?1",
+            [sqlite_i64(now_unix_seconds, "query timestamp")?],
+            |row| row.get::<_, Option<i64>>(0),
+        )?;
+        oldest
+            .map(|value| {
+                u64::try_from(value).map_err(|_| {
+                    MezError::invalid_args("token usage timestamp must not be negative")
+                })
+            })
+            .transpose()
+    }
+
     fn open(&self) -> Result<Connection> {
         ensure_private_parent(&self.path)?;
         let connection = Connection::open(&self.path)?;

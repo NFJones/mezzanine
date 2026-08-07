@@ -415,21 +415,45 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.token_usage_store() else {
             return;
         };
-        let windows =
-            match store.aggregate_windows(current_unix_seconds(), &TOKEN_USAGE_WINDOWS_DAYS) {
-                Ok(windows) => windows,
-                Err(_) => {
-                    let message =
-                        "persistent token accounting is degraded after a storage query failure";
-                    self.persistence.set_token_usage_health_error(message);
-                    lines.push(String::new());
-                    lines.push("### Rolling Token Usage Unavailable".to_string());
-                    lines.push(String::new());
-                    lines.push(message.to_string());
-                    return;
-                }
-            };
-        for days in TOKEN_USAGE_WINDOWS_DAYS {
+        let now = current_unix_seconds();
+        let oldest_observed_at = match store.oldest_observed_at(now) {
+            Ok(oldest_observed_at) => oldest_observed_at,
+            Err(_) => {
+                let message =
+                    "persistent token accounting is degraded after a storage query failure";
+                self.persistence.set_token_usage_health_error(message);
+                lines.push(String::new());
+                lines.push("### Rolling Token Usage Unavailable".to_string());
+                lines.push(String::new());
+                lines.push(message.to_string());
+                return;
+            }
+        };
+        let Some(oldest_observed_at) = oldest_observed_at else {
+            return;
+        };
+        let visible_windows = TOKEN_USAGE_WINDOWS_DAYS
+            .iter()
+            .copied()
+            .position(|days| {
+                oldest_observed_at >= now.saturating_sub(u64::from(days).saturating_mul(86_400))
+            })
+            .map(|index| TOKEN_USAGE_WINDOWS_DAYS[..=index].to_vec())
+            .unwrap_or_else(|| TOKEN_USAGE_WINDOWS_DAYS.to_vec());
+        let windows = match store.aggregate_windows(now, &visible_windows) {
+            Ok(windows) => windows,
+            Err(_) => {
+                let message =
+                    "persistent token accounting is degraded after a storage query failure";
+                self.persistence.set_token_usage_health_error(message);
+                lines.push(String::new());
+                lines.push("### Rolling Token Usage Unavailable".to_string());
+                lines.push(String::new());
+                lines.push(message.to_string());
+                return;
+            }
+        };
+        for days in visible_windows {
             lines.push(String::new());
             lines.push(format!("### {days}-Day Token Usage"));
             lines.push(String::new());

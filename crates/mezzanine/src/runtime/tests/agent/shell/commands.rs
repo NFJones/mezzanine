@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::runtime::SandboxConfig;
+use crate::runtime::{SandboxConfig, current_unix_seconds};
 
 /// Creates a visible primary agent shell backed by one disk configuration
 /// layer for generic sandbox command tests.
@@ -410,15 +410,13 @@ fn runtime_agent_shell_extended_status_persists_rolling_token_usage() {
         r#"{"jsonrpc":"2.0","id":"extended-status","method":"agent/shell/command","params":{"idempotency_key":"extended-status","input":"/status --extended"}}"#,
         &primary,
     );
-    let headings = [1, 7, 30, 60, 90].map(|days| {
-        extended
-            .find(&format!("### {days}-Day Token Usage"))
-            .expect("rolling window heading should be present")
-    });
-    assert!(
-        headings.windows(2).all(|pair| pair[0] < pair[1]),
-        "{extended}"
-    );
+    assert!(extended.contains("### 1-Day Token Usage"), "{extended}");
+    for days in [7, 30, 60, 90] {
+        assert!(
+            !extended.contains(&format!("### {days}-Day Token Usage")),
+            "{extended}"
+        );
+    }
     assert!(
         extended.contains(
             "| Provider | Model | Billed input | Cached input | Output | Reasoning | Cumulative Cache Hit % |"
@@ -457,8 +455,8 @@ fn runtime_agent_shell_extended_status_persists_rolling_token_usage() {
     assert!(after_restart.contains("| openai | gpt-durable | 60 | 40 | 20 | 5 | 40.00% |"));
 }
 
-/// Verifies an attached empty store renders all stable table shapes, invalid
-/// status arguments are rejected, and query failure is never shown as zero use.
+/// Verifies an attached empty store omits rolling tables, invalid status
+/// arguments are rejected, and query failure is never shown as zero use.
 #[test]
 fn runtime_agent_shell_extended_status_handles_empty_and_degraded_stores() {
     let root = temp_root("runtime-agent-extended-status-empty");
@@ -480,14 +478,10 @@ fn runtime_agent_shell_extended_status_handles_empty_and_degraded_stores() {
     );
     for days in [1, 7, 30, 60, 90] {
         assert!(
-            empty.contains(&format!("### {days}-Day Token Usage")),
+            !empty.contains(&format!("### {days}-Day Token Usage")),
             "{empty}"
         );
     }
-    assert!(
-        empty.contains("| Provider | Model | Billed input |"),
-        "{empty}"
-    );
 
     let invalid = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"invalid-extended","method":"agent/shell/command","params":{"idempotency_key":"invalid-extended","input":"/status --verbose"}}"#,
@@ -528,6 +522,56 @@ fn runtime_agent_shell_extended_status_handles_empty_and_degraded_stores() {
     );
     assert!(degraded.contains("storage write failure"), "{degraded}");
     assert!(!degraded.contains("### 7-Day Token Usage"), "{degraded}");
+}
+
+/// Verifies extended status limits rolling usage tables to windows supported
+/// by the age of retained accounting data, avoiding empty longer windows.
+#[test]
+fn runtime_agent_shell_extended_status_limits_tables_to_history_age() {
+    let root = temp_root("runtime-agent-extended-status-history-age");
+    let store = crate::storage::token_usage::TokenUsageStore::new(root.join("token-usage.sqlite"));
+    let now = current_unix_seconds();
+    store.initialize(now).unwrap();
+    store
+        .append(&crate::storage::token_usage::TokenUsageEvent {
+            id: "two-day-old-usage".to_string(),
+            observed_at_unix_seconds: now.saturating_sub(2 * 86_400),
+            model: mez_agent::ModelTokenUsageKey::new("openai", "gpt-history"),
+            usage: mez_agent::ModelTokenUsage {
+                input_tokens: 10,
+                output_tokens: 1,
+                reasoning_tokens: 0,
+                cached_input_tokens: None,
+                cache_write_input_tokens: None,
+            },
+        })
+        .unwrap();
+    let mut service = test_runtime_service();
+    service.set_token_usage_store(store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let extended = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"history-age","method":"agent/shell/command","params":{"idempotency_key":"history-age","input":"/status --extended"}}"#,
+        &primary,
+    );
+    for days in [1, 7] {
+        assert!(
+            extended.contains(&format!("### {days}-Day Token Usage")),
+            "{extended}"
+        );
+    }
+    for days in [30, 60, 90] {
+        assert!(
+            !extended.contains(&format!("### {days}-Day Token Usage")),
+            "{extended}"
+        );
+    }
 }
 
 /// Verifies that `/init` creates a project instruction scaffold in the active
