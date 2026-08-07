@@ -21,6 +21,7 @@ use super::{
     supervise_async_runtime_services, terminal_size_from_fd_or_environment, write_json_or_plain,
 };
 use crate::storage::snapshot::SnapshotRepository;
+use crate::storage::token_usage::TokenUsageStore;
 use crate::{
     control::{CONTROL_CONTENT_TYPE, encode_control_body},
     protocol::framing::ProtocolFrameCodec,
@@ -936,6 +937,9 @@ pub(super) async fn run_foreground_control_daemon(
     )?;
     service.set_session_registry(registry.clone());
     service.set_config_root(config.root.clone());
+    let token_usage_store = TokenUsageStore::under_config_root(&config.root);
+    token_usage_store.initialize(current_unix_seconds()?)?;
+    service.set_token_usage_store(token_usage_store);
     service
         .set_agent_transcript_store(AgentTranscriptStore::under_config_root(config.root.clone()));
     let auth_store = AuthStore::new(AuthPaths::under_config_root(&config.root));

@@ -6,6 +6,7 @@ use super::{
     SessionRegistry, TerminalClientLoopConfig, apply_registry_update,
     runtime_status_refresh_interval_ms_for_config, runtime_status_refresh_required_by_config,
 };
+use crate::storage::token_usage::TokenUsageStore;
 
 impl RuntimeSessionService {
     /// Runs the session operation for this subsystem.
@@ -26,6 +27,11 @@ impl RuntimeSessionService {
     /// state.
     pub fn set_session_registry(&mut self, registry: SessionRegistry) {
         self.persistence.set_session_registry(registry);
+    }
+
+    /// Attaches the initialized durable provider token-accounting store.
+    pub(crate) fn set_token_usage_store(&mut self, store: TokenUsageStore) {
+        self.persistence.set_token_usage_store(store);
     }
 
     /// Assigns audit persistence to the external effect adapter.

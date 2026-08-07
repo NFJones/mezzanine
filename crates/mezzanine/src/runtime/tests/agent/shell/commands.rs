@@ -1,5 +1,7 @@
 //! Agent shell commands tests.
 
+use std::collections::BTreeMap;
+
 use super::*;
 use crate::runtime::SandboxConfig;
 
@@ -347,6 +349,185 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         service.total_agent_token_usage_by_model(),
         session_usage_before_reset
     );
+}
+
+/// Verifies durable history is queried only for `/status --extended`, uses the
+/// existing accounting columns in deterministic window order, survives a pane
+/// reset, and remains visible after constructing a new runtime on the store.
+#[test]
+fn runtime_agent_shell_extended_status_persists_rolling_token_usage() {
+    let root = temp_root("runtime-agent-extended-status");
+    let store = crate::storage::token_usage::TokenUsageStore::new(root.join("token-usage.sqlite"));
+    store.initialize(0).unwrap();
+
+    let mut service = test_runtime_service();
+    service.set_token_usage_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let profile = runtime_model_profile("openai", "gpt-durable");
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        mez_agent::ModelTokenUsage {
+            input_tokens: 100,
+            output_tokens: 20,
+            reasoning_tokens: 5,
+            cached_input_tokens: Some(40),
+            cache_write_input_tokens: None,
+        },
+        mez_agent::ModelTokenUsage::default(),
+        Some(&profile),
+    );
+    service.record_agent_provider_token_usage_by_model(
+        "%1",
+        &BTreeMap::from([(
+            mez_agent::ModelTokenUsageKey::new("router", "route-small"),
+            mez_agent::ModelTokenUsage {
+                input_tokens: 12,
+                output_tokens: 2,
+                reasoning_tokens: 0,
+                cached_input_tokens: None,
+                cache_write_input_tokens: None,
+            },
+        )]),
+    );
+
+    let plain = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"plain-status","method":"agent/shell/command","params":{"idempotency_key":"plain-status","input":"/status"}}"#,
+        &primary,
+    );
+    assert!(!plain.contains("### 7-Day Token Usage"), "{plain}");
+    assert!(
+        !plain.contains("Rolling Token Usage Unavailable"),
+        "{plain}"
+    );
+
+    let extended = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"extended-status","method":"agent/shell/command","params":{"idempotency_key":"extended-status","input":"/status --extended"}}"#,
+        &primary,
+    );
+    let headings = [7, 30, 60, 90].map(|days| {
+        extended
+            .find(&format!("### {days}-Day Token Usage"))
+            .expect("rolling window heading should be present")
+    });
+    assert!(
+        headings.windows(2).all(|pair| pair[0] < pair[1]),
+        "{extended}"
+    );
+    assert!(
+        extended.contains(
+            "| Provider | Model | Billed input | Cached input | Output | Reasoning | Cumulative Cache Hit % |"
+        ),
+        "{extended}"
+    );
+    assert!(
+        extended.contains("| openai | gpt-durable | 60 | 40 | 20 | 5 | 40.00% |"),
+        "{extended}"
+    );
+    assert!(
+        extended.contains("| router | route-small | 12 | unknown | 2 | 0 | unknown |"),
+        "{extended}"
+    );
+
+    service.reset_agent_token_usage_for_pane("%1");
+    let after_reset = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"extended-after-reset","method":"agent/shell/command","params":{"idempotency_key":"extended-after-reset","input":"/status --extended"}}"#,
+        &primary,
+    );
+    assert!(after_reset.contains("| openai | gpt-durable | 60 | 40 | 20 | 5 | 40.00% |"));
+
+    let mut restarted = test_runtime_service();
+    restarted.set_token_usage_store(store);
+    let restarted_primary = restarted
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    restarted
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let after_restart = restarted.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"extended-after-restart","method":"agent/shell/command","params":{"idempotency_key":"extended-after-restart","input":"/status --extended"}}"#,
+        &restarted_primary,
+    );
+    assert!(after_restart.contains("| openai | gpt-durable | 60 | 40 | 20 | 5 | 40.00% |"));
+}
+
+/// Verifies an attached empty store renders all stable table shapes, invalid
+/// status arguments are rejected, and query failure is never shown as zero use.
+#[test]
+fn runtime_agent_shell_extended_status_handles_empty_and_degraded_stores() {
+    let root = temp_root("runtime-agent-extended-status-empty");
+    let store = crate::storage::token_usage::TokenUsageStore::new(root.join("token-usage.sqlite"));
+    store.initialize(0).unwrap();
+    let mut service = test_runtime_service();
+    service.set_token_usage_store(store);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let empty = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"empty-extended","method":"agent/shell/command","params":{"idempotency_key":"empty-extended","input":"/status --extended"}}"#,
+        &primary,
+    );
+    for days in [7, 30, 60, 90] {
+        assert!(
+            empty.contains(&format!("### {days}-Day Token Usage")),
+            "{empty}"
+        );
+    }
+    assert!(
+        empty.contains("| Provider | Model | Billed input |"),
+        "{empty}"
+    );
+
+    let invalid = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"invalid-extended","method":"agent/shell/command","params":{"idempotency_key":"invalid-extended","input":"/status --verbose"}}"#,
+        &primary,
+    );
+    assert!(invalid.contains("status accepts only the optional --extended argument"));
+
+    let broken_path = root.join("database-is-a-directory");
+    fs::create_dir_all(&broken_path).unwrap();
+    service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
+        broken_path,
+    ));
+    service.record_agent_provider_token_usage(
+        "%1",
+        mez_agent::ModelTokenUsage {
+            input_tokens: 5,
+            output_tokens: 1,
+            reasoning_tokens: 0,
+            cached_input_tokens: None,
+            cache_write_input_tokens: None,
+        },
+    );
+    assert_eq!(
+        service
+            .agent_token_usage_for_pane("%1")
+            .values()
+            .next()
+            .map(|usage| usage.input_tokens),
+        Some(5),
+    );
+    let degraded = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"degraded-extended","method":"agent/shell/command","params":{"idempotency_key":"degraded-extended","input":"/status --extended"}}"#,
+        &primary,
+    );
+    assert!(
+        degraded.contains("### Rolling Token Usage Unavailable"),
+        "{degraded}"
+    );
+    assert!(degraded.contains("storage write failure"), "{degraded}");
+    assert!(!degraded.contains("### 7-Day Token Usage"), "{degraded}");
 }
 
 /// Verifies that `/init` creates a project instruction scaffold in the active

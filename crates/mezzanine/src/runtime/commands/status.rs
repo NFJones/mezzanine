@@ -8,11 +8,23 @@
 use super::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentShellCommandOutcome, BTreeMap,
     ConfigFormat, ConfigScope, MezError, ModelTokenUsage, ModelTokenUsageKey, Result,
-    RuntimeSessionService, agent_shell_visibility_json_name, compose_effective_config, json_escape,
-    parse_slash_command, runtime_agent_turn_state_name, runtime_approval_policy_name,
-    runtime_cooperation_mode_name, runtime_markdown_table, runtime_permission_preset_name,
+    RuntimeSessionService, agent_shell_visibility_json_name, compose_effective_config,
+    current_unix_seconds, json_escape, parse_slash_command, runtime_agent_turn_state_name,
+    runtime_approval_policy_name, runtime_cooperation_mode_name, runtime_markdown_table,
+    runtime_permission_preset_name,
 };
+use crate::storage::token_usage::TOKEN_USAGE_WINDOWS_DAYS;
 use crate::ui::command::auth_status_store_table_row;
+
+const TOKEN_USAGE_TABLE_COLUMNS: [&str; 7] = [
+    "Provider",
+    "Model",
+    "Billed input",
+    "Cached input",
+    "Output",
+    "Reasoning",
+    "Cumulative Cache Hit %",
+];
 
 impl RuntimeSessionService {
     /// Executes `/auth-status` against the live authentication store.
@@ -66,10 +78,22 @@ impl RuntimeSessionService {
     pub(super) fn execute_agent_shell_status_command(
         &self,
         pane_id: &str,
+        input: &str,
     ) -> Result<AgentShellCommandOutcome> {
+        let slash = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("status command must be a slash command"))?;
+        let extended = match slash.args.trim() {
+            "" => false,
+            "--extended" => true,
+            _ => {
+                return Err(MezError::invalid_args(
+                    "status accepts only the optional --extended argument",
+                ));
+            }
+        };
         Ok(AgentShellCommandOutcome::Display {
             command: "status".to_string(),
-            body: self.runtime_agent_status_display(pane_id)?,
+            body: self.runtime_agent_status_display_with_options(pane_id, extended)?,
         })
     }
 
@@ -97,7 +121,18 @@ impl RuntimeSessionService {
     }
 
     /// Builds the live `/status` display from runtime session state.
+    #[cfg(test)]
     pub(crate) fn runtime_agent_status_display(&self, pane_id: &str) -> Result<String> {
+        self.runtime_agent_status_display_with_options(pane_id, false)
+    }
+
+    /// Builds the live status display, optionally including durable rolling
+    /// token-accounting windows.
+    fn runtime_agent_status_display_with_options(
+        &self,
+        pane_id: &str,
+        extended: bool,
+    ) -> Result<String> {
         let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
@@ -329,15 +364,7 @@ impl RuntimeSessionService {
             lines.push("### Pane Agent Token Usage".to_string());
             lines.push(String::new());
             lines.extend(runtime_markdown_table(
-                &[
-                    "Provider",
-                    "Model",
-                    "Billed input",
-                    "Cached input",
-                    "Output",
-                    "Reasoning",
-                    "Cumulative Cache Hit %",
-                ],
+                &TOKEN_USAGE_TABLE_COLUMNS,
                 &Self::runtime_agent_provider_token_usage_rows(&token_usage_by_model),
             ));
         }
@@ -346,17 +373,12 @@ impl RuntimeSessionService {
             lines.push("### Mez Session Token Usage".to_string());
             lines.push(String::new());
             lines.extend(runtime_markdown_table(
-                &[
-                    "Provider",
-                    "Model",
-                    "Billed input",
-                    "Cached input",
-                    "Output",
-                    "Reasoning",
-                    "Cumulative Cache Hit %",
-                ],
+                &TOKEN_USAGE_TABLE_COLUMNS,
                 &Self::runtime_agent_provider_token_usage_rows(&instance_token_usage_by_model),
             ));
+        }
+        if extended {
+            self.append_extended_token_usage(&mut lines);
         }
         if !active_scopes.is_empty() {
             let scope_rows = active_scopes
@@ -378,6 +400,45 @@ impl RuntimeSessionService {
             ));
         }
         Ok(lines.join("\n"))
+    }
+
+    /// Appends durable rolling token-accounting sections or one bounded
+    /// degradation diagnostic when attached storage is not trustworthy.
+    fn append_extended_token_usage(&self, lines: &mut Vec<String>) {
+        if let Some(message) = self.persistence.token_usage_health_error() {
+            lines.push(String::new());
+            lines.push("### Rolling Token Usage Unavailable".to_string());
+            lines.push(String::new());
+            lines.push(message);
+            return;
+        }
+        let Some(store) = self.persistence.token_usage_store() else {
+            return;
+        };
+        let windows =
+            match store.aggregate_windows(current_unix_seconds(), &TOKEN_USAGE_WINDOWS_DAYS) {
+                Ok(windows) => windows,
+                Err(_) => {
+                    let message =
+                        "persistent token accounting is degraded after a storage query failure";
+                    self.persistence.set_token_usage_health_error(message);
+                    lines.push(String::new());
+                    lines.push("### Rolling Token Usage Unavailable".to_string());
+                    lines.push(String::new());
+                    lines.push(message.to_string());
+                    return;
+                }
+            };
+        for days in TOKEN_USAGE_WINDOWS_DAYS {
+            lines.push(String::new());
+            lines.push(format!("### {days}-Day Token Usage"));
+            lines.push(String::new());
+            let rows = windows
+                .get(&days)
+                .map(Self::runtime_agent_provider_token_usage_rows)
+                .unwrap_or_default();
+            lines.extend(runtime_markdown_table(&TOKEN_USAGE_TABLE_COLUMNS, &rows));
+        }
     }
 
     /// Returns the compact `/status` summary for per-model provider tokens.

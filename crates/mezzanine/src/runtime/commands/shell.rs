@@ -716,7 +716,8 @@ impl RuntimeSessionService {
                     outcome.as_ref()
                     && command == "status"
                 {
-                    let status_outcome = self.execute_agent_shell_status_command(&pane_id)?;
+                    let status_outcome =
+                        self.execute_agent_shell_status_command(&pane_id, input)?;
                     runtime_agent_shell_command_response_json(
                         &pane_id,
                         input,

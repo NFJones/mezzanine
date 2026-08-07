@@ -13,6 +13,7 @@ use super::{
     runtime_action_status_name, runtime_agent_provider_context_usage_display,
     runtime_unrecovered_action_failure_output, transcript_entries_for_execution,
 };
+use crate::storage::token_usage::{TokenUsageEvent, new_token_usage_event_id};
 use mez_agent::TranscriptContextEvent;
 
 /// Maximum recent execution groups retained for in-process idempotency.
@@ -422,6 +423,7 @@ impl RuntimeSessionService {
         let token_usage_key = profile
             .map(|profile| ModelTokenUsageKey::new(profile.provider.clone(), profile.model.clone()))
             .unwrap_or_else(ModelTokenUsageKey::unknown);
+        self.record_durable_token_usage(&token_usage_key, usage, current_unix_seconds());
         self.agent
             .agent_latest_request_usage_by_conversation
             .insert(
@@ -483,6 +485,12 @@ impl RuntimeSessionService {
         if usage_by_model.is_empty() {
             return;
         }
+        let observed_at_unix_seconds = current_unix_seconds();
+        for (key, usage) in usage_by_model {
+            if !usage.is_zero() {
+                self.record_durable_token_usage(key, *usage, observed_at_unix_seconds);
+            }
+        }
         let conversation_id = self
             .agent_shell_store()
             .get(pane_id)
@@ -515,6 +523,31 @@ impl RuntimeSessionService {
         }
         if changed {
             let _ = self.checkpoint_agent_session_metadata();
+        }
+    }
+
+    /// Best-effort records one settled provider usage delta without affecting
+    /// provider response settlement or retry behavior.
+    fn record_durable_token_usage(
+        &self,
+        model: &ModelTokenUsageKey,
+        usage: ModelTokenUsage,
+        observed_at_unix_seconds: u64,
+    ) {
+        let Some(store) = self.persistence.cloned_token_usage_store() else {
+            return;
+        };
+        let event = TokenUsageEvent {
+            id: new_token_usage_event_id(),
+            observed_at_unix_seconds,
+            model: model.clone(),
+            usage,
+        };
+        match store.append(&event) {
+            Ok(_) => self.persistence.clear_token_usage_health_error(),
+            Err(_) => self.persistence.set_token_usage_health_error(
+                "persistent token accounting is degraded after a storage write failure",
+            ),
         }
     }
 

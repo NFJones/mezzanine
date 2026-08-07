@@ -306,7 +306,7 @@ Useful slash commands include:
 | Command        | Purpose                                               |
 | -------------- | ----------------------------------------------------- |
 | `/help`        | Show agent shell help.                                |
-| `/status`      | Show the current pane agent session, pane-lifetime token usage, and mez-session totals. |
+| `/status [--extended]` | Show the current pane agent session, pane-lifetime token usage, and mez-session totals; `--extended` also queries durable 7-, 30-, 60-, and 90-day usage. |
 | `/model`       | Inspect or change model selection.                    |
 | `/thinking`    | Toggle provider thinking mode when supported.         |
 | `/approval`    | Inspect or change pane-subtree approval mode; `inherit` clears the pane override. |

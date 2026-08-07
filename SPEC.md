@@ -6331,10 +6331,24 @@ The baseline command capabilities are:
   cached-token accounting, the status display SHOULD show that counter as
   unknown rather than as zero. Provider token counters MUST include auxiliary
   routing/model-sizing provider requests as separate provider/model rows when
-  token usage is reported.
+  token usage is reported. `/status` MUST accept the optional `--extended`
+  argument and MUST reject other arguments. Only `/status --extended` may query
+  durable token-accounting storage or render rolling-history sections. It MUST
+  append `7-Day Token Usage`, `30-Day Token Usage`, `60-Day Token Usage`, and
+  `90-Day Token Usage` tables in that order after the pane and mez-session
+  accounting tables, using the same columns and per-model formatting. Each
+  window MUST use one shared UTC query time, include events exactly on its
+  `days * 86,400`-second lower boundary, and exclude future-dated events. The
+  durable store MUST retain raw events for at least 90 days, preserve unknown
+  cached-token counters, include main and auxiliary provider calls, and MUST
+  NOT fabricate history from restored transcript totals. Collection therefore
+  begins when durable accounting is installed; existing transcript totals are
+  not backfilled. Empty attached storage MUST render header-only rolling tables.
+  Query or prior write failure MUST render a bounded rolling-accounting
+  unavailable diagnostic instead of deceptively empty totals.
 - `/reset-status`: Clear only the current panes pane-lifetime provider token
   counters. Mez-session totals aggregated from retained conversations MUST remain
-  unchanged.
+  unchanged. Durable rolling token history MUST also remain unchanged.
 - `/debug-config`: Show effective configuration, layer order, and policy
   diagnostics.
 - `/log-level`: Show or set the pane-local agent log level. Accepted levels

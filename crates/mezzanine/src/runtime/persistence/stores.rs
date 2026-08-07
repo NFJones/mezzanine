@@ -3,6 +3,7 @@
 use crate::security::audit::AuditLog;
 use crate::storage::registry::SessionRegistry;
 use crate::storage::snapshot::SnapshotRepository;
+use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::transcript::AgentTranscriptStore;
 
 use super::RuntimePersistenceComponent;
@@ -56,6 +57,37 @@ impl RuntimePersistenceComponent {
     /// Clones the attached agent transcript store handle.
     pub(crate) fn cloned_transcript_store(&self) -> Option<AgentTranscriptStore> {
         self.agent_transcript_store.clone()
+    }
+
+    /// Returns the attached durable token-accounting store.
+    pub(crate) fn token_usage_store(&self) -> Option<&TokenUsageStore> {
+        self.token_usage_store.as_ref()
+    }
+
+    /// Clones the attached durable token-accounting store handle.
+    pub(crate) fn cloned_token_usage_store(&self) -> Option<TokenUsageStore> {
+        self.token_usage_store.clone()
+    }
+
+    /// Attaches the durable token-accounting store.
+    pub(crate) fn set_token_usage_store(&mut self, store: TokenUsageStore) {
+        self.token_usage_store = Some(store);
+        self.clear_token_usage_health_error();
+    }
+
+    /// Records a bounded persistent-accounting degradation diagnostic.
+    pub(crate) fn set_token_usage_health_error(&self, message: impl Into<String>) {
+        *self.token_usage_health_error.borrow_mut() = Some(message.into());
+    }
+
+    /// Clears the persistent-accounting degradation diagnostic.
+    pub(crate) fn clear_token_usage_health_error(&self) {
+        self.token_usage_health_error.borrow_mut().take();
+    }
+
+    /// Returns the current persistent-accounting degradation diagnostic.
+    pub(crate) fn token_usage_health_error(&self) -> Option<String> {
+        self.token_usage_health_error.borrow().clone()
     }
 
     /// Returns the attached live-session registry.

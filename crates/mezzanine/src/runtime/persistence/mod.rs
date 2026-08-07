@@ -5,11 +5,13 @@
 //! serialized runtime transitions into external I/O workers. It does not own
 //! configuration, authorization policy, or control connection state.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use crate::security::audit::AuditLog;
 use crate::storage::registry::SessionRegistry;
 use crate::storage::snapshot::SnapshotRepository;
+use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::transcript::AgentTranscriptStore;
 use mez_terminal::TerminalSize;
 
@@ -24,6 +26,8 @@ mod stores;
 pub(crate) struct RuntimePersistenceComponent {
     snapshot_repository: Option<SnapshotRepository>,
     agent_transcript_store: Option<AgentTranscriptStore>,
+    token_usage_store: Option<TokenUsageStore>,
+    token_usage_health_error: RefCell<Option<String>>,
     session_registry: Option<SessionRegistry>,
     audit_log: Option<AuditLog>,
     queued_pane_input_effects: Vec<RuntimeSideEffect>,

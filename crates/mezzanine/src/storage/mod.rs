@@ -7,4 +7,5 @@ pub(crate) mod issues;
 pub(crate) mod memory;
 pub(crate) mod registry;
 pub(crate) mod snapshot;
+pub(crate) mod token_usage;
 pub(crate) mod transcript;
