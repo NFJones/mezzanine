@@ -771,13 +771,15 @@ impl ProviderResponseError {
 
     /// Attaches a sanitized provider failure payload to this error.
     pub fn with_provider_failure_json(mut self, failure_json: impl Into<String>) -> Self {
-        self.provider_failure_json = Some(failure_json.into());
+        self.provider_failure_json = Some(crate::sanitize_provider_failure_payload_json(
+            &failure_json.into(),
+        ));
         self
     }
 
-    /// Attaches raw provider output required for recovery or diagnostics.
+    /// Attaches sanitized provider output required for recovery or diagnostics.
     pub fn with_provider_raw_text(mut self, raw_text: impl Into<String>) -> Self {
-        self.provider_raw_text = Some(raw_text.into());
+        self.provider_raw_text = Some(crate::sanitize_provider_diagnostic_text(&raw_text.into()));
         self
     }
 
@@ -1450,16 +1452,21 @@ mod request_assembly_tests {
     #[test]
     fn provider_response_errors_preserve_sanitized_failure_payloads() {
         let error = ProviderResponseError::invalid_state("response failed")
-            .with_provider_failure_json(r#"{"status_code":500}"#)
-            .with_provider_raw_text("partial provider output");
+            .with_provider_failure_json(
+                r#"{"status_code":500,"error":{"api_key":"opaque-secret"}}"#,
+            )
+            .with_provider_raw_text(r#"{"partial":"provider output","password":"opaque-secret"}"#);
 
         assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
         assert_eq!(error.message(), "response failed");
+        let failure: serde_json::Value =
+            serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();
+        assert_eq!(failure["status_code"], 500);
+        assert_eq!(failure["error"]["api_key"], "[REDACTED]");
         assert_eq!(
-            error.provider_failure_json(),
-            Some(r#"{"status_code":500}"#)
+            error.provider_raw_text(),
+            Some(r#"{"partial":"provider output","password":"[REDACTED]"}"#)
         );
-        assert_eq!(error.provider_raw_text(), Some("partial provider output"));
     }
 
     /// OpenAI endpoint derivation preserves canonical defaults, normalizes

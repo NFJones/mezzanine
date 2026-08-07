@@ -1119,7 +1119,7 @@ pub(super) fn runtime_agent_provider_error_trace_json(
         },
         "provider_raw_text": error.provider_raw_text().map(|raw_text| {
             if include_shell_view {
-                serde_json::Value::String(runtime_bounded_trace_text(raw_text))
+                runtime_bounded_trace_value_strings(runtime_json_or_string(raw_text))
             } else {
                 runtime_redacted_shell_view_marker()
             }
@@ -1204,7 +1204,7 @@ pub(super) fn runtime_action_results_trace_json(
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_model_response_trace_json;
+    use super::{runtime_agent_provider_error_trace_json, runtime_model_response_trace_json};
 
     /// Verifies provider traces distinguish accumulated exchange usage from
     /// the latest concrete request sample.
@@ -1288,5 +1288,37 @@ mod tests {
         assert!(trace["action_batch"]["thought"].is_null());
         assert!(!trace.to_string().contains("opaque-hidden-secret"));
         assert_eq!(trace["action_batch"]["rationale"], "continue");
+    }
+
+    #[test]
+    /// Verifies provider-error traces cannot recover raw credentials from the
+    /// product error envelope while retaining safe routing diagnostics.
+    fn provider_error_trace_uses_sanitized_payloads() {
+        let error = crate::error::MezError::invalid_state("provider failed")
+            .with_provider_raw_text(
+                r#"{"message":"denied","password":"opaque-trace-secret","request_id":"req_123"}"#,
+            )
+            .with_provider_failure_json(
+                r#"{"error":{"access_token":"opaque-access","code":"bad_auth"},"request_id":"req_123"}"#,
+            );
+        let profile = mez_agent::ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        };
+
+        let trace = runtime_agent_provider_error_trace_json("openai", &profile, &error, true);
+        let serialized = trace.to_string();
+
+        assert!(!serialized.contains("opaque-trace-secret"));
+        assert!(!serialized.contains("opaque-access"));
+        assert_eq!(trace["provider_raw_text"]["password"], "[REDACTED]");
+        assert_eq!(trace["provider_raw_text"]["request_id"], "req_123");
+        assert_eq!(trace["provider_failure_json"]["error"]["code"], "bad_auth");
+        assert_eq!(trace["provider_failure_json"]["request_id"], "req_123");
     }
 }

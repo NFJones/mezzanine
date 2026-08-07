@@ -622,10 +622,9 @@ impl MezError {
         self.io_kind
     }
 
-    /// Attach raw provider response text that should be available to runtime
-    /// transcript failure handling without changing the public error message.
+    /// Attach sanitized provider response text for runtime failure handling.
     pub fn with_provider_raw_text(mut self, raw_text: impl Into<String>) -> Self {
-        let raw_text = raw_text.into();
+        let raw_text = mez_agent::sanitize_provider_diagnostic_text(&raw_text.into());
         if !raw_text.is_empty() {
             self.provider_raw_text = Some(raw_text);
         }
@@ -643,7 +642,7 @@ impl MezError {
     /// failure events. It is intentionally separate from raw model output so the
     /// runtime can audit API errors without storing prompt or completion content.
     pub fn with_provider_failure_json(mut self, failure_json: impl Into<String>) -> Self {
-        let failure_json = failure_json.into();
+        let failure_json = mez_agent::sanitize_provider_failure_payload_json(&failure_json.into());
         if !failure_json.is_empty() {
             self.provider_failure_json = Some(failure_json);
         }

@@ -407,7 +407,8 @@ pub use provider::{
 pub use provider_diagnostics::{
     ProviderMalformedOutputError, provider_error_detail, provider_failure_event_json,
     provider_failure_json, provider_malformed_output_error, provider_malformed_output_failure_json,
-    provider_malformed_output_hint,
+    provider_malformed_output_hint, sanitize_provider_diagnostic_text,
+    sanitize_provider_failure_payload_json,
 };
 pub use provider_error::{
     DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorKind, ProviderErrorRetryClass, ProviderRetryPolicy,

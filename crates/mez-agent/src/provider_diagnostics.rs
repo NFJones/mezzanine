@@ -10,6 +10,30 @@ use serde_json::{Map, Value};
 const MAX_PROVIDER_FAILURE_TEXT_CHARS: usize = 4096;
 const MAX_PROVIDER_FAILURE_ARRAY_ITEMS: usize = 32;
 
+/// Sanitizes provider-authored diagnostic text before storage or replay.
+///
+/// JSON payloads retain their non-sensitive structure while nested secret
+/// fields and token-like strings are redacted. Free-form text is bounded and
+/// replaced wholesale when it contains recognizable credential material.
+pub fn sanitize_provider_diagnostic_text(text: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<Value>(text) {
+        return sanitize_provider_failure_value(value).to_string();
+    }
+    redact_or_truncate_provider_failure_text(text)
+}
+
+/// Sanitizes one structured provider failure payload without trusting callers
+/// to have passed through a provider-specific adapter first.
+pub fn sanitize_provider_failure_payload_json(payload: &str) -> String {
+    match serde_json::from_str::<Value>(payload) {
+        Ok(value) => sanitize_provider_failure_value(value).to_string(),
+        Err(_) => serde_json::json!({
+            "body_text": redact_or_truncate_provider_failure_text(payload)
+        })
+        .to_string(),
+    }
+}
+
 /// Extracts a bounded, secret-safe human-readable detail from a provider body.
 pub fn provider_error_detail(body: &str) -> String {
     if body.trim().is_empty() {
@@ -135,7 +159,7 @@ pub fn provider_malformed_output_error(
     ProviderMalformedOutputError {
         kind: error_kind,
         message,
-        raw_text: raw_text.to_string(),
+        raw_text: sanitize_provider_diagnostic_text(raw_text),
         provider_failure_json: provider_malformed_output_failure_json(
             error_kind,
             error_message,
@@ -264,7 +288,28 @@ fn provider_failure_key_is_secret_like(key: &str) -> bool {
 }
 
 fn provider_failure_text_contains_secret_like(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
     value.contains("-----BEGIN")
+        || [
+            "api_key=",
+            "api_key =",
+            "access_token=",
+            "access_token =",
+            "refresh_token=",
+            "refresh_token =",
+            "client_secret=",
+            "client_secret =",
+            "password=",
+            "password =",
+            "private_key=",
+            "private_key =",
+            "secret=",
+            "secret =",
+            "token=",
+            "token =",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
         || value
             .split_whitespace()
             .any(provider_failure_token_is_secret_like)
@@ -326,7 +371,8 @@ mod tests {
     use super::{
         provider_error_detail, provider_failure_event_json, provider_failure_json,
         provider_malformed_output_error, provider_malformed_output_failure_json,
-        provider_malformed_output_hint,
+        provider_malformed_output_hint, sanitize_provider_diagnostic_text,
+        sanitize_provider_failure_payload_json,
     };
     use crate::ProviderErrorKind;
 
@@ -359,6 +405,31 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(value["body"]["items"].as_array().unwrap().len(), 32);
+    }
+
+    #[test]
+    /// Verifies raw provider diagnostics preserve useful JSON shape while
+    /// removing nested secrets, and fail closed for secret-bearing free text.
+    fn provider_raw_diagnostics_are_safe_for_replay() {
+        let sanitized = sanitize_provider_diagnostic_text(
+            r#"{"error":{"message":"denied","password":"opaque-secret"},"request_id":"req_123"}"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&sanitized).unwrap();
+        assert_eq!(value["error"]["message"], "denied");
+        assert_eq!(value["error"]["password"], "[REDACTED]");
+        assert_eq!(value["request_id"], "req_123");
+        assert_eq!(
+            sanitize_provider_diagnostic_text("password = opaque-secret"),
+            "[REDACTED]"
+        );
+
+        let failure = sanitize_provider_failure_payload_json(
+            r#"{"error":{"api_key":"opaque-key","code":"bad_auth"},"request_id":"req_456"}"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&failure).unwrap();
+        assert_eq!(value["error"]["api_key"], "[REDACTED]");
+        assert_eq!(value["error"]["code"], "bad_auth");
+        assert_eq!(value["request_id"], "req_456");
     }
 
     #[test]
