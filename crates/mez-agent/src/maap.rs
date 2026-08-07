@@ -291,6 +291,8 @@ pub enum AgentActionPayload {
     IssueAdd {
         /// Issue kind: defect or task.
         kind: String,
+        /// Optional initial issue workflow state; omitted issues start open.
+        state: Option<String>,
         /// Single-line issue title.
         title: String,
         /// Optional issue detail text.
@@ -306,7 +308,7 @@ pub enum AgentActionPayload {
         id: String,
         /// Optional replacement issue kind: defect or task.
         kind: Option<String>,
-        /// Optional replacement issue workflow state: open or resolved.
+        /// Optional replacement issue workflow state: open, in-progress, or resolved.
         state: Option<String>,
         /// Optional replacement single-line issue title.
         title: Option<String>,
@@ -327,7 +329,7 @@ pub enum AgentActionPayload {
     IssueQuery {
         /// Optional issue kind filter: defect or task.
         kind: Option<String>,
-        /// Optional issue state filter: open or resolved.
+        /// Optional issue state filter: open, in-progress, or resolved.
         state: Option<String>,
         /// Optional title/body substring filter.
         text: Option<String>,
@@ -760,6 +762,7 @@ impl AgentAction {
             }
             AgentActionPayload::IssueAdd {
                 kind,
+                state,
                 title,
                 body,
                 notes,
@@ -767,6 +770,9 @@ impl AgentAction {
             } => {
                 validate_non_empty("issue kind", kind)?;
                 validate_agent_contract(validate_issue_kind(kind))?;
+                if let Some(state) = state.as_deref() {
+                    validate_agent_contract(crate::issues::validate_issue_state(state))?;
+                }
                 validate_agent_contract(validate_issue_title(title))?;
                 validate_agent_contract(validate_issue_body(body.as_deref()))?;
                 validate_agent_contract(validate_issue_notes(notes.as_deref()))?;
@@ -1242,6 +1248,7 @@ fn parse_maap_action_value(
         },
         "issue_add" => AgentActionPayload::IssueAdd {
             kind: required_string(object, "kind")?.to_string(),
+            state: optional_string(object, "state")?.map(str::to_string),
             title: required_string(object, "title")?.to_string(),
             body: optional_string(object, "body")?.map(str::to_string),
             notes: optional_string(object, "notes")?.map(str::to_string),

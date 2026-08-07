@@ -13,7 +13,7 @@ fn issue_action_validation_accepts_valid_fields() {
     let dependencies = vec!["issue-1".to_string()];
     validate_issue_update(IssueUpdateValidation {
         kind: Some("task"),
-        state: Some("open"),
+        state: Some("in-progress"),
         title: Some("Implement agent contract"),
         body: None,
         clear_body: false,

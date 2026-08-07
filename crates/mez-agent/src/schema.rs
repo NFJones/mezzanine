@@ -557,6 +557,14 @@ fn maap_issue_add_action_schema() -> serde_json::Value {
                     "description": "Issue kind to create: defect for bugs or task for planned work."
                 }),
             ),
+            (
+                "state",
+                serde_json::json!({
+                    "type": ["string", "null"],
+                    "enum": ["open", "in-progress", "resolved", null],
+                    "description": "Optional initial issue state. Use null to create an open issue."
+                }),
+            ),
             described_string_property("title", "Single-line issue title."),
             (
                 "body",
@@ -581,7 +589,7 @@ fn maap_issue_add_action_schema() -> serde_json::Value {
                 }),
             ),
         ],
-        &["kind", "title", "body", "notes", "depends_on"],
+        &["kind", "state", "title", "body", "notes", "depends_on"],
     )
 }
 
@@ -603,7 +611,7 @@ fn maap_issue_update_action_schema() -> serde_json::Value {
                 "state",
                 serde_json::json!({
                     "type": ["string", "null"],
-                    "enum": ["open", "resolved", null],
+                    "enum": ["open", "in-progress", "resolved", null],
                     "description": "Optional replacement issue state. Use null to leave unchanged."
                 }),
             ),
@@ -690,7 +698,7 @@ fn maap_issue_query_action_schema() -> serde_json::Value {
                 "state",
                 serde_json::json!({
                     "type": ["string", "null"],
-                    "enum": ["open", "resolved", null],
+                    "enum": ["open", "in-progress", "resolved", null],
                     "description": "Optional issue state filter. Use null for open issues by default."
                 }),
             ),

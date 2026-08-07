@@ -1,11 +1,13 @@
 ---
 name: fix-issues
-description: Use when you need to query the current project's mez issue tracker, fix open issues, keep per-issue plans and progress notes updated, and mark verified fixes resolved.
+description: Use when you need to query the current project's mez issue tracker, mark selected work in-progress, fix open issues, keep per-issue plans and progress notes updated, and mark verified fixes resolved.
 ---
 
 Query open issues in the mez issue tracker for the current project first only when current action-result context does not already contain a successful open-issue query for the current issue-store mutation state. Use local issue actions when they are exposed; otherwise request the issues capability. Treat the latest successful query result as current evidence across provider continuations: do not repeat the query merely because another capability, inspection, edit, test, or provider call occurred. Use `refresh: true` only after concrete evidence that the issue store changed externally. If the open query returns no issues, stop and take no further action. Inspect returned `state` and `depends_on` metadata, and work dependency-free prerequisite issues before issues that depend on them.
 
 Work one returned issue at a time, choosing an issue whose `depends_on` list is empty or already resolved. In the first action batch after choosing, name the selected issue id in the batch rationale and record `Active issue: <id>` plus the durable implementation direction in `thought`. Keep using that selected id until the issue is resolved or explicitly blocked. Before implementing, inspect the cited code, tests, docs, and spec enough to form a concrete execution plan for that issue. Do not issue another open-backlog query while the selected issue is being inspected, implemented, documented, or validated. If all remaining issues are blocked by dependencies that are absent from the query result, use a narrowly filtered query or inspect the missing issue ids before proceeding; report a blocker if the dependency graph cannot be resolved.
+
+After selecting an issue and before implementation, use `issue_update` to mark it `in-progress`. If it is already `in-progress`, retain that state. Reopening work that should return to the backlog uses `open`; normal completion follows open -> in-progress -> resolved.
 
 Store the plan in the issue notes field with a progress-tracker section. Keep the notes concise and structured for multi-turn updates. At minimum include the problem summary, intended fix surface, validation steps, and a checklist or status list that can be revised as work advances.
 

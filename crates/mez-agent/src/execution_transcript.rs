@@ -414,13 +414,15 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
         ),
         AgentActionPayload::IssueAdd {
             kind,
+            state,
             title,
             body,
             notes,
             depends_on,
         } => format!(
-            "issue_add kind={} title={} body_bytes={} notes_bytes={} depends_on_count={}",
+            "issue_add kind={} state={} title={} body_bytes={} notes_bytes={} depends_on_count={}",
             bounded_transcript_field(kind),
+            state.as_deref().unwrap_or("open"),
             bounded_transcript_field(title),
             body.as_deref().map(str::len).unwrap_or(0),
             notes.as_deref().map(str::len).unwrap_or(0),

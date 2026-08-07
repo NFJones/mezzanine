@@ -179,6 +179,19 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(action_types.contains(&"issue_update".to_string()));
     assert!(action_types.contains(&"issue_query".to_string()));
     assert!(action_types.contains(&"issue_delete".to_string()));
+    for action_type in ["issue_add", "issue_update", "issue_query"] {
+        let schema = action_schemas
+            .iter()
+            .find(|schema| schema["properties"]["type"]["enum"][0] == action_type)
+            .unwrap();
+        assert!(
+            schema["properties"]["state"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("in-progress")),
+            "missing in-progress state in {action_type}: {schema}"
+        );
+    }
     assert!(!action_types.contains(&"request_skills".to_string()));
     assert!(!action_types.contains(&"call_skill".to_string()));
     assert!(action_types.contains(&"mcp_call".to_string()));

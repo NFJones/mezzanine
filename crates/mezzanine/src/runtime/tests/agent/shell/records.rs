@@ -2327,6 +2327,7 @@ fn runtime_agent_shell_show_issues_blocks_open_dependents_then_deletes() {
             mez_agent::issues::NewIssueRecord {
                 project: project.clone(),
                 kind: mez_agent::issues::IssueKind::Task,
+                state: None,
                 title: "Open dependent".to_string(),
                 body: None,
                 notes: None,

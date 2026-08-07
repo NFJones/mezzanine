@@ -57,7 +57,7 @@ const BUILTIN_ADD_ISSUES_SKILL_DESCRIPTION: &str =
     "Use when recent findings should be turned into Mezzanine project issue tracker entries.";
 const BUILTIN_ADD_RESEARCH_SKILL_DESCRIPTION: &str =
     "Use when the user asks to save durable research findings into memory.";
-const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Use when you need to query the current project's Mez issue tracker, fix open issues, keep progress notes current, and mark verified fixes resolved.";
+const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Use when you need to query the current project's Mez issue tracker, mark selected work in-progress, fix open issues, keep progress notes current, and mark verified fixes resolved.";
 const BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, common workflows, and live config_change schema guidance without rediscovering the command or config surface.";
 
 #[derive(Debug, Deserialize)]
@@ -905,6 +905,11 @@ mod tests {
         assert!(fix_issues_document.text.contains(
             "mark the issue `resolved` with `issue_update` so history remains queryable"
         ));
+        assert!(
+            fix_issues_document
+                .text
+                .contains("use `issue_update` to mark it `in-progress`")
+        );
         assert!(fix_issues_document.text.contains(
             "do not repeat the query merely because another capability, inspection, edit, test, or provider call occurred"
         ));

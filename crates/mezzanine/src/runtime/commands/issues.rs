@@ -43,6 +43,7 @@ pub(super) fn execute_agent_shell_issue_command(
     match args {
         RuntimeIssueArgs::Add {
             kind,
+            state,
             title,
             body,
             notes,
@@ -52,6 +53,7 @@ pub(super) fn execute_agent_shell_issue_command(
                 mez_agent::issues::NewIssueRecord {
                     project,
                     kind,
+                    state,
                     title,
                     body,
                     notes,
@@ -137,6 +139,7 @@ pub(super) fn execute_agent_shell_issue_command(
 enum RuntimeIssueArgs {
     Add {
         kind: mez_agent::issues::IssueKind,
+        state: Option<mez_agent::issues::IssueState>,
         title: String,
         body: Option<String>,
         notes: Option<String>,
@@ -185,6 +188,7 @@ fn parse_issue_args(args: &str) -> Result<RuntimeIssueArgs> {
 
 fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
     let mut kind = mez_agent::issues::IssueKind::Defect;
+    let mut state = None;
     let mut title = None;
     let mut body = None;
     let mut notes = None;
@@ -197,6 +201,12 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
                 kind = mez_agent::issues::IssueKind::parse(required_issue_value(
                     tokens, index, "kind",
                 )?)?;
+            }
+            "--state" => {
+                index = index.saturating_add(1);
+                state = Some(mez_agent::issues::IssueState::parse(required_issue_value(
+                    tokens, index, "state",
+                )?)?);
             }
             "--title" => {
                 index = index.saturating_add(1);
@@ -216,7 +226,7 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
             }
             _ => {
                 return Err(MezError::invalid_args(
-                    "issue add accepts --kind, --title, --body, --notes, and --depends-on",
+                    "issue add accepts --kind, --state, --title, --body, --notes, and --depends-on",
                 ));
             }
         }
@@ -224,6 +234,7 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
     }
     Ok(RuntimeIssueArgs::Add {
         kind,
+        state,
         title: title.ok_or_else(|| MezError::invalid_args("issue add requires --title"))?,
         body,
         notes,
@@ -453,8 +464,14 @@ mod tests {
     /// so runtime users can store progress separately from issue descriptions.
     #[test]
     fn issue_parser_accepts_notes_update_and_show() {
-        match parse_issue_args("add --title Work --notes progress").unwrap() {
-            RuntimeIssueArgs::Add { title, notes, .. } => {
+        match parse_issue_args("add --state in-progress --title Work --notes progress").unwrap() {
+            RuntimeIssueArgs::Add {
+                state,
+                title,
+                notes,
+                ..
+            } => {
+                assert_eq!(state, Some(mez_agent::issues::IssueState::InProgress));
                 assert_eq!(title, "Work");
                 assert_eq!(notes.as_deref(), Some("progress"));
             }

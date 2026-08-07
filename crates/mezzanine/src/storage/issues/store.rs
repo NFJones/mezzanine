@@ -75,6 +75,7 @@ impl IssueStore {
             NewIssueRecord {
                 project,
                 kind,
+                state: None,
                 title,
                 body,
                 notes,
@@ -300,7 +301,7 @@ impl IssueStore {
                 AND issues.id = issue_dependencies.issue_id
              WHERE issue_dependencies.project = ?1
                AND issue_dependencies.depends_on_id = ?2
-               AND issues.state = 'open'
+               AND issues.state <> 'resolved'
              ORDER BY issues.id ASC",
         )?;
         let open_dependents = statement
@@ -416,17 +417,13 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
              id TEXT PRIMARY KEY NOT NULL,
              project TEXT NOT NULL,
              kind TEXT NOT NULL CHECK (kind IN ('defect', 'task')),
-             state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'resolved')),
+             state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'in-progress', 'resolved')),
              title TEXT NOT NULL,
              body TEXT,
              notes TEXT,
              created_at INTEGER NOT NULL,
              updated_at INTEGER NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS issues_project_kind_idx
-             ON issues(project, kind, updated_at DESC, id ASC);
-         CREATE INDEX IF NOT EXISTS issues_project_updated_idx
-             ON issues(project, updated_at DESC, id ASC);
          CREATE TABLE IF NOT EXISTS issue_dependencies (
              project TEXT NOT NULL,
              issue_id TEXT NOT NULL,
@@ -442,25 +439,69 @@ fn initialize_schema(connection: &Connection) -> Result<()> {
     )?;
     ensure_notes_column(connection)?;
     ensure_state_column(connection)?;
-    connection.execute(
-        "CREATE INDEX IF NOT EXISTS issues_project_state_kind_idx
-         ON issues(project, state, kind, updated_at DESC, id ASC)",
-        [],
+    connection.execute_batch(
+        "CREATE INDEX IF NOT EXISTS issues_project_kind_idx
+             ON issues(project, kind, updated_at DESC, id ASC);
+         CREATE INDEX IF NOT EXISTS issues_project_updated_idx
+             ON issues(project, updated_at DESC, id ASC);
+         CREATE INDEX IF NOT EXISTS issues_project_state_kind_idx
+             ON issues(project, state, kind, updated_at DESC, id ASC);",
     )?;
     Ok(())
 }
 
 fn ensure_state_column(connection: &Connection) -> Result<()> {
-    let mut statement = connection.prepare("PRAGMA table_info(issues)")?;
-    let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
-    for column in columns {
-        if column? == "state" {
-            return Ok(());
+    let has_state = {
+        let mut statement = connection.prepare("PRAGMA table_info(issues)")?;
+        let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+        let mut has_state = false;
+        for column in columns {
+            has_state |= column? == "state";
         }
+        has_state
+    };
+    if has_state {
+        return ensure_in_progress_state_constraint(connection);
     }
     connection.execute(
-        "ALTER TABLE issues ADD COLUMN state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'resolved'))",
+        "ALTER TABLE issues ADD COLUMN state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'in-progress', 'resolved'))",
         [],
+    )?;
+    Ok(())
+}
+
+/// Rebuilds legacy issue tables whose state constraint predates in-progress.
+fn ensure_in_progress_state_constraint(connection: &Connection) -> Result<()> {
+    let schema: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'issues'",
+        [],
+        |row| row.get(0),
+    )?;
+    if schema.contains("'in-progress'") {
+        return Ok(());
+    }
+    connection.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         BEGIN IMMEDIATE;
+         CREATE TABLE issues_with_in_progress (
+             id TEXT PRIMARY KEY NOT NULL,
+             project TEXT NOT NULL,
+             kind TEXT NOT NULL CHECK (kind IN ('defect', 'task')),
+             state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'in-progress', 'resolved')),
+             title TEXT NOT NULL,
+             body TEXT,
+             notes TEXT,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );
+         INSERT INTO issues_with_in_progress
+             (id, project, kind, state, title, body, notes, created_at, updated_at)
+             SELECT id, project, kind, state, title, body, notes, created_at, updated_at
+             FROM issues;
+         DROP TABLE issues;
+         ALTER TABLE issues_with_in_progress RENAME TO issues;
+         COMMIT;
+         PRAGMA foreign_keys = ON;",
     )?;
     Ok(())
 }

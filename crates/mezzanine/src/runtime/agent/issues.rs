@@ -107,6 +107,7 @@ impl RuntimeSessionService {
         match &action.payload {
             AgentActionPayload::IssueAdd {
                 kind,
+                state,
                 title,
                 body,
                 notes,
@@ -116,6 +117,10 @@ impl RuntimeSessionService {
                     mez_agent::issues::NewIssueRecord {
                         project,
                         kind: mez_agent::issues::IssueKind::parse(kind)?,
+                        state: state
+                            .as_deref()
+                            .map(mez_agent::issues::IssueState::parse)
+                            .transpose()?,
                         title: title.clone(),
                         body: body.clone(),
                         notes: notes.clone(),

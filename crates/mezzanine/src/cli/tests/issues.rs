@@ -21,6 +21,8 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
             "add".to_string(),
             "--kind".to_string(),
             "defect".to_string(),
+            "--state".to_string(),
+            "in-progress".to_string(),
             "--title".to_string(),
             "Fix renderer panic".to_string(),
             "--body".to_string(),
@@ -37,6 +39,7 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
     let add_output = String::from_utf8(add_stdout).unwrap();
     assert!(add_output.contains(r#""project":"/work/repo""#));
     assert!(add_output.contains(r#""kind":"defect""#));
+    assert!(add_output.contains(r#""state":"in-progress""#));
     assert!(add_output.contains(r#""title":"Fix renderer panic""#));
     assert!(add_output.contains(r#""notes":"initial investigation started""#));
     assert!(add_output.contains(r#""depends_on":[]"#));
@@ -87,6 +90,8 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
             "query".to_string(),
             "--kind".to_string(),
             "defect".to_string(),
+            "--state".to_string(),
+            "in-progress".to_string(),
             "--text".to_string(),
             "borders".to_string(),
         ],

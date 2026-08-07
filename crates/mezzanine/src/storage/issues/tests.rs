@@ -8,6 +8,7 @@ use super::{
     IssueBrowserQuery, IssueKind, IssueQuery, IssueState, IssueStore, IssueUpdate, NewIssueRecord,
     fs, issue_database_location,
 };
+use rusqlite::Connection;
 
 fn temp_store(name: &str) -> IssueStore {
     let root = std::env::temp_dir().join(format!("mez-issue-store-{name}-{}", std::process::id()));
@@ -115,6 +116,84 @@ fn issue_store_defaults_to_open_and_filters_resolved_state() {
         )
         .unwrap();
     assert_eq!(resolved_results, vec![resolved]);
+}
+
+/// Verifies opening a legacy issue database preserves existing records while
+/// expanding its state constraint to accept the in-progress lifecycle state.
+#[test]
+fn issue_store_migrates_legacy_state_constraint_for_in_progress() {
+    let store = temp_store("legacy-in-progress-state");
+    fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+    let connection = Connection::open(store.path()).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE issues (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 project TEXT NOT NULL,
+                 kind TEXT NOT NULL CHECK (kind IN ('defect', 'task')),
+                 state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'resolved')),
+                 title TEXT NOT NULL,
+                 body TEXT,
+                 notes TEXT,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE issue_dependencies (
+                 project TEXT NOT NULL,
+                 issue_id TEXT NOT NULL,
+                 depends_on_id TEXT NOT NULL,
+                 PRIMARY KEY (project, issue_id, depends_on_id),
+                 FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE,
+                 FOREIGN KEY (depends_on_id) REFERENCES issues(id) ON DELETE CASCADE
+             );
+             INSERT INTO issues
+                 (id, project, kind, state, title, body, notes, created_at, updated_at)
+             VALUES
+                 ('legacy-open', '/repo', 'task', 'open', 'Legacy open', NULL, NULL, 10, 10),
+                 ('legacy-resolved', '/repo', 'defect', 'resolved', 'Legacy resolved', NULL, NULL, 11, 11);",
+        )
+        .unwrap();
+    drop(connection);
+
+    let updated = store
+        .update_issue(
+            "/repo".to_string(),
+            "legacy-open".to_string(),
+            IssueUpdate {
+                state: Some(IssueState::InProgress),
+                ..IssueUpdate::default()
+            },
+            20,
+        )
+        .unwrap()
+        .record
+        .unwrap();
+
+    assert_eq!(updated.state, IssueState::InProgress);
+    assert_eq!(
+        store
+            .get_issue("/repo".to_string(), "legacy-resolved".to_string())
+            .unwrap()
+            .unwrap()
+            .state,
+        IssueState::Resolved
+    );
+    assert_eq!(
+        store
+            .query_issues(
+                &IssueQuery::new_with_state(
+                    "/repo".to_string(),
+                    None,
+                    Some(IssueState::InProgress),
+                    None,
+                    Some(10),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        vec![updated]
+    );
 }
 
 /// Verifies query limits are bounded and ordered by recent updates.
@@ -379,6 +458,7 @@ fn issue_store_persists_dependencies_and_rejects_cycles() {
             NewIssueRecord {
                 project: "/repo".to_string(),
                 kind: IssueKind::Task,
+                state: None,
                 title: "Teach skills".to_string(),
                 body: None,
                 notes: None,
@@ -401,6 +481,7 @@ fn issue_store_persists_dependencies_and_rejects_cycles() {
         NewIssueRecord {
             project: "/repo".to_string(),
             kind: IssueKind::Task,
+            state: None,
             title: "Blocked by missing issue".to_string(),
             body: None,
             notes: None,
@@ -442,6 +523,7 @@ fn issue_store_delete_rejects_open_dependents_and_allows_resolved_dependents() {
             NewIssueRecord {
                 project: "/repo".to_string(),
                 kind: IssueKind::Task,
+                state: None,
                 title: "Teach skills".to_string(),
                 body: None,
                 notes: None,

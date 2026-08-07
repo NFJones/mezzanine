@@ -6230,10 +6230,12 @@ The baseline command capabilities are:
   active pane project. It MUST accept `add`, `show`, `update`, `query` (or
   `list`), and `delete` (or `remove`). Records MUST be stored in the
   runtime-owned SQLite issue store and keyed by the active pane project root.
-  Issue records MUST support open and resolved workflow states, default new
-  records to open, preserve resolved records for history, and support an
-  optional body for the stable description and optional mutable notes for
-  progress, handoff context, and next steps.
+  Issue records MUST support open, in-progress, and resolved workflow states,
+  default new records to open, preserve resolved records for history, and
+  support an optional body for the stable description and optional mutable
+  notes for progress, handoff context, and next steps. The intended lifecycle
+  is open -> in-progress -> resolved; reopening a resolved or in-progress issue
+  sets it to open so it returns to the backlog.
 - `/show-approvals`: Browse all pending blocked approvals in the live session,
   ordered deterministically. Its list MUST show pane id, requesting agent id,
   action kind, and the full actionable summary with exactly one selectable
@@ -8911,13 +8913,17 @@ gated `issues` capability whose concrete action subset contains `issue_add`,
 execute through the runtime-owned local issue store, MUST scope records to the
 active pane project, and MUST return bounded action results for provider
 continuation. `issue_query` MUST default to open issues when no state filter is
-provided and MAY filter by open or resolved state. `issue_update` MAY mark
-issues open or resolved while preserving resolved records for history.
-`issue_add` and `issue_update` MAY set dependency issue ids through a
-`depends_on` list; `issue_update` MAY also mutate body text, title, kind, notes,
-state, and dependencies. Dependencies MUST reference existing same-project
-issues and MUST NOT introduce cycles. Notes are the intended field for model
-working progress and handoff state.
+provided and MAY filter by open, in-progress, or resolved state. `issue_add`
+MAY set an initial state and MUST default it to open when omitted.
+`issue_update` MAY mark issues open, in-progress, or resolved while preserving
+resolved records for history. Agents following an issue-fixing workflow MUST
+mark selected work in-progress before implementation, then mark it resolved
+only after verification. Reopening MUST use open. `issue_add` and
+`issue_update` MAY set dependency issue ids through a `depends_on` list;
+`issue_update` MAY also mutate body text, title, kind, notes, state, and
+dependencies. Dependencies MUST reference existing same-project issues and
+MUST NOT introduce cycles. Notes are the intended field for model working
+progress and handoff state.
 `issue_query` MUST carry a Boolean `refresh` field in compact provider-native
 schemas; compatibility inputs that omit it MUST behave as `false`. A successful
 query result MUST include the normalized query descriptor and a deterministic

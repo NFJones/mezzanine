@@ -44,6 +44,8 @@ impl IssueKind {
 pub enum IssueState {
     /// Issue is still active and should be returned by default work queries.
     Open,
+    /// Issue is actively being implemented or verified.
+    InProgress,
     /// Issue implementation and verification are complete, but history remains queryable.
     Resolved,
 }
@@ -53,6 +55,7 @@ impl IssueState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Open => "open",
+            Self::InProgress => "in-progress",
             Self::Resolved => "resolved",
         }
     }
@@ -61,9 +64,10 @@ impl IssueState {
     pub fn parse(value: &str) -> Result<Self> {
         match value {
             "open" => Ok(Self::Open),
+            "in-progress" => Ok(Self::InProgress),
             "resolved" => Ok(Self::Resolved),
             _ => Err(IssueError::invalid_args(
-                "issue state must be open or resolved",
+                "issue state must be open, in-progress, or resolved",
             )),
         }
     }
@@ -76,6 +80,8 @@ pub struct NewIssueRecord {
     pub project: String,
     /// Defect or task classification.
     pub kind: IssueKind,
+    /// Optional initial workflow state; omitted records start open.
+    pub state: Option<IssueState>,
     /// Required single-line issue summary.
     pub title: String,
     /// Optional issue detail text.
@@ -95,7 +101,7 @@ pub struct IssueRecord {
     pub project: String,
     /// Defect or task classification.
     pub kind: IssueKind,
-    /// Open or resolved workflow state.
+    /// Open, in-progress, or resolved workflow state.
     pub state: IssueState,
     /// Required single-line issue summary.
     pub title: String,
@@ -127,6 +133,7 @@ impl IssueRecord {
             NewIssueRecord {
                 project,
                 kind,
+                state: None,
                 title,
                 body,
                 notes,
@@ -146,7 +153,7 @@ impl IssueRecord {
             id,
             project: fields.project,
             kind: fields.kind,
-            state: IssueState::Open,
+            state: fields.state.unwrap_or(IssueState::Open),
             title: fields.title,
             body: fields.body,
             notes: fields.notes,
@@ -186,7 +193,7 @@ impl IssueRecord {
 pub struct IssueUpdate {
     /// Optional replacement defect/task classification.
     pub kind: Option<IssueKind>,
-    /// Optional replacement open/resolved workflow state.
+    /// Optional replacement open/in-progress/resolved workflow state.
     pub state: Option<IssueState>,
     /// Optional replacement single-line title.
     pub title: Option<String>,
@@ -272,7 +279,7 @@ pub struct IssueQuery {
     pub project: String,
     /// Optional defect/task filter.
     pub kind: Option<IssueKind>,
-    /// Optional open/resolved filter.
+    /// Optional open/in-progress/resolved filter.
     pub state: Option<IssueState>,
     /// Optional case-insensitive title/body substring query.
     pub text: Option<String>,
@@ -334,7 +341,7 @@ pub struct IssueBrowserQuery {
     pub project_glob: Option<String>,
     /// Optional defect/task filter.
     pub kind: Option<IssueKind>,
-    /// Optional open/resolved filter.
+    /// Optional open/in-progress/resolved filter.
     pub state: Option<IssueState>,
     /// Optional case-insensitive title/body substring query.
     pub text: Option<String>,

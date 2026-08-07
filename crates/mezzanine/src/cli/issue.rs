@@ -48,6 +48,7 @@ pub(super) fn run_issue<W: Write>(
     let output = match parsed.command {
         IssueCliCommand::Add {
             kind,
+            state,
             title,
             body,
             notes,
@@ -57,6 +58,7 @@ pub(super) fn run_issue<W: Write>(
                 NewIssueRecord {
                     project,
                     kind: IssueKind::parse(&kind)?,
+                    state: state.as_deref().map(IssueState::parse).transpose()?,
                     title,
                     body,
                     notes,
@@ -148,6 +150,9 @@ enum IssueCliCommand {
         /// Issue kind: defect or task.
         #[arg(long, default_value = "defect")]
         kind: String,
+        /// Optional initial workflow state: open, in-progress, or resolved.
+        #[arg(long)]
+        state: Option<String>,
         /// Single-line issue title.
         #[arg(long, allow_hyphen_values = true)]
         title: String,
@@ -173,7 +178,7 @@ enum IssueCliCommand {
         /// Optional replacement issue kind: defect or task.
         #[arg(long)]
         kind: Option<String>,
-        /// Optional replacement workflow state: open or resolved.
+        /// Optional replacement workflow state: open, in-progress, or resolved.
         #[arg(long)]
         state: Option<String>,
         /// Optional replacement single-line issue title.
@@ -207,7 +212,7 @@ enum IssueCliCommand {
         /// Optional issue kind filter: defect or task.
         #[arg(long)]
         kind: Option<String>,
-        /// Optional issue state filter: open or resolved.
+        /// Optional issue state filter: open, in-progress, or resolved.
         #[arg(long)]
         state: Option<String>,
         /// Optional title/body substring query.

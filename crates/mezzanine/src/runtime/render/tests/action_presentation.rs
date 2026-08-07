@@ -75,6 +75,7 @@ fn agent_action_execution_header_summarizes_issue_actions() {
         rationale: String::new(),
         payload: AgentActionPayload::IssueAdd {
             kind: "defect".to_string(),
+            state: None,
             title: "Fix issue rendering".to_string(),
             body: Some("show useful issue arguments".to_string()),
             notes: Some("progress notes".to_string()),

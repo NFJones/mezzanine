@@ -174,6 +174,7 @@ fn maap_batch_accepts_issue_update_actions() {
                 "type": "issue_update",
                 "id": "issue-1",
                 "kind": null,
+                "state": "in-progress",
                 "title": null,
                 "body": null,
                 "clear_body": false,
@@ -192,6 +193,7 @@ fn maap_batch_accepts_issue_update_actions() {
     match &batch.actions[0].payload {
         AgentActionPayload::IssueUpdate {
             id,
+            state,
             notes,
             clear_notes,
             depends_on,
@@ -199,6 +201,7 @@ fn maap_batch_accepts_issue_update_actions() {
             ..
         } => {
             assert_eq!(id, "issue-1");
+            assert_eq!(state.as_deref(), Some("in-progress"));
             assert_eq!(notes.as_deref(), Some("documented the next step"));
             assert!(!clear_notes);
             assert_eq!(

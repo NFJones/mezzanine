@@ -1317,13 +1317,16 @@ mod tests {
     #[test]
     fn show_issues_parser_accepts_filters_detail_and_save_path() {
         let parsed = parse_show_issues_args(
-            "--project /repo/* --kind task --state resolved --text panic --limit 20 --save out.md issue-1",
+            "--project /repo/* --kind task --state in-progress --text panic --limit 20 --save out.md issue-1",
         )
         .unwrap();
 
         assert_eq!(parsed.project_glob.as_deref(), Some("/repo/*"));
         assert_eq!(parsed.kind, Some(mez_agent::issues::IssueKind::Task));
-        assert_eq!(parsed.state, Some(mez_agent::issues::IssueState::Resolved));
+        assert_eq!(
+            parsed.state,
+            Some(mez_agent::issues::IssueState::InProgress)
+        );
         assert_eq!(parsed.text.as_deref(), Some("panic"));
         assert_eq!(parsed.limit, 20);
         assert_eq!(parsed.save_path.as_deref(), Some("out.md"));
