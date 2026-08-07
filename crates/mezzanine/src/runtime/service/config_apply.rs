@@ -14,7 +14,8 @@ use super::{
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,
     runtime_agent_personality_profiles_from_config, runtime_agent_root_routing_policy_from_config,
-    runtime_agent_routing_from_config, runtime_audit_config_present, runtime_audit_log_from_config,
+    runtime_agent_routing_from_config, runtime_always_exposed_mcp_servers_from_config,
+    runtime_audit_config_present, runtime_audit_log_from_config,
     runtime_configured_permissions_from_config, runtime_default_agent_personality_from_config,
     runtime_default_models_for_provider, runtime_effective_config_value,
     runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
@@ -434,6 +435,9 @@ impl RuntimeSessionService {
             .set_default_agent_personality(default_personality);
         self.integration.set_custom_agent_system_prompt(
             runtime_agent_custom_system_prompt_from_config(&structured)?,
+        );
+        self.integration.replace_always_exposed_mcp_servers(
+            runtime_always_exposed_mcp_servers_from_config(&structured)?,
         );
         self.integration
             .replace_hook_definitions(runtime_hook_definitions_from_config(&structured)?);

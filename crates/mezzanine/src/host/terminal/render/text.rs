@@ -55,11 +55,15 @@ mod tests {
         wrap_agent_log_text,
     };
     use mez_terminal::active_terminal_text_width;
+    use std::sync::Mutex;
+
+    static AGENT_WRAP_COLUMN_CAP_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Verifies agent log wrapping uses the pane width until the default cap
     /// applies, so very wide terminals do not create unbounded transcript rows.
     #[test]
     fn agent_log_wrap_width_caps_terminal_width_at_default_columns() {
+        let _guard = AGENT_WRAP_COLUMN_CAP_TEST_LOCK.lock().unwrap();
         set_agent_wrap_column_cap(DEFAULT_AGENT_WRAP_COLUMN_CAP);
 
         assert_eq!(agent_log_wrap_width(0), 1);
@@ -73,6 +77,7 @@ mod tests {
     /// or persisted, so the low-level wrapper must stop using a fixed constant.
     #[test]
     fn agent_log_wrap_width_uses_configured_column_cap() {
+        let _guard = AGENT_WRAP_COLUMN_CAP_TEST_LOCK.lock().unwrap();
         set_agent_wrap_column_cap(96);
 
         assert_eq!(agent_log_wrap_width(200), 96);
@@ -84,6 +89,8 @@ mod tests {
     /// wider, protecting persisted replay rows from host-width drift.
     #[test]
     fn wrap_agent_log_text_applies_global_column_cap() {
+        let _guard = AGENT_WRAP_COLUMN_CAP_TEST_LOCK.lock().unwrap();
+        set_agent_wrap_column_cap(DEFAULT_AGENT_WRAP_COLUMN_CAP);
         let wrapped = wrap_agent_log_text(&"x".repeat(130), 200);
 
         assert_eq!(active_terminal_text_width(&wrapped[0]), 120);

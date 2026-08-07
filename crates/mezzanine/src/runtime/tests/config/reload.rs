@@ -163,6 +163,45 @@ fn runtime_config_reload_applies_action_failure_retry_limit() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies always-exposed MCP server selection is replaced on config reload.
+///
+/// The setting is live request policy, so removing a server from configuration
+/// must affect later model turns without retaining a stale runtime snapshot.
+#[test]
+fn runtime_config_reload_replaces_always_exposed_mcp_servers() {
+    let mut service = test_runtime_service();
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nalways_exposed_mcp_servers = [\"GitHub\", \"state\"]\n".to_string(),
+        }])
+        .unwrap();
+    assert_eq!(
+        service.integration.always_exposed_mcp_servers(),
+        &["GitHub".to_string(), "state".to_string()]
+    );
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nalways_exposed_mcp_servers = [\"state\"]\n".to_string(),
+        }])
+        .unwrap();
+    assert_eq!(
+        service.integration.always_exposed_mcp_servers(),
+        &["state".to_string()]
+    );
+}
+
 /// Verifies that subagent wait policy is a validated live agent option.
 ///
 /// The default must remain join-and-wait so parent turns do not race ahead of

@@ -76,6 +76,15 @@ pub(crate) fn runtime_agent_custom_system_prompt_from_config(
     Ok((!prompt.trim().is_empty()).then(|| prompt.to_string()))
 }
 
+/// Parses MCP server ids that should be exposed on every applicable model turn.
+pub(crate) fn runtime_always_exposed_mcp_servers_from_config(root: &Value) -> Result<Vec<String>> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(Vec::new());
+    };
+    runtime_json_string_array(agents.get("always_exposed_mcp_servers"))
+        .map(Option::unwrap_or_default)
+}
+
 /// Parses the configured default personality profile id.
 pub(crate) fn runtime_default_agent_personality_from_config(
     root: &Value,

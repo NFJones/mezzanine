@@ -135,7 +135,7 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 53"));
+    assert!(plan.text.contains("version = 54"));
     assert!(plan.text.contains("emoji_width = \"wide\""));
     assert!(plan.text.contains("agent_wrap_column_cap = 120"));
     assert!(!plan.text.contains("detach_behavior"));
@@ -1489,6 +1489,52 @@ fn migrates_schema_52_with_pane_spawn_view_policy() {
         assert_eq!(
             explicit_values.get("terminal.pane_spawn_view"),
             Some(&"agent".to_string())
+        );
+    }
+}
+
+/// Verifies schema v54 defaults to explicit-only MCP exposure in every format
+/// while preserving an already configured always-exposed server list.
+#[test]
+fn migrates_schema_53_with_always_exposed_mcp_servers() {
+    for (format, missing, explicit) in [
+        (
+            ConfigFormat::Toml,
+            "version = 53\n[agents]\nrouting = false\n",
+            "version = 53\n[agents]\nalways_exposed_mcp_servers = [\"GitHub\", \"state\"]\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":53,"agents":{"routing":false}}"#,
+            r#"{"version":53,"agents":{"always_exposed_mcp_servers":["GitHub","state"]}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 53\nagents:\n  routing: false\n",
+            "version: 53\nagents:\n  always_exposed_mcp_servers: [GitHub, state]\n",
+        ),
+    ] {
+        let missing_plan = migrate_config_text(format, missing).unwrap();
+        let missing_values = extract_config_values(format, &missing_plan.text);
+        assert_eq!(missing_plan.from_version, 53);
+        assert_eq!(missing_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            missing_values.get("agents.always_exposed_mcp_servers"),
+            Some(&"[]".to_string())
+        );
+
+        let explicit_plan = migrate_config_text(format, explicit).unwrap();
+        let explicit_document = parse_config_json_value(format, &explicit_plan.text).unwrap();
+        assert_eq!(explicit_plan.from_version, 53);
+        assert_eq!(explicit_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            explicit_document
+                .pointer("/agents/always_exposed_mcp_servers")
+                .and_then(serde_json::Value::as_array),
+            Some(&vec![
+                serde_json::json!("GitHub"),
+                serde_json::json!("state")
+            ])
         );
     }
 }

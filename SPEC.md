@@ -2586,7 +2586,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 50 is the current configuration schema version for this
+schema version 54 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2951,7 +2951,10 @@ profile MAY define `name`, `description`, `developer_instructions`,
 text appended after the built-in Mezzanine agent prompt. It MUST be treated as
 provider system context, not as a user message. `agents.default_personality` MAY
 name a profile from the `personalities` table and MUST fail validation if the
-named profile is absent.
+named profile is absent. `agents.always_exposed_mcp_servers` MUST be a string
+array of configured MCP server identifiers and MUST default to an empty array.
+It controls turn-local availability only and MUST NOT add instructions that
+encourage or require the model to use any listed server.
 
 The `personalities` table MUST be a map keyed by user-defined personality
 profile identity. Mezzanine MUST NOT define built-in personality profiles. Each
@@ -7123,6 +7126,13 @@ usable, trusted, or presented to the model in a given session.
 
 MCP servers MUST be configured under the `mcp_servers` configuration table.
 Explicit `@<server-id>` invocations MUST resolve against canonical configured MCP server identifiers. Exact identifier casing MUST take precedence; an ASCII case-insensitive fallback MAY resolve only when it identifies exactly one configured server. Unresolved or case-ambiguous mentions MUST fail closed, expose no arbitrarily selected server tools, and provide a bounded model-visible diagnostic.
+Names in `agents.always_exposed_mcp_servers` MUST use the same canonical
+resolution and model-visible metadata contracts as explicit invocations.
+Configured names and explicit mentions MUST be merged deterministically and
+deduplicated by canonical server identity. Unknown, disabled, unavailable, or
+case-ambiguous configured names MUST expose no fabricated tools and MUST produce
+a bounded model-visible diagnostic. Configuration reload MUST replace the list
+for subsequent turns rather than retaining stale exposure state.
 For a resolved explicit invocation, the turn-local model context MUST identify the invoked server, state that matching callable `mcp_call` actions are the direct execution route, and make clear that memory lookup or unrelated discovery is not a substitute. It MUST present every callable tool identity and description together with its complete validated input-schema contract, including required and optional fields, descriptions, nested structures, arrays, enums, and validation constraints, without silent truncation or omission. Mezzanine MUST preserve complete model-safe initialization instructions advertised by the MCP server as non-authoritative guidance, SHOULD derive a complete purpose from discovered tool metadata when operator-configured purpose is absent, and MUST preserve complete operator-configured purpose and usage guidance as higher-priority context. Credentials, transport configuration, environment variables, headers, approval internals, and other runtime-only metadata MUST remain excluded. If a provider context limit cannot accommodate the complete selected-server metadata, Mezzanine MUST fail the invocation explicitly rather than present a partial manifest. For cache-stable provider schemas that use a generic `mcp_call` variant, the turn-local context MUST instead identify callable server/tool pairs and their complete argument contracts, while controller and runtime validation MUST enforce those requirements before execution.
 
 Mezzanine MUST support stdio MCP servers with `command`, optional `args`,

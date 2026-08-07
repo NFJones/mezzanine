@@ -17,6 +17,7 @@ use crate::runtime::service_state::{
 pub(super) struct RuntimeBindingsState {
     mcp_registry: McpRegistry,
     mcp_transports: RuntimeMcpTransportSet,
+    always_exposed_mcp_servers: Vec<String>,
     provider_registry: RuntimeProviderRegistry,
     preset_registry: RuntimePresetRegistry,
     subagent_profiles: BTreeMap<String, SubagentProfile>,
@@ -35,6 +36,7 @@ impl RuntimeBindingsState {
         Self {
             mcp_registry: McpRegistry::default(),
             mcp_transports: RuntimeMcpTransportSet::default(),
+            always_exposed_mcp_servers: Vec::new(),
             provider_registry,
             preset_registry: RuntimePresetRegistry::default(),
             subagent_profiles,
@@ -56,6 +58,14 @@ impl RuntimeBindingsState {
 
     pub(super) fn mcp_transports_mut(&mut self) -> &mut RuntimeMcpTransportSet {
         &mut self.mcp_transports
+    }
+
+    pub(super) fn always_exposed_mcp_servers(&self) -> &[String] {
+        &self.always_exposed_mcp_servers
+    }
+
+    pub(super) fn replace_always_exposed_mcp_servers(&mut self, servers: Vec<String>) {
+        self.always_exposed_mcp_servers = servers;
     }
 
     pub(super) fn provider_registry(&self) -> &RuntimeProviderRegistry {

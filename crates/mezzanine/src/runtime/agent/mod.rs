@@ -79,8 +79,8 @@ use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MacroManagedSubagent,
     MacroRunState, ModelInteractionKind, ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext,
     ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory,
-    append_mcp_context_for_provider, assistant_context_content_for_execution,
-    invoked_mcp_tools_for_context, set_project_guidance_context,
+    append_mcp_context_for_provider_with_configured, assistant_context_content_for_execution,
+    invoked_mcp_tools_for_context_with_configured, set_project_guidance_context,
 };
 use mez_mux::command::CommandInvocation;
 

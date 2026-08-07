@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 53
+version = 54
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -184,6 +184,7 @@ action_failure_retry_limit = 5
 loop_limit = 8
 custom_system_prompt = ""
 default_personality = ""
+always_exposed_mcp_servers = []
 subagent_placement = "new-window"
 max_concurrent_agents = 4
 max_root_subagents = 4

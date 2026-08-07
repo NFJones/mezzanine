@@ -537,6 +537,7 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "loop_limit",
     "custom_system_prompt",
     "default_personality",
+    "always_exposed_mcp_servers",
     "auto_sizing",
     "subagent_placement",
     "max_concurrent_agents",

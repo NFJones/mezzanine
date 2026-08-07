@@ -80,11 +80,20 @@ const MCP_INTEGRATIONS_CONTEXT_LABEL: &str = "mcp integrations";
 const ROUTED_CONTROLLER_TASK_LABEL: &str = "routed controller task";
 
 pub fn append_mcp_context(
-    mut context: AgentContext,
+    context: AgentContext,
     summary: &McpPromptSummary,
 ) -> AgentContextResult<AgentContext> {
+    append_mcp_context_with_configured(context, summary, &[])
+}
+
+/// Replaces MCP availability context with configured and explicitly invoked servers.
+pub fn append_mcp_context_with_configured(
+    mut context: AgentContext,
+    summary: &McpPromptSummary,
+    configured_server_names: &[String],
+) -> AgentContextResult<AgentContext> {
     context.retain_blocks(|block| !is_mcp_context_block(block))?;
-    let invocation = explicit_mcp_invocation_summary(&context, summary);
+    let invocation = mcp_invocation_summary(&context, summary, configured_server_names);
     if invocation.available_servers.is_empty()
         && invocation.available_tools.is_empty()
         && invocation.unavailable_servers.is_empty()
@@ -102,12 +111,22 @@ pub fn append_mcp_context(
 /// with dynamic schemas already carry complete definitions and receive only
 /// unavailable-server diagnostics in text.
 pub fn append_mcp_context_for_provider(
-    mut context: AgentContext,
+    context: AgentContext,
     summary: &McpPromptSummary,
     provider: &str,
 ) -> AgentContextResult<AgentContext> {
+    append_mcp_context_for_provider_with_configured(context, summary, provider, &[])
+}
+
+/// Replaces provider-specific MCP state for configured and explicitly invoked servers.
+pub fn append_mcp_context_for_provider_with_configured(
+    mut context: AgentContext,
+    summary: &McpPromptSummary,
+    provider: &str,
+    configured_server_names: &[String],
+) -> AgentContextResult<AgentContext> {
     context.retain_blocks(|block| !is_mcp_context_block(block))?;
-    let invocation = explicit_mcp_invocation_summary(&context, summary);
+    let invocation = mcp_invocation_summary(&context, summary, configured_server_names);
     append_filtered_mcp_context(context, &invocation, provider == "openai")
 }
 
@@ -116,7 +135,16 @@ pub fn invoked_mcp_tools_for_context(
     context: &AgentContext,
     summary: &McpPromptSummary,
 ) -> Vec<McpPromptTool> {
-    explicit_mcp_invocation_summary(context, summary).available_tools
+    invoked_mcp_tools_for_context_with_configured(context, summary, &[])
+}
+
+/// Returns callable MCP tools selected by configuration or explicit invocation.
+pub fn invoked_mcp_tools_for_context_with_configured(
+    context: &AgentContext,
+    summary: &McpPromptSummary,
+    configured_server_names: &[String],
+) -> Vec<McpPromptTool> {
+    mcp_invocation_summary(context, summary, configured_server_names).available_tools
 }
 
 /// Builds one prompt-context block from a pre-filtered MCP summary.
@@ -218,14 +246,14 @@ fn is_mcp_context_block(block: &ContextBlock) -> bool {
     ) && block.label == MCP_INTEGRATIONS_CONTEXT_LABEL
 }
 
-/// Filters the live MCP prompt summary down to servers explicitly named by the
-/// current user prompt or loaded skill text.
-fn explicit_mcp_invocation_summary(
+/// Filters live MCP state to configured servers and turn-local explicit names.
+fn mcp_invocation_summary(
     context: &AgentContext,
     summary: &McpPromptSummary,
+    configured_server_names: &[String],
 ) -> McpPromptSummary {
-    let requested = explicit_mcp_invocations_from_context(context);
-    if requested.is_empty() {
+    let explicit = explicit_mcp_invocations_from_context(context);
+    if explicit.is_empty() && configured_server_names.is_empty() {
         return McpPromptSummary {
             available_servers: Vec::new(),
             available_tools: Vec::new(),
@@ -233,7 +261,19 @@ fn explicit_mcp_invocation_summary(
         };
     }
 
-    let (resolved, mut resolution_failures) = resolve_explicit_mcp_invocations(&requested, summary);
+    let (mut resolved, mut resolution_failures) = resolve_mcp_server_names(
+        configured_server_names,
+        summary,
+        "configured MCP server name",
+    );
+    let (explicit_resolved, mut explicit_failures) =
+        resolve_mcp_server_names(&explicit, summary, "explicit MCP server mention");
+    for server_id in explicit_resolved {
+        if !resolved.iter().any(|existing| existing == &server_id) {
+            resolved.push(server_id);
+        }
+    }
+    resolution_failures.append(&mut explicit_failures);
 
     let mut available_servers = summary
         .available_servers
@@ -269,9 +309,10 @@ fn explicit_mcp_invocation_summary(
 }
 
 /// Resolves requested names to canonical configured MCP server identifiers.
-fn resolve_explicit_mcp_invocations(
+fn resolve_mcp_server_names(
     requested: &[String],
     summary: &McpPromptSummary,
+    request_kind: &str,
 ) -> (Vec<String>, Vec<McpPromptUnavailableServer>) {
     let mut configured = summary
         .available_servers
@@ -314,15 +355,15 @@ fn resolve_explicit_mcp_invocations(
         }
 
         let reason = if case_matches.is_empty() {
-            "explicit MCP server mention did not match a configured server"
+            format!("{request_kind} did not match a configured server")
         } else {
-            "explicit MCP server mention is ambiguous; use the exact configured identifier casing"
+            format!("{request_kind} is ambiguous; use the exact configured identifier casing")
         };
         failures.push(McpPromptUnavailableServer {
             server_id: requested_name.clone(),
             purpose: String::new(),
             usage_instructions: String::new(),
-            reason: reason.to_string(),
+            reason,
             retryable: false,
         });
     }

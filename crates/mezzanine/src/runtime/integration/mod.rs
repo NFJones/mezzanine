@@ -249,6 +249,16 @@ impl RuntimeIntegrationComponent {
         self.bindings.mcp_transports_mut()
     }
 
+    /// Returns MCP server ids exposed on every applicable model turn.
+    pub(crate) fn always_exposed_mcp_servers(&self) -> &[String] {
+        self.bindings.always_exposed_mcp_servers()
+    }
+
+    /// Replaces the always-exposed MCP server ids after config reload.
+    pub(crate) fn replace_always_exposed_mcp_servers(&mut self, servers: Vec<String>) {
+        self.bindings.replace_always_exposed_mcp_servers(servers);
+    }
+
     /// Borrows disjoint MCP transport and credential bindings for one execution.
     #[allow(
         dead_code,

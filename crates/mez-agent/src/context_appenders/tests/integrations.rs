@@ -44,6 +44,64 @@ fn mcp_context_content(context: &AgentContext) -> &str {
 }
 
 #[test]
+/// Verifies configured MCP exposure selects callable metadata without requiring
+/// an explicit user mention or adding duplicate tools for repeated names.
+fn mcp_context_exposes_configured_servers_without_explicit_mentions() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::ConversationAppend,
+        label: "user".to_string(),
+        content: "inspect the issue".to_string(),
+    }])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+    let configured = vec!["github_2".to_string(), "GitHub_2".to_string()];
+
+    let tools = invoked_mcp_tools_for_context_with_configured(&context, &summary, &configured);
+    let context = append_mcp_context_with_configured(context, &summary, &configured).unwrap();
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].server_id, "GitHub_2");
+    let content = mcp_context_content(&context);
+    assert_eq!(content.matches("available_tool=GitHub_2/lookup").count(), 1);
+    assert!(!content.contains("Use GitHub_2"), "{content}");
+}
+
+#[test]
+/// Verifies configured names and explicit mentions share canonical resolution,
+/// deduplicate overlap, and retain bounded diagnostics for unknown names.
+fn mcp_context_merges_configured_and_explicit_servers_deterministically() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::ConversationAppend,
+        label: "user".to_string(),
+        content: "use @GitHub_2 for this task".to_string(),
+    }])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub_2", "state"]);
+    let configured = vec!["state".to_string(), "missing".to_string()];
+
+    let tools = invoked_mcp_tools_for_context_with_configured(&context, &summary, &configured);
+    let context = append_mcp_context_with_configured(context, &summary, &configured).unwrap();
+
+    assert_eq!(
+        tools
+            .iter()
+            .map(|tool| tool.server_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["GitHub_2", "state"]
+    );
+    let content = mcp_context_content(&context);
+    assert_eq!(content.matches("available_tool=GitHub_2/lookup").count(), 1);
+    assert_eq!(content.matches("available_tool=state/lookup").count(), 1);
+    assert!(content.contains("unavailable_server=missing"), "{content}");
+    assert!(
+        content.contains("configured MCP server name did not match a configured server"),
+        "{content}"
+    );
+}
+
+#[test]
 /// Verifies dynamic-schema providers do not receive duplicate textual MCP
 /// definitions while OpenAI Responses retains the complete late manifest its
 /// cache-stable generic MCP action cannot express.
