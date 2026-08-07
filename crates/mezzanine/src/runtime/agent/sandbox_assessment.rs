@@ -12,7 +12,7 @@ use crate::runtime::{
 
 impl RuntimeSessionService {
     /// Queues one bounded internal model assessment after Bubblewrap proves
-    /// that a prompt-classified payload executed and then exited non-zero.
+    /// that an explicitly allowed payload executed and then exited non-zero.
     pub(crate) fn queue_sandbox_failure_assessment(
         &mut self,
         turn: &AgentTurnRecord,
@@ -58,7 +58,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| {
                 MezError::invalid_state("sandbox assessment permission evaluation is unavailable")
             })?;
-        if evaluation.decision != mez_agent::permissions::RuleDecision::Prompt {
+        if evaluation.decision != mez_agent::permissions::RuleDecision::Allow {
             return Ok(false);
         }
         let model_profile = self
@@ -87,7 +87,7 @@ impl RuntimeSessionService {
             .collect();
         let evidence = mez_agent::SandboxFailureAssessmentEvidence {
             action_kind: action.action_type().to_string(),
-            permission_decision: "prompt".to_string(),
+            permission_decision: "allow".to_string(),
             matched_rule_ids: evaluation.matched_rule_ids.clone(),
             read_effects: evaluation.effects.reads.clone(),
             write_effects,

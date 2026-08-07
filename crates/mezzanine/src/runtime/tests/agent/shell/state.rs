@@ -1167,21 +1167,22 @@ fn runtime_host_access_does_not_enforce_network_policy() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Builds one prompting shell evaluation retained by sandbox-first dispatch.
-fn sandbox_fallback_prompt_evaluation() -> mez_agent::permissions::PermissionEvaluation {
+/// Builds one explicitly authorized shell evaluation for sandbox fallback
+/// lifecycle tests that begin after permission approval has completed.
+fn sandbox_fallback_allowed_evaluation() -> mez_agent::permissions::PermissionEvaluation {
     let effects = path_resolution_effects();
     let confinement_effects = Some(effects.clone());
     mez_agent::permissions::PermissionEvaluation {
-        decision: RuleDecision::Prompt,
+        decision: RuleDecision::Allow,
         candidates: vec![mez_agent::permissions::CandidateEvaluation {
             command: "env".to_string(),
-            decision: RuleDecision::Prompt,
-            matched_rule_ids: vec!["sandbox-fallback-prompt".to_string()],
+            decision: RuleDecision::Allow,
+            matched_rule_ids: vec!["sandbox-fallback-allow".to_string()],
             effects: effects.clone(),
             confinement_effects: confinement_effects.clone(),
             completeness: mez_agent::permissions::EffectCompleteness::Complete,
         }],
-        matched_rule_ids: vec!["sandbox-fallback-prompt".to_string()],
+        matched_rule_ids: vec!["sandbox-fallback-allow".to_string()],
         effects,
         confinement_effects,
         completeness: mez_agent::permissions::EffectCompleteness::Complete,
@@ -1232,7 +1233,7 @@ fn sandbox_fallback_execution_service() -> (RuntimeSessionService, String, Strin
         vec!["local action accepted for sandbox-first dispatch".to_string()],
         None,
     );
-    result.permission_evaluation = Some(Box::new(sandbox_fallback_prompt_evaluation()));
+    result.permission_evaluation = Some(Box::new(sandbox_fallback_allowed_evaluation()));
     service.agent_turn_executions_mut().insert(
         turn.turn_id.clone(),
         mez_agent::AgentTurnExecution {
@@ -1293,7 +1294,7 @@ fn add_sandbox_fallback_probe_waiter(
         vec!["local action accepted for sandbox-first dispatch".to_string()],
         None,
     );
-    result.permission_evaluation = Some(Box::new(sandbox_fallback_prompt_evaluation()));
+    result.permission_evaluation = Some(Box::new(sandbox_fallback_allowed_evaluation()));
     let execution = service
         .agent_turn_executions_mut()
         .get_mut(turn_id)
@@ -1318,6 +1319,14 @@ fn settle_bubblewrap_probe_for_preparation_test(
     root: &Path,
 ) {
     configure_path_resolution_bubblewrap(service);
+    service
+        .session_approvals_mut()
+        .decide_prefix(
+            ["env"],
+            mez_agent::permissions::ApprovalScope::Session,
+            mez_agent::permissions::ApprovalDecision::Approve,
+        )
+        .unwrap();
     service.set_pane_environment_signature_for_tests("%1", path_resolution_environment(root));
     cache_path_resolution_maximum(service, root);
     mark_test_pane_ready(service, "%1");
@@ -1347,7 +1356,7 @@ fn settle_bubblewrap_probe_for_preparation_test(
 
 /// Verifies trusted evidence that Bubblewrap closed without an exit-code event
 /// creates one normal approval for an exact unsandboxed retry while retaining
-/// the original prompt evaluation.
+/// the original explicit authorization.
 #[test]
 fn runtime_bubblewrap_pre_payload_failure_offers_exact_fallback_approval() {
     let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
@@ -1371,7 +1380,7 @@ fn runtime_bubblewrap_pre_payload_failure_offers_exact_fallback_approval() {
             .permission_evaluation
             .as_ref()
             .map(|evaluation| evaluation.decision),
-        Some(RuleDecision::Prompt)
+        Some(RuleDecision::Allow)
     );
     let approval_ids = service.blocked_agent_approval_ids_by_turn();
     let approval_id = approval_ids.get(&turn_id).unwrap().first().unwrap();

@@ -288,20 +288,6 @@ fn plan_local_action(
                 )),
             ))
         }
-        RuleDecision::Prompt if input.sandbox_first_local_prompts => Ok(ActionResult::running(
-            turn,
-            action,
-            vec!["local action accepted for sandbox-first dispatch".to_string()],
-            Some(shell_action_structured_content_json(
-                action,
-                plan,
-                Some("pending_local_dispatch"),
-                false,
-                serde_json::json!({"state":"sandbox_first","kind":action.action_type(),"action_id":action.id}),
-                matched_rule_ids,
-                serde_json::json!({"state":"pending_sandbox_dispatch"}),
-            )),
-        )),
         RuleDecision::Prompt => Ok(ActionResult::blocked(
             turn,
             action,
@@ -692,9 +678,9 @@ mod tests {
     }
 
     #[test]
-    /// Verifies only an explicitly enabled sandbox-first backend converts a
-    /// prompting local action into pending sandbox dispatch.
-    fn action_planning_routes_prompted_local_actions_to_enabled_sandbox_first_dispatch() {
+    /// Verifies a sandbox-first backend cannot convert an approval requirement
+    /// into runnable work before the primary user approves the exact action.
+    fn action_planning_keeps_sandbox_first_prompts_blocked() {
         let action = shell_action("inspect repository files");
         let plan = local_plan();
         let result = plan_action_result(
@@ -709,13 +695,13 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.status, ActionStatus::Running);
+        assert_eq!(result.status, ActionStatus::Blocked);
         assert!(
             result
                 .structured_content_json
                 .as_deref()
                 .unwrap()
-                .contains(r#""state":"pending_sandbox_dispatch""#)
+                .contains(r#""state":"pending_approval""#)
         );
 
         let policy_only = plan_action_result(

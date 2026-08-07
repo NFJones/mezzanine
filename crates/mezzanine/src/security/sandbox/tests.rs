@@ -217,16 +217,17 @@ fn sandbox_compiler_forwards_whitelisted_path() {
     }));
 }
 
-/// Prompt evaluations may compile for sandbox-first execution, while hard
-/// forbids remain terminal and cannot produce a Bubblewrap launch plan.
+/// Only explicitly allowed evaluations may produce a Bubblewrap launch plan;
+/// pending prompts and hard forbids both remain non-dispatchable.
 #[test]
-fn sandbox_compiler_accepts_prompts_and_rejects_forbids() {
+fn sandbox_compiler_requires_explicit_allow() {
     let config = config();
     let authority = authority();
     let mut prompt = evaluation(EffectCompleteness::Unknown, effects());
     prompt.decision = RuleDecision::Prompt;
 
-    compile_bubblewrap_launch_plan(request(&config, &authority, &prompt)).unwrap();
+    let error = compile_bubblewrap_launch_plan(request(&config, &authority, &prompt)).unwrap_err();
+    assert_eq!(error.kind(), SandboxCompileErrorKind::Unauthorized);
 
     let mut forbid = prompt;
     forbid.decision = RuleDecision::Forbid;

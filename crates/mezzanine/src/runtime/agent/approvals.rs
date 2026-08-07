@@ -195,7 +195,7 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        if evaluation.decision != RuleDecision::Prompt {
+        if evaluation.decision != RuleDecision::Allow {
             return Ok(false);
         }
         let plan = local_action_plan(&action)?.ok_or_else(|| {

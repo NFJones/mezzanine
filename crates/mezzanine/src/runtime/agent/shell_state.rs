@@ -329,7 +329,7 @@ impl RuntimeSessionService {
             ) {
                 Ok(launch_plan) => launch_plan,
                 Err(error)
-                    if evaluation.decision == mez_agent::permissions::RuleDecision::Prompt
+                    if evaluation.decision == mez_agent::permissions::RuleDecision::Allow
                         && error.kind().approval_fallback_eligible() =>
                 {
                     return Ok(ShellActionDispatchOutcome::SandboxFallbackEligible {

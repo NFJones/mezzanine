@@ -1216,9 +1216,9 @@ impl RuntimeSessionService {
                     "sandbox preparation fallback requires a permission evaluation",
                 )
             })?;
-        if evaluation.decision != mez_agent::permissions::RuleDecision::Prompt {
+        if evaluation.decision != mez_agent::permissions::RuleDecision::Allow {
             return Err(MezError::invalid_state(
-                "sandbox preparation fallback requires an originally prompted action",
+                "sandbox preparation fallback requires an explicitly allowed action",
             ));
         }
         let mut blocked = ActionResult::blocked(
