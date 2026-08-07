@@ -7,6 +7,11 @@ use super::{
     SnapshotRepository, StreamExt, UnixListener, UnixStream, authorize_unix_peer_raw_fd,
     encode_frame,
 };
+use std::time::Duration;
+
+/// Maximum time terminal daemon shutdown waits for active control responses to
+/// finish writing before aborting non-responsive connection tasks.
+const TERMINAL_CONTROL_CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Runs the serve async runtime control connection operation for this subsystem.
 ///
@@ -241,13 +246,47 @@ where
         accepted = accepted.saturating_add(1);
     }
 
+    let terminal_drain = matches!(
+        *lifecycle.borrow(),
+        RuntimeLifecycleState::Stopping
+            | RuntimeLifecycleState::Killed
+            | RuntimeLifecycleState::Failed
+    );
+    if terminal_drain {
+        if tokio::time::timeout(
+            TERMINAL_CONTROL_CONNECTION_DRAIN_TIMEOUT,
+            drain_control_connection_tasks(&mut tasks),
+        )
+        .await
+        .is_err()
+        {
+            tasks.abort_all();
+            while let Some(joined) = tasks.join_next().await {
+                if let Err(error) = joined
+                    && !error.is_cancelled()
+                {
+                    return Err(MezError::invalid_state(format!(
+                        "async control connection task failed: {error}"
+                    )));
+                }
+            }
+        }
+    } else {
+        drain_control_connection_tasks(&mut tasks).await?;
+    }
+
+    Ok(accepted)
+}
+
+/// Joins all accepted control connections and propagates task or service
+/// failures after their response loops finish.
+async fn drain_control_connection_tasks(tasks: &mut JoinSet<Result<u64>>) -> Result<()> {
     while let Some(joined) = tasks.join_next().await {
         joined.map_err(|error| {
             MezError::invalid_state(format!("async control connection task failed: {error}"))
         })??;
     }
-
-    Ok(accepted)
+    Ok(())
 }
 
 /// Runs the handle control input with optional snapshots operation for this subsystem.

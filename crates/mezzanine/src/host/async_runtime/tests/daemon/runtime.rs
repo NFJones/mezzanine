@@ -183,3 +183,87 @@ async fn async_runtime_daemon_supervises_named_control_and_message_listeners() {
     let _ = std::fs::remove_file(&control_path);
     let _ = std::fs::remove_file(&message_path);
 }
+
+/// Verifies closing the final window through the supervised control listener
+/// flushes its complete success response before terminal lifecycle shutdown
+/// drains the daemon services.
+#[tokio::test(flavor = "current_thread")]
+async fn async_runtime_daemon_flushes_final_window_close_response() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{UnixListener, UnixStream};
+    use tokio::time::timeout;
+
+    let control_path = std::env::temp_dir().join(format!(
+        "mez-async-daemon-final-window-{}.sock",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&control_path);
+    let listener = UnixListener::bind(&control_path).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let initialize = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"init","method":"control/initialize","params":{"client_name":"primary","requested_version":1,"requested_role":"primary","client":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}},"authentication":{"mechanism":"peer_credentials"}}}"#,
+    );
+    let close = encode_control_body(
+        r#"{"jsonrpc":"2.0","id":"close","method":"window/close","params":{"target":{"window_id":"@1"},"force":true,"idempotency_key":"final-window-close"}}"#,
+    );
+
+    let client = async {
+        let mut stream = UnixStream::connect(&control_path).await.unwrap();
+        stream.write_all(&initialize).await.unwrap();
+        let mut initialized = vec![0; 4096];
+        let read = stream.read(&mut initialized).await.unwrap();
+        initialized.truncate(read);
+        let (body, _) = decode_control_frame(&initialized, 4096).unwrap();
+        assert!(body.contains(r#""control/initialize""#), "{body}");
+
+        stream.write_all(&close).await.unwrap();
+        let mut closed = vec![0; 4096];
+        let read = timeout(Duration::from_secs(1), stream.read(&mut closed))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(read > 0, "final-window close response must precede EOF");
+        closed.truncate(read);
+        let (body, consumed) = decode_control_frame(&closed, 4096).unwrap();
+        assert_eq!(consumed, closed.len());
+        assert!(body.contains(r#""id":"close""#), "{body}");
+        assert!(body.contains(r#""closed":true"#), "{body}");
+        assert!(body.contains(r#""session_empty":true"#), "{body}");
+    };
+    let daemon_handle = handle.clone();
+    let daemon = async move {
+        let report = timeout(
+            Duration::from_secs(1),
+            run_async_runtime_daemon(
+                daemon_handle.clone(),
+                AsyncRuntimeDaemonListeners::control_only(listener),
+                AsyncRuntimeDaemonConfig {
+                    control: AsyncRuntimeControlConnectionConfig::new(
+                        4096,
+                        current_effective_uid(),
+                    )
+                    .unwrap(),
+                    ..AsyncRuntimeDaemonConfig::default()
+                },
+                std::future::pending(),
+            ),
+        )
+        .await
+        .expect("terminal daemon shutdown should remain bounded")
+        .unwrap();
+        daemon_handle.shutdown().await.unwrap();
+        report
+    };
+
+    let ((), report, _exit) = tokio::join!(client, daemon, actor.run());
+    assert!(
+        report
+            .services
+            .iter()
+            .any(|service| service.name == "control" && service.exit.work_units == 1)
+    );
+    let _ = std::fs::remove_file(&control_path);
+}

@@ -173,17 +173,13 @@ pub fn build_async_pane_process_supervisor_service(
         {
             Ok(report) => report,
             Err(error) if is_terminal_pane_supervisor_error(&error) => {
-                return Ok(AsyncRuntimeServiceExit::shutdown(0));
+                return Ok(AsyncRuntimeServiceExit::completed(0));
             }
             Err(error) => return Err(error),
         };
         let work_units = report
             .spawned_workers
             .saturating_add(report.completed_workers);
-        if is_terminal_runtime_lifecycle_state(report.terminal_state) {
-            Ok(AsyncRuntimeServiceExit::shutdown(work_units))
-        } else {
-            Ok(AsyncRuntimeServiceExit::completed(work_units))
-        }
+        Ok(AsyncRuntimeServiceExit::completed(work_units))
     }))
 }
