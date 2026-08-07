@@ -487,14 +487,17 @@ fn pane_process_manager_rejects_async_handoff_after_exit() {
         )
         .unwrap();
 
+    let mut exited = Vec::new();
     for _ in 0..50 {
         let activity_sequence = manager.output_activity_sequence(pane_id);
-        if !manager.poll_exited().unwrap().is_empty() {
+        exited = manager.poll_exited().unwrap();
+        if !exited.is_empty() {
             break;
         }
         wait_for_manager_output_activity(&manager, pane_id, activity_sequence);
     }
 
+    assert_eq!(exited.len(), 1);
     let error = manager.take_running_pane_process(pane_id).unwrap_err();
 
     assert_eq!(error.kind(), crate::MuxErrorKind::InvalidState);
