@@ -95,7 +95,79 @@ pub fn action_result_transcript_content(result: &ActionResult) -> String {
         }
         return content;
     }
+    if matches!(
+        result.action_type,
+        "shell_command" | "apply_patch" | "mcp_call"
+    ) {
+        return durable_tool_result_summary(result);
+    }
     action_result_context_content(result)
+}
+
+/// Builds a secret-safe durable summary for an executed local or MCP tool.
+///
+/// Live action context retains exact output for the active task. Durable
+/// history stores only identity, status, safe shell outcome metadata, and an
+/// explicit omission marker so session replay cannot become a provider secret
+/// disclosure channel.
+fn durable_tool_result_summary(result: &ActionResult) -> String {
+    let facts = ActionResultContextView::new(result);
+    let mut lines = vec![facts.header_line()];
+    let structured_object = facts.structured_object();
+    let terminal_observation = structured_object
+        .and_then(|object| object.get("terminal_observation"))
+        .and_then(serde_json::Value::as_object);
+    if let Some(observation) = terminal_observation {
+        append_json_scalar_line(&mut lines, "exit_code", observation.get("exit_code"));
+        append_json_scalar_line(&mut lines, "signal", observation.get("signal"));
+        append_true_bool_line(&mut lines, "timed_out", observation.get("timed_out"));
+        append_true_bool_line(
+            &mut lines,
+            "output_truncated",
+            observation.get("output_truncated"),
+        );
+    }
+    if let Some(error) = &result.error {
+        lines.push(format!("error_code: {}", error.code));
+    }
+    lines.push("historical_output: omitted".to_string());
+    lines.join("\n")
+}
+
+/// Returns a provider-safe projection of one durable or legacy tool entry.
+///
+/// Canonical action-result summaries retain only their header and safe scalar
+/// metadata. Unknown legacy tool bodies are replaced wholesale because their
+/// provenance and secret content cannot be reconstructed safely.
+pub fn historical_tool_result_context_content(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut lines = trimmed.lines();
+    let header = lines.next()?;
+    if !header.starts_with("[action_result ") {
+        return Some("[historical tool result omitted from provider replay]".to_string());
+    }
+    let mut retained = vec![header.to_string()];
+    for line in lines {
+        if line == "historical_output: omitted"
+            || line.starts_with("exit_code: ")
+            || line.starts_with("signal: ")
+            || line == "timed_out: true"
+            || line == "output_truncated: true"
+            || line.starts_with("error_code: ")
+        {
+            retained.push(line.to_string());
+        }
+    }
+    if !retained
+        .iter()
+        .any(|line| line == "historical_output: omitted")
+    {
+        retained.push("historical_output: omitted".to_string());
+    }
+    Some(retained.join("\n"))
 }
 
 /// Builds a compact durable summary for non-effecting skill actions.

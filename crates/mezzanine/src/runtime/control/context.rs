@@ -109,12 +109,11 @@ fn runtime_transcript_entry_context_content(entry: &TranscriptEntry) -> Option<S
     }
 }
 
-/// Returns transcript tool output for model-facing replay.
+/// Returns secret-safe transcript tool output for model-facing replay.
 ///
-/// Previous action results are often the user's freshest evidence, especially
-/// failed file reads and shell observations. Historical replay should stay
-/// byte-stable so later turns see the same durable tool context they already
-/// observed.
+/// Current-turn action context carries exact execution evidence. Historical
+/// transcript replay independently reduces legacy tool bodies to safe status
+/// metadata so old session files cannot become a provider disclosure channel.
 fn runtime_transcript_tool_context_content(content: &str) -> Option<String> {
     let trimmed = content.trim();
     if trimmed.is_empty() {
@@ -123,8 +122,9 @@ fn runtime_transcript_tool_context_content(content: &str) -> Option<String> {
     if transcript_tool_content_is_omitted_for_replay(trimmed) {
         return None;
     }
+    let sanitized = mez_agent::historical_tool_result_context_content(trimmed)?;
     Some(truncate_runtime_context_text(
-        trimmed,
+        &sanitized,
         AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES,
         "transcript tool context",
     ))
@@ -213,4 +213,25 @@ pub(crate) fn runtime_local_message_context_content(envelope: &Envelope) -> Stri
         "local message payload",
     ));
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_transcript_tool_context_content;
+
+    #[test]
+    /// Verifies legacy shell and MCP transcript bodies are unavailable to
+    /// provider replay even when persistence predates durable summarization.
+    fn transcript_tool_replay_omits_legacy_raw_bodies() {
+        let shell = runtime_transcript_tool_context_content(
+            "[action_result shell-1 shell_command succeeded]\noutput:\nshell-secret",
+        )
+        .unwrap();
+        let mcp = runtime_transcript_tool_context_content("mcp-secret").unwrap();
+
+        assert!(shell.contains("[action_result shell-1 shell_command succeeded]"));
+        assert!(shell.contains("historical_output: omitted"));
+        assert!(!shell.contains("shell-secret"));
+        assert_eq!(mcp, "[historical tool result omitted from provider replay]");
+    }
 }

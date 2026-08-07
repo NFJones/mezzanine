@@ -186,7 +186,10 @@ pub use action_result::{
     ActionResultContractResult, ActionStatus, AgentActionResultIdentity, AgentTurnResultIdentity,
     action_text_content_blocks, turn_state_from_action_results,
 };
-pub use action_result_context::{action_result_context_content, action_result_transcript_content};
+pub use action_result_context::{
+    action_result_context_content, action_result_transcript_content,
+    historical_tool_result_context_content,
+};
 pub use agent_shell::{
     AgentShellSessionError, AgentShellSessionErrorKind, AgentShellSessionResult,
     validate_agent_shell_required,

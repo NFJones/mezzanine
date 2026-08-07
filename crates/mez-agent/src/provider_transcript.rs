@@ -109,7 +109,9 @@ impl ProviderTranscriptEvent {
             }
             DEEPSEEK_TOOL_RESULT_KIND => Some(Self::DeepSeekToolResult {
                 tool_call_id: value.get("tool_call_id")?.as_str()?.to_string(),
-                content: value.get("content")?.as_str()?.to_string(),
+                content: crate::historical_tool_result_context_content(
+                    value.get("content")?.as_str()?,
+                )?,
             }),
             _ => None,
         }
@@ -223,5 +225,27 @@ mod tests {
             ProviderTranscriptEvent::from_transcript_content(&encoded),
             Some(event)
         );
+    }
+
+    #[test]
+    /// Verifies legacy provider-native tool results cannot replay raw output
+    /// bodies while canonical action identity and status remain available.
+    fn deepseek_tool_result_replay_omits_legacy_raw_output() {
+        let event = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call_1".to_string(),
+            content: "[action_result a1 shell_command succeeded]\noutput:\nnative-secret"
+                .to_string(),
+        };
+
+        let decoded =
+            ProviderTranscriptEvent::from_transcript_content(&event.to_transcript_content())
+                .unwrap();
+        let ProviderTranscriptEvent::DeepSeekToolResult { content, .. } = decoded else {
+            panic!("expected DeepSeek tool result");
+        };
+
+        assert!(content.contains("[action_result a1 shell_command succeeded]"));
+        assert!(content.contains("historical_output: omitted"));
+        assert!(!content.contains("native-secret"));
     }
 }

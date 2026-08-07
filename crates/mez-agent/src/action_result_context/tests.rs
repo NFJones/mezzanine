@@ -293,6 +293,64 @@ fn shell_action_result_context_preserves_raw_recorded_output_preview() {
 }
 
 #[test]
+/// Verifies live tool context keeps current-turn evidence while durable shell
+/// and MCP transcript projections omit raw bodies and secret sentinels.
+fn durable_tool_transcripts_omit_shell_and_mcp_bodies() {
+    let shell = succeeded_result(
+        "shell-1",
+        "shell_command",
+        vec!["shell command exited with status 0".to_string()],
+        Some(
+            serde_json::json!({
+                "command": "printf secret",
+                "terminal_observation": {
+                    "exit_code": 0,
+                    "combined_output_preview": "shell-secret-sentinel"
+                }
+            })
+            .to_string(),
+        ),
+    );
+    let mcp = succeeded_result(
+        "mcp-1",
+        "mcp_call",
+        vec!["mcp-secret-sentinel".to_string()],
+        Some(r#"{"result":"mcp-secret-sentinel"}"#.to_string()),
+    );
+
+    let live_shell = action_result_context_content(&shell);
+    let durable_shell = action_result_transcript_content(&shell);
+    let durable_mcp = action_result_transcript_content(&mcp);
+
+    assert!(live_shell.contains("shell-secret-sentinel"));
+    assert!(!durable_shell.contains("shell-secret-sentinel"));
+    assert!(!durable_shell.contains("printf secret"));
+    assert!(durable_shell.contains("exit_code: 0"));
+    assert!(durable_shell.contains("historical_output: omitted"));
+    assert!(!durable_mcp.contains("mcp-secret-sentinel"));
+    assert!(durable_mcp.contains("[action_result mcp-1 mcp_call succeeded]"));
+}
+
+#[test]
+/// Verifies legacy replay keeps canonical status metadata but replaces raw
+/// historical tool bodies independently of persistence-time sanitization.
+fn historical_tool_replay_sanitizes_legacy_content() {
+    let canonical = historical_tool_result_context_content(
+        "[action_result shell-1 shell_command succeeded]\nexit_code: 0\noutput:\nlegacy-secret",
+    )
+    .unwrap();
+    let unknown = historical_tool_result_context_content("legacy-secret").unwrap();
+
+    assert!(canonical.contains("exit_code: 0"));
+    assert!(canonical.contains("historical_output: omitted"));
+    assert!(!canonical.contains("legacy-secret"));
+    assert_eq!(
+        unknown,
+        "[historical tool result omitted from provider replay]"
+    );
+}
+
+#[test]
 /// Verifies durable skill action results keep metadata, not skill text.
 ///
 /// `request_skills` and `call_skill` action bodies can contain complete

@@ -1275,7 +1275,7 @@ mod tests {
         assert_eq!(blocks[3].source, mez_agent::ContextSourceKind::ActionResult);
         assert_eq!(
             blocks[3].content,
-            "[action_result query-1 issue_query succeeded]"
+            "[action_result query-1 issue_query succeeded]\nhistorical_output: omitted"
         );
         assert!(
             blocks
