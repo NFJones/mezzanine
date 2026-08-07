@@ -18,6 +18,7 @@ use super::{
 };
 use crate::runtime::service_state::RuntimeRecordBrowserOverlayState;
 use mez_mux::readline::{ReadlineDecodedInput, readline_input_is_ctrl_v};
+use std::sync::mpsc::TryRecvError;
 
 impl RuntimeSessionService {
     /// Runs the apply primary prompt terminal action operation for this subsystem.
@@ -247,13 +248,8 @@ impl RuntimeSessionService {
         if input != b"\x03" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
         }
-        let selector_candidates_need_loading = self
-            .presentation
-            .agent_prompt_inputs
-            .get(pane_id)
-            .is_none_or(|state| !state.selector_extra_candidates_loaded);
-        let selector_extra_candidates = selector_candidates_need_loading
-            .then(|| self.runtime_agent_selector_extra_candidates(pane_id));
+        self.poll_agent_prompt_selector_extra_candidates_refresh(pane_id);
+        self.initialize_agent_prompt_in_memory_selector_candidates(pane_id);
         let selector_working_directory = self.pane_current_working_directory(pane_id);
         let prompt_body_columns = self
             .agent_prompt_editable_body_width(pane_id)
@@ -290,12 +286,6 @@ impl RuntimeSessionService {
                 .entry(pane_id.to_string())
                 .or_insert_with(default_runtime_agent_prompt_input);
             state.prompt.set_prompt_body_columns(prompt_body_columns);
-            if let Some(selector_extra_candidates) = selector_extra_candidates {
-                state
-                    .prompt
-                    .set_selector_extra_candidates(selector_extra_candidates);
-                state.selector_extra_candidates_loaded = true;
-            }
             state
                 .prompt
                 .set_selector_working_directory(selector_working_directory);
@@ -350,7 +340,7 @@ impl RuntimeSessionService {
                         }
                     }
                     if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-                        self.presentation.agent_prompt_inputs.remove(pane_id);
+                        self.remove_agent_prompt_input(pane_id);
                     }
                 }
                 ReadlineOutcome::SubmittedWithDisplay { text, display } => {
@@ -389,7 +379,7 @@ impl RuntimeSessionService {
                         }
                     }
                     if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-                        self.presentation.agent_prompt_inputs.remove(pane_id);
+                        self.remove_agent_prompt_input(pane_id);
                     }
                 }
                 ReadlineOutcome::Cancelled => {
@@ -401,7 +391,7 @@ impl RuntimeSessionService {
                 ReadlineOutcome::Eof => {
                     changed = true;
                     let _ = self.execute_agent_shell_command(primary_client_id, "/exit")?;
-                    self.presentation.agent_prompt_inputs.remove(pane_id);
+                    self.remove_agent_prompt_input(pane_id);
                 }
                 ReadlineOutcome::Edited => changed = true,
                 ReadlineOutcome::Noop => {}
@@ -445,7 +435,7 @@ impl RuntimeSessionService {
             )?,
         }
         if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-            self.presentation.agent_prompt_inputs.remove(pane_id);
+            self.remove_agent_prompt_input(pane_id);
         }
         Ok(true)
     }
@@ -517,11 +507,33 @@ impl RuntimeSessionService {
         Vec::new()
     }
 
-    /// Builds dynamic agent prompt selector candidates from saved transcripts.
-    fn runtime_agent_selector_extra_candidates(
-        &self,
-        pane_id: &str,
-    ) -> Vec<SelectorExtraCandidate> {
+    /// Installs selector candidates that require no filesystem or database I/O.
+    ///
+    /// This fallback keeps direct prompt construction usable in tests and
+    /// synchronous adapters that do not pass through agent-mode entry. It is
+    /// safe on the input path because personalities and MCP server summaries
+    /// are copied from runtime-owned in-memory registries only.
+    fn initialize_agent_prompt_in_memory_selector_candidates(&mut self, pane_id: &str) {
+        if self
+            .presentation
+            .agent_prompt_inputs
+            .get(pane_id)
+            .is_some_and(|state| state.selector_extra_candidates_initialized)
+        {
+            return;
+        }
+        let candidates = self.runtime_agent_in_memory_selector_extra_candidates();
+        let state = self
+            .presentation
+            .agent_prompt_inputs
+            .entry(pane_id.to_string())
+            .or_insert_with(default_runtime_agent_prompt_input);
+        state.prompt.set_selector_extra_candidates(candidates);
+        state.selector_extra_candidates_initialized = true;
+    }
+
+    /// Builds selector candidates from runtime-owned in-memory configuration.
+    fn runtime_agent_in_memory_selector_extra_candidates(&self) -> Vec<SelectorExtraCandidate> {
         let mut candidates = self
             .integration
             .agent_personality_profiles()
@@ -575,108 +587,275 @@ impl RuntimeSessionService {
                     ]
                 }),
         );
-        let catalog = self.effective_skill_catalog_for_pane(pane_id);
-        candidates.extend(catalog.skills.into_iter().map(|skill| {
-            SelectorExtraCandidate::new(
-                SelectorSurface::AgentCommand,
-                "$",
-                SelectorCandidate::new(
-                    format!("${}", skill.name),
-                    SelectorCandidateKind::Value,
-                    true,
-                )
-                .with_detail(format!(
-                    "{} ({})",
-                    skill.description,
-                    skill.source.as_str()
-                )),
-            )
-        }));
-        let macro_catalog = self.effective_macro_catalog_for_pane(pane_id);
-        candidates.extend(macro_catalog.macros.into_iter().map(|macro_summary| {
-            SelectorExtraCandidate::new(
-                SelectorSurface::AgentCommand,
-                "#",
-                SelectorCandidate::new(
-                    format!("#{}", macro_summary.name),
-                    SelectorCandidateKind::Value,
-                    true,
-                )
-                .with_detail(format!(
-                    "{} ({}; {} steps)",
-                    macro_summary.description,
-                    macro_summary.source.as_str(),
-                    macro_summary.step_count
-                )),
-            )
-        }));
-        if crate::runtime::commands::runtime_issues_enabled(self)
-            && let Some(config_root) = self.integration.config_root()
-        {
-            let store = crate::storage::issues::IssueStore::from_database_path(
-                crate::runtime::commands::runtime_issue_database_path(
-                    self,
-                    &config_root.to_path_buf(),
-                ),
-            );
-            candidates.extend(
-                store
-                    .list_issue_projects()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .flat_map(|project| {
-                        ["--project", "--project-glob"]
-                            .into_iter()
-                            .map(move |option| {
-                                SelectorExtraCandidate::after_option(
-                                    SelectorSurface::AgentCommand,
-                                    "show-issues",
-                                    option,
-                                    SelectorCandidate::new(
-                                        project.clone(),
-                                        SelectorCandidateKind::Value,
-                                        true,
-                                    ),
-                                )
-                            })
-                    }),
-            );
-        }
-        let Some(store) = self.persistence.transcript_store() else {
-            return candidates;
-        };
-        candidates.extend(
-            store
-                .saved_sessions()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|session| {
-                    let summary = session.summary;
-                    let detail = match session.name {
-                        Some(name) => format!(
-                            "{name} — {} entries, pane {}, agent {}",
-                            summary.entries, summary.pane_id, summary.agent_id
-                        ),
-                        None => format!(
-                            "{} entries, pane {}, agent {}",
-                            summary.entries, summary.pane_id, summary.agent_id
-                        ),
-                    };
-                    SelectorExtraCandidate::new(
-                        SelectorSurface::AgentCommand,
-                        "resume",
-                        SelectorCandidate::new(
-                            summary.conversation_id.clone(),
-                            SelectorCandidateKind::Value,
-                            true,
-                        )
-                        .with_detail(detail),
-                    )
-                }),
-        );
         candidates
     }
 
+    /// Starts one pane-scoped selector refresh without blocking prompt input.
+    ///
+    /// Actor-owned configuration is copied before the worker starts. Filesystem
+    /// traversal, SQLite access, and transcript enumeration then run entirely
+    /// on the worker, while duplicate requests for the same generation are
+    /// suppressed.
+    pub(crate) fn request_agent_prompt_selector_extra_candidates_refresh(&mut self, pane_id: &str) {
+        let state = self
+            .presentation
+            .agent_prompt_inputs
+            .entry(pane_id.to_string())
+            .or_insert_with(default_runtime_agent_prompt_input);
+        if state.selector_extra_candidates_loaded {
+            return;
+        }
+        let generation = state.selector_extra_candidates_generation;
+        if self
+            .presentation
+            .agent_prompt_selector_refreshes
+            .get(pane_id)
+            .is_some_and(|refresh| refresh.generation == generation)
+        {
+            return;
+        }
+
+        let candidates = self.runtime_agent_in_memory_selector_extra_candidates();
+        if !self
+            .presentation
+            .agent_prompt_inputs
+            .get(pane_id)
+            .is_some_and(|state| state.selector_extra_candidates_initialized)
+            && let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id)
+        {
+            state
+                .prompt
+                .set_selector_extra_candidates(candidates.clone());
+            state.selector_extra_candidates_initialized = true;
+        }
+        let user_config_root = self.integration.config_root().map(ToOwned::to_owned);
+        let project_root = self.trusted_skill_project_root_for_pane(pane_id);
+        let issue_database_path = (crate::runtime::commands::runtime_issues_enabled(self))
+            .then(|| {
+                user_config_root.as_ref().map(|config_root| {
+                    crate::runtime::commands::runtime_issue_database_path(self, config_root)
+                })
+            })
+            .flatten();
+        let transcript_store = self.persistence.cloned_transcript_store();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        self.presentation.agent_prompt_selector_refreshes.insert(
+            pane_id.to_string(),
+            super::RuntimeAgentSelectorCandidateRefresh {
+                generation,
+                receiver,
+            },
+        );
+        let spawn = std::thread::Builder::new()
+            .name("mez-selector-refresh".to_string())
+            .spawn(move || {
+                let candidates = runtime_agent_selector_extra_candidates_from_snapshot(
+                    candidates,
+                    user_config_root,
+                    project_root,
+                    issue_database_path,
+                    transcript_store,
+                );
+                let _ = sender.send(candidates);
+            });
+        if spawn.is_err() {
+            self.presentation
+                .agent_prompt_selector_refreshes
+                .remove(pane_id);
+            if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id)
+                && state.selector_extra_candidates_generation == generation
+            {
+                state.selector_extra_candidates_loaded = true;
+            }
+        }
+    }
+
+    /// Applies a completed selector refresh when one is immediately available.
+    ///
+    /// The operation never waits. Disconnected workers retain the prior prompt
+    /// snapshot, and stale generations are discarded without mutating the
+    /// current prompt.
+    fn poll_agent_prompt_selector_extra_candidates_refresh(&mut self, pane_id: &str) -> bool {
+        let completion = {
+            let Some(refresh) = self
+                .presentation
+                .agent_prompt_selector_refreshes
+                .get(pane_id)
+            else {
+                return false;
+            };
+            match refresh.receiver.try_recv() {
+                Ok(candidates) => Some((refresh.generation, Some(candidates))),
+                Err(TryRecvError::Disconnected) => Some((refresh.generation, None)),
+                Err(TryRecvError::Empty) => None,
+            }
+        };
+        let Some((generation, candidates)) = completion else {
+            return false;
+        };
+        self.presentation
+            .agent_prompt_selector_refreshes
+            .remove(pane_id);
+        let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id) else {
+            return false;
+        };
+        if state.selector_extra_candidates_generation != generation {
+            return false;
+        }
+        if let Some(candidates) = candidates {
+            state.prompt.set_selector_extra_candidates(candidates);
+            state.selector_extra_candidates_initialized = true;
+        }
+        state.selector_extra_candidates_loaded = true;
+        true
+    }
+
+    /// Waits for one selector refresh in focused tests and applies its result.
+    #[cfg(test)]
+    pub(crate) fn complete_agent_prompt_selector_refresh_for_tests(&mut self, pane_id: &str) {
+        for _ in 0..1_000 {
+            if self.poll_agent_prompt_selector_extra_candidates_refresh(pane_id) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("agent prompt selector refresh did not complete");
+    }
+
+    /// Installs an intentionally unresolved selector refresh for input tests.
+    #[cfg(test)]
+    pub(crate) fn hold_agent_prompt_selector_refresh_for_tests(
+        &mut self,
+        pane_id: &str,
+    ) -> std::sync::mpsc::SyncSender<Vec<SelectorExtraCandidate>> {
+        let state = self
+            .presentation
+            .agent_prompt_inputs
+            .entry(pane_id.to_string())
+            .or_insert_with(default_runtime_agent_prompt_input);
+        state.selector_extra_candidates_loaded = false;
+        let generation = state.selector_extra_candidates_generation;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        self.presentation.agent_prompt_selector_refreshes.insert(
+            pane_id.to_string(),
+            super::RuntimeAgentSelectorCandidateRefresh {
+                generation,
+                receiver,
+            },
+        );
+        sender
+    }
+}
+
+/// Builds expensive selector candidates from an immutable runtime snapshot.
+///
+/// This function is intentionally independent of `RuntimeSessionService` so it
+/// can run on a blocking worker without touching serialized actor-owned state.
+fn runtime_agent_selector_extra_candidates_from_snapshot(
+    mut candidates: Vec<SelectorExtraCandidate>,
+    user_config_root: Option<std::path::PathBuf>,
+    project_root: Option<std::path::PathBuf>,
+    issue_database_path: Option<crate::storage::issues::IssueDatabasePath>,
+    transcript_store: Option<crate::storage::transcript::AgentTranscriptStore>,
+) -> Vec<SelectorExtraCandidate> {
+    let catalog = crate::integrations::skills::discover_skill_catalog(
+        user_config_root.as_deref(),
+        project_root.as_deref(),
+    );
+    candidates.extend(catalog.skills.into_iter().map(|skill| {
+        SelectorExtraCandidate::new(
+            SelectorSurface::AgentCommand,
+            "$",
+            SelectorCandidate::new(
+                format!("${}", skill.name),
+                SelectorCandidateKind::Value,
+                true,
+            )
+            .with_detail(format!("{} ({})", skill.description, skill.source.as_str())),
+        )
+    }));
+    let macro_catalog = crate::integrations::macros::discover_macro_catalog(
+        user_config_root.as_deref(),
+        project_root.as_deref(),
+    );
+    candidates.extend(macro_catalog.macros.into_iter().map(|macro_summary| {
+        SelectorExtraCandidate::new(
+            SelectorSurface::AgentCommand,
+            "#",
+            SelectorCandidate::new(
+                format!("#{}", macro_summary.name),
+                SelectorCandidateKind::Value,
+                true,
+            )
+            .with_detail(format!(
+                "{} ({}; {} steps)",
+                macro_summary.description,
+                macro_summary.source.as_str(),
+                macro_summary.step_count
+            )),
+        )
+    }));
+    if let Some(issue_database_path) = issue_database_path {
+        let store = crate::storage::issues::IssueStore::from_database_path(issue_database_path);
+        candidates.extend(
+            store
+                .list_issue_projects()
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(|project| {
+                    ["--project", "--project-glob"]
+                        .into_iter()
+                        .map(move |option| {
+                            SelectorExtraCandidate::after_option(
+                                SelectorSurface::AgentCommand,
+                                "show-issues",
+                                option,
+                                SelectorCandidate::new(
+                                    project.clone(),
+                                    SelectorCandidateKind::Value,
+                                    true,
+                                ),
+                            )
+                        })
+                }),
+        );
+    }
+    let Some(store) = transcript_store else {
+        return candidates;
+    };
+    candidates.extend(
+        store
+            .saved_sessions()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|session| {
+                let summary = session.summary;
+                let detail = match session.name {
+                    Some(name) => format!(
+                        "{name} — {} entries, pane {}, agent {}",
+                        summary.entries, summary.pane_id, summary.agent_id
+                    ),
+                    None => format!(
+                        "{} entries, pane {}, agent {}",
+                        summary.entries, summary.pane_id, summary.agent_id
+                    ),
+                };
+                SelectorExtraCandidate::new(
+                    SelectorSurface::AgentCommand,
+                    "resume",
+                    SelectorCandidate::new(
+                        summary.conversation_id.clone(),
+                        SelectorCandidateKind::Value,
+                        true,
+                    )
+                    .with_detail(detail),
+                )
+            }),
+    );
+    candidates
+}
+
+impl RuntimeSessionService {
     /// Runs the reload agent prompt history for pane operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

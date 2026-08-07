@@ -228,6 +228,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("agent pane screen size is unavailable"))?;
         self.ensure_agent_pane_screen(pane_id, &conversation_id, size)?;
         self.checkpoint_agent_session_metadata()?;
+        self.request_agent_prompt_selector_extra_candidates_refresh(pane_id);
         Ok(conversation_id)
     }
 

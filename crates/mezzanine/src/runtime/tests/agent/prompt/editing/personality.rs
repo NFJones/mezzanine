@@ -34,6 +34,7 @@ fn runtime_agent_prompt_personality_autocompletes_configured_profile() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    service.request_agent_prompt_selector_extra_candidates_refresh("%1");
 
     let report = service
         .apply_attached_terminal_step_plan(

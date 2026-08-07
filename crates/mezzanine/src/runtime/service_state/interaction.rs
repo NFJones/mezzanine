@@ -383,10 +383,19 @@ pub(crate) struct RuntimeAgentPromptInput {
     pub(crate) pending_ctrl_c_exit_at_unix_ms: Option<u64>,
     /// Whether the prompt owns a current snapshot of runtime selector candidates.
     ///
-    /// Building those candidates may inspect durable transcript and issue stores,
-    /// so the runtime initializes them when the prompt first receives input
-    /// rather than performing storage I/O for every keystroke.
+    /// Candidate discovery runs outside the serialized runtime owner. Input may
+    /// continue using the previous snapshot while a newer generation is built.
     pub(crate) selector_extra_candidates_loaded: bool,
+    /// Whether the prompt has any runtime-provided selector snapshot installed.
+    ///
+    /// Initial refreshes install cheap in-memory candidates before background
+    /// discovery starts. Later refreshes retain the prior complete snapshot.
+    pub(crate) selector_extra_candidates_initialized: bool,
+    /// Monotonic generation of the selector sources required by this prompt.
+    ///
+    /// Background completions carry the generation they discovered so a result
+    /// produced before invalidation cannot replace a newer prompt snapshot.
+    pub(crate) selector_extra_candidates_generation: u64,
 }
 
 /// Runtime-local editable prompt state for the primary command surface.

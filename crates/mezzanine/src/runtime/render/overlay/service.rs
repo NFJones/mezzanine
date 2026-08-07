@@ -159,7 +159,7 @@ impl RuntimeSessionService {
             }
             self.set_agent_prompt_display_output(&pane_id, display_output)?;
             if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-                self.presentation.agent_prompt_inputs.remove(&pane_id);
+                self.remove_agent_prompt_input(&pane_id);
             }
             return Ok(true);
         }

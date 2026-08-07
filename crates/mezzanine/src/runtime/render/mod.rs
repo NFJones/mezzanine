@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use crate::ui::selector::SelectorExtraCandidate;
 use mez_mux::input::{
     GroupFocusTarget, MouseBorderCell, MousePaneRegion, MouseWindowFrameCell, MuxAction,
     PasteBufferTarget, WindowFocusTarget, key_chord_input_bytes,
@@ -234,6 +235,9 @@ pub(crate) struct RuntimePresentationComponent {
     copy: RuntimeCopyPresentationState,
     /// Active agent prompt editor state keyed by pane id.
     agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
+    /// Background selector discoveries keyed by their pane-local owner.
+    agent_prompt_selector_refreshes:
+        std::collections::BTreeMap<String, RuntimeAgentSelectorCandidateRefresh>,
     /// Pane-local transient shell-output status rows.
     agent_shell_output_status_lines: std::collections::BTreeMap<String, Vec<String>>,
     /// Panes replaying durable agent presentation entries.
@@ -281,6 +285,15 @@ pub(crate) struct RuntimePresentationComponent {
     pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
     /// Unacknowledged background agent completions keyed by stable pane id.
     completion_attention_panes: std::collections::BTreeSet<String>,
+}
+
+/// One in-flight pane-local selector candidate discovery.
+#[derive(Debug)]
+pub(super) struct RuntimeAgentSelectorCandidateRefresh {
+    /// Prompt source generation captured when discovery started.
+    generation: u64,
+    /// Nonblocking completion receiver owned by serialized presentation state.
+    receiver: std::sync::mpsc::Receiver<Vec<SelectorExtraCandidate>>,
 }
 
 /// Pane-local presentation state restored when conversation resume fails.
@@ -346,6 +359,7 @@ impl RuntimePresentationComponent {
     /// Removes every pane-keyed agent presentation artifact during teardown.
     pub(crate) fn remove_agent_presentation_state(&mut self, pane_id: &str) {
         self.agent_prompt_inputs.remove(pane_id);
+        self.agent_prompt_selector_refreshes.remove(pane_id);
         self.agent_shell_output_status_lines.remove(pane_id);
         self.agent_presentation_replay_panes.remove(pane_id);
         self.pending_agent_presentation_resize_sizes.remove(pane_id);
@@ -501,6 +515,9 @@ impl RuntimeSessionService {
         snapshot: RuntimeAgentResumePresentationSnapshot,
     ) {
         self.presentation.agent_prompt_inputs.remove(pane_id);
+        self.presentation
+            .agent_prompt_selector_refreshes
+            .remove(pane_id);
         if let Some(value) = snapshot.prompt_input {
             self.presentation
                 .agent_prompt_inputs
@@ -968,6 +985,9 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Option<RuntimeAgentPromptInput> {
+        self.presentation
+            .agent_prompt_selector_refreshes
+            .remove(pane_id);
         self.presentation.agent_prompt_inputs.remove(pane_id)
     }
 
@@ -981,17 +1001,32 @@ impl RuntimeSessionService {
 
     /// Marks runtime-provided agent selector candidates stale for every prompt.
     ///
-    /// The next input batch refreshes each prompt snapshot after the durable
-    /// source backing completions has changed.
+    /// The next input batch starts a nonblocking refresh after the durable
+    /// source backing completions has changed. Existing candidates remain
+    /// available until the replacement snapshot completes.
     pub(crate) fn invalidate_agent_prompt_selector_extra_candidates(&mut self) {
         for prompt in self.presentation.agent_prompt_inputs.values_mut() {
             prompt.selector_extra_candidates_loaded = false;
+            prompt.selector_extra_candidates_generation = prompt
+                .selector_extra_candidates_generation
+                .saturating_add(1);
+        }
+        self.presentation.agent_prompt_selector_refreshes.clear();
+        let pane_ids = self
+            .presentation
+            .agent_prompt_inputs
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for pane_id in pane_ids {
+            self.request_agent_prompt_selector_extra_candidates_refresh(&pane_id);
         }
     }
 
     /// Clears every active agent prompt editor during lifecycle teardown.
     pub(crate) fn clear_agent_prompt_inputs(&mut self) {
         self.presentation.agent_prompt_inputs.clear();
+        self.presentation.agent_prompt_selector_refreshes.clear();
     }
 }
 
@@ -1085,7 +1120,7 @@ use crate::host::terminal::{
 };
 use crate::storage::transcript::AgentPresentationEntry;
 use crate::ui::command::baseline_commands;
-use crate::ui::selector::{SelectorExtraCandidate, SelectorSurface};
+use crate::ui::selector::SelectorSurface;
 use mez_agent::mcp::McpServerStatus;
 use mez_agent::{ActionResult, agent_output_content_type_is_markdown};
 use mez_mux::attached_client::mouse_border_cells_for_geometries;

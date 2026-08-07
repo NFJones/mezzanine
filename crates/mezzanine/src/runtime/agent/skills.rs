@@ -35,7 +35,7 @@ impl RuntimeSessionService {
     ///
     /// # Parameters
     /// - `pane_id`: Pane whose working directory determines project scope.
-    fn trusted_skill_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
+    pub(crate) fn trusted_skill_project_root_for_pane(&self, pane_id: &str) -> Option<PathBuf> {
         let working_directory = self.pane_current_working_directory(pane_id)?;
         let store = self.integration.project_trust_store()?;
         store

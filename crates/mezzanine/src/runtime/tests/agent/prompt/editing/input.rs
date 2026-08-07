@@ -143,6 +143,59 @@ fn runtime_agent_prompt_same_row_edits_do_not_resize_the_pty() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies the first typed byte edits the prompt while selector discovery is
+/// still unresolved. Candidate loading may traverse files and query durable
+/// stores, so an in-flight refresh must never be awaited by terminal input.
+#[test]
+fn runtime_agent_prompt_input_remains_editable_while_selector_refresh_is_pending() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
+    );
+    let _pending_refresh = service.hold_agent_prompt_selector_refresh_for_tests("%1");
+
+    let report = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"x".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
+    assert_eq!(
+        service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .prompt
+            .buffer
+            .line(),
+        "x"
+    );
+    assert!(
+        !service
+            .agent_prompt_inputs_for_tests()
+            .get("%1")
+            .unwrap()
+            .selector_extra_candidates_loaded
+    );
+}
+
 /// Verifies a below-threshold bracketed paste retains exact multiline text.
 ///
 /// Small pastes stay directly editable rather than becoming collapsed paste

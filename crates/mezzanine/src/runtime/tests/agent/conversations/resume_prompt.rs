@@ -28,6 +28,8 @@ fn runtime_agent_prompt_resume_autocompletes_saved_session_uuid() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    service.request_agent_prompt_selector_extra_candidates_refresh("%1");
+    service.complete_agent_prompt_selector_refresh_for_tests("%1");
 
     let report = service
         .apply_attached_terminal_step_plan(
@@ -86,6 +88,8 @@ fn runtime_agent_prompt_resume_completion_uses_cached_saved_sessions() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    service.request_agent_prompt_selector_extra_candidates_refresh("%1");
+    service.complete_agent_prompt_selector_refresh_for_tests("%1");
 
     service
         .apply_attached_terminal_step_plan(

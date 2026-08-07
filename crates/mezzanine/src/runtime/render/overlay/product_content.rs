@@ -60,6 +60,8 @@ pub(crate) fn default_runtime_agent_prompt_input() -> RuntimeAgentPromptInput {
         display_lines: Vec::new(),
         pending_ctrl_c_exit_at_unix_ms: None,
         selector_extra_candidates_loaded: false,
+        selector_extra_candidates_initialized: false,
+        selector_extra_candidates_generation: 1,
     }
 }
 
