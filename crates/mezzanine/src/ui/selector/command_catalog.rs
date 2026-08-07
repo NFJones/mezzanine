@@ -356,6 +356,7 @@ pub(super) fn agent_argument_candidates(
     let candidates = match command {
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
         "loop" => flag_candidates(&["--fork", "--new", "--limit"]),
+        "status" => flag_candidates(&["--extended"]),
         "memory" => value_candidates(&["on", "off", "toggle", "status", "show"]),
         "issue" => value_candidates(&[
             "add", "query", "delete", "--kind", "--title", "--body", "--text", "--limit",

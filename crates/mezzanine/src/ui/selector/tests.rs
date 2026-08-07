@@ -804,6 +804,23 @@ fn selector_shadow_hint_completes_loop_flags() {
     assert_eq!(limit_hint.kind, SelectorCandidateKind::Flag);
 }
 
+/// Verifies `/status` exposes its extended-report option as a transient shadow
+/// completion, allowing users to discover the additional status tables before
+/// accepting the flag with Tab.
+#[test]
+fn selector_shadow_hint_completes_status_extended_flag() {
+    let hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/status --e",
+        "/status --e".len(),
+    )
+    .unwrap();
+
+    assert_eq!(hint.insert_at, "/status --e".len());
+    assert_eq!(hint.text, "xtended");
+    assert_eq!(hint.kind, SelectorCandidateKind::Flag);
+}
+
 /// Verifies argument-bearing slash commands expose parameter shadow hints
 /// so users can discover their accepted values without opening help.
 #[test]
