@@ -12,8 +12,12 @@ using this reference.
 
 ## Chapters
 
-This section will own CLI, key-binding, agent-action, and terminal-
-compatibility references.
+This section owns the following reference material:
+
+- [CLI reference](cli.md)
+- [Key bindings](key-bindings.md)
+- [Agent actions](agent-actions.md)
+- [Terminal compatibility](terminal-compatibility.md)
 
 ## Related pages
 
@@ -23,4 +27,5 @@ compatibility references.
 
 ## Next step
 
-Return to [the manual home](../README.md) to choose a task-oriented guide.
+Choose [CLI reference](cli.md) for scripting and session administration, or
+[Key bindings](key-bindings.md) for interactive controls.
