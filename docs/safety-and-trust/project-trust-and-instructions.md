@@ -51,6 +51,13 @@ pane. Trust decisions persist in the user-private trust store. Trusting an
 overlay does not itself grant host access, disable approval, or override a
 Bubblewrap boundary.
 
+While a relevant overlay is pending and no primary client can decide it, Mez
+does not silently substitute lower-precedence behavior for work that depends on
+that overlay. Agent prompts and turns, hooks, MCP configuration, command rules,
+and provider settings scoped to that project wait for the trust decision. Use
+`mez config layers` to distinguish an applied overlay from one that is pending
+or ignored.
+
 ## Related pages
 
 - [Approvals and review](approvals-and-review.md)

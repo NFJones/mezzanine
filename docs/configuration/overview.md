@@ -47,6 +47,17 @@ pending until the primary user decides whether to trust the project. Even a
 trusted overlay cannot change primary-user-only execution boundaries such as
 sandbox backend, scopes, network policy, approval policy, or bypass state.
 
+Only one overlay format may be selected in each directory. Multiple supported
+overlay files in that directory are a configuration error unless an explicit
+format precedence is configured; Mez does not merge them by filename order.
+When a relevant overlay is pending and no primary client can decide trust, work
+that depends on it—including agent prompts, hooks, MCP, command rules, or
+provider settings—waits rather than silently using a lower-precedence
+configuration. Use `mez config layers` to see pending and ignored overlays, and
+use the project-trust commands in [Project trust and
+instructions](../safety-and-trust/project-trust-and-instructions.md) to make
+the decision.
+
 ## Schema versions and examples
 
 The current schema is version `54`. Older primary user configurations migrate
