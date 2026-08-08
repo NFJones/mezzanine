@@ -12,10 +12,12 @@ not in configuration files.
 
 ## Create and inspect configuration
 
-Mezzanine selects one primary file from `~/.config/mezzanine/`: `config.toml`,
-`config.yaml`, `config.yml`, or `config.json`. Starting a session creates the
-default TOML configuration when none exists. Run `mez config init` first only
-when you want to create and inspect that baseline before starting a session:
+Mezzanine accepts one primary file in `~/.config/mezzanine/`: `config.toml`,
+`config.yaml`, `config.yml`, or `config.json`. If none exists, starting a
+session creates the default TOML configuration. If more than one exists, Mez
+stops with a configuration error rather than choosing by filename precedence.
+Run `mez config init` first only when you want to create and inspect that
+baseline before starting a session:
 
 ```sh
 mez config init

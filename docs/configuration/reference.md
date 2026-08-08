@@ -21,7 +21,7 @@ precedence, trust, and validation. Compare settings against the generated
 
 ## Configuration Files and Layers
 
-Primary config discovery looks for exactly one of these files under
+Primary config discovery accepts exactly one of these files under
 `~/.config/mezzanine/`:
 
 - `config.toml`
@@ -33,6 +33,8 @@ If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions. `mez config
 set` and `mez config unset` target that user configuration by default; their
 `--scope project` option targets the applicable project overlay instead.
+If multiple supported primary files exist, Mez reports a configuration error;
+remove or relocate all but the intended file.
 
 The current config schema version is `54`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,

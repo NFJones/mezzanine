@@ -27,7 +27,8 @@ Start a prompt with `$<skill-name>` to load a reusable skill, followed by any
 task-specific context. Use `/list-skills` to inspect the effective catalog.
 User skills live under `~/.config/mezzanine/skills/<name>/SKILL.md`; trusted
 project skills live under `.mezzanine/skills/<name>/SKILL.md`. Project skills
-are untrusted for security and do not override approvals or action rules.
+remain untrusted content for security purposes and do not override approvals
+or action rules, even after project trust enables their discovery.
 
 Start a prompt with `#<macro-name>` to run an ordered macro. Macros use a
 `MACRO.md` definition in the corresponding user or trusted-project macro root.
