@@ -44,12 +44,14 @@ Every envelope is an object with these fields:
 | `content_type` | Payload media type. |
 | `payload` | The application payload. |
 
-Before registration, `hello` may omit `sender.agent_id` or use a provisional
-ID. The service assigns the effective identity in `welcome`. The service—not
-the sender—validates identity against the authenticated connection. Mismatched
-sender claims are rejected unless a documented trusted bridge rewrites them.
-Forwarders preserve the effective identity and unknown envelope fields unless
-policy removes them.
+The registration `hello` is the bootstrap exception to this full envelope: it
+contains `protocol`, `type`, a non-empty `role`, and optional `capabilities`.
+It does not carry a registered sender identity, recipient, delivery metadata,
+or application payload. The service assigns the effective identity in
+`welcome`. After registration, the service—not the sender—validates identity
+against the authenticated connection. Mismatched sender claims are rejected
+unless a documented trusted bridge rewrites them. Forwarders preserve the
+effective identity and unknown envelope fields unless policy removes them.
 
 ## Message types
 
