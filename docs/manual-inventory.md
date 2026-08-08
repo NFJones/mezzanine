@@ -74,10 +74,8 @@ all of these conditions:
    anchors, and a search finds no inbound links to a source approved for
    removal.
 6. Configuration documentation verifies its example and schema version against
-   generated defaults. The current files visibly disagree (`docs/examples/config.toml`
-   declares version 54 while `docs/configuration-reference.md` describes version
-   50), so the configuration task must resolve this before migration is marked
-   complete.
+   generated defaults. The checked-in example and canonical reference both
+   declare the current version, 54.
 
 ## Cleanup authority
 
@@ -87,6 +85,19 @@ confirms coverage” in this inventory and explicitly included in that final
 list. It must preserve `docs/reference/`, `SPEC.md`, `AGENTS.md`, the manual
 home, and the configuration example unless an approved replacement and updated
 links exist.
+
+## Validated superseded-source list
+
+The following legacy source files have canonical manual owners, no inbound
+links outside their own content or this inventory, and are approved for removal
+by the cleanup task:
+
+- `docs/agent-skills-and-commands.md`
+- `docs/cache-status-diagnostics.md`
+- `docs/configuration-reference.md`
+- `docs/context-lifecycle-and-compaction.md`
+- `docs/routed-loop-lifecycle.md`
+- `docs/sandbox-mechanism.md`
 
 ## Related pages
 

@@ -301,7 +301,7 @@ original Markdown rather than rendered diagram glyphs or terminal controls.
 Common slash commands are `/help`, `/model`, `/approval`, `/new`, and
 `/resume`. Use `/status` to inspect the active pane's session and token usage.
 For the complete command, skill, and macro reference, see
-[Agent and integrations](docs/README.md#agent-and-integrations).
+[Agent and integrations](docs/agent/README.md).
 
 ### Project context
 
@@ -337,7 +337,7 @@ For the current compatibility contract, see [SPEC.md](SPEC.md).
   active pane's policy. Project overlays remain pending until explicitly
   trusted.
 
-See [Safety, trust, and security](docs/README.md#safety-trust-and-security)
+See [Safety, trust, and security](docs/safety-and-trust/README.md)
 for confinement, authority, network, managed-home, profile, cache, and
 environment behavior. See
 [SPEC.md](SPEC.md) for normative security and approval requirements.
@@ -349,8 +349,8 @@ client before allowing them. Before trusting a project overlay, review its
 `.mezzanine/config.toml` and `AGENTS.md`, then inspect pending trust with
 `mez sandbox trust list`.
 
-See [Agent and integrations](docs/README.md#agent-and-integrations) and
-[Safety, trust, and security](docs/README.md#safety-trust-and-security) for
+See [Agent and integrations](docs/agent/README.md) and
+[Safety, trust, and security](docs/safety-and-trust/README.md) for
 detailed workflows.
 
 ## What Persists Across the Session
@@ -386,7 +386,7 @@ authentication, and MCP reference.
 Use the dedicated reference for generated defaults, supported fields, and layer
 behavior:
 
-- [Configuration](docs/README.md#configuration)
+- [Configuration](docs/configuration/README.md)
 - [Example config](docs/examples/config.toml)
 - [SPEC.md Section 8](SPEC.md#8-configuration)
 
@@ -410,10 +410,10 @@ Credentials belong in `mez auth`, not in config files.
 ## Documentation Guide
 
 Use [the manual](docs/README.md) to find documentation by audience and task.
-Start with [Getting started](docs/README.md#getting-started),
-[Agent and integrations](docs/README.md#agent-and-integrations),
-[Configuration](docs/README.md#configuration), or
-[Safety, trust, and security](docs/README.md#safety-trust-and-security).
+Start with [Getting started](docs/getting-started/README.md),
+[Agent and integrations](docs/agent/README.md),
+[Configuration](docs/configuration/README.md), or
+[Safety, trust, and security](docs/safety-and-trust/README.md).
 
 ## FAQ
 
@@ -445,7 +445,7 @@ in configuration if your terminal renders emoji with a different width.
 ### How do project instructions work?
 
 Mezzanine discovers project instructions such as `AGENTS.md` and includes them
-in the agent context. See [Configuration](docs/README.md#configuration)
+in the agent context. See [Configuration](docs/configuration/README.md)
 for discovery settings.
 
 ### How do project config overlays become trusted?
