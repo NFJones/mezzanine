@@ -384,11 +384,7 @@ impl RuntimeSessionService {
         let store = crate::storage::issues::IssueStore::from_database_path(
             issues::runtime_issue_database_path(self, &config_root),
         );
-        let issue_state = if args.detail_id.is_some() {
-            args.state
-        } else {
-            args.state.or(Some(mez_agent::issues::IssueState::Open))
-        };
+        let issue_state = args.state;
         let source = Some(RuntimeRecordBrowserOverlaySource::Issues {
             project_glob: project_glob.clone(),
             default_project_glob: project_glob.clone(),
@@ -411,7 +407,22 @@ impl RuntimeSessionService {
                 args.text.clone(),
                 Some(args.limit),
             )?;
-            store.query_issue_browser(&query)?
+            store
+                .query_issue_browser(&query)?
+                .into_iter()
+                .filter(|record| {
+                    !matches!(record.state, mez_agent::issues::IssueState::Resolved)
+                        || !source.as_ref().is_some_and(|source| {
+                            matches!(
+                                source,
+                                RuntimeRecordBrowserOverlaySource::Issues {
+                                    active_only: true,
+                                    ..
+                                }
+                            )
+                        })
+                })
+                .collect()
         };
         let mut browser = RecordBrowser::new(
             if args.detail_id.is_some() {
@@ -576,6 +587,7 @@ impl RuntimeSessionService {
                 project_glob,
                 kind,
                 state,
+                active_only,
                 text,
                 limit,
                 ..
@@ -604,6 +616,10 @@ impl RuntimeSessionService {
                     store
                         .query_issue_browser(&query)?
                         .into_iter()
+                        .filter(|record| {
+                            !matches!(record.state, mez_agent::issues::IssueState::Resolved)
+                                || !*active_only
+                        })
                         .map(issue_browser_record)
                         .collect(),
                     issue_kind_filter_choices(),
@@ -708,6 +724,33 @@ impl RuntimeSessionService {
                 text: text.clone(),
                 limit: *limit,
             },
+        }
+    }
+
+    /// Toggles implicit issue browsers between active work and closed issues.
+    pub(crate) fn record_browser_source_toggled_closed_issues(
+        &self,
+        source: &RuntimeRecordBrowserOverlaySource,
+    ) -> RuntimeRecordBrowserOverlaySource {
+        match source {
+            RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob,
+                default_project_glob,
+                kind,
+                state: None,
+                active_only,
+                text,
+                limit,
+            } => RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob: project_glob.clone(),
+                default_project_glob: default_project_glob.clone(),
+                kind: *kind,
+                state: None,
+                active_only: !active_only,
+                text: text.clone(),
+                limit: *limit,
+            },
+            _ => source.clone(),
         }
     }
 
@@ -844,8 +887,8 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser) {
         ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
     ]);
     browser.set_help(
-        Some("**Keys:** `↑`/`↓` focus issue ID · `Enter` open · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
-        Some("**Keys:** `Esc` back · `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `↑`/`↓` focus issue ID · `Enter` open · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `Esc` back · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
     );
     browser.set_empty_message(Some("No issues found.".to_string()));
 }

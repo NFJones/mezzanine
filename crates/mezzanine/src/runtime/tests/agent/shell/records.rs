@@ -485,6 +485,27 @@ enabled = true
             2,
         )
         .unwrap();
+    let resolved_issue = store
+        .add_issue(
+            project.clone(),
+            mez_agent::issues::IssueKind::Task,
+            "Closed issue".to_string(),
+            None,
+            None,
+            3,
+        )
+        .unwrap();
+    store
+        .update_issue(
+            project.clone(),
+            resolved_issue.id.clone(),
+            mez_agent::issues::IssueUpdate {
+                state: Some(mez_agent::issues::IssueState::Resolved),
+                ..mez_agent::issues::IssueUpdate::default()
+            },
+            4,
+        )
+        .unwrap();
     let cross_project_issue = store
         .add_issue(
             "/other/project".to_string(),
@@ -515,6 +536,7 @@ enabled = true
     assert!(footer.contains("esc: back"), "{footer}");
     assert!(footer.contains("enter: open"), "{footer}");
     assert!(footer.contains("a: all"), "{footer}");
+    assert!(footer.contains("r: closed"), "{footer}");
     assert!(footer.contains("k: kind"), "{footer}");
     assert!(footer.contains("p: project"), "{footer}");
     assert!(footer.contains("x: text"), "{footer}");
@@ -572,6 +594,31 @@ enabled = true
             .any(|line| line.contains(&cross_project_issue.id)),
         "{overlay_view:?}"
     );
+    assert!(
+        !overlay
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .records()
+            .iter()
+            .any(|record| record.id == resolved_issue.id)
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"r");
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .record_browser
+            .as_ref()
+            .unwrap()
+            .browser
+            .records()
+            .iter()
+            .any(|record| record.id == resolved_issue.id)
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"r");
 
     let toggle_all = service
         .apply_attached_terminal_step_plan(

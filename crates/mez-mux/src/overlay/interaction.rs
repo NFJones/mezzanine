@@ -125,9 +125,16 @@ pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized>, size: Size) -> Strin
             .to_string()
     } else if let Some(record_browser) = overlay.record_browser.as_ref() {
         let browser = &record_browser.browser;
-        let mut hints = vec!["esc: back", "/: search", "enter: open"];
+        let mut hints = if record_browser.command == "show-issues" {
+            vec!["esc: back", "enter: open"]
+        } else {
+            vec!["esc: back", "/: search", "enter: open"]
+        };
         if browser.scope_toggle_enabled() {
             hints.push("a: all");
+        }
+        if record_browser.command == "show-issues" {
+            hints.push("r: closed");
         }
         if browser.supports_filter(crate::record_browser::RecordBrowserFilterField::Kind) {
             hints.push("k: kind");

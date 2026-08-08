@@ -293,6 +293,35 @@ impl RuntimeSessionService {
                 )));
             }
         }
+        if input == b"r"
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::Issues { state: None, .. })
+            )
+        {
+            let Some(source) = record_browser.source.clone() else {
+                return Ok(Some(false));
+            };
+            let active_index =
+                record_browser_active_index(overlay, record_browser.browser.active_index());
+            let source = self.record_browser_source_toggled_closed_issues(&source);
+            let mut browser = self.refresh_record_browser_overlay_source(&source)?;
+            browser.set_active_index(active_index);
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(None);
+            };
+            record_browser.source = Some(source);
+            record_browser.browser = browser;
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
+        }
         if input == b"c"
             && matches!(
                 record_browser.source,
