@@ -17,8 +17,9 @@ policy, network policy, sandbox backend, scopes, and the explicit bypass mode.
 `policy-only` provides no operating-system confinement; approval policy and
 optional audit logging remain separate controls. `bubblewrap` enforces its
 configured filesystem and network boundary for eligible local shell work.
-`host-access` is a primary-user-only approval mode that runs local shell work
-outside Bubblewrap.
+Runtime-owned web, fetch, and MCP actions are separate capability and approval
+boundaries rather than child shell processes. `host-access` is a
+primary-user-only approval mode that runs local shell work outside Bubblewrap.
 
 `permissions.bypass_mode` is visible configuration state, but configuration
 cannot enable it. Only an explicit primary-user bypass decision can do so; see
@@ -36,7 +37,8 @@ project overlay to attempt to broaden the primary user's execution boundary.
 Project configuration and project skills/macros are discovered under the active
 project root but remain pending until a primary user trusts or rejects that
 root. Use `mez sandbox trust list` to inspect decisions. Trust enables eligible
-overlay behavior; it does not approve an action or expand sandbox authority by
+overlay behavior and project skill/macro discovery; it does not approve an
+action, treat project content as trusted input, or expand sandbox authority by
 itself.
 
 ## Related pages

@@ -42,7 +42,8 @@ timeout 60s just test
 formatting. `just clippy` denies warnings across the workspace. `just test`
 runs all targets and features with Cargo's quiet output; the timeout makes a
 hang visible. Use a timeout of at least 60 seconds for every direct test
-command as well.
+command as well. `just test` already supplies Cargo's `--quiet` option; retain
+that option when running a direct `cargo test` command.
 
 The optional `just test-real-bubblewrap` acceptance test requires Linux and a
 working Bubblewrap environment. Run it when a change affects the real

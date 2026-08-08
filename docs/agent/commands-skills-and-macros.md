@@ -65,8 +65,9 @@ Start a prompt with `$<skill-name>` to load a reusable skill, followed by any
 task-specific context. Use `/list-skills` to inspect the effective catalog.
 User skills live under `~/.config/mezzanine/skills/<name>/SKILL.md`; trusted
 project skills live under `.mezzanine/skills/<name>/SKILL.md`. Project skills
-remain untrusted content for security purposes and do not override approvals
-or action rules, even after project trust enables their discovery.
+are discovered only after project trust is granted. Their contents remain
+untrusted workflow guidance and cannot override approvals, action rules, or
+other runtime authority.
 
 `/sync-builtin-skills` synchronizes managed built-in skills into the user
 configuration root. It can change local files, so review the result before
@@ -74,9 +75,11 @@ relying on a refreshed catalog.
 
 Start a prompt with `#<macro-name>` to run an ordered macro. User macros live
 under `~/.config/mezzanine/macros/<name>/MACRO.md`; trusted project macros live
-under `.mezzanine/macros/<name>/MACRO.md`. One persistent subagent runs the
-ordered sequence, while normal prompt parsing, permissions, and approvals still
-apply to every step. Use `/list-macros` before invoking an unfamiliar macro.
+under `.mezzanine/macros/<name>/MACRO.md` and are discovered only after project
+trust is granted. Macro content cannot grant authority: one persistent
+subagent runs the ordered sequence, while normal prompt parsing, permissions,
+and approvals still apply to every step. Use `/list-macros` before invoking an
+unfamiliar macro.
 
 Use `@<server-id>` only when a task requires a configured MCP server. That
 server's callable metadata is available for the current turn, not permanently

@@ -113,8 +113,9 @@ Approval policy decides whether Mezzanine permits an action. OS confinement
 controls what an already-permitted local shell process can access.
 `policy-only` provides no filesystem or shell-network confinement; approval
 policy and optional audit logging remain separate controls. Bubblewrap enforces
-configured boundaries. `host-access` runs
-local shell actions outside the sandbox and is reserved for the primary user.
+configured boundaries for eligible local shell work; web, fetch, and MCP
+actions have separate capability and approval gates. `host-access` runs local
+shell actions outside the sandbox and is reserved for the primary user.
 
 Review unfamiliar project overlays before trusting them, and review applicable
 `AGENTS.md` files before acting on their guidance. Project instructions can
