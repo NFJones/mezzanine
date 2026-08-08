@@ -32,9 +32,12 @@ the workload's scope and risk rather than prompt length alone, then restores the
 ordinary pane selection after the turn. A `/loop` uses its selected worker
 profile across its internal iterations instead of rerouting each one.
 
-Use `/routing` to inspect or change automatic sizing and `/thinking` only when
-the selected provider supports a native thinking toggle. Authentication secrets
-remain in `mez auth`, never ordinary configuration.
+Use `/routing` to inspect or change automatic sizing, `/latency` to select a
+pane-local latency/cost preference, and `/thinking` only when the selected
+provider supports a native thinking toggle. Use `/refresh-provider-info` to
+refresh cached provider model and quota information before treating a stale
+catalog as an entitlement failure. Authentication secrets remain in `mez auth`,
+never ordinary configuration.
 
 ## Related pages
 

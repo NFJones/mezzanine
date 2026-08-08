@@ -32,7 +32,7 @@ turning the command into an ordinary model request:
 | --- | --- |
 | Inspect or change authority | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, and `/sandbox` |
 | Control the current task | `/plan`, `/directive`, `/stop`, `/new`, `/fork`, `/resume`, and `/name-session` |
-| Inspect or preserve context | `/compact`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, and `/copy-trace-log` |
+| Inspect or preserve context | `/compact`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, and `/list-modified-files` |
 | Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, and `/list-personalities` |
 | Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, and `/show-issues` |
 
@@ -43,12 +43,21 @@ and managed-home cache operations remain under `mez sandbox`. `/plan on`
 keeps the conversation in plan-only mode and removes write scopes for later
 turns; use `/plan off` before asking the agent to edit files.
 
-`/new` starts a conversation without prior context, `/fork` creates a branch,
-and `/resume` returns to a saved conversation. `/compact` summarizes older
-closed work and is intentionally lossy; use `/copy-context` or
-`/copy-trace-log` only when the resulting diagnostic material can be handled
-safely. `/memory` controls persistent-memory availability, while `/issue`
-manages runtime-owned project issues rather than an external tracker.
+`/new` starts a conversation without prior context, `/fork` starts a new
+thread from the current conversation, and `/resume` returns to a saved
+conversation. `/compact` summarizes older closed work and is intentionally
+lossy; `/show-context` can browse or delete entries in the current pane
+conversation. Use `/copy-context` or `/copy-trace-log` only when the resulting
+diagnostic material can be handled safely. `/copy-patches` exports retained
+`apply_patch` payloads and statuses, while `/list-modified-files` reports files
+changed by the current conversation.
+
+`/memory` controls persistent-memory availability, while `/issue` manages
+runtime-owned project issues rather than an external tracker. `/init` creates a
+project instruction scaffold. `/auth-status`, `/refresh-provider-info`,
+`/debug-config`, `/reset-status`, and `/log-level` provide non-secret
+authentication, provider, configuration, token-accounting, and verbosity
+diagnostics. Use `/exit` to hide the agent shell after active work stops.
 
 ## Invoke a skill or macro explicitly
 
@@ -58,6 +67,10 @@ User skills live under `~/.config/mezzanine/skills/<name>/SKILL.md`; trusted
 project skills live under `.mezzanine/skills/<name>/SKILL.md`. Project skills
 remain untrusted content for security purposes and do not override approvals
 or action rules, even after project trust enables their discovery.
+
+`/sync-builtin-skills` synchronizes managed built-in skills into the user
+configuration root. It can change local files, so review the result before
+relying on a refreshed catalog.
 
 Start a prompt with `#<macro-name>` to run an ordered macro. User macros live
 under `~/.config/mezzanine/macros/<name>/MACRO.md`; trusted project macros live

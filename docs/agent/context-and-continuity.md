@@ -36,6 +36,11 @@ provider observation, not proof that context is correct: provider/model changes
 and compaction can legitimately create a cold request. Consult operations
 diagnostics for cache and continuity interpretation.
 
+Use `/show-context` to browse the current pane's conversation entries and, when
+appropriate, delete an entry. Use `/copy-context` only to export the current
+model request context for diagnostics; its contents can include sensitive task
+material even though credentials and hidden runtime policy are excluded.
+
 ## Related pages
 
 - [Subagents and messaging](subagents-and-messaging.md)
