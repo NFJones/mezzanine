@@ -1088,6 +1088,7 @@ Hook events include `session_start`, `session_stop`, `client_attach`,
 | `audit.retention_days` | integer | `30` | Audit retention period. |
 | `audit.redact_secrets` | boolean | `true` | Redact detected secrets in audit records. |
 | `audit.hash_chain` | boolean | `false` | Enable hash chaining of audit records. |
+| `audit.required` | boolean | `false` | Require audit logging for sensitive operations. |
 
 Agent shell-command records identify the active sandbox backend. Bubblewrap
 records also contain only redacted plan facts: runtime-profile version,
@@ -1095,7 +1096,6 @@ maximum/narrowed authority source, read-only and read-write mount counts,
 protected-mask count, and launch-plan SHA-256. Mount paths, Bubblewrap argv,
 command content, and environment values are never included. Policy-only records
 omit plan-specific fields.
-| `audit.required` | boolean | `false` | Require audit logging for sensitive operations. |
 
 ### `extensions.<name>`
 
