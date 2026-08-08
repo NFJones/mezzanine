@@ -35,10 +35,12 @@ sensitive titles and paths, but a resumed snapshot does not restore credentials,
 terminal history, agent conversations, local message state, live MCP state,
 pending approvals, approval grants, or pane processes.
 
-Snapshots are stored under Mezzanine's user-private configuration area unless
-you configure another user-private location. Treat snapshot files as sensitive
-metadata: inspect their paths and titles before sharing, copying, or backing
-them up outside your normal private storage boundary.
+Snapshots are stored under Mezzanine's user-private configuration area. The
+snapshot CLI uses its `snapshots` directory, while live session layout commands
+use the separate `layouts` directory. Neither location is configurable. Treat
+snapshot files as sensitive metadata: inspect their paths and titles before
+sharing, copying, or backing them up outside your normal private storage
+boundary.
 
 Use `mez snapshot resume-plan <snapshot-id>` before restoring when you need to
 inspect the proposed layout recovery. Use `mez snapshot latest-plan` to inspect

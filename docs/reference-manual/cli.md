@@ -31,7 +31,7 @@ one.
 | `mez new [--dry-run]` | Start a new background session and attach when interactive. With `--dry-run`, validate session construction instead of starting a daemon. Alias: `new-session`. |
 | `mez serve` | Start a foreground session service; it does not attach a primary client unless `--attach-primary` is supplied from an interactive terminal. Alias: `daemon`. |
 | `mez list` | List resumable sessions. Alias: `list-sessions`. |
-| `mez attach [session-id] [--observer|--observe]` | Attach a primary client, or request read-only observer access with either observer flag. Alias: `attach-session`. |
+| `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access. Alias: `attach-session`. |
 | `mez detach` | Detach the current or selected client. Alias: `detach-client`. |
 | `mez kill-session --force` | Terminate a live session through its control socket; `--force` confirms the destructive operation. |
 | `mez snapshot` | Manage persisted snapshots. With no subcommand it lists snapshots; see the snapshot forms below. |
