@@ -13,9 +13,10 @@ trust.
 ## Instruction discovery
 
 By default, Mezzanine searches for `AGENTS.md` through the pane shell. The
-project root is the nearest ancestor containing `.git`; when none exists, it is
-the pane working directory. For a path-scoped task, applicable instruction
-files are collected from the project root down to the target directory.
+project root is the nearest ancestor containing a `.git` directory or file;
+when none exists, it is the pane working directory. For a path-scoped task,
+applicable instruction files are collected from the project root down to the
+target directory.
 
 Ancestor guidance applies before descendant guidance, and a descendant file
 takes precedence when instructions conflict. Its scope is the directory tree
