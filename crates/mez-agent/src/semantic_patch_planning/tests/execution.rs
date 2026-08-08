@@ -177,6 +177,79 @@ fn semantic_apply_patch_command_reports_partial_late_failure_per_file() {
 }
 
 #[test]
+/// Verifies the native pane resolver matches physical missing-path semantics.
+///
+/// A missing component followed by `..` can expose a later symlink that still
+/// needs physical resolution. Resolving only the nearest existing prefix would
+/// miss that link and could authorize the wrong boundary. The test suppresses
+/// GNU `realpath -m` so every Unix host exercises the macOS-compatible native
+/// component walker.
+#[cfg(unix)]
+fn semantic_apply_patch_native_resolver_handles_symlink_after_missing_parent() {
+    let root = test_temp_dir("semantic-patch-native-path-resolution");
+    let cwd = root.join("cwd");
+    let outside = root.join("outside");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink("../outside", cwd.join("link")).unwrap();
+    let path = path_with_failing_realpath(&root);
+    let mut lines = vec!["MEZ_APPLY_CWD=$(pwd -P) || exit 1".to_string()];
+    lines.extend(apply_patch_path_resolution_lines());
+    lines.push(format!(
+        "mez_apply_patch_resolve {}",
+        crate::shell_quote("missing/../link/new.txt")
+    ));
+
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(lines.join("\n"))
+        .current_dir(&cwd)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let actual = String::from_utf8(output.stdout).unwrap();
+    let expected = std::fs::canonicalize(&outside).unwrap().join("new.txt");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(actual.trim_end(), expected.to_string_lossy());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+/// Verifies the native pane resolver fails closed on symbolic-link cycles.
+///
+/// The macOS-compatible fallback reads links one component at a time and must
+/// impose its own traversal bound. A cyclic target should therefore return a
+/// failure instead of hanging the pane transaction or emitting an apparently
+/// canonical path.
+#[cfg(unix)]
+fn semantic_apply_patch_native_resolver_rejects_symlink_loops() {
+    let root = test_temp_dir("semantic-patch-native-path-loop");
+    std::os::unix::fs::symlink("second", root.join("first")).unwrap();
+    std::os::unix::fs::symlink("first", root.join("second")).unwrap();
+    let path = path_with_failing_realpath(&root);
+    let mut lines = vec!["MEZ_APPLY_CWD=$(pwd -P) || exit 1".to_string()];
+    lines.extend(apply_patch_path_resolution_lines());
+    lines.push("mez_apply_patch_resolve first/file.txt".to_string());
+
+    let output = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(lines.join("\n"))
+        .current_dir(&root)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 /// Verifies a target retargeted through a symlink after snapshotting cannot
 /// reuse failed path-resolution state to mutate a file outside the boundary.
 #[cfg(unix)]
@@ -235,7 +308,7 @@ fn semantic_apply_patch_revalidates_target_immediately_before_write() {
     let cwd = root.join("cwd");
     let outside = root.join("outside.txt");
     let fake_bin = root.join("bin");
-    let count_path = root.join("realpath-count");
+    let retargeted_path = root.join("retargeted");
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&fake_bin).unwrap();
     std::fs::write(cwd.join("note.txt"), "old\n").unwrap();
@@ -254,26 +327,26 @@ fn semantic_apply_patch_revalidates_target_immediately_before_write() {
         &String::from_utf8_lossy(&read_output.stdout),
     )
     .unwrap();
-    let realpath_output = Command::new("/bin/sh")
+    let cmp_output = Command::new("/bin/sh")
         .arg("-c")
-        .arg("command -v realpath")
+        .arg("command -v cmp")
         .output()
         .unwrap();
-    assert!(realpath_output.status.success());
-    let realpath = String::from_utf8(realpath_output.stdout)
+    assert!(cmp_output.status.success());
+    let cmp = String::from_utf8(cmp_output.stdout)
         .unwrap()
         .trim()
         .to_string();
-    let fake_realpath = fake_bin.join("realpath");
+    let fake_cmp = fake_bin.join("cmp");
     std::fs::write(
-        &fake_realpath,
+        &fake_cmp,
         format!(
-            "#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=$arg; done\nif [ \"$last\" = note.txt ]; then\n  count=$(cat {count} 2>/dev/null || printf 0)\n  count=$((count + 1))\n  printf '%s' \"$count\" > {count}\n  if [ \"$count\" = 2 ]; then\n    rm -f -- note.txt\n    ln -s ../outside.txt note.txt\n  fi\nfi\nexec {realpath} \"$@\"\n",
-            count = count_path.display(),
+            "#!/bin/sh\n{cmp} \"$@\"\nstatus=$?\nif [ \"$status\" = 0 ]; then\n  rm -f -- note.txt\n  ln -s ../outside.txt note.txt\n  printf retargeted > {retargeted}\nfi\nexit \"$status\"\n",
+            retargeted = retargeted_path.display(),
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&fake_realpath, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&fake_cmp, std::fs::Permissions::from_mode(0o755)).unwrap();
     let path = format!(
         "{}:{}",
         fake_bin.display(),
@@ -294,7 +367,10 @@ fn semantic_apply_patch_revalidates_target_immediately_before_write() {
         stderr.contains("resolved path is outside current working directory"),
         "{stderr}"
     );
-    assert_eq!(std::fs::read_to_string(&count_path).unwrap(), "2");
+    assert_eq!(
+        std::fs::read_to_string(&retargeted_path).unwrap(),
+        "retargeted"
+    );
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "old\n");
     assert!(
         std::fs::symlink_metadata(cwd.join("note.txt"))

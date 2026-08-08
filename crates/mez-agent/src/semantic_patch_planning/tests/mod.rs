@@ -29,6 +29,26 @@ fn test_temp_dir(label: &str) -> PathBuf {
     path
 }
 
+/// Creates a leading `PATH` entry whose `realpath` rejects GNU `-m` probes.
+///
+/// Native-resolver tests use this to exercise the pane fallback even on Linux
+/// development hosts where GNU coreutils would otherwise take the fast path.
+#[cfg(unix)]
+fn path_with_failing_realpath(root: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fake_bin = root.join("no-gnu-realpath");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let fake_realpath = fake_bin.join("realpath");
+    std::fs::write(&fake_realpath, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&fake_realpath, std::fs::Permissions::from_mode(0o755)).unwrap();
+    format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
 /// Builds a Mezzanine add-file patch for one relative path and exact content.
 fn add_file_patch(path: &str, content: &str) -> String {
     let mut patch = format!("*** Begin Patch\n*** Add File: {path}\n");

@@ -496,8 +496,10 @@ fn semantic_apply_patch_uses_sandbox_write_scopes_for_absolute_targets() {
     std::fs::create_dir_all(&writable).unwrap();
     let target = writable.join("note.txt");
     let patch = add_file_patch(target.to_str().unwrap(), "scoped\n");
-    let boundary =
-        ApplyPatchPathBoundary::SandboxWriteScopes(vec![writable.to_string_lossy().into_owned()]);
+    let canonical_writable = std::fs::canonicalize(&writable).unwrap();
+    let boundary = ApplyPatchPathBoundary::SandboxWriteScopes(vec![
+        canonical_writable.to_string_lossy().into_owned(),
+    ]);
     let paths = apply_patch_touched_paths(&patch)
         .unwrap()
         .into_iter()

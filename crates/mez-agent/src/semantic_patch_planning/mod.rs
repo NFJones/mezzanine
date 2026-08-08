@@ -14,12 +14,14 @@ use base64::Engine;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod matcher;
+mod path_resolution;
 mod snapshot;
 #[cfg(test)]
 mod tests;
 mod transaction;
 
 use matcher::apply_patch_hunks_to_file;
+use path_resolution::apply_patch_path_resolution_lines;
 use snapshot::{
     ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchTextFile,
     ensure_missing_state, ensure_regular_state, parse_apply_patch_snapshot_output,
