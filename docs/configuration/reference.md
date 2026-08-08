@@ -150,7 +150,7 @@ Use the relevant task and reference pages to inspect those live facilities.
 | `terminal.reduced_motion` | boolean | `false` | Disable optional frame/status animations. |
 | `terminal.completion_attention_flashing` | boolean | `true` | Whether completion-attention title pills alternate their attention color. |
 | `terminal.resize_debounce_ms` | integer | `200` | Milliseconds to debounce resize redraws. |
-| `terminal.render_rate_limit_fps` | integer | `5` | Maximum burst render frames per second; `0` disables render rate limiting. |
+| `terminal.render_rate_limit_fps` | integer | `30` | Maximum burst render frames per second; `0` disables render rate limiting. |
 | `terminal.shell_output_preview_lines` | integer | `5` | Maximum preview lines shown for shell-command output; must be positive. |
 | `terminal.agent_wrap_column_cap` | integer | `120` | Maximum presentation width for persisted agent logs and transcripts; must be positive. |
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |

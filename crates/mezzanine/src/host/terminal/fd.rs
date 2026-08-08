@@ -335,7 +335,7 @@ impl Default for TerminalClientLoopConfig {
             host_bracketed_paste_buffer: Vec::new(),
             host_bracketed_paste_started_at: None,
             resize_debounce_ms: 200,
-            render_rate_limit_fps: 5,
+            render_rate_limit_fps: 30,
             ui_theme: UiTheme::default(),
         }
     }

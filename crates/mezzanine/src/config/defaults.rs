@@ -41,7 +41,7 @@ reduced_motion = false
 # Whether completion-attention title pills alternate their attention color.
 completion_attention_flashing = true
 resize_debounce_ms = 200
-render_rate_limit_fps = 5
+render_rate_limit_fps = 30
 shell_output_preview_lines = 5
 agent_wrap_column_cap = 120
 cursor_style = "block"

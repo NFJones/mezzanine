@@ -2665,7 +2665,7 @@ of flashing while reduced motion is enabled.
 completion-attention title pills MUST use their stable attention color without
 an animation refresh timer.
 
-`terminal.render_rate_limit_fps` MUST default to 5. When nonzero, attached
+`terminal.render_rate_limit_fps` MUST default to 30. When nonzero, attached
 foreground clients SHOULD coalesce bursty render invalidations so ordinary
 output rendering is emitted no more frequently than the configured frame rate
 per client, while still delivering one trailing frame after a burst. A value of
