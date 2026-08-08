@@ -849,6 +849,14 @@ fn selector_shadow_hint_covers_argument_bearing_agent_commands() {
         ("/remember ", " [statement]"),
         ("/fork ", " [conversation-id]"),
         ("/debug-config ", " [filter]"),
+        (
+            "/show-issues ",
+            " [--project path|--project-glob path|--all-projects] [--kind defect|task] [--state state] [--text text|--query text] [--limit int] [--save path]",
+        ),
+        (
+            "/show-memories ",
+            " [--kind preference|fact|procedure|documentation|research|episode|warning|scratch]",
+        ),
     ];
 
     for (line, expected) in cases {

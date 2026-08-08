@@ -77,6 +77,12 @@ pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "fork" => Some(" [conversation-id]"),
         "list-mcp" => Some(" [server-name]"),
         "debug-config" => Some(" [filter]"),
+        "show-issues" => Some(
+            " [--project path|--project-glob path|--all-projects] [--kind defect|task] [--state state] [--text text|--query text] [--limit int] [--save path]",
+        ),
+        "show-memories" => Some(
+            " [--kind preference|fact|procedure|documentation|research|episode|warning|scratch]",
+        ),
         _ => None,
     }
 }
