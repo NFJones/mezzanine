@@ -27,6 +27,7 @@ terminal state remain outside ordinary model context.
 
 | Action | Use | Important boundary |
 | --- | --- | --- |
+| `say` | Present progress, completion, or a blocker to the user. | It is display-only and cannot execute text that resembles a command or patch. |
 | `request_capability` | Ask the controller to expose a coarse action family for this turn. | It is not a user permission prompt. |
 | `shell_command` | Pane-shell inspection, commands, validation, and filesystem operations. | Runs through the pane shell and can require approval. |
 | `apply_patch` | Semantic file-content add, update, move, or delete using `*** Begin Patch` format. | It is a MAAP action, never a shell executable. |
@@ -35,6 +36,7 @@ terminal state remain outside ordinary model context.
 | `config_change` | Supported scalar live configuration mutation. | Execution-boundary settings remain direct-user-only. |
 | `mcp_call` | Call a currently available configured MCP tool. | External capability and approval policy still apply. |
 | `memory_search`, `memory_store` | Retrieve or retain runtime-owned durable memory when enabled. | Records must be safe, durable, and non-secret. |
+| `issue_add`, `issue_update`, `issue_query`, `issue_delete` | Manage runtime-owned local issues for the active project. | Issue records remain subject to the active action surface and project-store rules. |
 
 The controller exposes only actions available to the current turn. An absent
 action family should be requested through `request_capability`, not simulated

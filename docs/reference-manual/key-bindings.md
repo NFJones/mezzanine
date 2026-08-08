@@ -25,9 +25,10 @@ configuration can replace bindings.
 | `Ctrl+A %` / `Ctrl+A "` | Split vertically / horizontally. |
 | `Ctrl+A` then arrow keys, `o`, `;`, or `q` | Select an adjacent, next, last, or indexed pane. |
 | `Ctrl+A z`, `Ctrl+A Space` | Toggle pane zoom / cycle layouts. |
-| `Ctrl+A x`, `Ctrl+A &`, `Ctrl+A !`, `{`, `}` | Kill a pane/window, break a pane, or swap panes. |
+| `Ctrl+A x` / `Ctrl+A &` | Kill the active pane / current window. |
+| `Ctrl+A !`, `Ctrl+A {`, `Ctrl+A }` | Break the active pane into a window / swap it with the previous or next pane. |
 | `Ctrl+A [` / `Ctrl+A PageUp` | Enter copy mode / enter copy mode and scroll up. |
-| `Ctrl+A ]`, `#`, `=`, `-` | Paste, list, choose, or delete paste buffers. |
+| `Ctrl+A ]`, `Ctrl+A #`, `Ctrl+A =`, `Ctrl+A -` | Paste, list, choose, or delete paste buffers. |
 | `Ctrl+A O` / `Ctrl+A ~` | Manage observers / show Mez messages. |
 | `Ctrl+A a` | Toggle the focused pane's agent shell. |
 
