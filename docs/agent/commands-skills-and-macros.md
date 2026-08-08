@@ -21,6 +21,33 @@ Use `/help` and the command prompt's `help` output for the effective live
 command catalog; bindings and capabilities can vary with configuration. The
 manual reference is the canonical place for exhaustive command and key data.
 
+## Use operational slash commands
+
+Use the following agent-shell commands to control the current pane without
+turning the command into an ordinary model request:
+
+| Goal | Commands |
+| --- | --- |
+| Inspect or change authority | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, and `/sandbox` |
+| Control the current task | `/plan`, `/directive`, `/stop`, `/new`, `/fork`, `/resume`, and `/name-session` |
+| Inspect or preserve context | `/compact`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, and `/copy-trace-log` |
+| Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, and `/list-personalities` |
+| Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, and `/show-issues` |
+
+`/approve` decides a pending action in the current pane; use
+`/show-approvals` when the request may belong to another pane. `/sandbox`
+reports or changes pane-local sandbox state, while advanced setup, profiles,
+and managed-home cache operations remain under `mez sandbox`. `/plan on`
+keeps the conversation in plan-only mode and removes write scopes for later
+turns; use `/plan off` before asking the agent to edit files.
+
+`/new` starts a conversation without prior context, `/fork` creates a branch,
+and `/resume` returns to a saved conversation. `/compact` summarizes older
+closed work and is intentionally lossy; use `/copy-context` or
+`/copy-trace-log` only when the resulting diagnostic material can be handled
+safely. `/memory` controls persistent-memory availability, while `/issue`
+manages runtime-owned project issues rather than an external tracker.
+
 ## Invoke a skill or macro explicitly
 
 Start a prompt with `$<skill-name>` to load a reusable skill, followed by any
