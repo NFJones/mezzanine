@@ -18,15 +18,17 @@ mez new         # create a new session
 mez serve       # run a foreground service without a primary client
 mez list         # list resumable sessions
 mez attach       # attach to a resumable session
+mez attach --observer  # request read-only observer access
 ```
 
 Use `-S <socket-path>` for an explicit control socket, `-L <name>` for a named
 socket, and `--json` for machine-readable command output. `mez serve` starts a
 session service and initial pane but does not attach a primary terminal.
 
-Only one attached client can be primary at a time. An observer must request
-access and the primary client must approve it. Observers are read-only and do
-not receive history from before approval.
+Only one attached client can be primary at a time. `mez attach --observer`
+requests observer access; the primary client must approve the request before
+the observer receives the live view. Observers are read-only and do not receive
+history from before approval.
 
 ## Work with windows and panes
 

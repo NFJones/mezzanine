@@ -68,12 +68,11 @@ Install the product package:
 cargo install --path crates/mezzanine --locked
 ```
 
-Optionally create the baseline configuration, authenticate, and start in a
-working directory. Starting a session also creates the default configuration
-when none exists:
+Optionally create and inspect the baseline configuration before authenticating
+and starting in a working directory. Starting a session also creates the
+default configuration when none exists:
 
 ```sh
-# Optional: create and inspect the baseline before starting a session.
 mez config init
 mez auth login
 cd /path/to/repository

@@ -31,12 +31,15 @@ session behavior.
 | `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access with `--observer`. Alias: `attach-session`. |
 | `mez detach` | Detach the current or selected client. Alias: `detach-client`. |
 | `mez kill-session --force` | Terminate a live session through its control socket; `--force` confirms the destructive operation. |
-| `mez snapshot` | List, create, inspect, delete, plan a resume with `resume-plan`, or resume persisted snapshots. |
+| `mez snapshot` | Manage persisted snapshots: `list`, `create`, `inspect`, `delete`, `resume`, `resume-latest`, `resume-plan`, `latest-plan`, and `rollback-plan`. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez
 serve` can run without one. An observer request also requires an interactive
-terminal and remains pending until the primary client approves it. Use `mez
---help` and `mez <command> --help` for the current argument and target syntax.
+terminal and remains pending until the primary client approves it. `mez snapshot
+resume <snapshot-id> --serve` restores a snapshot as a foreground daemon; add
+`--attach-primary` only when the invoking terminal should attach as its primary
+client. Use `mez --help` and `mez <command> --help` for the current argument
+and target syntax.
 
 ## Configuration, identity, and integrations
 

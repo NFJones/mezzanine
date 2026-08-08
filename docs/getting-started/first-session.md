@@ -13,12 +13,11 @@ complete a small reviewable task.
 
 ## Initialize configuration and start
 
-Optionally create the baseline configuration, then start Mezzanine from the
-project you want to work in. Starting a session also creates the default
-configuration when none exists:
+Optionally create and inspect the baseline configuration, then start Mezzanine
+from the project you want to work in. Starting a session also creates the
+default configuration when none exists:
 
 ```sh
-# Optional: create and inspect the baseline before starting a session.
 mez config init
 cd /path/to/repository
 mez
