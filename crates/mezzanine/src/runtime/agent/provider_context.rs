@@ -26,7 +26,7 @@ use sha2::{Digest, Sha256};
 fn output_limit_continuation_input(state: &mez_agent::ProviderOutputLimitState) -> String {
     let instruction = match state.continuation_disposition {
         mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText => {
-            "Continue the unfinished response from the safe assistant text below."
+            "Treat the safe assistant text below as already emitted. Continue immediately after it; do not repeat or replace it."
         }
         mez_agent::ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall => {
             "No truncated action ran. Re-emit exactly one complete atomic action call; do not continue or rely on truncated arguments."

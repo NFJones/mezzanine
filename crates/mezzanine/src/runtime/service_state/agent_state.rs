@@ -89,6 +89,8 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
         kind: Option<mez_agent::issues::IssueKind>,
         /// Optional lifecycle state filter.
         state: Option<mez_agent::issues::IssueState>,
+        /// Whether an implicit active-work filter excludes resolved records.
+        active_only: bool,
         /// Optional title/body text filter.
         text: Option<String>,
         /// Maximum number of displayed records.

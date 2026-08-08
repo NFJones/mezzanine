@@ -394,6 +394,7 @@ impl RuntimeSessionService {
             default_project_glob: project_glob.clone(),
             kind: args.kind,
             state: issue_state,
+            active_only: args.state.is_none() && args.detail_id.is_none(),
             text: args.text.clone(),
             limit: args.limit,
         });
@@ -672,6 +673,7 @@ impl RuntimeSessionService {
                 default_project_glob,
                 kind,
                 state,
+                active_only,
                 text,
                 limit,
             } => RuntimeRecordBrowserOverlaySource::Issues {
@@ -683,6 +685,7 @@ impl RuntimeSessionService {
                 default_project_glob: default_project_glob.clone(),
                 kind: *kind,
                 state: *state,
+                active_only: *active_only,
                 text: text.clone(),
                 limit: *limit,
             },
@@ -726,6 +729,7 @@ impl RuntimeSessionService {
                 default_project_glob,
                 kind,
                 state,
+                active_only,
                 text,
                 limit,
             } => Ok(RuntimeRecordBrowserOverlaySource::Issues {
@@ -743,6 +747,7 @@ impl RuntimeSessionService {
                     *kind
                 },
                 state: *state,
+                active_only: *active_only,
                 text: if field == RecordBrowserFilterField::Text {
                     (!value.is_empty()).then(|| value.to_string())
                 } else {

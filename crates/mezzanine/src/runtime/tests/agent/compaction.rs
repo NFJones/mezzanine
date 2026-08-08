@@ -1128,6 +1128,14 @@ max_output_tokens = 4096
         second_request_text.contains("Mezzanine interaction mode: output_limit_retry"),
         "{second_request_text}"
     );
+    assert!(
+        second_request_text.contains("[safe partial assistant text]\npartial safe response"),
+        "{second_request_text}"
+    );
+    assert!(
+        second_request_text.contains("Treat the safe assistant text below as already emitted"),
+        "{second_request_text}"
+    );
     assert!(!second_request_text.contains("output_limit_recovery_attempt="));
     assert!(
         !second_request_text.contains("error_message="),

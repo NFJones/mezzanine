@@ -911,7 +911,7 @@ mod tests {
                 .contains("use `issue_update` to mark it `in-progress`")
         );
         assert!(fix_issues_document.text.contains(
-            "do not repeat the query merely because another capability, inspection, edit, test, or provider call occurred"
+            "do not repeat either query merely because another capability, inspection, edit, test, or provider call occurred"
         ));
         assert!(
             fix_issues_document

@@ -121,7 +121,7 @@ impl ModelInteractionKind {
                 "The previous provider response failed MAAP validation before any action executed. Return exactly one corrected MAAP action batch on the currently allowed surface. Do not mention the repair process to the user.",
             ),
             ModelInteractionKind::OutputLimitRetry => Some(
-                "The previous response hit the provider output limit. Return one minimal complete MAAP batch when work remains or one short final answer when it does not. Omit progress prose, plans, evidence recaps, command logs, and explanations from this retry.",
+                "The previous response hit the provider output limit. If safe partial assistant text is appended, treat it as already emitted and continue from it without repetition. Return one minimal complete MAAP batch when work remains or one short final answer when it does not. Omit progress prose, plans, evidence recaps, command logs, and explanations from this retry.",
             ),
             ModelInteractionKind::RoutedHandoff => Some(
                 "Complete the routed handoff task from controller-origin context. Return only the requested structured JSON handoff; do not continue implementation or address the end user.",

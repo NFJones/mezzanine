@@ -839,7 +839,7 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
                     0,
                     1,
                     mez_agent::ModelTokenUsage::default(),
-                    mez_agent::ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall,
+                    mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText,
                 ),
             ));
         }
