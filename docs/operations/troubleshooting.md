@@ -12,11 +12,11 @@ before restarting or changing policy.
 
 ## Session cannot be found or reattached
 
-Run `mez list`, then select the intended session with `mez attach`, `-S`, or
-`-L`. A live primary-client conflict requires detaching or transferring the
-existing primary rather than attaching a second primary. If a background daemon
-started by `mez new` failed, inspect its private
-`<control-socket>.diagnostics.log` before creating a replacement session. A
+Run `mez list`, then select the intended session with `mez attach <session-id>`
+or select its control socket with `-S` or `-L`. A live primary-client conflict
+requires detaching or transferring the existing primary rather than attaching a
+second primary. If a background daemon started by `mez new` failed, inspect
+its private `<control-socket>.diagnostics.log` before creating a replacement session. A
 foreground `mez serve` reports its diagnostics to the terminal that started it.
 
 ## Agent cannot run a shell command

@@ -68,6 +68,9 @@ Install the product package:
 cargo install --path crates/mezzanine --locked
 ```
 
+Cargo normally installs `mez` in `~/.cargo/bin`. Ensure that directory is on
+`PATH`, or invoke `~/.cargo/bin/mez` in the commands below.
+
 From a checkout of this repository, optionally create and inspect the baseline
 configuration before authenticating and starting in a working directory.
 Starting a session also creates the default configuration when none exists:

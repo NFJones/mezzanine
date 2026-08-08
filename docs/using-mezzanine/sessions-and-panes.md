@@ -17,13 +17,17 @@ mez             # attach to an available session, or create one
 mez new         # always create a new session
 mez serve       # run a foreground service without a primary client
 mez list         # list resumable sessions
-mez attach       # attach to a resumable session
-mez attach --observer  # request read-only observer access
+mez attach [session-id] # attach to a resumable session
+mez attach [session-id] --observer  # request read-only observer access
 ```
 
 Use `-S <socket-path>` for an explicit control socket, `-L <name>` for a named
 socket, and `--json` for machine-readable command output. `mez serve` starts a
 session service and initial pane but does not attach a primary terminal.
+
+Use `mez list` to find a session ID, then pass it to `mez attach <session-id>`
+when more than one resumable session is available. Omitting the ID uses the
+selected socket or the default attach-selection behavior.
 
 Only one attached client can be primary at a time. `mez attach --observer`
 requests observer access; the primary client must approve the request before
