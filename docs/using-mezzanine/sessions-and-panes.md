@@ -57,8 +57,9 @@ Detaching normally keeps pane processes running. Layout, history, and agent
 state persist according to their settings, but persistence never bypasses trust
 or approval checks. Use `mez snapshot create` to save a layout and
 `mez snapshot` to list saved snapshots. Use `mez snapshot resume-plan
-<snapshot-id>` to inspect a proposed restore; `mez snapshot resume
-<snapshot-id> --serve` reconstructs it as a live foreground daemon. Use `mez
+<snapshot-id>` to inspect a proposed restore. `mez snapshot resume
+<snapshot-id>` reconstructs the saved layout model without starting a daemon;
+add `--serve` to start it as a live foreground daemon. Use `mez
 kill-session --force` or the command-prompt `exit` to end a session and its
 panes.
 

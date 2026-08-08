@@ -55,8 +55,8 @@ the planning commands before a restore when the result needs review:
 | `mez snapshot resume-plan <snapshot-id>` | Show the restore plan without loading the snapshot payload. |
 | `mez snapshot latest-plan [--session-id ID]` | Show the restore plan for the newest matching snapshot. |
 | `mez snapshot rollback-plan <snapshot-id>` | Show whether a snapshot can serve as a rollback point. |
-| `mez snapshot resume <snapshot-id>` | Restore the saved layout model; add `--serve` to launch fresh panes in a foreground daemon. |
-| `mez snapshot resume-latest [--session-id ID]` | Restore the newest matching snapshot; it also accepts `--serve`. |
+| `mez snapshot resume <snapshot-id>` | Reconstruct the saved layout model without starting a daemon; add `--serve` to launch fresh panes in a foreground daemon. |
+| `mez snapshot resume-latest [--session-id ID]` | Reconstruct the newest matching layout model without starting a daemon; it also accepts `--serve`. |
 
 Both restore commands accept `--restart-command <command>` for restorable pane
 processes. A live restore starts fresh processes and cannot reconnect to the

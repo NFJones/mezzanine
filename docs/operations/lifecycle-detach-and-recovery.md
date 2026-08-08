@@ -37,10 +37,11 @@ terminal history, live MCP state, or pane processes.
 Use `mez snapshot resume-plan <snapshot-id>` before restoring when you need to
 inspect the proposed layout recovery. Use `mez snapshot latest-plan` to inspect
 the newest matching snapshot without selecting an ID. `mez snapshot resume
-<snapshot-id>` reconstructs a saved session model; add `--serve` to start it as
-a live foreground daemon. `resume-latest` offers the same behavior for the
-newest matching snapshot. Both restore commands accept `--restart-command` for
-restorable pane processes. A live restore creates fresh panes and shell
+<snapshot-id>` reconstructs a saved session model without starting a daemon;
+add `--serve` to start it as a live foreground daemon. `resume-latest` offers
+the same behavior for the newest matching snapshot. Both restore commands
+accept `--restart-command` for restorable pane processes. A live restore
+creates fresh panes and shell
 processes. It cannot reconnect to processes that exited, and it resets previous
 live approvals. If a saved directory cannot be used, Mez falls back to the
 user's home directory and reports the recovery state. Review interrupted agent
