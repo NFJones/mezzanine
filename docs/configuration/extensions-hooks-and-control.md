@@ -20,9 +20,10 @@ configuration.
 
 `hooks` configures lifecycle and command hooks. Hooks can execute or contact
 external systems, so they remain subject to configuration trust, permission,
-and audit requirements. `control` configures the local control endpoint;
-`message_protocol` configures local agent messaging; `snapshots` controls
-persisted session metadata; and `audit` controls structured security records.
+and audit requirements. The local control endpoint, agent messaging, and
+snapshot storage are runtime-owned rather than configuration tables; use their
+CLI and reference documentation to inspect those facilities. `audit` controls
+structured security records.
 
 Treat hook runners as distinct execution boundaries. Program hooks can invoke
 external programs and receive structured event data on standard input. Shell
