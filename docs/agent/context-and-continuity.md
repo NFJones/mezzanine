@@ -38,7 +38,7 @@ diagnostics for cache and continuity interpretation.
 ## Related pages
 
 - [Subagents and messaging](subagents-and-messaging.md)
-- [Cache status and diagnostics](../operations/README.md)
+- [Cache status and diagnostics](../operations/cache-status-and-diagnostics.md)
 - [Agent shell](../using-mezzanine/agent-shell.md)
 - [Normative context contract](../../SPEC.md#96-context-assembly)
 

@@ -12,7 +12,12 @@ initial quick-start commands.
 
 ## Chapters
 
-This section will own installation, authentication, and first-session guides.
+- [Install Mezzanine](installation.md): build or install `mez` and verify the
+  local environment.
+- [Authenticate a provider](authentication.md): use a supported credential
+  flow without placing secrets in configuration files.
+- [Start your first session](first-session.md): initialize configuration, open
+  the agent shell, and resume work safely.
 
 ## Related pages
 

@@ -10,8 +10,14 @@ Complete [Getting started](../getting-started/README.md).
 
 ## Chapters
 
-This section will own sessions and panes, terminal input and history, the
-agent shell, and task-oriented workflows.
+- [Sessions and panes](sessions-and-panes.md): create, attach, organize, and
+  persist terminal workspaces.
+- [Terminal input, copy, and history](terminal-input-copy-and-history.md): use
+  the command prompt, copy mode, paste buffers, and retained pane history.
+- [Agent shell](agent-shell.md): open the pane-local prompt and understand its
+  visible action boundary.
+- [Workflows](workflows.md): apply sessions and agents to bounded, reviewable
+  repository work.
 
 ## Related pages
 

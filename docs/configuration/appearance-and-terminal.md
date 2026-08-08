@@ -34,7 +34,7 @@ local integrations.
 ## Related pages
 
 - [Terminal input, copy, and history](../using-mezzanine/terminal-input-copy-and-history.md)
-- [Terminal compatibility](../reference-manual/README.md)
+- [Terminal compatibility](../reference-manual/terminal-compatibility.md)
 - [Configuration reference](reference.md)
 
 ## Next step
