@@ -20,12 +20,13 @@ default configuration when none exists:
 ```sh
 mez config init
 cd /path/to/repository
-mez
+mez new
 ```
 
-Bare `mez` starts a new session; `mez new` makes that intent explicit. Use
-`mez list` and `mez attach` to return to an existing session. Creating and
-attaching a primary client requires an interactive terminal.
+`mez new` always creates a session. Bare `mez` first attaches to a session
+that accepts a primary client, then creates one only when none is available.
+Use `mez list` and `mez attach` to inspect and select existing sessions.
+Creating or attaching a primary client requires an interactive terminal.
 
 ## Open the agent shell
 

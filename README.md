@@ -76,7 +76,7 @@ Starting a session also creates the default configuration when none exists:
 mez config init
 mez auth login
 cd /path/to/repository
-mez
+mez new
 ```
 
 The default interactive `mez auth login` flow opens OpenAI's browser sign-in.
