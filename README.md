@@ -111,7 +111,9 @@ policy and optional audit logging remain separate controls. Bubblewrap enforces
 configured boundaries. `host-access` runs
 local shell actions outside the sandbox and is reserved for the primary user.
 
-Review unfamiliar project overlays and `AGENTS.md` files before trusting them.
+Review unfamiliar project overlays before trusting them, and review applicable
+`AGENTS.md` files before acting on their guidance. Project instructions can
+shape workflow but cannot grant authority; overlay trust is a separate decision.
 See [Safety, trust, and security](docs/safety-and-trust/README.md) for approval,
 sandbox, project-trust, and audit guidance.
 
