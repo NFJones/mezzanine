@@ -34,8 +34,10 @@ and some MCP actions can require approval. Approval policy does not itself
 confine a permitted process; sandboxing is a separate boundary.
 
 Put repository-specific instructions in `AGENTS.md`. Project configuration
-overlays under `.mezzanine/config.toml` remain pending until explicitly trusted.
-Inspect trust with `mez sandbox trust list` before trusting an unfamiliar root.
+overlays under `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
+`.mezzanine/config.yml`, or `.mezzanine/config.json` remain pending until
+explicitly trusted. Inspect trust with `mez sandbox trust list` before trusting
+an unfamiliar root.
 
 ## Related pages
 

@@ -38,9 +38,12 @@ backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
 running binary supports are rejected instead of interpreted best-effort.
 
-Project overlays are intended for `.mezzanine/config.toml` under the project
-root. The project root is the nearest ancestor of the pane working directory
-with a `.git` directory or file; otherwise the pane working directory is used.
+Project overlays can use `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
+`.mezzanine/config.yml`, or `.mezzanine/config.json` under a project directory.
+Only one supported overlay file may exist in a directory unless explicit format
+precedence is configured. The project root is the nearest ancestor of the pane
+working directory with a `.git` directory or file; otherwise the pane working
+directory is used.
 
 Configuration is conservative:
 

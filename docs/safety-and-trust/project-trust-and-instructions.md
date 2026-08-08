@@ -30,7 +30,8 @@ truncate content.
 
 ## Trust a project overlay
 
-Project configuration under `.mezzanine/config.toml` remains pending until the
+Project configuration under `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
+`.mezzanine/config.yml`, or `.mezzanine/config.json` remains pending until the
 primary user explicitly trusts or rejects the project root. Inspect the overlay
 and applicable instructions first, then use:
 
