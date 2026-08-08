@@ -32,11 +32,14 @@ selections, names, and known pane working directories. It can contain sensitive
 titles and paths, but it does not retain credentials, pending approvals,
 terminal history, live MCP state, or pane processes.
 
-Resuming a snapshot creates fresh panes and shell processes. It cannot reconnect
-to processes that exited, and it resets previous live approvals. If a saved
-directory cannot be used, Mez falls back to the user's home directory and
-reports the recovery state. Review interrupted agent work before retrying a
-non-idempotent action.
+Use `mez snapshot resume-plan <snapshot-id>` before restoring when you need to
+inspect the proposed layout recovery. `mez snapshot resume <snapshot-id>`
+reconstructs a saved session model; add `--serve` to start it as a live
+foreground daemon. A live restore creates fresh panes and shell processes. It
+cannot reconnect to processes that exited, and it resets previous live
+approvals. If a saved directory cannot be used, Mez falls back to the user's
+home directory and reports the recovery state. Review interrupted agent work
+before retrying a non-idempotent action.
 
 ## Recover an agent conversation
 

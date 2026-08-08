@@ -113,7 +113,7 @@ entry is shown.
 | `session.reattach_behavior` | string | `"default-session"` | How bare attach/start resolves resumable sessions. |
 | `session.empty_session_behavior` | string | `"keep-open"` | What happens when the final window or pane closes. |
 | `session.restore_strategy` | string | `"live-first"` | Preference for live state versus restored state. |
-| `session.default_command` | string | rejected | Not supported in v1; use explicit pane or window commands. |
+| `session.default_command` | string | rejected | Removed in schema version 2; use explicit pane or window commands. |
 
 ### `terminal`
 
