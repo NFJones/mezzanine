@@ -82,6 +82,7 @@ pub(super) fn signal_number_from_portable_name(name: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::signal_number_from_portable_name;
+    use rustix::process::Signal;
 
     /// Verifies resolves standard signal names.
     ///
@@ -90,12 +91,30 @@ mod tests {
     /// implementation detail.
     #[test]
     fn resolves_standard_signal_names() {
-        assert_eq!(signal_number_from_portable_name("sigint"), Some(2));
-        assert_eq!(signal_number_from_portable_name("sigquit"), Some(3));
-        assert_eq!(signal_number_from_portable_name("sigkill"), Some(9));
-        assert_eq!(signal_number_from_portable_name("sigsegv"), Some(11));
-        assert_eq!(signal_number_from_portable_name("sigpipe"), Some(13));
-        assert_eq!(signal_number_from_portable_name("sigterm"), Some(15));
+        assert_eq!(
+            signal_number_from_portable_name("sigint"),
+            Some(Signal::INT.as_raw())
+        );
+        assert_eq!(
+            signal_number_from_portable_name("sigquit"),
+            Some(Signal::QUIT.as_raw())
+        );
+        assert_eq!(
+            signal_number_from_portable_name("sigkill"),
+            Some(Signal::KILL.as_raw())
+        );
+        assert_eq!(
+            signal_number_from_portable_name("sigsegv"),
+            Some(Signal::SEGV.as_raw())
+        );
+        assert_eq!(
+            signal_number_from_portable_name("sigpipe"),
+            Some(Signal::PIPE.as_raw())
+        );
+        assert_eq!(
+            signal_number_from_portable_name("sigterm"),
+            Some(Signal::TERM.as_raw())
+        );
     }
 
     /// Verifies resolves descriptive signal names.
@@ -105,13 +124,22 @@ mod tests {
     /// implementation detail.
     #[test]
     fn resolves_descriptive_signal_names() {
-        assert_eq!(signal_number_from_portable_name("interrupt"), Some(2));
-        assert_eq!(signal_number_from_portable_name("killed"), Some(9));
+        assert_eq!(
+            signal_number_from_portable_name("interrupt"),
+            Some(Signal::INT.as_raw())
+        );
+        assert_eq!(
+            signal_number_from_portable_name("killed"),
+            Some(Signal::KILL.as_raw())
+        );
         assert_eq!(
             signal_number_from_portable_name("segmentation fault"),
-            Some(11)
+            Some(Signal::SEGV.as_raw())
         );
-        assert_eq!(signal_number_from_portable_name("bus error"), Some(7));
+        assert_eq!(
+            signal_number_from_portable_name("bus error"),
+            Some(Signal::BUS.as_raw())
+        );
     }
 
     /// Verifies returns none for unrecognized signals.

@@ -19,6 +19,8 @@ fn pane_path_resolution_observes_symlinks_and_create_targets() {
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
     symlink(&outside, project.join("link")).unwrap();
+    let project = std::fs::canonicalize(project).unwrap();
+    let outside = std::fs::canonicalize(outside).unwrap();
 
     let request = PanePathResolutionRequest::new(
         vec![".".to_string()],
@@ -88,6 +90,7 @@ fn pane_path_resolution_returns_restrictive_partial_authority() {
     let root = test_temp_dir("path-resolution-partial");
     let existing = root.join("existing");
     std::fs::create_dir_all(&existing).unwrap();
+    let canonical_existing = std::fs::canonicalize(&existing).unwrap();
     let request = PanePathResolutionRequest::new(
         vec![
             existing.to_string_lossy().into_owned(),
@@ -119,7 +122,7 @@ fn pane_path_resolution_returns_restrictive_partial_authority() {
         outcome
             .scopes
             .read_scopes
-            .contains(&existing.to_string_lossy().into_owned())
+            .contains(&canonical_existing.to_string_lossy().into_owned())
     );
     assert!(
         outcome

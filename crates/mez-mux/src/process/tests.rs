@@ -187,9 +187,10 @@ fn spawns_explicit_command_from_start_directory() {
 
     let status = process.wait().unwrap();
     let actual = fs::read_to_string(&output).unwrap();
+    let canonical_cwd = fs::canonicalize(&cwd).unwrap();
 
     assert!(status.success());
-    assert_eq!(actual.trim_end(), cwd.to_string_lossy());
+    assert_eq!(actual.trim_end(), canonical_cwd.to_string_lossy());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -365,9 +366,22 @@ fn pane_process_manager_writes_input_to_pane_pty() {
 
     manager.write_pane_input(pane_id, b"hello\n").unwrap();
     manager.write_pane_input(pane_id, b"\x04").unwrap();
-    let status = manager.wait_and_remove(pane_id).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        let activity_sequence = manager.output_activity_sequence(pane_id);
+        let _ = manager.read_available_output(4096).unwrap();
+        if let Some(exited) = manager.poll_exited().unwrap().into_iter().next() {
+            break exited.status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pane process did not exit after receiving terminal EOF"
+        );
+        wait_for_manager_output_activity(&manager, pane_id, activity_sequence);
+    };
 
     assert!(status.success());
+    manager.remove_exited(pane_id).unwrap();
 }
 
 /// Verifies pane process manager polls exits without forgetting process.
