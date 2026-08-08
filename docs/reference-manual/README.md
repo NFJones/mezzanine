@@ -17,6 +17,7 @@ This section owns the following reference material:
 
 - [CLI reference](cli.md)
 - [Key bindings](key-bindings.md)
+- [Terminal commands](terminal-commands.md)
 - [Agent actions](agent-actions.md)
 - [Terminal compatibility](terminal-compatibility.md)
 - [Protocol reference](protocols/README.md): implementer summaries for
@@ -33,4 +34,6 @@ This section owns the following reference material:
 
 Choose [CLI reference](cli.md) for scripting and session administration,
 [Key bindings](key-bindings.md) for interactive controls, or [Protocol
-reference](protocols/README.md) to build an integration.
+reference](protocols/README.md) to build an integration. Use [Terminal
+commands](terminal-commands.md) for commands entered through the in-session
+command prompt.

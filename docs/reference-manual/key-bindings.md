@@ -56,6 +56,7 @@ or outer environment deliberately.
 ## Related pages
 
 - [Terminal input, copy, and history](../using-mezzanine/terminal-input-copy-and-history.md)
+- [Terminal commands](terminal-commands.md)
 - [Agent shell](../using-mezzanine/agent-shell.md)
 - [Configuration reference](../configuration/reference.md)
 

@@ -48,6 +48,7 @@ search. Exact behavior and all default bindings belong to the manual reference.
 ## Related pages
 
 - [Sessions and panes](sessions-and-panes.md)
+- [Terminal commands](../reference-manual/terminal-commands.md)
 - [Agent shell](agent-shell.md)
 - [Manual reference](../reference-manual/README.md)
 
