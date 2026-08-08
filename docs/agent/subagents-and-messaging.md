@@ -13,10 +13,10 @@ and divide work into independently reviewable tasks.
 ## Delegate deliberately
 
 Subagents are policy-authorized pane agents with their own shell, conversation,
-and stable identity. Mez creates them in dedicated windows in the controlling
-pane's window group without moving the primary user's focus. The parent receives
-status and final results through local messaging and remains responsible for
-integrating the outcome.
+and stable identity. Mez places them in dedicated subagent panes within the
+controlling pane's window group, creating or reusing a subagent window without
+moving the primary user's focus. The parent receives status and final results
+through local messaging and remains responsible for integrating the outcome.
 
 Use the `explorer` role for read-heavy investigation and `worker` for bounded
 implementation. A cooperation mode constrains the intended work: `explore-only`
