@@ -7,6 +7,12 @@ pages describe wire contracts, authorization boundaries, and lifecycle rules.
 [SPEC.md](../../../SPEC.md) remains the normative compatibility contract when
 this manual and the specification differ.
 
+## Prerequisites
+
+Use the task-oriented manual chapters before implementing an integration. Know
+which local service the client needs to reach, and treat the capabilities
+advertised by that live service as authoritative over this summary.
+
 ## Protocol map
 
 | Protocol | Audience | Responsibility |
