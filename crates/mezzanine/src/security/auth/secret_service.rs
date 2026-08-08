@@ -75,6 +75,7 @@ impl NativeSecretServiceCredentialStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn reference_for_provider(&self, provider: &str) -> Result<String> {
         validate_safe_name(provider, "provider name is not credential-store safe")?;
         Ok(format!(

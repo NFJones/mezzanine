@@ -19,8 +19,6 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rustix::fd::BorrowedFd;
-use rustix::net::sockopt::socket_peercred;
 use rustix::process::geteuid;
 use serde_json::Value;
 
@@ -305,6 +303,8 @@ mod lifecycle;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod pane_io;
+/// Exposes operating-system Unix peer credential lookup.
+mod peer_credentials;
 mod persistence;
 pub(crate) use persistence::RuntimePersistenceComponent;
 /// Exposes the processes module boundary.
@@ -528,6 +528,8 @@ use service_state::{
 pub(crate) use service_state::{RuntimeMcpTransport, RuntimeMcpTransportSet};
 #[cfg(test)]
 use sockets::effective_uid;
+#[cfg(test)]
+use sockets::unix_peer_uid;
 use sockets::{ensure_absolute, ensure_no_mez_separator};
 
 pub(crate) use service_state::{

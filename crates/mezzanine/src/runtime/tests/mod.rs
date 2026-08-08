@@ -28,7 +28,7 @@ use super::{
     pane_environment_with_term, prune_stale_socket_files_in_directory,
     runtime_apply_persisted_config_mutation_batch, runtime_cooperation_mode,
     runtime_hook_event_for_lifecycle, runtime_hook_event_name, runtime_marker_for_action,
-    socket_path_for_name,
+    socket_path_for_name, unix_peer_uid,
 };
 use crate::MezError;
 use crate::host::terminal::{

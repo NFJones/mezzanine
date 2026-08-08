@@ -6,12 +6,13 @@
 
 #[cfg(test)]
 use super::DEFAULT_PANE_TERM;
+use super::peer_credentials::peer_effective_uid;
 use super::{
-    AsRawFd, AuxiliarySocketKind, BorrowedFd, Component, DirBuilder, DirBuilderExt, FileTypeExt,
+    AsRawFd, AuxiliarySocketKind, Component, DirBuilder, DirBuilderExt, FileTypeExt,
     MEZ_ENV_FIELD_SEPARATOR, MetadataExt, MezError, OsString, PaneEnvironment, PaneId, Path,
     PathBuf, PermissionsExt, RawFd, Result, RuntimeEnv, RuntimeLifecycleState,
     RuntimeRegistryUpdatePlan, SessionId, SessionRegistry, SocketDirectory, SocketDirectorySource,
-    UnixListener, UnixStream, WindowId, fs, geteuid, socket_peercred,
+    UnixListener, UnixStream, WindowId, fs, geteuid,
 };
 #[cfg(test)]
 use super::{
@@ -639,12 +640,7 @@ pub(super) fn set_private_socket_permissions(path: &Path) -> Result<()> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn unix_peer_uid(raw_fd: RawFd) -> Result<u32> {
-    // SAFETY: callers pass a live Unix-stream descriptor and this borrow is
-    // consumed immediately by the rustix socket option call.
-    let borrowed_fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
-    socket_peercred(borrowed_fd)
-        .map(|credentials| credentials.uid.as_raw())
-        .map_err(|error| std::io::Error::from(error).into())
+    peer_effective_uid(raw_fd).map_err(Into::into)
 }
 
 /// Runs the effective uid operation for this subsystem.

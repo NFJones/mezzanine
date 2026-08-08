@@ -1,5 +1,7 @@
 //! Runtime tests for session sockets behavior.
 
+use std::os::fd::AsRawFd;
+
 use super::*;
 
 /// Verifies default socket directory prefers mez tmpdir.
@@ -146,6 +148,21 @@ fn unix_peer_authorization_accepts_same_user_stream() {
     let (_client, server) = UnixStream::pair().unwrap();
 
     authorize_unix_peer(&server, effective_uid()).unwrap();
+}
+
+/// Verifies native peer credential lookup reports the connected process UID.
+///
+/// Linux and Apple-family hosts expose peer identity through different socket
+/// APIs. Exercising the production descriptor adapter with a connected Unix
+/// stream protects both implementations from target-specific compilation or
+/// credential-conversion regressions.
+#[test]
+fn unix_peer_uid_reports_effective_uid_for_connected_stream() {
+    let (_client, server) = UnixStream::pair().unwrap();
+
+    let peer_uid = unix_peer_uid(server.as_raw_fd()).unwrap();
+
+    assert_eq!(peer_uid, effective_uid());
 }
 
 /// Verifies stale socket cleanup removes only unserved runtime sockets.
