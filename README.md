@@ -68,7 +68,9 @@ Install the product package:
 cargo install --path crates/mezzanine --locked
 ```
 
-Create configuration, authenticate, and start in a working directory:
+Optionally create the baseline configuration, authenticate, and start in a
+working directory. Starting a session also creates the default configuration
+when none exists:
 
 ```sh
 mez config init
@@ -104,8 +106,9 @@ scrollback, or other panes.
 
 Approval policy decides whether Mezzanine permits an action. OS confinement
 controls what an already-permitted local shell process can access.
-`policy-only` gates and audits actions without filesystem or shell-network
-confinement; Bubblewrap enforces configured boundaries. `host-access` runs
+`policy-only` provides no filesystem or shell-network confinement; approval
+policy and optional audit logging remain separate controls. Bubblewrap enforces
+configured boundaries. `host-access` runs
 local shell actions outside the sandbox and is reserved for the primary user.
 
 Review unfamiliar project overlays and `AGENTS.md` files before trusting them.

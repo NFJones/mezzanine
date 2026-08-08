@@ -14,10 +14,11 @@ Read [Approvals and review](../safety-and-trust/approvals-and-review.md) and
 
 The `permissions` table owns approval policy, command rules, destructive-action
 policy, network policy, sandbox backend, scopes, and the explicit bypass mode.
-`policy-only` gates and audits actions but does not provide operating-system
-confinement. `bubblewrap` enforces its configured filesystem and network
-boundary for eligible local shell work. `host-access` is a primary-user-only
-approval mode that runs local shell work outside Bubblewrap.
+`policy-only` provides no operating-system confinement; approval policy and
+optional audit logging remain separate controls. `bubblewrap` enforces its
+configured filesystem and network boundary for eligible local shell work.
+`host-access` is a primary-user-only approval mode that runs local shell work
+outside Bubblewrap.
 
 Read scopes are maximum read authority; write scopes also imply reads. Network
 policy controls connected versus isolated Bubblewrap profiles, not destination

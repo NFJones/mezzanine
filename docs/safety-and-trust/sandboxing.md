@@ -12,8 +12,9 @@ replace the decision to approve an action.
 
 ## Select a backend
 
-`permissions.sandbox = "policy-only"` classifies and audits actions but does
-not confine their filesystem or shell-network access. `bubblewrap` launches
+`permissions.sandbox = "policy-only"` does not confine filesystem or
+shell-network access. Approval policy and optional audit logging remain
+separate controls. `bubblewrap` launches
 eligible local shell workloads in a constrained Linux namespace. It requires a
 configured `bwrap` executable available in the active pane environment; Mez
 does not install a privileged helper.
