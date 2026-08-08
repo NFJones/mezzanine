@@ -67,10 +67,10 @@ Configuration is conservative:
 - `session.default_command` is removed by the v1-to-v2 primary-config
   migration and rejected if it still appears in a current-schema layer; pass
   pane commands explicitly when creating windows or panes.
-- `shell.path`, `shell.executable`, and `shell.command` are removed by the
-  v1-to-v2 primary-config migration and rejected if they still appear in a
-  current-schema layer; the shell executable is resolved from `$SHELL` or
-  `/bin/sh`.
+- The `shell`, `layout`, `message_protocol`, `control`, and `snapshots` tables
+  are removed by the v15-to-v16 primary-config migration and rejected in a
+  current-schema layer. Their behavior is runtime-owned; the pane shell is
+  resolved from `$SHELL` or `/bin/sh`.
 - `agents.implementation_pressure_after_shell_actions` is removed by the
   v19-to-v20 primary-config migration and rejected in current-schema layers;
   model-facing action-pressure prompts are no longer part of runtime policy.
@@ -97,9 +97,7 @@ entry is shown.
 | `version` | integer | `54` | Config schema version. Do not change this. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
-| `shell` | table | see below | Shell mode and environment policy. |
 | `keys` | table | see below | Prefix and direct key bindings. |
-| `layout` | table | see below | Pane layout policy. |
 | `frames` | table | see below | Window and pane frame templates. |
 | `theme` | table | see below | Active theme aliases and colors. |
 | `themes` | map | `{}` | User-defined named themes. |
@@ -113,15 +111,16 @@ entry is shown.
 | `providers` | map | `providers.openai` | Provider connection profiles. |
 | `subagents` | map | `{}` | Named subagent profiles. |
 | `personalities` | map | `{}` | User-defined agent personalities. |
-| `message_protocol` | table | see below | Local agent message passing. |
-| `control` | table | see below | Control endpoint settings. |
 | `mcp_servers` | map | `{}` | MCP server definitions. |
 | `auth` | table | see below | Auth metadata paths and profile names. |
 | `instructions` | table | see below | Project instruction discovery. |
 | `hooks` | map | `{}` | Lifecycle and command hooks. |
-| `snapshots` | table | see below | Snapshot persistence policy. |
 | `audit` | table | see below | Security audit logging. |
 | `extensions` | map | `{}` | Implementation-specific extension data. |
+
+Shell discovery, pane layout, local messaging, control-endpoint transport, and
+snapshot storage are runtime behavior rather than configurable schema tables.
+Use the relevant task and reference pages to inspect those live facilities.
 
 ### `runtime`
 
@@ -162,23 +161,6 @@ The historical `terminal.nested_muxxer` spelling is accepted as a version 1
 migration alias and is rewritten to `terminal.nested_multiplexer` before layer
 composition.
 
-### `shell`
-
-| Field | Type | Default declaration | Description |
-| --- | --- | --- | --- |
-| `shell.login` | boolean | `false` | Start pane shells as login shells when supported. |
-| `shell.interactive` | boolean | `true` | Start pane shells interactively. |
-| `shell.integration` | boolean | `true` | Enable passive shell integration when possible. |
-| `shell.integration_mode` | string | `"passive"` | Shell integration strategy. |
-| `shell.default_working_directory` | string | `"."` | Initial pane working directory. |
-| `shell.env` | map | `{}` | Extra environment values for pane shells. |
-| `shell.tool_discovery` | boolean | `true` | Discover shell tools for agent context. |
-| `shell.tool_cache` | boolean | `true` | Cache discovered tools by environment signature. |
-| `shell.fallback_behavior` | string | `"bin-sh"` | Fallback behavior when `$SHELL` is unusable. |
-| `shell.path` | string | rejected | Shell executable override is not allowed. |
-| `shell.executable` | string | rejected | Shell executable override is not allowed. |
-| `shell.command` | string | rejected | Default shell command override is not allowed. |
-
 ### `keys`
 
 The prefix key table remains available even when direct bindings are omitted.
@@ -200,16 +182,6 @@ The prefix key table remains available even when direct bindings are omitted.
 | `keys.focus_previous_group` | string | omitted | Optional direct previous-group key. Prefix default is `Ctrl+A (`. |
 | `keys.focus_next_group` | string | omitted | Optional direct next-group key. Prefix default is `Ctrl+A )`. |
 | `keys.command_bindings` | map | `{}` | User-defined key to Mezzanine command bindings. |
-
-### `layout`
-
-| Field | Type | Default declaration | Description |
-| --- | --- | --- | --- |
-| `layout.default` | string | `"tiled"` | Default layout policy. |
-| `layout.resize_policy` | string | `"relative"` | How layout ratios respond to terminal resize. |
-| `layout.close_policy` | string | `"rebalance"` | How remaining panes fill space after close. |
-| `layout.min_pane_columns` | integer | `8` | Minimum pane width. |
-| `layout.min_pane_rows` | integer | `3` | Minimum pane height. |
 
 ### `frames.window`
 
@@ -982,27 +954,6 @@ unsandboxed retry, and the grant is consumed exactly once.
 | `personalities.<name>.routing_enabled` | boolean | omitted | Enable routing for the profile. |
 | `personalities.<name>.routing` | boolean | omitted | Compatibility routing field. |
 
-### `message_protocol`
-
-| Field | Type | Default declaration | Description |
-| --- | --- | --- | --- |
-| `message_protocol.enabled` | boolean | `true` | Enable local agent message protocol. |
-| `message_protocol.endpoint` | string | `"local"` | Endpoint mode. |
-| `message_protocol.retention_messages` | integer | `1000` | Maximum retained local messages. |
-| `message_protocol.retention_bytes` | integer | `1048576` | Maximum retained message bytes. |
-| `message_protocol.allow_remote_bridges` | boolean | `false` | Permit configured remote bridges. |
-
-### `control`
-
-| Field | Type | Default declaration | Description |
-| --- | --- | --- | --- |
-| `control.endpoint` | string | `"unix"` | Control endpoint kind. |
-| `control.socket_path` | string | `""` | Explicit Unix socket path; empty uses runtime default. |
-| `control.tcp_bind` | string | `"127.0.0.1:0"` | TCP bind address when TCP is enabled. |
-| `control.tcp_enabled` | boolean | `false` | Enable TCP control endpoint. |
-| `control.auth_token_file` | string | `""` | Auth token file for control access. |
-| `control.observer_policy` | string | `"primary-approval"` | Observer request approval policy. |
-
 ### `mcp_servers.<name>`
 
 | Field | Type | Default declaration | Description |
@@ -1112,17 +1063,6 @@ Hook events include `session_start`, `session_stop`, `client_attach`,
 `permission_request`, `permission_decision`, `pre_mcp_tool_use`,
 `post_mcp_tool_use`, `snapshot_create`, and `snapshot_resume`.
 
-### `snapshots`
-
-| Field | Type | Default declaration | Description |
-| --- | --- | --- | --- |
-| `snapshots.enabled` | boolean | `true` | Enable snapshot support. |
-| `snapshots.path` | string | `"snapshots"` | Snapshot storage path under config root. |
-| `snapshots.on_detach` | boolean | `false` | Snapshot when the primary detaches. |
-| `snapshots.on_interval_seconds` | integer | `0` | Periodic snapshot interval; 0 disables. |
-| `snapshots.on_agent_turn` | boolean | `false` | Snapshot around agent turns. |
-| `snapshots.retention_count` | integer | `10` | Number of snapshots to retain. |
-
 ### `audit`
 
 | Field | Type | Default declaration | Description |
@@ -1131,7 +1071,6 @@ Hook events include `session_start`, `session_stop`, `client_attach`,
 | `audit.path` | string | `"audit.jsonl"` | Audit log path under config root. |
 | `audit.format` | string | `"jsonl"` | Audit log format. |
 | `audit.retention_days` | integer | `30` | Audit retention period. |
-| `audit.redact_secrets` | boolean | `true` | Redact detected secrets in audit records. |
 | `audit.hash_chain` | boolean | `false` | Enable hash chaining of audit records. |
 | `audit.required` | boolean | `false` | Require audit logging for sensitive operations. |
 
