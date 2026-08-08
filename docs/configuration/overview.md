@@ -39,8 +39,9 @@ edit; invalid configuration is rejected rather than partially applied.
 Run `mez config path` before a mutation when several supported formats might
 exist or when you need to confirm the target. A default mutation updates the
 selected primary file; if none exists, it creates the default `config.toml`.
-Use `--file PATH` only for an existing user configuration file under the
-private configuration root. For example:
+For user-scoped mutations, `--file PATH` selects an existing file under the
+private configuration root. With `--scope project`, it instead selects the
+target overlay within a trusted project. For example:
 
 ```sh
 mez config set terminal.emoji_width narrow
