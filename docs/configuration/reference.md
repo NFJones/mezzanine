@@ -94,6 +94,7 @@ entry is shown.
 | `themes` | map | `{}` | User-defined named themes. |
 | `history` | table | see below | Per-pane history buffering. |
 | `memory` | table | see below | Persistent memory storage, retrieval, injection, and retention defaults. |
+| `issues` | table | see below | Local project issue tracking storage and availability. |
 | `agents` | table | see below | Agent defaults and limits. |
 | `model_profiles` | map | default profiles shown below | Model profile definitions. |
 | `model_presets` | map | built-in provider presets shown below | Named default and automatic-sizing model-profile selections. |

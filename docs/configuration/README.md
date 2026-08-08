@@ -30,4 +30,5 @@ This section owns the following configuration guidance:
 ## Next step
 
 Start with [Configuration overview](overview.md), then use the focused chapters
-or [Configuration reference](reference.md) for an exact field.
+or [Configuration reference](reference.md) for an exact field, including the
+local memory and issue-store settings.
