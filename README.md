@@ -69,16 +69,8 @@ Contributing in this repository? See [Contributor Notes](#contributor-notes).
 - [Provider Support](#provider-support)
 - [Agent Model and Safety](#agent-model-and-safety)
 - [Advanced Tasks](#advanced-tasks)
-  - [Debug a failing test in the current repository](#debug-a-failing-test-in-the-current-repository)
-  - [Delegate a bounded investigation to subagents](#delegate-a-bounded-investigation-to-subagents)
-  - [See approval and policy boundaries in practice](#see-approval-and-policy-boundaries-in-practice)
-  - [Review a project overlay before trusting it](#review-a-project-overlay-before-trusting-it)
 - [What Persists Across the Session](#what-persists-across-the-session)
 - [CLI Cheat Sheet](#cli-cheat-sheet)
-  - [Common global flags](#common-global-flags)
-  - [Session commands](#session-commands)
-  - [Configuration and trust commands](#configuration-and-trust-commands)
-  - [Auth and integration commands](#auth-and-integration-commands)
 - [Configuration Quick Reference](#configuration-quick-reference)
 - [Documentation Guide](#documentation-guide)
 - [FAQ](#faq)
@@ -250,9 +242,8 @@ full-screen alternate-screen pane copies the visible pane text without adding it
 to scrollback or default agent context.
 
 Terminal compatibility is tracked as a bounded implemented subset rather than a
-blanket xterm claim. See the [Terminal Compatibility Matrix](docs/terminal-compatibility-matrix.md)
-for the current capability coverage, known unsupported behavior, and full-screen
-TUI fixture backlog.
+blanket xterm claim. Consult [SPEC.md](SPEC.md) for the normative compatibility
+requirements.
 
 The Mezzanine command prompt accepts commands such as `new-window`,
 `split-window`, `select-pane`, `rename-pane`, `synchronize-panes`, `set-theme`,
@@ -307,49 +298,10 @@ theme. Unsupported, malformed, oversized, overwide, or excess diagrams remain
 literal fenced source. Copy and persisted transcript content always retain the
 original Markdown rather than rendered diagram glyphs or terminal controls.
 
-Useful slash commands include:
-
-| Command        | Purpose                                               |
-| -------------- | ----------------------------------------------------- |
-| `/help`        | Show agent shell help.                                |
-| `/status [--extended]` | Show the current pane agent session, pane-lifetime token usage, and mez-session totals; `--extended` also queries durable 7-, 30-, 60-, and 90-day usage. |
-| `/model`       | Inspect or change model selection.                    |
-| `/thinking`    | Toggle provider thinking mode when supported.         |
-| `/approval`    | Inspect or change pane-subtree approval mode; `inherit` clears the pane override. |
-| `/permissions` | Inspect pane-subtree preset/approval fields and session-scoped rules/bypass. |
-| `/directive`   | Show or set a session-scoped developer addendum.      |
-| `/list-skills` | Show the skills available to the active pane.         |
-| `/sync-builtin-skills` | Resync managed built-in skill copies in the user config root. |
-| `/list-macros` | Show the agent macros available to the active pane.   |
-| `/list-mcp`    | List configured MCP tools.                            |
-| `/list-personalities` | Browse configured personalities and select one for the active pane. |
-| `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions; persistent memory is enabled by default. |
-| `/sandbox`     | Inspect or change sandbox state for the current pane; use `--global` for persisted enable/disable changes, or the nested `trust` command. |
-| `/show-context` | Browse the current pane conversation in transcript order, open individual entries, and delete the selected entry with `d`. |
-| `/show-issues` | Browse open project issues, filter issue records (including `--kind defect|task`), open details, delete with `d` when no open issue depends on the selection, and save the rendered Markdown view. |
-| `/show-memories` | Browse project-scoped persistent memories, filter records including `--kind`, open details, delete the selection with `d`, and save the rendered Markdown view. |
-| `/remember`    | Generate durable memories from context or a statement while opportunistically pruning expired persistent records. |
-| `/log-level`   | Show or set `normal`, `verbose`, `debug`, or `trace`. |
-| `/stop`        | Interrupt the active turn.                            |
-| `/new`         | Start a fresh conversation for the pane.              |
-| `/resume`      | Browse saved conversations, inspect a full transcript with `i`, then resume the selected session. |
-| `/compact`     | Queue model-backed conversation compaction while opportunistically pruning expired persistent records. |
-| `/exit`        | Hide the agent shell.                                 |
-
-Normal logging shows prompts, assistant text, concise progress, approvals,
-errors, command summaries, and final responses. Higher log levels are mainly
-for debugging.
-
-Mezzanine has four operator-facing command surfaces:
-
-- terminal commands entered through the Mezzanine command prompt,
-- pane-local slash commands entered in the agent shell,
-- explicit skills invoked with `$<skill-name> [additional context]`, and
-- harness-sequenced, model-judged agent macros invoked with `#<macro-name> [additional context]`.
-
-See [docs/agent-skills-and-commands.md](docs/agent-skills-and-commands.md) for
-the command-surface breakdown, explicit skill and macro syntax, and built-in
-skill usage.
+Common slash commands are `/help`, `/model`, `/approval`, `/new`, and
+`/resume`. Use `/status` to inspect the active pane's session and token usage.
+For the complete command, skill, and macro reference, see
+[Agent skills and commands](docs/agent-skills-and-commands.md).
 
 ### Project context
 
@@ -360,32 +312,11 @@ skill usage.
 - Inspect trust state with `mez sandbox trust list`; trust, reject, or revoke
   project roots through `mez sandbox trust ...`.
 ## Provider Support
-Mezzanine currently ships with native support for a small provider set. The table below summarizes the
-currently supported providers and the provider families that should eventually
-be supported.
+Mezzanine natively supports OpenAI, OpenAI-compatible APIs, DeepSeek, and
+Anthropic. Provider capabilities vary by API; select and authenticate a
+provider with `mez auth login` and inspect the active model with `/model`.
 
-Abstract feature labels in the table mean:
-- **Streaming**: incremental token or event streaming during a turn.
-- **Tools**: provider support for Mezzanine MAAP tool/function calls.
-- **Structured output**: schema-shaped or otherwise strongly structured model
-  responses.
-- **Reasoning controls**: explicit thinking or reasoning-effort controls.
-- **Catalog refresh**: explicit runtime model-list discovery or refresh.
-
-| Provider / family   | Status      | API shape                                                                    | Streaming | Tools | Structured output | Reasoning controls | Catalog refresh |
-| ------------------- | ----------- | ---------------------------------------------------------------------------- | --------- | ----- | ----------------- | ------------------ | --------------- |
-| OpenAI              | Supported   | Native Responses API                                                         | Yes       | Yes   | Yes               | Partial            | Yes             |
-| Generic OpenAI API  | Supported   | OpenAI-compatible Chat Completions API                                        | No        | Yes   | Partial           | No                 | Partial         |
-| DeepSeek            | Supported   | Native Chat Completions API                                                  | Partial   | Yes   | Partial           | Yes                | Partial         |
-| Anthropic           | Supported   | Native Messages API                                                          | Yes       | Yes   | No                | Yes                | No              |
-| Gemini direct API   | Unsupported | OpenAI-compatible first, native later if needed                              |           |       |                   |                    |                 |
-| Mistral             | Unsupported | OpenAI-compatible or native API                                              |           |       |                   |                    |                 |
-| Perplexity          | Unsupported | Native API or compatibility path to be determined                            |           |       |                   |                    |                 |
-| xAI                 | Unsupported | Responses-compatible hosted API                                              |           |       |                   |                    |                 |
-| Bedrock / Vertex AI | Unsupported | Cloud deployment backends over multiple provider families                    |           |       |                   |                    |                 |
-| Cohere              | Unsupported | Native or compatibility path to be determined                                |           |       |                   |                    |                 |
-
-Current support reflects behavior implemented in the repository today.
+For the current compatibility contract, see [SPEC.md](SPEC.md).
 
 ## Agent Model and Safety
 
@@ -398,150 +329,27 @@ Current support reflects behavior implemented in the repository today.
   conversation context, and explicit action results.
 - Shell, network, destructive, configuration, and some MCP actions may require
   approval depending on the active runtime mode.
-- `full-access` skips fresh whitelist prompts but still uses the configured
-  sandbox. `host-access` skips prompts and executes local shell actions on the
-  host outside that sandbox; it is primary-user-only, remains subject to hooks
-  and explicit denies, and is distinct from a one-shot approved sandbox retry.
-- `policy-only` is an approval and audit backend, not OS confinement. Its path
-  and shell-network classifications can trigger `ask` or `auto-allow` gates,
-  but they do not prevent a running host process from accessing resources.
-- See [Sandbox mechanism](docs/sandbox-mechanism.md) for the Bubblewrap launch
-  boundary, authority resolution, network profiles, managed homes, and
-  fail-closed fallback behavior.
-- Bubblewrap subagents inherit their parent's effective filesystem authority;
-  omitted scopes inherit, explicit scopes may only narrow, and explicit empty
-  scope arrays remain empty. Outside Bubblewrap, subagent scopes are retained
-  as coordination and approval metadata rather than hard path restrictions.
-- Bubblewrap is the shell confinement boundary: mounts enforce maximum read and
-  write authority. A `network_policy` of `allow` selects an explicitly
-  connected launch profile for every shell action; `deny` selects an isolated
-  profile, while `prompt` connects only authorized network actions. Brokered
-  `web_search`, `fetch_url`, and MCP actions use product-owned transports and
-  remain controller-gated.
-- `/permissions` reports whether the active pane's effective Bubblewrap scopes
-  came from explicit configuration, a trusted project, or no authority. It also
-  reports stable restriction identifiers for the synthetic home, minimal PATH,
-  enforced shell network policy, authority-only mounts, and hidden host
-  credentials.
-- Permission preset and approval-policy overrides apply to the issuing pane and
-  its existing and future subagents. The nearest override wins independently
-  for each field; unrelated root panes remain isolated. `/approval inherit` and
-  `/permissions preset clear` remove explicit pane fields and resume dynamic
-  ancestor or session-default inheritance. Command rules and dangerous approval
-  bypass retain their separately reported session, project, or global scope.
-- `mez sandbox status [PATH] [--verbose]` reports configured and effective
-  sandbox state, project discovery and trust provenance, local executable and
-  managed-home readiness, pane-specific probe freshness, and stable
-  diagnostics. It is strictly read-only: it does not migrate configuration,
-  mutate trust, create managed homes, or populate capability-probe caches.
-- `mez sandbox plan`, `enable`, `preset apply`, and `disable` provide
-  direct-user guided setup, while `mez sandbox trust ...` manages project
-  trust records. Plans and
-  `--dry-run` never write; guided setup mutations require confirmation and noninteractive
-  use requires `--yes`. Persisted project-trust changes become visible to
-  already-running services at their next trust-sensitive configuration or
-  agent operation. Code-owned presets provide safe, automatic, read-only, and
-  off modes without exposing these policy changes to agents.
-- `mez sandbox profile export` emits a deterministic version-2 JSON recipe
-  containing exactly a code-owned preset and authority strategy. `profile
-  import FILE` previews against an independently resolved local project and
-  requires `--yes`; it rejects version-1, toolchain-bearing, and other unknown
-  fields. Recipes never carry host paths, trust, credentials, execution
-  controls, arbitrary mounts, or provider state.
-- Trusted-project Bubblewrap runs reuse a private Mezzanine-managed home with
-  persistent XDG cache, config, data, and state directories. Homes are isolated
-  by project and sandbox profile, support overlapping same-project workloads,
-  never copy the real user home, and are removed when project trust is revoked.
-  Sandboxed launches use the active pane shell's native UID, primary GID, and
-  inherited supplementary credentials. The primary-user-only
-  `permissions.bubblewrap.group_whitelist` list names the pane groups that
-  Mezzanine attempts to map into synthetic identity records; it does not
-  create, replace, or filter kernel credentials. Names unavailable in the
-  active pane are omitted with an `agent warning:` and the sandbox continues
-  with reduced access.
-  Empty means no supplementary names are projected, while ambient pane groups
-  may remain inherited. Reconnect or relog a stale shell when the omitted group
-  is needed on that pane. A group credential does not mount a corresponding
-  socket, device, or path: filesystem policy must authorize that separately.
-  Unprivileged user namespaces may display an unmapped configured GID as the
-  overflow GID even though its kernel credential remains active.
-- `permissions.bubblewrap.env_whitelist` selects environment variable names to
-  read from the active pane process, including remote panes. It defaults to
-  `["PATH"]` for schema compatibility. When successfully resolved, a
-  whitelisted `PATH` is forwarded unchanged for command lookup; otherwise the
-  sandbox falls back to `/usr/bin:/bin`. Set it explicitly to `[]` when no
-  optional pane variables are needed.
-  Each unavailable or unsafe value is omitted with a redacted warning while
-  Bubblewrap continues with reduced environment data. Values never appear in
-  status or logs and cannot override Mez-owned HOME, XDG, locale, identity,
-  shell, or Git isolation variables. Internal semantic `apply_patch`
-  phases intentionally use the fixed sandbox environment without resolving or
-  forwarding these optional pane values.
-  `mez sandbox cache status [PATH]` reports usage without creating storage.
-  `cache clear [PATH]` and `cache prune` preview inactive candidates by default;
-  pass `--dry-run` for an explicit preview or `--yes` to delete. Active homes
-  are locked and skipped, and maintenance never follows symbolic links.
-- Bubblewrap disables host system/global Git configuration. Users may configure
-  a paired sanitized Git name and email; only those identity values are
-  projected, while credential helpers, signing keys, includes, URL rewrites,
-  hooks, and other host Git settings remain excluded.
-- External runtimes and SDKs use ordinary filesystem and environment controls.
-  Add every required installation, loader, or library root to
-  `permissions.read_scopes`; those paths are mounted read-only at their
-  canonical locations. Add only required variable names to
-  `permissions.bubblewrap.env_whitelist`; their values must already exist in
-  the active pane and remain redacted. A whitelisted `PATH` controls command
-  lookup only; scoping one SDK does not implicitly expose credentials, host
-  caches, manager state, sockets, dependency roots, or writable package state.
-- In the agent shell, `/sandbox` and `/sandbox status` report the effective
-  backend and its pane-override or global-default provenance. `/sandbox enable
-  --yes` and `/sandbox disable --yes` affect only the current pane and do not
-  persist configuration; adding `--global` changes the persisted default for
-  panes without local overrides. `/sandbox status --global` inspects only that
-  persisted default. Advanced setup, profile, and cache workflows remain
-  available only through the `mez sandbox` CLI.
-- Actions can be logged, approved, denied, or interrupted.
+- Approval policy and OS confinement are separate: `policy-only` records and
+  gates actions but does not confine host processes, while Bubblewrap enforces
+  configured filesystem and network boundaries. `host-access` runs outside the
+  sandbox and is reserved for the primary user.
+- Use `/approval`, `/permissions`, and `/sandbox` to inspect or adjust the
+  active pane's policy. Project overlays remain pending until explicitly
+  trusted.
+
+See [Sandbox mechanism](docs/sandbox-mechanism.md) for confinement, authority,
+network, managed-home, profile, cache, and environment behavior. See
+[SPEC.md](SPEC.md) for normative security and approval requirements.
 
 ## Advanced Tasks
+Ask the pane-local agent to debug a focused failure, make a small change, or
+delegate a bounded investigation. Review requested approvals in the primary
+client before allowing them. Before trusting a project overlay, review its
+`.mezzanine/config.toml` and `AGENTS.md`, then inspect pending trust with
+`mez sandbox trust list`.
 
-### Debug a failing test in the current repository
-
-1. Start or attach to a Mezzanine session in the repo.
-2. Press `Ctrl+A a` in the pane that already has the repo working directory.
-3. Ask:
-   > Run the smallest relevant test target, explain the failure, fix it with
-   > the smallest coherent patch, and rerun the check.
-
-### Delegate a bounded investigation to subagents
-
-1. Open the agent shell in the pane where the repo already lives.
-2. Ask for a split task such as:
-   > Inspect this regression and delegate targeted read-only investigation to
-   > subagents for the scheduler and runtime paths. Summarize the findings and
-   > recommend the smallest safe fix.
-3. Review any additional panes or windows created for delegated work and the
-   final parent-agent summary.
-
-### See approval and policy boundaries in practice
-
-1. Start a session in a repository and open the agent shell with `Ctrl+A a`.
-2. Ask for a task that needs execution, for example:
-   > Run the smallest relevant test command, explain the result, and propose a
-   > patch if needed.
-3. When approval is required, review the requested action in the primary
-   client before allowing or denying it.
-   Approval requests appear in the primary client before the action runs.
-
-### Review a project overlay before trusting it
-
-1. Open the project in a pane.
-2. Inspect pending trust state:
-   ```sh
-   mez sandbox trust list
-   ```
-3. Review `.mezzanine/config.toml` and `AGENTS.md`.
-4. Trust the project root only after you understand the additional authority it
-   requests.
+See [Agent skills and commands](docs/agent-skills-and-commands.md) and
+[Sandbox mechanism](docs/sandbox-mechanism.md) for detailed workflows.
 
 ## What Persists Across the Session
 
@@ -561,79 +369,15 @@ Current support reflects behavior implemented in the repository today.
 mez [--json] <command> [options]
 ```
 
-### Common global flags
+Common commands are `mez`, `mez new`, `mez list`, `mez attach`, `mez config
+init`, `mez auth login`, and `mez sandbox trust list`. Add `--json` when
+scripting, `-S <socket-path>` for an explicit control socket, or `-L <name>`
+for a named socket.
 
-| Flag               | Purpose                                            |
-| ------------------ | -------------------------------------------------- |
-| `--json`           | Machine-readable output for scripting.             |
-| `-S <socket-path>` | Target an explicit control socket.                 |
-| `-L <name>`        | Target a named socket under the runtime directory. |
-
-### Session commands
-
-| Command                    | Purpose                                                    |
-| -------------------------- | ---------------------------------------------------------- |
-| `mez`                      | Start or attach using the default session behavior.        |
-| `mez new`                  | Create a new session.                                      |
-| `mez list`                 | List resumable sessions.                                   |
-| `mez attach [SESSION_ID]`  | Attach to a resumable session.                             |
-| `mez detach`               | Detach the current or specified client.                    |
-| `mez kill-session --force` | Terminate a live session.                                  |
-| `mez serve`                | Start a foreground control daemon for a new session.       |
-| `mez snapshot ...`         | Create, list, inspect, delete, resume, and plan layout snapshots. |
-
-### Configuration and trust commands
-
-| Command                     | Purpose                                    |
-| --------------------------- | ------------------------------------------ |
-| `mez config init`           | Create a starter config.                   |
-| `mez config path`           | Show the active config path.               |
-| `mez config validate`       | Validate the current configuration.        |
-| `mez config get [PATH]`     | Show effective config values.              |
-| `mez config default`        | Print the built-in default config.         |
-| `mez config layers`         | Show loaded config layers and diagnostics. |
-| `mez config set PATH VALUE` | Persist a scalar value.                    |
-| `mez config unset PATH`     | Remove a persisted scalar value.           |
-| `mez sandbox trust list`    | Inspect project trust records.             |
-
-### Auth and integration commands
-
-| Command                    | Purpose                                                         |
-| -------------------------- | --------------------------------------------------------------- |
-| `mez auth login`           | Authenticate with the active provider.                          |
-| `mez auth login --api-key` | Authenticate with an API key for the selected provider.         |
-| `mez auth status`          | Show auth state.                                                |
-| `mez auth logout`          | Remove stored auth for the active profile.                      |
-| `mez mcp ...`              | List, add, remove, enable, disable, inspect, login, logout, and status MCP servers. |
-| `mez memory ...`           | List, search, add, inspect, edit, lifecycle, prune, delete, and export persistent memory. |
-
-`mez auth status` reports coarse authentication state that is safe to share for
-debugging by default. JSON status output intentionally omits account identifiers
-and raw credential-store references, even though local auth metadata may retain
-those non-secret but privacy-sensitive fields for provider selection and token
-refresh.
-
-Provider OAuth credentials are proactively refreshed when their persisted expiry
-metadata is within the configured refresh leeway. The default leeway is 24 hours
-(`auth.provider_refresh_leeway_seconds = 86400`); daemon startup checks this in
-the background, and each agent turn checks it before making its first provider
-API request.
-
-OpenAI ChatGPT browser/device login uses a built-in public native-app OAuth
-client id. That identifier is request metadata, not a secret, and Mezzanine does
-not store any paired OpenAI OAuth client secret in this repository or in user
-auth metadata.
-
-`mez mcp login <server-id>` authenticates streamable HTTP MCP servers with a
-browser authorization-code PKCE flow. If the server advertises OAuth dynamic
-client registration and you do not pass `--client-id`, Mezzanine registers a
-public native client for the localhost callback and stores only the returned
-non-secret client id plus token references in the auth store metadata. Raw MCP
-OAuth access and refresh tokens are never written to config files. Unless
-`--resource` is supplied, login discovers an RFC 9728 protected-resource
-identifier and otherwise falls back to the canonical configured MCP endpoint.
-The selected non-secret resource is reused for authorization, token exchange,
-persistence, diagnostics, and refresh.
+Use `mez auth status` for shareable authentication diagnostics. Credentials and
+tokens are managed by `mez auth`, not configuration files. See
+[Agent skills and commands](docs/agent-skills-and-commands.md) and
+[SPEC.md](SPEC.md) for the complete CLI, authentication, and MCP reference.
 
 ## Configuration Quick Reference
 
@@ -663,22 +407,10 @@ Credentials belong in `mez auth`, not in config files.
 
 ## Documentation Guide
 
-- [docs/README.md](docs/README.md): documentation map by audience and task.
-- [docs/agent-skills-and-commands.md](docs/agent-skills-and-commands.md):
-  terminal commands, slash commands, and explicit skills.
-- [docs/configuration-reference.md](docs/configuration-reference.md): exact
-  configuration fields, defaults, and layer behavior.
-- [docs/maap-actions-reference.md](docs/maap-actions-reference.md): currently
-  defined MAAP action objects, fields, capabilities, and runtime boundaries.
-- [docs/cache-status-diagnostics.md](docs/cache-status-diagnostics.md): cache
-  reuse accounting and immutable-context continuity diagnostics.
-- [docs/context-lifecycle-and-compaction.md](docs/context-lifecycle-and-compaction.md):
-  active-context phases, atomic action settlement, and safe compaction groups.
-- [docs/routed-loop-lifecycle.md](docs/routed-loop-lifecycle.md): route-once
-  `/loop` execution, worker pinning, fork/new isolation, terminal handoff, and
-  joined subagent or macro settlement.
-- [docs/examples/config.toml](docs/examples/config.toml): generated baseline
-  configuration example.
+Use the [documentation guide](docs/README.md) to find reference material by
+audience and task. Start with [Agent skills and commands](docs/agent-skills-and-commands.md),
+[Configuration reference](docs/configuration-reference.md), and
+[Sandbox mechanism](docs/sandbox-mechanism.md).
 
 ## FAQ
 
@@ -699,34 +431,25 @@ secret material in config files.
 
 ### Can I configure a different shell executable?
 
-No. Mezzanine resolves the shell from `$SHELL` when it is absolute and
-executable, otherwise from `/bin/sh`. The shell executable, mode, and startup
-environment are not configurable through Mezzanine config.
+Mezzanine uses a usable `$SHELL`, falling back to `/bin/sh`. Shell startup
+configuration is intentionally outside the Mezzanine config surface.
 
 ### Why do status glyphs shift pane text?
 
-Some host terminals render emoji-presentation status glyphs through one-cell
-text fallback fonts instead of two-cell emoji fonts. Bare text symbols such as
-`↗` keep their one-cell text width by default; set
-`terminal.emoji_width = "narrow"` when your terminal/font stack also renders
-explicit emoji-presentation status glyphs through text fallback fonts. Keep the
-default `"wide"` for terminals that render those explicit emoji sequences as
-two-cell emoji.
+This is usually a terminal-font width mismatch. Adjust `terminal.emoji_width`
+in configuration if your terminal renders emoji with a different width.
 
 ### How do project instructions work?
 
-By default Mezzanine discovers `AGENTS.md` from the project context and includes
-it in provider requests. The discovery filenames are configurable under
-`instructions.project_filenames`.
+Mezzanine discovers project instructions such as `AGENTS.md` and includes them
+in the agent context. See the [Configuration reference](docs/configuration-reference.md)
+for discovery settings.
 
 ### How do project config overlays become trusted?
 
-Project overlays are discovered from the project root and remain pending until
-the primary client trusts or rejects them. Use `mez sandbox trust list` to see
-records and `mez sandbox trust add PATH` to trust a root. In the pane-local
-agent shell, `/sandbox trust PATH` trusts an explicit project root (with
-relative paths resolved from the active pane), while `/sandbox trust`,
-`/sandbox trust latest`, and `/sandbox trust list` manage pending requests.
+Project overlays remain pending until the primary client trusts or rejects
+them. Review the overlay and project instructions first, then use
+`mez sandbox trust list` or `mez sandbox trust add PATH`.
 
 ### What happens when a command needs approval?
 
@@ -736,9 +459,8 @@ pane input.
 
 ### Can I use more than one agent at once?
 
-Yes. Agents are pane-scoped, so you can open agent shells in different panes
-for separate tasks. Mezzanine can also spawn subagents for delegated work,
-subject to the configured depth, placement, and concurrency limits.
+Yes. Agents are pane-scoped, so separate panes can work on separate tasks;
+agents can also delegate bounded work to subagents.
 
 ### How do I run Mezzanine for automation?
 
@@ -747,19 +469,5 @@ Use `mez serve` to start a foreground service, then target it with `mez -S
 
 ## Contributor Notes
 
-Use the repository `justfile`:
-
-```sh
-just check
-just architecture
-just fmt
-just clippy
-just test
-```
-
-`just architecture`, `just fmt`, `just clippy`, and `just test` are the expected
-pre-handoff checks for repository changes. The repository is a five-package
-Cargo workspace; see the
-[workspace architecture](docs/workspace-architecture.md) and
-[ownership matrix](docs/workspace-ownership-matrix.md) before changing package
-boundaries.
+See [AGENTS.md](AGENTS.md) for contributor workflow, validation requirements,
+and workspace guidance.
