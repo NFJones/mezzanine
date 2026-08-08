@@ -68,9 +68,9 @@ Install the product package:
 cargo install --path crates/mezzanine --locked
 ```
 
-Optionally create and inspect the baseline configuration before authenticating
-and starting in a working directory. Starting a session also creates the
-default configuration when none exists:
+From a checkout of this repository, optionally create and inspect the baseline
+configuration before authenticating and starting in a working directory.
+Starting a session also creates the default configuration when none exists:
 
 ```sh
 mez config init
@@ -78,6 +78,11 @@ mez auth login
 cd /path/to/repository
 mez
 ```
+
+The default `mez auth login` flow authenticates OpenAI interactively. Choose an
+explicit provider and credential method when using another provider or an
+API key; [Getting started](docs/getting-started/README.md) documents those
+flows.
 
 Press `Ctrl+A a` to open the focused pane's agent shell. Begin with a bounded
 task that asks for inspection and focused validation. Press `Ctrl+A d` to detach

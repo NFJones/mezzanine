@@ -65,7 +65,7 @@ processes that existed when the snapshot was taken.
 
 | Command | Subcommands and scope |
 | --- | --- |
-| `mez config` | `init`, `path`, `default`, `validate`, `get`, `layers`, `set`, and `unset` for user configuration. |
+| `mez config` | `init`, `path`, `default`, `validate`, `get`, `layers`, `set`, and `unset`. `set` and `unset` write the user configuration by default; their `--scope project` option targets an eligible trusted project overlay. |
 | `mez auth` | `status`, `login`, and `logout` for provider credentials and metadata. |
 | `mez mcp` | List, inspect, authenticate, add, remove, enable, disable, and configure MCP servers and tools. |
 | `mez sandbox` | Inspect, plan, enable, disable, manage presets/profiles, project trust, and Bubblewrap-home caches. |

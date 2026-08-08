@@ -48,10 +48,11 @@ sandbox backend, scopes, network policy, approval policy, or bypass state.
 
 ## Schema versions and examples
 
-The current schema is version `54`. Older primary configurations migrate on
-launch; a configuration declaring a newer schema is rejected. The checked-in
-[example configuration](../examples/config.toml) is generated for version 54
-and is the baseline for valid default settings.
+The current schema is version `54`. Older primary user configurations migrate
+on launch; a configuration declaring a newer schema is rejected. Project
+overlays must already declare the current schema version and are not migrated
+automatically. The checked-in [example configuration](../examples/config.toml)
+is generated for version 54 and is the baseline for valid default settings.
 
 ## Related pages
 
