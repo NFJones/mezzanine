@@ -416,6 +416,10 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "durable memory generation requires the live model runtime".to_string(),
         },
+        "plan" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "pane plan mode changes require the live runtime".to_string(),
+        },
         "latency" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "latency preference changes require the live runtime".to_string(),

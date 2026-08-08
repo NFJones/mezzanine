@@ -151,6 +151,48 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
     );
 }
 
+/// Verifies `/plan` changes only the issuing pane, supports idempotent modes,
+/// and reports the resulting read-only state through the live command path.
+#[test]
+fn runtime_slash_command_plan_controls_pane_local_read_only_mode() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%2")
+        .unwrap();
+
+    let enabled = service
+        .execute_agent_shell_plan_command("%1", "/plan on")
+        .unwrap();
+    let AgentShellCommandOutcome::Mutated { body, .. } = enabled else {
+        panic!("expected plan mutation");
+    };
+    assert!(body.contains("enabled=true"), "{body}");
+    assert!(service.agent_planning_enabled("%1"));
+    assert!(!service.agent_planning_enabled("%2"));
+
+    let status = service
+        .execute_agent_shell_plan_command("%1", "/plan")
+        .unwrap();
+    let AgentShellCommandOutcome::Display { body, .. } = status else {
+        panic!("expected plan status display");
+    };
+    assert!(body.contains("write_scopes=disabled"), "{body}");
+
+    service
+        .execute_agent_shell_plan_command("%1", "/plan toggle")
+        .unwrap();
+    assert!(!service.agent_planning_enabled("%1"));
+    service
+        .execute_agent_shell_plan_command("%1", "/plan off")
+        .unwrap();
+    assert!(!service.agent_planning_enabled("%1"));
+}
+
 /// Verifies that the /latency slash command displays the current setting when
 /// called without args and applies a pane-local override when given a valid
 /// value.

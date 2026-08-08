@@ -565,6 +565,30 @@ fn configured_write_scopes_override_trusted_project_fallback() {
             second_write_scope.to_string_lossy(),
         ]
     );
+
+    service.set_agent_planning_enabled("%1", true);
+    let plan_request = service
+        .primary_path_resolution_request("%1")
+        .unwrap()
+        .expect("plan mode should retain read authority");
+    assert_eq!(
+        plan_request.read_scopes,
+        vec![project_root.to_string_lossy()]
+    );
+    assert!(plan_request.write_scopes.is_empty());
+
+    service.set_agent_planning_enabled("%1", false);
+    let restored_request = service
+        .primary_path_resolution_request("%1")
+        .unwrap()
+        .expect("disabling plan mode should restore normal authority");
+    assert_eq!(
+        restored_request.write_scopes,
+        vec![
+            first_write_scope.to_string_lossy(),
+            second_write_scope.to_string_lossy(),
+        ]
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

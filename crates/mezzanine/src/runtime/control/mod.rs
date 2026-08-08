@@ -275,6 +275,17 @@ impl RuntimeSessionService {
                 );
             }
         }
+        if self.agent_planning_enabled(pane_id) {
+            insert_context_block_by_placement(
+                &mut blocks,
+                ContextBlock {
+                    source: ContextSourceKind::Policy,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    label: "agent shell plan-only mode".to_string(),
+                    content: "[plan-only mode]\nPlan only for the following user prompt. Do not modify files, implement a plan, or perform write-capable actions.".to_string(),
+                },
+            );
+        }
         insert_context_block_by_placement(
             &mut blocks,
             ContextBlock::user_event("user prompt", prompt),

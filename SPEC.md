@@ -6064,6 +6064,12 @@ The baseline command capabilities are:
   configuration. Invoking it with text MUST replace the current directive for
   the pane session; `show` or no argument MUST display the current value; and
   `clear`, `default`, or `none` MUST remove it.
+- `/plan`: Inspect or set pane-local plan-only mode with `on`, `off`, or
+  `toggle`; no argument MUST display the current state. While enabled,
+  Mezzanine MUST insert a plan-only instruction immediately before the newest
+  user prompt without rewriting that prompt, and MUST derive the pane's
+  effective sandbox authority with no write scopes. Disabling the mode MUST
+  recompute normal pane authority rather than restore a cached scope snapshot.
 - `/approve`: Approve a pending pane-local agent action. It MUST accept an
   approval id, `latest`, or the only pending approval for the active pane, and
   it MUST support `once`, `session`, `project`, and `global` approval scopes.

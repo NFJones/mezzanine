@@ -428,6 +428,12 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
+                    && command == "plan"
+                {
+                    let plan_outcome = self.execute_agent_shell_plan_command(&pane_id, input)?;
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&plan_outcome))
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
                     && command == "compact"
                 {
                     let compact_outcome =

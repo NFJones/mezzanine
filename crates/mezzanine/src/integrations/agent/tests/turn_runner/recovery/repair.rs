@@ -245,14 +245,14 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
 }
 
 #[test]
-/// Verifies heredoc shell commands are repairable MAAP validation failures.
+/// Verifies shell commands invoking semantic MAAP actions are repairable validation failures.
 ///
 /// Shell commands are exposed only after a capability request, so this test
-/// first grants the shell surface and then returns a disabled heredoc command.
-/// The runner should send a bounded ephemeral repair request with file-action
-/// guidance, accept the corrected response, and avoid retaining the repair
-/// diagnostic in durable execution context.
-fn turn_runner_repairs_shell_command_heredoc_validation_error() {
+/// first grants the shell surface and then returns an invalid `apply_patch`
+/// shell invocation. The runner should send a bounded ephemeral repair request
+/// with the dedicated-action guidance, accept the corrected response, and avoid
+/// retaining the repair diagnostic in durable execution context.
+fn turn_runner_repairs_shell_command_semantic_action_validation_error() {
     let turn = turn();
     let capability = ModelResponse {
         provider: "batch".to_string(),
@@ -272,18 +272,18 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         }),
         provider_transcript_events: Vec::new(),
     };
-    let mut heredoc_action = shell_action("shell-heredoc");
+    let mut semantic_action = shell_action("shell-semantic-action");
     if let AgentActionPayload::ShellCommand {
         command, summary, ..
-    } = &mut heredoc_action.payload
+    } = &mut semantic_action.payload
     {
-        *summary = "Write a Rust file with a heredoc".to_string();
-        *command = "cat > hello.rs <<'EOF'\nfn main() {}\nEOF".to_string();
+        *summary = "Apply the prepared patch".to_string();
+        *command = "apply_patch --help".to_string();
     }
     let invalid = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
-        raw_text: "invalid heredoc shell response".to_string(),
+        raw_text: "invalid semantic-action shell response".to_string(),
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),
@@ -293,7 +293,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
-            actions: vec![heredoc_action],
+            actions: vec![semantic_action],
             final_turn: false,
         }),
         provider_transcript_events: Vec::new(),
@@ -367,7 +367,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             .request
             .messages
             .iter()
-            .all(|message| !message.content.contains("heredoc redirection is disabled")),
+            .all(|message| !message.content.contains("must not invoke MAAP action")),
         "{:?}",
         execution.request.messages
     );
@@ -384,7 +384,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         "{repair_message}"
     );
     assert!(
-        repair_message.contains("heredoc redirection is disabled"),
+        repair_message.contains("must not invoke MAAP action"),
         "{repair_message}"
     );
     assert!(repair_message.contains("apply_patch"), "{repair_message}");

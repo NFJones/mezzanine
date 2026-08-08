@@ -112,6 +112,7 @@ Common slash commands:
 | `/approval` | Inspect or change the pane-subtree approval mode; use `inherit` or `clear` to remove the pane override. |
 | `/permissions` | Inspect or change pane-subtree preset/approval fields and separately scoped command rules or approval bypass. |
 | `/directive` | Show or set a session-scoped developer-instruction addendum. |
+| `/plan` | Show or set pane-local plan-only mode; while enabled, the model receives a plan-only tag and the sandbox has no write scopes. |
 | `/list-skills` | Show the effective skill catalog available to the pane. |
 | `/sync-builtin-skills` | Resync Mez-managed built-in skill copies in the user config root and report created, replaced, preserved, and current entries. |
 | `/list-macros` | Show the effective agent macro catalog available to the pane. |

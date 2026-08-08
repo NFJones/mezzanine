@@ -819,6 +819,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         "approval"
         | "approve"
         | "auth-status"
+        | "plan"
         | "routing"
         | "init"
         | "latency"
@@ -884,6 +885,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "memory" => "inspect or change persistent memory enablement.",
         "show-memories" => "browse durable memory records and open memory details.",
         "remember" => "generate durable memories from the current context or a statement.",
+        "plan" => "toggle pane-local plan-only mode and remove write sandbox scopes.",
         "model" => "inspect or change model and reasoning settings.",
         "thinking" => "inspect or toggle pane-local model reasoning visibility.",
         "latency" => "inspect or change latency/cost preference.",

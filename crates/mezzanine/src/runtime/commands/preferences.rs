@@ -15,6 +15,62 @@ use mez_agent::AutoSizingRoutingPolicy;
 use mez_mux::record_browser::{RecordBrowser, RecordBrowserRecord};
 
 impl RuntimeSessionService {
+    /// Executes `/plan` as a pane-local plan-only and read-only mode transition.
+    pub(crate) fn execute_agent_shell_plan_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let invocation = parse_slash_command(input)?
+            .ok_or_else(|| MezError::invalid_args("plan command must be a slash command"))?;
+        let mode = runtime_single_mode_arg(&invocation.args, "plan", "status")?;
+        let enabled_before = self.agent_planning_enabled(pane_id);
+        if matches!(mode.as_str(), "status" | "show") {
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "plan".to_string(),
+                body: format!(
+                    "pane={} enabled={} write_scopes={} source=runtime-plan",
+                    json_escape(pane_id),
+                    enabled_before,
+                    if enabled_before { "disabled" } else { "normal" }
+                ),
+            });
+        }
+        let enabled = match mode.as_str() {
+            "on" => true,
+            "off" => false,
+            "toggle" => !enabled_before,
+            _ => {
+                return Err(MezError::invalid_args(
+                    "plan slash command expects on, off, toggle, status, or no argument",
+                ));
+            }
+        };
+        if enabled
+            && !enabled_before
+            && self
+                .agent_shell_store()
+                .get(pane_id)
+                .and_then(|session| session.running_turn_id.as_deref())
+                .is_some()
+        {
+            self.stop_agent_turn_for_pane(pane_id)?;
+        }
+        self.set_agent_planning_enabled(pane_id, enabled);
+        let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "plan".to_string(),
+            body: format!(
+                "pane={} enabled={} write_scopes={} changed={} source=runtime-plan",
+                json_escape(pane_id),
+                enabled,
+                if enabled { "disabled" } else { "normal" },
+                enabled != enabled_before
+            ),
+            visibility,
+        })
+    }
+
     /// Opens `/list-personalities` as a selectable pane-local personality table.
     pub(super) fn execute_agent_shell_list_personalities_command(
         &mut self,

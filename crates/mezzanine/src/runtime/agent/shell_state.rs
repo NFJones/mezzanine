@@ -739,7 +739,12 @@ impl RuntimeSessionService {
     /// read-write authority for the deepest matching project root only.
     pub(crate) fn primary_path_scope_paths(&self, pane_id: &str) -> (Vec<String>, Vec<String>) {
         let status = self.primary_path_scope_status(pane_id);
-        (status.read_scopes, status.write_scopes)
+        let write_scopes = if self.agent_planning_enabled(pane_id) {
+            Vec::new()
+        } else {
+            status.write_scopes
+        };
+        (status.read_scopes, write_scopes)
     }
 
     /// Builds the canonical resolver request for one pane's primary authority.

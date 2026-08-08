@@ -275,6 +275,9 @@ project paths as Tab completions and shadow hints while retaining glob filters.
 `/show-issues --kind` completes `defect` and `task`, while `/show-memories
 --kind` completes supported memory kinds; either option preselects that kind in
 the opened browser's kind picker.
+`/plan on`, `/plan off`, and `/plan toggle` control a pane-local plan-only
+mode. While enabled, the next prompt receives a plan-only instruction and the
+pane's effective sandbox authority has no write scopes.
 They add browser-specific keys: `k` opens a kind dropdown selector,
 `p` opens a project/scope filter prompt, `x` opens a database-backed text filter
 prompt, `s` opens a save-to-file prompt, `Enter` opens the focused record, and

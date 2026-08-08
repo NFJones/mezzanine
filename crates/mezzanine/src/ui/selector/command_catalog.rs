@@ -378,6 +378,7 @@ pub(super) fn agent_argument_candidates(
         "loop" => flag_candidates(&["--fork", "--new", "--limit"]),
         "status" => flag_candidates(&["--extended"]),
         "memory" => value_candidates(&["on", "off", "toggle", "status", "show"]),
+        "plan" => value_candidates(&["on", "off", "toggle", "status"]),
         "issue" => value_candidates(&[
             "add", "query", "delete", "--kind", "--title", "--body", "--text", "--limit",
         ]),

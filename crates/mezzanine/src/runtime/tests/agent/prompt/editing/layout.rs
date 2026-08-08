@@ -161,19 +161,20 @@ fn runtime_config_reload_applies_agent_prompt_and_personality_profiles() {
             && block.label == "agent personality system prompt"
             && block.content.contains("Be exact about evidence")
     }));
-    assert!(context.blocks().iter().any(|block| {
-        block.label == "agent shell plan mode" && block.content.contains("Planning mode is active")
-    }));
-    assert!(context.blocks().iter().any(|block| {
-        block.label == "agent shell plan mode"
-            && block
-                .content
-                .contains("Do not use a visible plan when the next safe inspection")
-    }));
-    assert!(!context.blocks().iter().any(|block| {
-        block.label == "agent shell plan mode"
-            && block.content.contains("Start by presenting a concise")
-    }));
+    let user_index = context
+        .blocks()
+        .iter()
+        .position(|block| block.label == "user prompt")
+        .expect("started turn should retain the newest user prompt");
+    assert_eq!(
+        context.blocks()[user_index - 1].label,
+        "agent shell personality"
+    );
+    assert!(
+        context.blocks()[user_index - 1]
+            .content
+            .contains("Response style preference")
+    );
     assert!(context.blocks().iter().any(|block| {
         block.label == "agent shell personality"
             && block.content.contains("Response style preference")

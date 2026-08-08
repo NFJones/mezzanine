@@ -771,9 +771,11 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
         "/routing ".len(),
     )
     .unwrap();
+    let plan_hint = shadow_hint(SelectorSurface::AgentCommand, "/plan ", "/plan ".len()).unwrap();
 
     assert_eq!(loop_hint.text, " [--fork|--new] [--limit <int>] <prompt>");
     assert_eq!(latency_hint.text, " <slow|default|fast>");
+    assert_eq!(plan_hint.text, " <on|off|toggle|status>");
     assert_eq!(trust_hint.text, " [project-root|latest|list|pending]");
     assert_eq!(
         routing_hint.text,
@@ -862,6 +864,7 @@ fn selector_shadow_hint_completes_additional_agent_command_values() {
     let cases = [
         ("/directive cl", "ear", SelectorCandidateKind::Value),
         ("/memory to", "ggle", SelectorCandidateKind::Value),
+        ("/plan to", "ggle", SelectorCandidateKind::Value),
         (
             "/debug-config mc",
             "p_servers",

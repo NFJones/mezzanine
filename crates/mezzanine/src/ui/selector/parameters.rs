@@ -53,6 +53,7 @@ pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
         "directive" => Some(" <status|show|clear|default|none|text>"),
         "loop" => Some(" [--fork|--new] [--limit <int>] <prompt>"),
         "memory" => Some(" <on|off|toggle|status|show>"),
+        "plan" => Some(" <on|off|toggle|status>"),
         "issue" => Some(" <add|query|delete> [--kind defect|task] [--title text]"),
         "permissions" => {
             Some(" <status|preset|approval-policy|list|allow|deny|prompt|remove|bypass>")

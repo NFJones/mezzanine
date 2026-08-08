@@ -725,22 +725,6 @@ impl RuntimeSessionService {
             )?;
         }
         let selected_profile = self.agent_selected_personality_profile(pane_id);
-        let planning_enabled = self.agent_planning_enabled(pane_id)
-            || selected_profile.is_some_and(|profile| profile.planning_enabled == Some(true));
-        if planning_enabled {
-            context.insert_typed_block(
-                ContextBlock {
-                    source: ContextSourceKind::Configuration,
-                    placement: mez_agent::ContextPlacement::StablePrefix,
-                    label: "agent shell plan mode".to_string(),
-                    content: "Planning mode is active. For broad or ambiguous work, briefly state the execution approach before acting. Do not use a visible plan when the next safe inspection, edit, validation, or repair action is clear."
-                        .to_string(),
-                },
-                mez_agent::ContextSemanticKind::AmbientInstruction,
-                mez_agent::ContextRetention::Exact,
-                false,
-            )?;
-        }
         let profile_style = selected_profile.and_then(|profile| profile.response_style.as_deref());
         if let Some(style) = self.agent_response_style(pane_id).or(profile_style) {
             context.insert_typed_block(

@@ -105,7 +105,11 @@ fn agent_shell_executes_builtin_slash_command_effects() {
         "{body}"
     );
     assert!(!body.contains("/mention"), "{body}");
-    assert!(!body.contains("/plan"), "{body}");
+    assert!(body.contains("| `/plan` |"), "{body}");
+    assert!(
+        body.contains("toggle pane-local plan-only mode and remove write sandbox scopes."),
+        "{body}"
+    );
     assert!(!body.contains("/ps"), "{body}");
     assert!(!body.contains("/review"), "{body}");
     assert!(!body.contains("effect="), "{body}");

@@ -13,6 +13,42 @@ fn project_instruction(content: &str) -> mez_agent::instructions::DiscoveredInst
     }
 }
 
+/// Verifies pane plan mode adds a plan-only tag immediately before the newest
+/// user prompt without changing the stored user content or another pane.
+#[test]
+fn runtime_plan_mode_tags_only_the_active_pane_newest_prompt() {
+    let mut service = test_runtime_service();
+    service.set_agent_planning_enabled("%1", true);
+
+    let context = service
+        .agent_context_for_pane_prompt("%1", "inspect the sandbox policy", 0)
+        .unwrap();
+    let blocks = context.blocks();
+    let user_index = blocks
+        .iter()
+        .position(|block| block.label == "user prompt")
+        .expect("newest user prompt must be retained");
+
+    assert_eq!(blocks[user_index].content, "inspect the sandbox policy");
+    assert_eq!(blocks[user_index - 1].label, "agent shell plan-only mode");
+    assert!(blocks[user_index - 1].content.contains("Plan only"));
+    assert!(
+        blocks[user_index - 1]
+            .content
+            .contains("Do not modify files")
+    );
+
+    let other_context = service
+        .agent_context_for_pane_prompt("%2", "inspect the sandbox policy", 0)
+        .unwrap();
+    assert!(
+        !other_context
+            .blocks()
+            .iter()
+            .any(|block| block.label == "agent shell plan-only mode")
+    );
+}
+
 /// Verifies project-guidance discovery is an exact no-op until source content
 /// changes, then rewrites only the reserved stable slot and records a new cache
 /// lineage with an attributable diagnostic.
