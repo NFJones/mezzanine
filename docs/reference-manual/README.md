@@ -2,8 +2,9 @@
 
 ## Purpose
 
-Provide exhaustive, stable reference material that task chapters can link to
-without duplicating tables and protocol details.
+Provide stable command, key, action, and terminal reference material that task
+chapters can link to without duplicating tables and protocol details. For
+normative or exhaustive contracts, follow the linked sections of `SPEC.md`.
 
 ## Prerequisites
 

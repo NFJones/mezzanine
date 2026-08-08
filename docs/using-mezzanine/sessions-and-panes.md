@@ -53,9 +53,9 @@ change them.
 
 Detaching normally keeps pane processes running. Layout, history, and agent
 state persist according to their settings, but persistence never bypasses trust
-or approval checks. Use `mez snapshot` for saved snapshots; use
-`mez kill-session --force` or the command-prompt `exit` to end a session and
-its panes.
+or approval checks. Use `mez snapshot create` to save a layout and
+`mez snapshot` to list saved snapshots; use `mez kill-session --force` or the
+command-prompt `exit` to end a session and its panes.
 
 ## Related pages
 
