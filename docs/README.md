@@ -41,21 +41,15 @@ normative behavior and compatibility contract.
 
 ## Documentation boundaries
 
-Each manual page should state its purpose, prerequisites, related pages, and
-next step. A topic has one canonical owner; other pages summarize it and link
-to that owner. Relative links are used for repository browsing and published
+Each manual page states its purpose, prerequisites, related pages, and next
+step. A topic has one canonical owner; other pages summarize it and link to
+that owner. Relative links support both repository browsing and published
 copies.
 
-The existing files in this directory are migration sources until their owning
-manual chapters are drafted and validated. Do not remove them solely because a
-manual destination exists. `docs/reference/` is intentionally excluded from
-the published manual: it retains research, audits, plans, and historical
-investigations. The published reference layer is therefore
-`docs/reference-manual/`, avoiding a collision with that preserved material.
-
-The [manual migration inventory](manual-inventory.md) records the source,
-canonical owner, coverage criteria, and eventual cleanup disposition for every
-published documentation source.
+`docs/reference/` is intentionally outside the published manual. It retains
+research, audits, plans, and historical investigations. The published reference
+layer is `docs/reference-manual/`, avoiding a collision with that preserved
+material.
 
 ## Related top-level documents
 
