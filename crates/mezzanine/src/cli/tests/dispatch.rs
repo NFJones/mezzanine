@@ -2,6 +2,36 @@
 
 use super::*;
 
+/// Verifies CLI startup creates the selected private runtime directory.
+///
+/// Daemon discovery and stale-socket cleanup both run before command dispatch,
+/// so a fresh installation must have its owner-only runtime directory ready
+/// even when no socket has been bound yet.
+#[test]
+fn cli_startup_creates_private_runtime_directory() {
+    let (env, home) = test_env("startup-runtime-directory");
+    let directory = default_socket_directory(&env.runtime).unwrap();
+    assert!(!directory.path.exists());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    run_with_plain(
+        vec!["mez".to_string(), "version".to_string()],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let metadata = fs::symlink_metadata(&directory.path).unwrap();
+    assert!(metadata.is_dir());
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies help mentions mez commands.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -229,6 +259,7 @@ fn invocation_prefers_in_pane_mez_socket_without_explicit_selector() {
     let runtime = RuntimeEnv {
         mez_tmpdir: Some(OsString::from("/tmp")),
         xdg_runtime_dir: None,
+        tmpdir: None,
         uid: 1000,
     };
     let mez = OsString::from(format!(
@@ -263,6 +294,7 @@ fn explicit_socket_selector_overrides_in_pane_mez_socket() {
     let runtime = RuntimeEnv {
         mez_tmpdir: Some(OsString::from("/tmp")),
         xdg_runtime_dir: None,
+        tmpdir: None,
         uid: 1000,
     };
     let mez = OsString::from(format!(

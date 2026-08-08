@@ -6,9 +6,10 @@
 
 use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
-    PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, io, json_escape,
-    prune_stale_socket_files_in_directory, run_attach, run_auth, run_config, run_control_request,
-    run_issue, run_list, run_mcp, run_memory, run_new, run_sandbox, run_serve, run_snapshot,
+    PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_private_socket_directory, io,
+    json_escape, prune_stale_socket_files_in_directory, run_attach, run_auth, run_config,
+    run_control_request, run_issue, run_list, run_mcp, run_memory, run_new, run_sandbox, run_serve,
+    run_snapshot,
 };
 
 // Top-level CLI run and command dispatch.
@@ -276,6 +277,7 @@ fn cleanup_startup_stale_socket_files(invocation: &CliInvocation, owner_uid: u32
                     unreachable!("explicit selections are handled by the outer match")
                 }
             };
+            ensure_private_socket_directory(&root, owner_uid)?;
             let _ = prune_stale_socket_files_in_directory(&root, owner_uid)?;
             Ok(())
         }

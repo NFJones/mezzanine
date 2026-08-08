@@ -30,8 +30,12 @@ pub enum AuxiliarySocketKind {
 pub enum SocketDirectorySource {
     /// The directory came from `MEZ_TMPDIR`.
     MezTmpdir,
-    /// The directory came from `XDG_RUNTIME_DIR`.
+    /// The directory came from `XDG_RUNTIME_DIR` on a non-macOS host.
+    #[cfg(not(target_os = "macos"))]
     XdgRuntimeDir,
+    /// The directory came from macOS's per-user `TMPDIR`.
+    #[cfg(target_os = "macos")]
+    MacOsTmpdir,
     /// The directory fell back to `/tmp`.
     Tmp,
 }
@@ -41,8 +45,10 @@ pub enum SocketDirectorySource {
 pub struct RuntimeEnv {
     /// Optional `MEZ_TMPDIR` override for runtime socket placement.
     pub mez_tmpdir: Option<OsString>,
-    /// Optional `XDG_RUNTIME_DIR` fallback for runtime socket placement.
+    /// Optional non-macOS `XDG_RUNTIME_DIR` fallback for runtime socket placement.
     pub xdg_runtime_dir: Option<OsString>,
+    /// Optional macOS per-user temporary directory used for runtime sockets.
+    pub tmpdir: Option<OsString>,
     /// Effective user id used for private runtime directory naming.
     pub uid: u32,
 }
@@ -53,6 +59,7 @@ impl RuntimeEnv {
         Self {
             mez_tmpdir: std::env::var_os("MEZ_TMPDIR"),
             xdg_runtime_dir: std::env::var_os("XDG_RUNTIME_DIR"),
+            tmpdir: std::env::var_os("TMPDIR"),
             uid: current_effective_uid(),
         }
     }

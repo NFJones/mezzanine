@@ -63,6 +63,7 @@ fn test_env(name: &str) -> (CliEnv, PathBuf) {
             runtime: RuntimeEnv {
                 mez_tmpdir: Some(runtime_tmp.into_os_string()),
                 xdg_runtime_dir: None,
+                tmpdir: None,
                 uid: effective_uid_for_tests(),
             },
         },

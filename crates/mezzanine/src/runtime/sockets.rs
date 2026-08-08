@@ -53,6 +53,16 @@ pub fn default_socket_directory(env: &RuntimeEnv) -> Result<SocketDirectory> {
         });
     }
 
+    #[cfg(target_os = "macos")]
+    if let Some(path) = non_empty_path(&env.tmpdir) {
+        ensure_absolute(path)?;
+        return Ok(SocketDirectory {
+            path: path.join(format!("mez-{}", env.uid)),
+            source: SocketDirectorySource::MacOsTmpdir,
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
     if let Some(path) = non_empty_path(&env.xdg_runtime_dir) {
         ensure_absolute(path)?;
         return Ok(SocketDirectory {

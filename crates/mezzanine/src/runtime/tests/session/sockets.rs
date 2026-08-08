@@ -14,6 +14,7 @@ fn default_socket_directory_prefers_mez_tmpdir() {
     let env = RuntimeEnv {
         mez_tmpdir: Some(OsString::from("/run/user/custom")),
         xdg_runtime_dir: Some(OsString::from("/run/user/1000")),
+        tmpdir: Some(OsString::from("/var/folders/user/T")),
         uid: 1000,
     };
 
@@ -28,11 +29,13 @@ fn default_socket_directory_prefers_mez_tmpdir() {
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn default_socket_directory_uses_xdg_runtime_dir_before_tmp() {
     let env = RuntimeEnv {
         mez_tmpdir: None,
         xdg_runtime_dir: Some(OsString::from("/run/user/1000")),
+        tmpdir: None,
         uid: 1000,
     };
 
@@ -40,6 +43,71 @@ fn default_socket_directory_uses_xdg_runtime_dir_before_tmp() {
 
     assert_eq!(directory.source, SocketDirectorySource::XdgRuntimeDir);
     assert_eq!(directory.path, PathBuf::from("/run/user/1000/mez"));
+}
+
+/// Verifies macOS uses its per-user temporary directory for daemon files.
+///
+/// macOS does not provide Linux-style `/run/user/<uid>` directories. This
+/// regression protects the platform-native fallback used when no explicit
+/// Mezzanine runtime override is configured.
+#[cfg(target_os = "macos")]
+#[test]
+fn default_socket_directory_uses_macos_user_tmpdir() {
+    let env = RuntimeEnv {
+        mez_tmpdir: None,
+        xdg_runtime_dir: Some(OsString::from("/run/user/1000")),
+        tmpdir: Some(OsString::from("/var/folders/user/T")),
+        uid: 1000,
+    };
+
+    let directory = default_socket_directory(&env).unwrap();
+
+    assert_eq!(directory.source, SocketDirectorySource::MacOsTmpdir);
+    assert_eq!(
+        directory.path,
+        PathBuf::from("/var/folders/user/T/mez-1000")
+    );
+}
+
+/// Verifies macOS never falls back to a Linux-style XDG runtime path.
+///
+/// A stripped-down launch environment may omit `TMPDIR`. In that case macOS
+/// must use its portable `/tmp` fallback rather than an unusable inherited
+/// `/run/user/<uid>` value.
+#[cfg(target_os = "macos")]
+#[test]
+fn default_socket_directory_ignores_xdg_runtime_dir_on_macos() {
+    let env = RuntimeEnv {
+        mez_tmpdir: None,
+        xdg_runtime_dir: Some(OsString::from("/run/user/1000")),
+        tmpdir: None,
+        uid: 1000,
+    };
+
+    let directory = default_socket_directory(&env).unwrap();
+
+    assert_eq!(directory.source, SocketDirectorySource::Tmp);
+    assert_eq!(directory.path, PathBuf::from("/tmp/mez-1000"));
+}
+
+/// Verifies macOS rejects a relative per-user temporary directory.
+///
+/// Socket discovery and daemon launch exchange absolute paths, so accepting a
+/// relative `TMPDIR` would make the selected endpoint depend on process working
+/// directory and violate the runtime path security contract.
+#[cfg(target_os = "macos")]
+#[test]
+fn default_socket_directory_rejects_relative_macos_tmpdir() {
+    let env = RuntimeEnv {
+        mez_tmpdir: None,
+        xdg_runtime_dir: None,
+        tmpdir: Some(OsString::from("relative")),
+        uid: 1000,
+    };
+
+    let error = default_socket_directory(&env).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
 }
 
 /// Verifies default socket directory rejects relative env paths.
@@ -52,6 +120,7 @@ fn default_socket_directory_rejects_relative_env_paths() {
     let env = RuntimeEnv {
         mez_tmpdir: Some(OsString::from("relative")),
         xdg_runtime_dir: None,
+        tmpdir: None,
         uid: 1000,
     };
 

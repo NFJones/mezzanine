@@ -430,18 +430,20 @@ an explicit control socket and `-L <socket-name>` to select a named socket
 under the default Mezzanine socket directory.
 
 The default Mezzanine socket directory SHOULD be `$MEZ_TMPDIR/mez-$UID` when
-`MEZ_TMPDIR` is set, otherwise `$XDG_RUNTIME_DIR/mez` when `XDG_RUNTIME_DIR` is
-set, otherwise `/tmp/mez-$UID`. The default socket directory MUST be private to
-the current user and MUST NOT be world-readable, world-writable, or
-world-executable.
+`MEZ_TMPDIR` is set. On macOS, it SHOULD otherwise be `$TMPDIR/mez-$UID`, using
+the operating system's per-user temporary directory, and then
+`/tmp/mez-$UID` if `TMPDIR` is unavailable. On other Unix platforms, it SHOULD
+otherwise be `$XDG_RUNTIME_DIR/mez` when `XDG_RUNTIME_DIR` is set, and then
+`/tmp/mez-$UID`. The default socket directory MUST be private to the current
+user and MUST NOT be world-readable, world-writable, or world-executable.
 
 Detached daemons MUST append stderr and panic diagnostics to a private `0600` file named `<control-socket>.diagnostics.log` beside the control socket. This file is retained after startup and daemon failure so users can inspect panic locations and backtraces; failure to persist diagnostics MUST NOT prevent shutdown.
 
 Socket directory paths MUST be absolute. If `XDG_RUNTIME_DIR` is used, it MUST
 be owned by the current user and have Unix mode `0700`, consistent with the XDG
-Base Directory runtime directory requirements. If `MEZ_TMPDIR` is used, the
-derived Mezzanine socket directory MUST still satisfy the same leaf-directory
-ownership and permission requirements.
+Base Directory runtime directory requirements. If `MEZ_TMPDIR` or the macOS
+per-user `TMPDIR` is used, the derived Mezzanine socket directory MUST still
+satisfy the same leaf-directory ownership and permission requirements.
 
 When creating a socket directory, Mezzanine MUST use permissions no broader
 than `0700` and MUST create it in a way that does not follow a symlink for the
@@ -450,6 +452,9 @@ MUST verify that the path is a directory, is not a symlink, is owned by the
 current user, and grants no permissions to group or other users. If these
 checks fail, Mezzanine MUST refuse to use the directory and MUST report an
 actionable diagnostic.
+
+At CLI startup, Mezzanine MUST create or validate its selected default or named
+socket directory before performing daemon discovery or stale-socket cleanup.
 
 When creating a Unix domain socket, Mezzanine MUST bind only inside an approved
 socket directory. Mezzanine MUST NOT unlink or replace an existing socket path
