@@ -92,6 +92,22 @@ fn selector_plans_agent_argument_candidates() {
 
     let copy_plan = plan_selector(SelectorSurface::AgentCommand, "/copy c", 7).unwrap();
     assert_eq!(copy_plan.candidates[0].value, "clipboard");
+
+    let issue_kind_plan = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/show-issues --kind t",
+        "/show-issues --kind t".len(),
+    )
+    .unwrap();
+    assert_eq!(issue_kind_plan.candidates[0].value, "task");
+
+    let memory_kind_plan = plan_selector(
+        SelectorSurface::AgentCommand,
+        "/show-memories --kind d",
+        "/show-memories --kind d".len(),
+    )
+    .unwrap();
+    assert_eq!(memory_kind_plan.candidates[0].value, "documentation");
 }
 
 /// Verifies selector plans filesystem path candidates for command

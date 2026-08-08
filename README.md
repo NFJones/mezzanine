@@ -272,6 +272,9 @@ the focused personality for the active pane and refreshes the table in place.
 The browsers keep `/` in-page search behavior.
 `/show-issues --project` and `--project-glob` suggest known
 project paths as Tab completions and shadow hints while retaining glob filters.
+`/show-issues --kind` completes `defect` and `task`, while `/show-memories
+--kind` completes supported memory kinds; either option preselects that kind in
+the opened browser's kind picker.
 They add browser-specific keys: `k` opens a kind dropdown selector,
 `p` opens a project/scope filter prompt, `x` opens a database-backed text filter
 prompt, `s` opens a save-to-file prompt, `Enter` opens the focused record, and
@@ -320,8 +323,8 @@ Useful slash commands include:
 | `/memory`      | Inspect or change persistent memory enablement for durable loading and memory actions; persistent memory is enabled by default. |
 | `/sandbox`     | Inspect or change sandbox state for the current pane; use `--global` for persisted enable/disable changes, or the nested `trust` command. |
 | `/show-context` | Browse the current pane conversation in transcript order, open individual entries, and delete the selected entry with `d`. |
-| `/show-issues` | Browse open project issues, filter issue records, open details, delete with `d` when no open issue depends on the selection, and save the rendered Markdown view. |
-| `/show-memories` | Browse project-scoped persistent memories, filter records, open details, delete the selection with `d`, and save the rendered Markdown view. |
+| `/show-issues` | Browse open project issues, filter issue records (including `--kind defect|task`), open details, delete with `d` when no open issue depends on the selection, and save the rendered Markdown view. |
+| `/show-memories` | Browse project-scoped persistent memories, filter records including `--kind`, open details, delete the selection with `d`, and save the rendered Markdown view. |
 | `/remember`    | Generate durable memories from context or a statement while opportunistically pruning expired persistent records. |
 | `/log-level`   | Show or set `normal`, `verbose`, `debug`, or `trace`. |
 | `/stop`        | Interrupt the active turn.                            |

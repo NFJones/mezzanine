@@ -6252,7 +6252,8 @@ The baseline command capabilities are:
   browser while preserving a valid selection.
 - `/show-issues`: Browse local issue records in a pager-backed record browser.
   It MUST default to open issues for the active pane project, support optional
-  project glob, kind, state, full-text, and limit filters, and suggest known
+  project glob, kind, state, full-text, and limit filters, preselect a supplied
+  `--kind` value in the browser kind picker, and suggest known
   project paths for the value after `--project` or `--project-glob` without
   changing glob matching. Its list MUST be a table with one selectable stable
   issue-id link in the left-most column for each record; those links MUST open
@@ -6264,7 +6265,8 @@ The baseline command capabilities are:
 - `/show-memories`: Browse persistent memory records in the shared
   pager-backed record browser. It MUST default to active records in the active
   pane project scope when that scope is known, support optional scope, kind,
-  state, full-text, and limit filters. Its list MUST be a table with one
+  state, full-text, and limit filters, and preselect a supplied `--kind` value
+  in the browser kind picker. Its list MUST be a table with one
   selectable stable memory-UUID link in the left-most column for each record;
   those links MUST open memory details. It MUST allow deleting the selected
   memory with `d`, and allow

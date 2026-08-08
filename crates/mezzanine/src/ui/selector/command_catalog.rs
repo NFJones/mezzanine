@@ -353,6 +353,26 @@ pub(super) fn agent_argument_candidates(
             _ => Vec::new(),
         };
     }
+    if context
+        .tokens_before
+        .last()
+        .is_some_and(|token| token == "--kind")
+    {
+        return match command {
+            "show-issues" => value_candidates(&["defect", "task"]),
+            "show-memories" => value_candidates(&[
+                "preference",
+                "fact",
+                "procedure",
+                "documentation",
+                "research",
+                "episode",
+                "warning",
+                "scratch",
+            ]),
+            _ => Vec::new(),
+        };
+    }
     let candidates = match command {
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
         "loop" => flag_candidates(&["--fork", "--new", "--limit"]),

@@ -423,6 +423,7 @@ impl RuntimeSessionService {
         )?;
         browser.enable_deletion();
         configure_issue_record_browser(&mut browser);
+        browser.set_kind_filter_value(args.kind.map(|kind| kind.as_str().to_string()))?;
         if let Some(source) = source.as_ref() {
             set_record_browser_scope_indicator(&mut browser, source);
         }
@@ -509,6 +510,7 @@ impl RuntimeSessionService {
         )?;
         browser.enable_deletion();
         configure_memory_record_browser(&mut browser);
+        browser.set_kind_filter_value(args.kind.map(|kind| kind_name(kind).to_string()))?;
         if let Some(source) = source.as_ref() {
             set_record_browser_scope_indicator(&mut browser, source);
         }
@@ -607,6 +609,7 @@ impl RuntimeSessionService {
                 )?;
                 browser.enable_deletion();
                 configure_issue_record_browser(&mut browser);
+                browser.set_kind_filter_value(kind.map(|kind| kind.as_str().to_string()))?;
                 set_record_browser_scope_indicator(&mut browser, source);
                 Ok(browser)
             }
@@ -647,6 +650,7 @@ impl RuntimeSessionService {
                 )?;
                 browser.enable_deletion();
                 configure_memory_record_browser(&mut browser);
+                browser.set_kind_filter_value(kind.map(|kind| kind_name(kind).to_string()))?;
                 set_record_browser_scope_indicator(&mut browser, source);
                 Ok(browser)
             }

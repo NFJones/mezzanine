@@ -158,6 +158,7 @@ pub struct RecordBrowser {
     scope_indicator: Option<String>,
     records: Vec<RecordBrowserRecord>,
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
+    selected_kind_filter_value: String,
     scope_toggle_enabled: bool,
     project_filter_enabled: bool,
     text_filter_enabled: bool,
@@ -203,6 +204,7 @@ impl RecordBrowser {
             scope_indicator: None,
             records,
             kind_filter_choices,
+            selected_kind_filter_value: String::new(),
             scope_toggle_enabled: false,
             project_filter_enabled: false,
             text_filter_enabled: false,
@@ -229,6 +231,25 @@ impl RecordBrowser {
     /// Replaces the scope label rendered near the browser title.
     pub fn set_scope_indicator(&mut self, scope_indicator: Option<String>) {
         self.scope_indicator = scope_indicator.filter(|value| !value.trim().is_empty());
+    }
+
+    /// Selects the kind shown first when the kind filter picker opens.
+    ///
+    /// An empty or absent value selects the unfiltered choice. Returns an
+    /// argument error when the requested value is not offered by this browser.
+    pub fn set_kind_filter_value(&mut self, value: Option<String>) -> Result<()> {
+        let value = value.unwrap_or_default();
+        if let Some(position) = self
+            .kind_filter_choices
+            .iter()
+            .position(|choice| choice.value == value)
+        {
+            self.selected_kind_filter_value = self.kind_filter_choices[position].value.clone();
+            return Ok(());
+        }
+        Err(MuxError::invalid_args(format!(
+            "record browser does not support kind filter {value:?}"
+        )))
     }
 
     /// Replaces the heading for the stable record-id column in table lists.
@@ -427,7 +448,11 @@ impl RecordBrowser {
                     {
                         RecordBrowserPrompt::KindSelector {
                             options: self.kind_filter_choices.clone(),
-                            active_index: 0,
+                            active_index: self
+                                .kind_filter_choices
+                                .iter()
+                                .position(|choice| choice.value == self.selected_kind_filter_value)
+                                .unwrap_or_default(),
                         }
                     } else {
                         RecordBrowserPrompt::Filter {
@@ -1003,6 +1028,9 @@ mod tests {
             ],
         )
         .unwrap();
+        browser
+            .set_kind_filter_value(Some("task".to_string()))
+            .unwrap();
         assert_eq!(
             browser
                 .apply_action(RecordBrowserAction::StartFilter(
@@ -1020,7 +1048,7 @@ mod tests {
             Some(RecordBrowserPromptSelection {
                 start_line: 1,
                 option_count: 3,
-                active_index: 0,
+                active_index: 2,
             })
         );
         assert_eq!(
