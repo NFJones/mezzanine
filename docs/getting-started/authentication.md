@@ -42,9 +42,11 @@ For OpenAI, a device-code flow is also available with
 
 Use `mez auth`, not `config.toml`, for tokens, bearer credentials, and API
 keys. Authentication state is stored separately under the user configuration
-root. Mez uses an operating-system credential store when available and falls
-back to a private file there when it is not. Normal status output omits private
-account identifiers and credential-store references.
+root. By default, Mez prefers an operating-system credential store and falls
+back to a private file there when it is unavailable. Pass
+`--credential-store os` or `--credential-store file` to choose either store
+explicitly for a login. Normal status output omits private account identifiers
+and credential-store references.
 
 Successful authentication does not guarantee a particular entitlement, quota,
 or model. Select a model with `/model` or configure a model profile.

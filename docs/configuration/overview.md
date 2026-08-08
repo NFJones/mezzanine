@@ -31,8 +31,10 @@ mez config layers
 Use `mez config default` to print the built-in baseline. `mez config set` and
 `mez config unset` persist supported scalar changes to the user configuration
 by default; use their `--scope project` option only for a trusted, eligible
-project overlay. Validate after an edit; invalid configuration is rejected
-rather than partially applied.
+project overlay. These offline commands change the selected file, not an
+already-running session; their JSON result reports `reload_required` when the
+runtime must reload configuration to observe the change. Validate after an
+edit; invalid configuration is rejected rather than partially applied.
 
 ## Understand precedence and trust
 

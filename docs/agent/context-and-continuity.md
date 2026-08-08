@@ -14,7 +14,8 @@ Use the [agent shell](../using-mezzanine/agent-shell.md) in an active pane.
 Each request combines stable runtime and project guidance, ordered conversation
 history, applicable explicit action results, and a short-lived suffix of facts
 needed for the next request. User, assistant, action-result, project-file, and
-terminal sources retain distinct roles. Live controller state, passive terminal
+terminal sources retain distinct roles. Terminal text becomes context only when
+an explicit action result includes it; live controller state, passive terminal
 content, credentials, and unrelated pane data are not normal model context.
 
 The pane conversation can survive hiding the agent shell, detaching and
