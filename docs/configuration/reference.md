@@ -21,8 +21,8 @@ precedence, trust, and validation. Compare settings against the generated
 
 ## Configuration Files and Layers
 
-Primary config discovery accepts exactly one of these files under
-`~/.config/mezzanine/`:
+Primary config discovery resolves `$HOME/.config/mezzanine/` directly; it does
+not consult `XDG_CONFIG_HOME`. It accepts exactly one of these files there:
 
 - `config.toml`
 - `config.yaml`
