@@ -29,10 +29,11 @@ to its invoking terminal.
 
 Use `mez snapshot create` to save layout state, and `mez snapshot` to list
 saved snapshots. The `inspect`, `delete`, `resume`, `resume-latest`, and
-planning subcommands operate on those saved layouts. A snapshot retains session topology,
-selections, names, and known pane working directories. It can contain sensitive
-titles and paths, but it does not retain credentials, pending approvals,
-terminal history, live MCP state, or pane processes.
+planning subcommands operate on those saved layouts. A snapshot retains session
+topology, selections, names, and known pane working directories. It can contain
+sensitive titles and paths, but a resumed snapshot does not restore credentials,
+terminal history, agent conversations, local message state, live MCP state,
+pending approvals, approval grants, or pane processes.
 
 Snapshots are stored under Mezzanine's user-private configuration area unless
 you configure another user-private location. Treat snapshot files as sensitive

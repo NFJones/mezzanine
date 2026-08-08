@@ -13,8 +13,9 @@ Open the affected pane's [agent shell](../using-mezzanine/agent-shell.md).
 
 Use `/status` for the active pane's model, policy, writable roots, context
 usage, and token information. At debug or trace logging levels,
-`/copy-trace-log` exports bounded request details for investigation. These
-diagnostics expose metadata and digests, not prompt text or credential values.
+`/copy-trace-log` exports the pane's bounded retained diagnostic trace. Review
+that export before sharing it: it can contain task and action diagnostics, and
+it is not a substitute for the redacted audit log.
 
 `Cumulative cache hit` is a token-weighted ratio across retained provider
 samples, including cold starts and auxiliary routing or sizing requests.

@@ -70,7 +70,7 @@ panes.
 ## Related pages
 
 - [Terminal input, copy, and history](terminal-input-copy-and-history.md)
-- [Lifecycle and recovery](../operations/README.md)
+- [Lifecycle, detach, and recovery](../operations/lifecycle-detach-and-recovery.md)
 - [Manual reference](../reference-manual/README.md)
 
 ## Next step

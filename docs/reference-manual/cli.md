@@ -46,8 +46,10 @@ and target syntax.
 
 ## Snapshot forms
 
-Snapshots preserve recoverable session layout state, not running processes. Use
-the planning commands before a restore when the result needs review:
+Snapshots preserve recoverable session layout state, not running processes,
+terminal history, or agent conversations. Pending approvals and approval grants
+do not become authority in a restored session. Use the planning commands before
+a restore when the result needs review:
 
 | Command | Behavior |
 | --- | --- |
