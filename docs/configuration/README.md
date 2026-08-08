@@ -11,9 +11,15 @@ of configuration files.
 
 ## Chapters
 
-This section will own configuration overview, terminal appearance,
-agents/providers/authentication, permissions/sandbox/trust, hooks/control,
-the schema reference, and the example configuration.
+This section owns the following configuration guidance:
+
+- [Configuration overview](overview.md)
+- [Appearance and terminal](appearance-and-terminal.md)
+- [Agents, providers, and authentication](agents-providers-and-auth.md)
+- [Permissions, sandbox, and trust](permissions-sandbox-and-trust.md)
+- [Extensions, hooks, and control](extensions-hooks-and-control.md)
+- [Configuration reference](reference.md)
+- [Example configuration](../examples/config.toml)
 
 ## Related pages
 
@@ -23,5 +29,5 @@ the schema reference, and the example configuration.
 
 ## Next step
 
-Use [Operations and troubleshooting](../operations/README.md) to diagnose
-configuration or runtime failures.
+Start with [Configuration overview](overview.md), then use the focused chapters
+or [Configuration reference](reference.md) for an exact field.
