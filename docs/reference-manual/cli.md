@@ -31,7 +31,7 @@ session behavior.
 | `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access with `--observer`. Alias: `attach-session`. |
 | `mez detach` | Detach the current or selected client. Alias: `detach-client`. |
 | `mez kill-session --force` | Terminate a live session through its control socket; `--force` confirms the destructive operation. |
-| `mez snapshot` | Manage persisted snapshots: `list`, `create`, `inspect`, `delete`, `resume`, `resume-latest`, `resume-plan`, `latest-plan`, and `rollback-plan`. |
+| `mez snapshot` | Manage persisted snapshots. With no subcommand it lists snapshots; see the snapshot forms below. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez
 serve` can run without one. An observer request also requires an interactive
@@ -40,6 +40,26 @@ resume <snapshot-id> --serve` restores a snapshot as a foreground daemon; add
 `--attach-primary` only when the invoking terminal should attach as its primary
 client. Use `mez --help` and `mez <command> --help` for the current argument
 and target syntax.
+
+## Snapshot forms
+
+Snapshots preserve recoverable session layout state, not running processes. Use
+the planning commands before a restore when the result needs review:
+
+| Command | Behavior |
+| --- | --- |
+| `mez snapshot` or `mez snapshot list` | List persisted snapshots. |
+| `mez snapshot create [-n NAME]` | Create a snapshot of the live session selected by the control socket. |
+| `mez snapshot inspect <snapshot-id>` / `delete <snapshot-id>` | Inspect or delete one saved snapshot. |
+| `mez snapshot resume-plan <snapshot-id>` | Show the restore plan without loading the snapshot payload. |
+| `mez snapshot latest-plan [--session-id ID]` | Show the restore plan for the newest matching snapshot. |
+| `mez snapshot rollback-plan <snapshot-id>` | Show whether a snapshot can serve as a rollback point. |
+| `mez snapshot resume <snapshot-id>` | Restore the saved layout model; add `--serve` to launch fresh panes in a foreground daemon. |
+| `mez snapshot resume-latest [--session-id ID]` | Restore the newest matching snapshot; it also accepts `--serve`. |
+
+Both restore commands accept `--restart-command <command>` for restorable pane
+processes. A live restore starts fresh processes and cannot reconnect to the
+processes that existed when the snapshot was taken.
 
 ## Configuration, identity, and integrations
 
