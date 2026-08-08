@@ -764,9 +764,18 @@ async fn async_actor_refreshes_provider_info_from_interactive_prompt() {
             .unwrap()
             .unwrap();
         let output = view.lines.join("\n");
-        assert!(output.contains("providers=1 refreshed=1 failed=0"), "{output}");
-        assert!(!output.contains("requires the live agent runtime"), "{output}");
-        assert_eq!(handle.shutdown().await.unwrap(), RuntimeLifecycleState::Running);
+        assert!(
+            output.contains("providers=1 refreshed=1 failed=0"),
+            "{output}"
+        );
+        assert!(
+            !output.contains("requires the live agent runtime"),
+            "{output}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
     };
 
     let ((), mut exit) = tokio::join!(client, actor.run());
