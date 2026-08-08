@@ -4,8 +4,8 @@ use super::*;
 
 #[tokio::test]
 /// Verifies the async turn runner applies the same ephemeral MAAP repair path
-/// used by the synchronous runner when a shell command invokes a reserved MAAP
-/// action. Production provider workers must repair that model-correctable
+/// used by the synchronous runner when a shell command uses an unsupported
+/// heredoc. Production provider workers must repair that model-correctable
 /// validation error without adding repair instructions to durable context.
 async fn async_turn_runner_retries_maap_validation_error_without_persisting_repair_context() {
     let turn = turn();
@@ -30,7 +30,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
     let invalid = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
-        raw_text: "invalid semantic-action shell response".to_string(),
+        raw_text: "invalid heredoc shell response".to_string(),
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),
@@ -41,11 +41,11 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![AgentAction {
-                id: "shell-semantic-action".to_string(),
-                rationale: "apply the prepared patch".to_string(),
+                id: "shell-heredoc".to_string(),
+                rationale: "write the prepared file".to_string(),
                 payload: AgentActionPayload::ShellCommand {
-                    summary: "Apply the prepared patch".to_string(),
-                    command: "apply_patch --help".to_string(),
+                    summary: "Write the prepared file".to_string(),
+                    command: "cat <<'EOF' > README.md\nupdated\nEOF".to_string(),
                     interactive: false,
                     stateful: false,
                     timeout_ms: None,
@@ -58,7 +58,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
     let corrected = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
-        raw_text: "corrected async semantic-action response".to_string(),
+        raw_text: "corrected async heredoc response".to_string(),
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),
@@ -68,7 +68,10 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
-            actions: vec![say_action("say-1", "I will use a file action instead.")],
+            actions: vec![say_action(
+                "say-1",
+                "I will use a supported command instead.",
+            )],
             final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
@@ -119,8 +122,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
     assert_eq!(requests.len(), 3);
     assert!(requests[2].messages.iter().any(|message| {
         message.content.contains("[MAAP repair state]")
-            && message.content.contains("must not invoke MAAP action")
-            && message.content.contains("apply_patch")
+            && message.content.contains("heredoc redirection is disabled")
     }));
     assert!(
         execution

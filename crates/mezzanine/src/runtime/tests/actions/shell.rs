@@ -1309,11 +1309,6 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
         "{}",
         execution.response.raw_text
     );
-    assert!(
-        execution.response.raw_text.contains("apply_patch"),
-        "{}",
-        execution.response.raw_text
-    );
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

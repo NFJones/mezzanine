@@ -37,8 +37,7 @@ pub use transaction::{
     ShellChildArgument, ShellChildLaunch, ShellClassification, ShellTransaction,
     ShellTransactionInput, ShellTransactionOutputTransport, agent_subshell_enter_command,
     fish_quote, posix_shell_history_suppression_finish, posix_shell_history_suppression_start,
-    shell_command_contains_unquoted_heredoc, shell_command_invokes_semantic_action,
-    validate_agent_authored_shell_command,
+    shell_command_contains_unquoted_heredoc, validate_agent_authored_shell_command,
 };
 
 /// Categorizes deterministic shell-source validation failures.
@@ -281,46 +280,19 @@ mod tests {
         );
     }
 
-    /// Verifies semantic MAAP actions cannot be hidden in nested executable
-    /// shell contexts that still run through a model-authored shell command.
+    /// Verifies shell commands that use ordinary file-editing programs remain
+    /// valid shell source so permission policy and sandbox enforcement decide
+    /// whether they may execute.
     #[test]
-    fn agent_shell_validation_rejects_nested_semantic_action_invocations() {
+    fn agent_shell_validation_allows_file_editing_commands() {
         for command in [
-            "value=$(apply_patch --help)",
-            "value=$(printf '%s' $(apply_patch --help))",
-            "value=`apply_patch --help`",
-            "(apply_patch --help)",
-            "{ apply_patch --help; }",
-            "cat <(apply_patch --help)",
-            "printf '%s' ok | apply_patch --help",
-            "true && apply_patch --help",
+            "sed -i 's/old/new/' README.md",
+            "printf '%s\\n' updated > README.md",
+            "python3 -c \"from pathlib import Path; Path('README.md').write_text('updated\\n')\"",
+            "git apply change.patch",
         ] {
-            let error = validate_agent_authored_shell_command(command)
-                .expect_err("nested semantic action invocation must be rejected");
-            assert_eq!(error.kind(), AgentShellValidationErrorKind::InvalidArgs);
-            assert!(
-                error.message().contains("apply_patch"),
-                "{command}: {error:?}"
-            );
-        }
-    }
-
-    /// Verifies statically supplied shell program payloads are recursively
-    /// inspected instead of becoming an alternate semantic-action transport.
-    #[test]
-    fn agent_shell_validation_rejects_semantic_actions_in_static_shell_payloads() {
-        for command in [
-            "sh -c 'apply_patch --help'",
-            "bash -c \"apply_patch --help\"",
-            "env FOO=bar zsh -c 'true && apply_patch --help'",
-            "fish -c 'apply_patch --help'",
-        ] {
-            let error = validate_agent_authored_shell_command(command)
-                .expect_err("static shell payload must be inspected");
-            assert!(
-                error.message().contains("apply_patch"),
-                "{command}: {error:?}"
-            );
+            validate_agent_authored_shell_command(command)
+                .unwrap_or_else(|error| panic!("{command}: {error:?}"));
         }
     }
 
@@ -337,26 +309,6 @@ mod tests {
         ] {
             validate_agent_authored_shell_command(command)
                 .unwrap_or_else(|error| panic!("{command}: {error:?}"));
-        }
-    }
-
-    /// Verifies malformed or excessive executable nesting fails closed rather
-    /// than bypassing semantic-action validation or consuming unbounded stack.
-    #[test]
-    fn agent_shell_validation_fails_closed_on_invalid_nested_syntax() {
-        for command in [
-            "value=$(apply_patch --help",
-            "value=`apply_patch --help",
-            "sh -c",
-            &format!("{}apply_patch{}", "$(".repeat(17), ")".repeat(17)),
-        ] {
-            let error = validate_agent_authored_shell_command(command)
-                .expect_err("invalid executable nesting must fail closed");
-            assert_eq!(error.kind(), AgentShellValidationErrorKind::InvalidArgs);
-            assert!(
-                error.message().contains("apply_patch"),
-                "{command}: {error:?}"
-            );
         }
     }
 }

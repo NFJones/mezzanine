@@ -1849,7 +1849,7 @@ mod tests {
             .unwrap_err();
 
         assert!(error.message().contains("heredoc"));
-        assert!(error.message().contains("apply_patch"));
+        assert!(!error.message().contains("apply_patch"));
     }
 
     #[test]
