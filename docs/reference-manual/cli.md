@@ -67,8 +67,8 @@ processes that existed when the snapshot was taken.
 | --- | --- |
 | `mez config` | `init`, `path`, `default`, `validate`, `get`, `layers`, `set`, and `unset`. `set` and `unset` write the user configuration by default; their `--scope project` option targets an eligible trusted project overlay. |
 | `mez auth` | `status`, `login`, and `logout` for provider credentials and metadata. |
-| `mez mcp` | List, inspect, authenticate, add, remove, enable, disable, and configure MCP servers and tools. |
-| `mez sandbox` | Inspect, plan, enable, disable, manage presets/profiles, project trust, and Bubblewrap-home caches. |
+| `mez mcp` | `list`, `inspect`, `login`, `logout`, `status`, `add`, `remove`, `enable`, `disable`, `set`, `unset`, `tools`, and `approval` manage configured MCP servers, stored MCP credentials, tool filters, and server approval settings. |
+| `mez sandbox` | Inspect, plan, enable, disable, manage presets, profiles, project trust, and Bubblewrap-home caches. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
 | `mez issue` | Add, show, update, query, and delete local project issues. |
 | `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
 

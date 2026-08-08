@@ -33,17 +33,23 @@ truncate content.
 Project configuration under `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
 `.mezzanine/config.yml`, or `.mezzanine/config.json` remains pending until the
 primary user explicitly trusts or rejects the project root. Inspect the overlay
-and applicable instructions first, then use:
+and applicable instructions first. The trust store records trusted, rejected,
+and revoked roots; inspect a root before changing its decision:
 
 ```sh
 mez sandbox trust list
+mez sandbox trust inspect PATH
 mez sandbox trust add PATH
+mez sandbox trust reject PATH
+mez sandbox trust revoke PATH
 ```
 
-The agent-shell `/sandbox trust` flow can decide an explicit or pending root
-from the active pane. Trust decisions persist when the configured trust store
-is available. Trusting an overlay does not itself grant host access, disable
-approval, or override a Bubblewrap boundary.
+`add` marks a root trusted, `reject` records that its overlay must not apply,
+and `revoke` removes the prior trust decision from effect. The agent-shell
+`/sandbox trust` flow can decide an explicit or pending root from the active
+pane. Trust decisions persist in the user-private trust store. Trusting an
+overlay does not itself grant host access, disable approval, or override a
+Bubblewrap boundary.
 
 ## Related pages
 
