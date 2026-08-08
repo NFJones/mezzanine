@@ -20,9 +20,10 @@ attached client can be primary at a time.
 
 Use `mez serve` to run a foreground session service without attaching a primary
 terminal. Select a specific service with `-S <socket-path>` or `-L <name>`, and
-use `--json` for scriptable output. Detached service stderr and panic
-diagnostics are retained beside the control socket in its private diagnostics
-log.
+use `--json` for scriptable output. A background daemon started by `mez new`
+retains stderr and panic diagnostics beside its control socket in a private
+`<control-socket>.diagnostics.log`; a foreground `mez serve` reports directly
+to its invoking terminal.
 
 ## Snapshot and resume deliberately
 

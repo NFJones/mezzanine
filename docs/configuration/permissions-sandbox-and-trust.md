@@ -20,6 +20,11 @@ configured filesystem and network boundary for eligible local shell work.
 `host-access` is a primary-user-only approval mode that runs local shell work
 outside Bubblewrap.
 
+`permissions.bypass_mode` is visible configuration state, but configuration
+cannot enable it. Only an explicit primary-user bypass decision can do so; see
+[Approvals and review](../safety-and-trust/approvals-and-review.md) before
+relying on any reduced gating.
+
 Read scopes are maximum read authority; write scopes also imply reads. Network
 policy controls connected versus isolated Bubblewrap profiles, not destination
 filtering. Keep rules narrow: an exact command or digest rule is safer than a
