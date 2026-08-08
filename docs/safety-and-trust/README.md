@@ -12,8 +12,12 @@ requirements in [SPEC.md](../../SPEC.md).
 
 ## Chapters
 
-This section will own approvals and review, sandboxing, project trust and
-instructions, and audit and diagnostic guidance.
+This section owns the following safety guidance:
+
+- [Approvals and review](approvals-and-review.md)
+- [Sandboxing](sandboxing.md)
+- [Project trust and instructions](project-trust-and-instructions.md)
+- [Audit and diagnostics](audit-and-diagnostics.md)
 
 ## Related pages
 
@@ -23,4 +27,5 @@ instructions, and audit and diagnostic guidance.
 
 ## Next step
 
-Configure applicable policies through [Configuration](../configuration/README.md).
+Start with [Approvals and review](approvals-and-review.md) before changing a
+policy or approving an agent action.
