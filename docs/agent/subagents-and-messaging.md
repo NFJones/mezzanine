@@ -1,0 +1,50 @@
+# Subagents and messaging
+
+## Purpose
+
+Delegate bounded work to pane-backed subagents while retaining clear ownership,
+scope, approval, and result-handling responsibilities.
+
+## Prerequisites
+
+Understand [approvals and review](../safety-and-trust/approvals-and-review.md)
+and divide work into independently reviewable tasks.
+
+## Delegate deliberately
+
+Subagents are policy-authorized pane agents with their own shell, conversation,
+and stable identity. Mez creates them in dedicated windows in the controlling
+pane's window group without moving the primary user's focus. The parent receives
+status and final results through local messaging and remains responsible for
+integrating the outcome.
+
+Use the `explorer` role for read-heavy investigation and `worker` for bounded
+implementation. A cooperation mode constrains the intended work: `explore-only`
+does not modify state; `owned-write`, `coordinated-write`, and `serial-write`
+support scoped change coordination; `unrestricted` requires explicit authority.
+Child read and write authority inherits from, and can only narrow, the parent.
+
+The default join behavior waits for a child result before the parent continues;
+detached work can report later through local messaging. Approval requests from
+children are surfaced to the primary client and cannot be decided by observers.
+
+## Use routed loops sparingly
+
+`/loop` repeats a bounded task until an iteration completes without a patch or
+its limit is reached. With routing enabled, Mez classifies the logical job once,
+pins one managed worker for its internal iterations, and presents the final
+result through the invoking conversation. `--fork` uses a common captured
+baseline for attempts; `--new` uses isolated empty attempts. Cancel a loop with
+the usual agent stop controls when its work is no longer wanted.
+
+## Related pages
+
+- [Commands, skills, and macros](commands-skills-and-macros.md)
+- [Context and continuity](context-and-continuity.md)
+- [Workflows](../using-mezzanine/workflows.md)
+- [Configuration](../configuration/README.md)
+
+## Next step
+
+Read [Context and continuity](context-and-continuity.md) to understand what
+survives a continuation, compaction, or resumed session.

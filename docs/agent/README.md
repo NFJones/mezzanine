@@ -12,8 +12,14 @@ routine workflows in [Using Mezzanine](../using-mezzanine/README.md).
 
 ## Chapters
 
-This section will own the agent overview, commands and skills, subagents and
-messaging, context continuity, providers and models, and MCP integration.
+This section owns the following agent guidance:
+
+- [Agent overview](overview.md)
+- [Commands, skills, and macros](commands-skills-and-macros.md)
+- [Subagents and messaging](subagents-and-messaging.md)
+- [Context and continuity](context-and-continuity.md)
+- [Providers and models](providers-and-models.md)
+- [MCP integration](mcp-integration.md)
 
 ## Related pages
 
@@ -23,5 +29,6 @@ messaging, context continuity, providers and models, and MCP integration.
 
 ## Next step
 
-Review [Safety, trust, and security](../safety-and-trust/README.md) before
-granting approvals or changing permissions.
+Read [Agent overview](overview.md), then review
+[Safety, trust, and security](../safety-and-trust/README.md) before granting
+approvals or changing permissions.
