@@ -37,6 +37,7 @@ pub enum PaneProcessIoEffect {
     /// Write ordinary input bytes.
     WriteInput { bytes: Vec<u8> },
     /// Write generated shell source with interactive record pacing.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     WriteShellInput { bytes: Vec<u8> },
     /// Write input bytes ahead of already queued input for this instance.
     WriteInputPriority { bytes: Vec<u8> },

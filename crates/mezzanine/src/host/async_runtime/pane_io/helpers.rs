@@ -271,7 +271,9 @@ pub(super) async fn pane_io_events_for_side_effects<B>(
     driver: &mut AsyncPaneProcessDriver<B>,
     effects: Vec<RuntimeSideEffect>,
     pending: &mut VecDeque<RuntimeSideEffect>,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     paced_input_requires_output: &mut bool,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     paced_input_requires_ack: &mut bool,
 ) -> Vec<RuntimeEvent>
 where

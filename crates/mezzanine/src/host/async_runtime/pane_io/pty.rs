@@ -67,6 +67,7 @@ impl Drop for AsyncPtyPaneProcessIo {
 
 impl AsyncPaneProcessIo for AsyncPtyPaneProcessIo {
     /// Reports whether the live pane process can acknowledge shell records.
+    #[cfg(target_os = "macos")]
     fn supports_shell_input_acknowledgements(&self) -> bool {
         self.process.supports_shell_input_acknowledgements()
     }

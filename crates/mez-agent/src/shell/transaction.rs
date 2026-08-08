@@ -427,8 +427,7 @@ pub const SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES: usize = 768;
 #[cfg(target_os = "macos")]
 pub(crate) const SHELL_WRAPPER_BASE64_LINE_BYTES: usize = 64;
 #[cfg(not(target_os = "macos"))]
-pub(crate) const SHELL_WRAPPER_BASE64_LINE_BYTES: usize =
-    SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES;
+pub(crate) const SHELL_WRAPPER_BASE64_LINE_BYTES: usize = 640;
 /// Maximum raw output bytes emitted through one base64 shell-output transport.
 pub const SHELL_OUTPUT_BASE64_MAX_RAW_BYTES: usize = 256 * 1024;
 /// Output transport used by isolated shell transactions.
