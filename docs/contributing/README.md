@@ -11,8 +11,10 @@ Read [AGENTS.md](../../AGENTS.md) before changing repository content.
 
 ## Chapters
 
-This section will own workspace architecture and development-and-validation
-guidance.
+This section owns the following contributor guidance:
+
+- [Workspace architecture](architecture.md)
+- [Development and validation](development-and-validation.md)
 
 ## Related pages
 
@@ -22,4 +24,5 @@ guidance.
 
 ## Next step
 
-Follow [AGENTS.md](../../AGENTS.md) for the current implementation workflow.
+Read [Workspace architecture](architecture.md), then follow
+[AGENTS.md](../../AGENTS.md) for the current implementation workflow.
