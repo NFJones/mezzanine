@@ -123,7 +123,7 @@ entry is shown.
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `session.detach_behavior` | string | `"keep-running"` | What happens to panes when the primary client detaches. |
-| `session.reattach_behavior` | string | `"default-session"` | How bare attach/start resolves resumable sessions. |
+| `session.reattach_behavior` | string | `"default-session"` | How `mez attach` resolves a resumable session when no session ID is supplied; bare `mez` always starts a new session. |
 | `session.empty_session_behavior` | string | `"keep-open"` | What happens when the final window or pane closes. |
 | `session.restore_strategy` | string | `"live-first"` | Preference for live state versus restored state. |
 | `session.default_command` | string | rejected | Removed in schema version 2; use explicit pane or window commands. |

@@ -13,7 +13,7 @@ interactive primary client.
 ## Start, list, and attach
 
 ```sh
-mez             # create or attach according to configuration
+mez             # create a new session
 mez new         # create a new session
 mez serve       # run a foreground service without a primary client
 mez list         # list resumable sessions

@@ -23,9 +23,9 @@ Cargo usually places the executable in `~/.cargo/bin`. Ensure that directory
 is on `PATH`, or invoke `~/.cargo/bin/mez` explicitly. Confirm the installed
 command with `mez --version` and inspect top-level operations with `mez --help`.
 
-Invoking `mez` without a subcommand creates or attaches to a session according
-to the active configuration. It also provides configuration, authentication,
-MCP, issue, memory, sandbox, and snapshot commands.
+Invoking `mez` without a subcommand starts a new session. Use `mez list` and
+`mez attach` to return to an existing session. It also provides configuration,
+authentication, MCP, issue, memory, sandbox, and snapshot commands.
 
 ## Before enabling confinement
 

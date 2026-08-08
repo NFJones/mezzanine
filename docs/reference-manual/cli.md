@@ -18,8 +18,8 @@ mez [--json] [-S PATH] [-L NAME] [<command> [arguments]]
 
 `--json` selects machine-readable output. `-S` selects an explicit control
 socket and `-L` selects a named socket in the Mez runtime directory. Without a
-subcommand, `mez` creates or attaches according to the configured default
-session behavior.
+subcommand, `mez` starts a new session; use `mez attach` to return to an
+existing one.
 
 ## Session commands
 

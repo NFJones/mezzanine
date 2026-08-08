@@ -11,11 +11,10 @@ Know the basic session commands in [Sessions and panes](../using-mezzanine/sessi
 
 ## Manage a live session
 
-Use `mez` to create or attach according to the configured default, `mez new` to
-create a session, `mez list` to discover resumable sessions, and `mez attach`
-to return to one. Press `Ctrl+A d` or use `mez detach` to leave the primary
-client. Detaching normally leaves pane processes and agent tasks running; only
-one attached client can be primary at a time.
+Use `mez` or `mez new` to create a session, `mez list` to discover resumable
+sessions, and `mez attach` to return to one. Press `Ctrl+A d` or use `mez
+detach` to leave the primary client. Detaching normally leaves pane processes
+and agent tasks running; only one attached client can be primary at a time.
 
 Use `mez serve` to run a foreground session service without attaching a primary
 terminal. Select a specific service with `-S <socket-path>` or `-L <name>`, and

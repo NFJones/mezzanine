@@ -23,9 +23,9 @@ cd /path/to/repository
 mez
 ```
 
-Bare `mez` follows the configured default-session behavior. Use `mez new` to
-create a new session instead of reusing an existing default session. Creating
-and attaching a primary client requires an interactive terminal.
+Bare `mez` starts a new session; `mez new` makes that intent explicit. Use
+`mez list` and `mez attach` to return to an existing session. Creating and
+attaching a primary client requires an interactive terminal.
 
 ## Open the agent shell
 
