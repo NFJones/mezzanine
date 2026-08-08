@@ -251,6 +251,28 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Captures an interactive provider refresh for actor-owned asynchronous execution.
+    pub(crate) fn prepare_agent_prompt_provider_info_refresh(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<Option<crate::runtime::RuntimeAgentPromptProviderInfoRefresh>> {
+        let Some(work) =
+            self.prepare_agent_shell_provider_info_refresh(primary_client_id, input)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            crate::runtime::RuntimeAgentPromptProviderInfoRefresh {
+                primary_client_id: primary_client_id.clone(),
+                pane_id: pane_id.to_string(),
+                input: input.to_string(),
+                work: Some(work),
+            },
+        ))
+    }
+
     /// Executes an agent-shell command submitted through the control protocol.
     pub(crate) fn execute_agent_shell_control_command(
         &mut self,

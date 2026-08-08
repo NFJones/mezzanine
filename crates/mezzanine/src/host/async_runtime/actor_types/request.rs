@@ -16,6 +16,7 @@ use super::{
 #[cfg(test)]
 use crate::runtime::PaneInputDispatch;
 use crate::runtime::PaneProcessInstance;
+use crate::runtime::RuntimeAgentPromptProviderInfoRefresh;
 use crate::runtime::{RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork};
 
 /// Carries Async Runtime Request state for this subsystem.
@@ -549,6 +550,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         outcome: RuntimeProviderInfoRefreshOutcome,
         /// Original caller waiting for the command response.
         reply: oneshot::Sender<Result<String>>,
+    },
+    /// Applies a provider refresh submitted through an interactive prompt.
+    CompleteAgentPromptProviderInfoRefresh {
+        /// Prompt submission captured before worker-owned provider I/O.
+        refresh: RuntimeAgentPromptProviderInfoRefresh,
+        /// Provider catalog worker outcome.
+        outcome: RuntimeProviderInfoRefreshOutcome,
     },
     /// Represents the Pending Agent Provider Tasks case for this enumeration.
     ///

@@ -94,7 +94,10 @@ pub(super) use model_catalog::RuntimeModelCatalog;
 use model_catalog::runtime_markdown_table;
 #[cfg(test)]
 use model_catalog::runtime_model_catalog_unavailable_reason;
-pub(crate) use model_catalog::{RuntimeProviderInfoRefreshOutcome, RuntimeProviderInfoRefreshWork};
+pub(crate) use model_catalog::{
+    RuntimeAgentPromptProviderInfoRefresh, RuntimeProviderInfoRefreshOutcome,
+    RuntimeProviderInfoRefreshWork,
+};
 use remember::runtime_remember_scope_display;
 use slash::{
     runtime_agent_init_scaffold, runtime_single_approval_invocation, runtime_single_mode_arg,

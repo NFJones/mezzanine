@@ -313,6 +313,16 @@ impl RuntimeSessionService {
                     if command.trim().is_empty() {
                         continue;
                     }
+                    if let Some(refresh) = self.prepare_agent_prompt_provider_info_refresh(
+                        primary_client_id,
+                        pane_id,
+                        &command,
+                    )? {
+                        self.presentation
+                            .pending_agent_prompt_provider_info_refreshes
+                            .push(refresh);
+                        continue;
+                    }
                     let body = match self.execute_agent_shell_command(primary_client_id, &command) {
                         Ok(body) => body,
                         Err(error) => {
@@ -930,6 +940,35 @@ impl RuntimeSessionService {
             .or_insert_with(default_runtime_agent_prompt_input);
         state.display_lines.clear();
         Ok(())
+    }
+
+    /// Applies a completed provider refresh to the prompt that submitted it.
+    pub(crate) fn complete_agent_prompt_provider_info_refresh(
+        &mut self,
+        refresh: crate::runtime::RuntimeAgentPromptProviderInfoRefresh,
+        outcome: crate::runtime::RuntimeProviderInfoRefreshOutcome,
+    ) -> Result<()> {
+        let body = self.complete_agent_shell_provider_info_refresh(
+            &refresh.primary_client_id,
+            &refresh.input,
+            outcome,
+        )?;
+        self.set_agent_prompt_response_display_output_for_refresh(&refresh.pane_id, &body)
+    }
+
+    /// Renders a completed prompt refresh response at its original pane.
+    fn set_agent_prompt_response_display_output_for_refresh(
+        &mut self,
+        pane_id: &str,
+        response: &str,
+    ) -> Result<()> {
+        let display_output = runtime_agent_shell_display_output(
+            response,
+            &self.presentation.settings.ui_theme,
+            usize::from(self.session.authoritative_size.columns),
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        )?;
+        self.set_agent_prompt_display_output(pane_id, display_output)
     }
 
     /// Appends agent shell display output using the declared content renderer.

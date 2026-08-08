@@ -707,3 +707,68 @@ async fn async_actor_defers_agent_init_scaffold_to_persistence_worker() {
     exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Verifies submitting `/refresh-provider-info` through the visible interactive
+/// prompt delegates provider I/O outside the actor and renders the completed
+/// catalog report instead of the synchronous live-runtime diagnostic.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_refreshes_provider_info_from_interactive_prompt() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "interactive-provider-refresh".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        b"/refresh-provider-info\r".to_vec(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        let view = handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let output = view.lines.join("\n");
+        assert!(output.contains("providers=1 refreshed=1 failed=0"), "{output}");
+        assert!(!output.contains("requires the live agent runtime"), "{output}");
+        assert_eq!(handle.shutdown().await.unwrap(), RuntimeLifecycleState::Running);
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+}

@@ -412,6 +412,28 @@ impl AsyncRuntimeSessionActor {
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
+                        for mut refresh in self
+                            .service
+                            .take_pending_agent_prompt_provider_info_refreshes()
+                        {
+                            let Some(work) = refresh.work.take() else {
+                                continue;
+                            };
+                            let sender = self.sender.clone();
+                            let join_handle = tokio::spawn(async move {
+                                let outcome =
+                                    RuntimeSessionService::execute_provider_info_refresh(work).await;
+                                let _ = sender
+                                    .send(
+                                        AsyncRuntimeRequest::CompleteAgentPromptProviderInfoRefresh {
+                                            refresh,
+                                            outcome,
+                                        },
+                                    )
+                                    .await;
+                            });
+                            std::mem::drop(join_handle);
+                        }
                         Ok(application)
                     });
                 let _ = reply.send(result);
@@ -624,6 +646,18 @@ impl AsyncRuntimeSessionActor {
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
                 if should_notify {
+                    self.notify_event_delivery();
+                }
+                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
+                false
+            }
+            AsyncRuntimeRequest::CompleteAgentPromptProviderInfoRefresh { refresh, outcome } => {
+                let previous_lifecycle_state = self.service.lifecycle_state();
+                let result = self
+                    .service
+                    .complete_agent_prompt_provider_info_refresh(refresh, outcome)
+                    .and_then(|()| self.queue_deferred_pane_io_side_effects_from_service());
+                if result.is_ok() {
                     self.notify_event_delivery();
                 }
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);

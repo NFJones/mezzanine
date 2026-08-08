@@ -363,7 +363,10 @@ pub(crate) use agent_state::{
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
     RuntimeApprovedMcpActionDispatch,
 };
-pub(crate) use commands::{RuntimeProviderInfoRefreshOutcome, RuntimeProviderInfoRefreshWork};
+pub(crate) use commands::{
+    RuntimeAgentPromptProviderInfoRefresh, RuntimeProviderInfoRefreshOutcome,
+    RuntimeProviderInfoRefreshWork,
+};
 pub use deferred::AttachedClientStepApplication;
 pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, SocketDirectory,

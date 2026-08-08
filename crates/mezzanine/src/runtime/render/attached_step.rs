@@ -18,7 +18,8 @@ use crate::host::terminal::{
     plan_attached_terminal_client_step,
 };
 use crate::runtime::{
-    PaneProcessIoEffect, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
+    PaneProcessIoEffect, RenderInvalidationReason, RuntimeAgentPromptProviderInfoRefresh,
+    RuntimeSideEffect, RuntimeTransition,
 };
 
 impl RuntimeSessionService {
@@ -206,6 +207,17 @@ impl RuntimeSessionService {
                 side_effects,
             },
         ))
+    }
+
+    /// Drains interactive provider refreshes queued by prompt submission.
+    pub(crate) fn take_pending_agent_prompt_provider_info_refreshes(
+        &mut self,
+    ) -> Vec<RuntimeAgentPromptProviderInfoRefresh> {
+        std::mem::take(
+            &mut self
+                .presentation
+                .pending_agent_prompt_provider_info_refreshes,
+        )
     }
 
     /// Plans and applies raw primary-client input as a runtime transition.

@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use crate::runtime::RuntimeAgentPromptProviderInfoRefresh;
 use crate::ui::selector::SelectorExtraCandidate;
 use mez_mux::input::{
     GroupFocusTarget, MouseBorderCell, MousePaneRegion, MouseWindowFrameCell, MuxAction,
@@ -235,6 +236,8 @@ pub(crate) struct RuntimePresentationComponent {
     copy: RuntimeCopyPresentationState,
     /// Active agent prompt editor state keyed by pane id.
     agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
+    /// Provider refreshes submitted from agent prompts awaiting actor dispatch.
+    pending_agent_prompt_provider_info_refreshes: Vec<RuntimeAgentPromptProviderInfoRefresh>,
     /// Background selector discoveries keyed by their pane-local owner.
     agent_prompt_selector_refreshes:
         std::collections::BTreeMap<String, RuntimeAgentSelectorCandidateRefresh>,

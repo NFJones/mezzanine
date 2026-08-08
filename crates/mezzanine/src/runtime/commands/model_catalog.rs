@@ -28,6 +28,31 @@ pub(crate) struct RuntimeProviderInfoRefreshWork {
     auth_store: Option<crate::security::auth::AuthStore>,
 }
 
+/// Captures one interactive prompt refresh before its provider I/O runs outside
+/// the serialized runtime actor.
+pub(crate) struct RuntimeAgentPromptProviderInfoRefresh {
+    /// Primary client that submitted the prompt command.
+    pub(crate) primary_client_id: mez_core::ids::ClientId,
+    /// Pane whose prompt should receive the completed refresh output.
+    pub(crate) pane_id: String,
+    /// Original slash-command text retained for response rendering.
+    pub(crate) input: String,
+    /// Immutable provider catalog inputs for worker-owned I/O.
+    pub(crate) work: Option<RuntimeProviderInfoRefreshWork>,
+}
+
+impl std::fmt::Debug for RuntimeAgentPromptProviderInfoRefresh {
+    /// Formats prompt-refresh metadata without exposing worker-owned credentials.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeAgentPromptProviderInfoRefresh")
+            .field("primary_client_id", &self.primary_client_id)
+            .field("pane_id", &self.pane_id)
+            .field("input", &self.input)
+            .finish_non_exhaustive()
+    }
+}
+
 /// One configured provider and its actor-computed fallback catalog.
 struct RuntimeProviderInfoRefreshEntry {
     provider_id: String,
