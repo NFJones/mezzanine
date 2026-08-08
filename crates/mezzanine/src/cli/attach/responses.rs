@@ -194,9 +194,15 @@ pub(in crate::cli) fn terminal_step_response_refresh_requirement(
         .and_then(|application| application.get("full_redraw_required"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let session_terminated = parsed
+        .get("result")
+        .and_then(|result| result.get("session_terminated"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     Ok(TerminalStepRefreshRequirement {
         view_refresh_required: view_refresh_required || full_redraw_required,
         full_redraw_required,
+        session_terminated,
     })
 }
 

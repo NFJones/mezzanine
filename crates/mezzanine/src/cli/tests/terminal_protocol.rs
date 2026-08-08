@@ -173,6 +173,61 @@ fn terminal_step_response_refresh_requirement_preserves_full_redraw() {
     assert!(refresh.full_redraw_required);
 }
 
+/// Verifies a terminal step response stops the primary attach loop without a
+/// follow-up view request because the daemon has already begun shutdown.
+#[tokio::test(flavor = "current_thread")]
+async fn control_socket_primary_attach_loop_stops_after_terminated_step() {
+    let (client_stream, mut server_stream) = UnixStream::pair().unwrap();
+    client_stream.set_nonblocking(true).unwrap();
+    server_stream
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
+    let mut client_stream = tokio::net::UnixStream::from_std(client_stream).unwrap();
+    let server = thread::spawn(move || {
+        let request = read_control_response_frames(&mut server_stream, 1024 * 1024, 1).unwrap();
+        let (body, _) = decode_control_frame(&request, 1024 * 1024).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed.get("method").and_then(serde_json::Value::as_str),
+            Some("terminal/step")
+        );
+        server_stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-terminal-step-0","result":{"application":{"view_refresh_required":true,"full_redraw_required":true},"session_terminated":true}}"#,
+            ))
+            .unwrap();
+        server_stream.flush().unwrap();
+        let mut unexpected = [0u8; 256];
+        match server_stream.read(&mut unexpected) {
+            Ok(0) => {}
+            Ok(read) => panic!(
+                "unexpected follow-up view request: {}",
+                String::from_utf8_lossy(&unexpected[..read])
+            ),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => panic!("unexpected server read error: {error}"),
+        }
+    });
+    let mut io = AsyncFakeAttachedTerminalIo::default();
+    io.push_input(b"exit\n".to_vec());
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    run_control_socket_attached_primary_client_loop_async(
+        &mut client_stream,
+        &mut io,
+        primary_client_id,
+        Size::new(80, 24).unwrap(),
+    )
+    .await
+    .unwrap();
+    server.join().unwrap();
+    assert_eq!(io.written_frames.len(), 0);
+    assert_eq!(io.invalidated_output_frames, 0);
+}
+
 /// Verifies a light terminal-step refresh requests a new view without
 /// invalidating the retained output frame.
 ///

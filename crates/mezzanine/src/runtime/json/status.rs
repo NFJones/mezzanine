@@ -19,6 +19,7 @@ pub(crate) fn runtime_terminal_step_result_json(
     input_bytes: usize,
     application: &AttachedClientStepApplication,
     view: Option<&RenderedClientView>,
+    session_terminated: bool,
 ) -> String {
     let unsupported = application
         .unsupported_actions
@@ -32,7 +33,7 @@ pub(crate) fn runtime_terminal_step_result_json(
         .map(|view| super::presentation::ui_theme_json(&view.ui_theme))
         .unwrap_or_else(|| "null".to_string());
     format!(
-        r#"{{"input_bytes":{},"application":{{"forwarded_bytes":{},"mux_actions_applied":{},"mouse_actions_reported":{},"agent_prompt_inputs_applied":{},"view_refresh_required":{},"full_redraw_required":{},"unsupported_actions":[{}]}},"view":{},"ui_theme":{}}}"#,
+        r#"{{"input_bytes":{},"application":{{"forwarded_bytes":{},"mux_actions_applied":{},"mouse_actions_reported":{},"agent_prompt_inputs_applied":{},"view_refresh_required":{},"full_redraw_required":{},"unsupported_actions":[{}]}},"view":{},"ui_theme":{},"session_terminated":{}}}"#,
         input_bytes,
         application.forwarded_bytes,
         application.mux_actions_applied,
@@ -42,7 +43,8 @@ pub(crate) fn runtime_terminal_step_result_json(
         application.full_redraw_required,
         unsupported.join(","),
         view_json,
-        ui_theme
+        ui_theme,
+        session_terminated
     )
 }
 

@@ -621,10 +621,15 @@ impl RuntimeSessionService {
         } else {
             None
         };
+        let session_terminated = matches!(
+            self.lifecycle_state(),
+            RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed
+        );
         Ok(runtime_terminal_step_result_json(
             input.len(),
             &application,
             view.as_ref(),
+            session_terminated,
         ))
     }
 

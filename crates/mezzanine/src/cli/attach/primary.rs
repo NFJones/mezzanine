@@ -143,6 +143,9 @@ where
             break Ok(());
         }
         let refresh_requirement = terminal_step_response_refresh_requirement(body.as_str())?;
+        if refresh_requirement.session_terminated {
+            break Ok(());
+        }
         if refresh_requirement.full_redraw_required {
             terminal_io.invalidate_output_frame().await?;
         }
@@ -265,6 +268,9 @@ where
             break Ok(());
         }
         let refresh_requirement = terminal_step_response_refresh_requirement(body.as_str())?;
+        if refresh_requirement.session_terminated {
+            break Ok(());
+        }
         if refresh_requirement.full_redraw_required {
             terminal_io.invalidate_output_frame().await?;
         }
