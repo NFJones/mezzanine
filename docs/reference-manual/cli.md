@@ -30,7 +30,7 @@ session behavior.
 | `mez list` | List resumable sessions. Alias: `list-sessions`. |
 | `mez attach [target]` | Attach a primary client or request observer access. Alias: `attach-session`. |
 | `mez detach` | Detach the current or selected client. Alias: `detach-client`. |
-| `mez kill-session` | Terminate a live session through its control socket. |
+| `mez kill-session --force` | Terminate a live session through its control socket; `--force` confirms the destructive operation. |
 | `mez snapshot` | List, create, inspect, delete, plan, or resume persisted snapshots. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez
@@ -46,7 +46,7 @@ current argument and target syntax.
 | `mez mcp` | List, inspect, authenticate, add, remove, enable, disable, and configure MCP servers and tools. |
 | `mez sandbox` | Inspect, plan, enable, disable, manage presets/profiles, project trust, and Bubblewrap-home caches. |
 | `mez issue` | Add, show, update, query, and delete local project issues. |
-| `mez memory` | List, inspect, add, edit, search, retain, and export persistent memory records. |
+| `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
 
 `mez version` prints version information. `mez help` and `mez <command> --help`
 show the generated command contract. Human-readable output is the default;
