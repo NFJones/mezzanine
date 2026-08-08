@@ -13,11 +13,12 @@ provider for model-backed work.
 ## Open and use the prompt
 
 Press `Ctrl+A a` to show or hide the agent shell for the focused pane. Its
-conversation log and prompt replace the pane's process surface while visible;
-hiding the shell restores the retained process screen. The agent works from the
-pane working directory, its conversation state, configured instructions, and
-explicit action results; it does not passively receive your full terminal
-screen, scrollback, or other panes.
+conversation log and prompt appear at the bottom of that pane without replacing
+the retained process screen. While the prompt is visible, input for that pane
+goes to the agent shell; hiding it returns input to the process. The agent works
+from the pane working directory, its conversation state, configured
+instructions, and explicit action results; it does not passively receive your
+full terminal screen, scrollback, or other panes.
 
 Type a request and press Enter. `Ctrl+V` pastes host clipboard text into the
 editable prompt while preserving multiline text. Prompt completion supports

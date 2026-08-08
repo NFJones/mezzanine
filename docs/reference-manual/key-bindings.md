@@ -19,6 +19,8 @@ configuration can replace bindings.
 | `Ctrl+A ?` | Show effective bindings. |
 | `Ctrl+A d` / `Ctrl+A D` | Detach the primary client / choose a client or observer to detach. |
 | `Ctrl+A c` / `Ctrl+A C` | Create a window / window group. |
+| `Ctrl+A ,` | Rename the current window. |
+| `Ctrl+A w` / `Ctrl+A G` | Choose a window / window group interactively. |
 | `Ctrl+A n`, `Ctrl+A p`, `Ctrl+A l` | Next, previous, or last window. |
 | `Ctrl+A (` / `Ctrl+A )` | Previous or next window group. |
 | `Ctrl+A 0`–`Ctrl+A 9`, `Ctrl+A '`, `Ctrl+A .` | Select or renumber windows. |
