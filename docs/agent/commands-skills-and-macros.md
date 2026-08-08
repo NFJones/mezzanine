@@ -59,11 +59,11 @@ project skills live under `.mezzanine/skills/<name>/SKILL.md`. Project skills
 remain untrusted content for security purposes and do not override approvals
 or action rules, even after project trust enables their discovery.
 
-Start a prompt with `#<macro-name>` to run an ordered macro. Macros use a
-`MACRO.md` definition in the corresponding user or trusted-project macro root.
-One persistent subagent runs the sequence, while normal prompt parsing,
-permissions, and approvals still apply to every step. Use `/list-macros` before
-invoking an unfamiliar macro.
+Start a prompt with `#<macro-name>` to run an ordered macro. User macros live
+under `~/.config/mezzanine/macros/<name>/MACRO.md`; trusted project macros live
+under `.mezzanine/macros/<name>/MACRO.md`. One persistent subagent runs the
+ordered sequence, while normal prompt parsing, permissions, and approvals still
+apply to every step. Use `/list-macros` before invoking an unfamiliar macro.
 
 Use `@<server-id>` only when a task requires a configured MCP server. That
 server's callable metadata is available for the current turn, not permanently

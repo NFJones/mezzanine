@@ -14,9 +14,10 @@ Read [Agent overview](../agent/overview.md) and [Approvals and review](../safety
 An agent response is a validated `maap/1` batch with a concise rationale and
 one or more actions. Mezzanine assigns turn and action identities, validates
 the active action surface, independently classifies effects, and records a
-result for every accepted, rejected, blocked, denied, executed, or interrupted
-action. Model-provided effect claims and bookkeeping identities are not
-authoritative.
+result for every accepted action: it may be blocked, denied, run, succeed,
+fail, time out, be cancelled, or be interrupted. Rejected batches and actions
+also receive results. Model-provided effect claims and bookkeeping identities
+are not authoritative.
 
 `say` presents display-only text as `progress`, `final`, or `blocked`; text
 that looks like a command or patch does not execute. Action results are bounded
