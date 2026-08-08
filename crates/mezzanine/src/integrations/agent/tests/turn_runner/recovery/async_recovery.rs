@@ -4,14 +4,15 @@ use super::*;
 
 #[tokio::test]
 /// Verifies the async turn runner applies the same ephemeral MAAP repair path
-/// used by the synchronous runner so production provider workers can recover
-/// from model schema mistakes without adding repair instructions to context.
+/// used by the synchronous runner when a shell command invokes a reserved MAAP
+/// action. Production provider workers must repair that model-correctable
+/// validation error without adding repair instructions to durable context.
 async fn async_turn_runner_retries_maap_validation_error_without_persisting_repair_context() {
     let turn = turn();
     let capability = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
-        raw_text: "request mcp capability".to_string(),
+        raw_text: "request shell capability".to_string(),
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),
@@ -21,7 +22,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
-            actions: vec![capability_action("capability-1", AgentCapability::Mcp)],
+            actions: vec![capability_action("capability-1", AgentCapability::Shell)],
             final_turn: false,
         }),
         provider_transcript_events: Vec::new(),
@@ -29,7 +30,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
     let invalid = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
-        raw_text: "invalid unavailable mcp action".to_string(),
+        raw_text: "invalid semantic-action shell response".to_string(),
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),
@@ -40,12 +41,14 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             actions: vec![AgentAction {
-                id: "mcp-1".to_string(),
-                rationale: "inspect unavailable state".to_string(),
-                payload: AgentActionPayload::McpCall {
-                    server: "missing".to_string(),
-                    tool: "read".to_string(),
-                    arguments_json: "{}".to_string(),
+                id: "shell-semantic-action".to_string(),
+                rationale: "apply the prepared patch".to_string(),
+                payload: AgentActionPayload::ShellCommand {
+                    summary: "Apply the prepared patch".to_string(),
+                    command: "apply_patch --help".to_string(),
+                    interactive: false,
+                    stateful: false,
+                    timeout_ms: None,
                 },
             }],
             final_turn: false,
@@ -55,7 +58,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
     let corrected = ModelResponse {
         provider: "batch".to_string(),
         model: "test".to_string(),
-        raw_text: "corrected async response".to_string(),
+        raw_text: "corrected async semantic-action response".to_string(),
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),
@@ -65,7 +68,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             thought: None,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
-            actions: vec![say_action("say-1", "Corrected asynchronously.")],
+            actions: vec![say_action("say-1", "I will use a file action instead.")],
             final_turn: true,
         }),
         provider_transcript_events: Vec::new(),
@@ -73,13 +76,6 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
     let provider = SequencedProvider::new(vec![Ok(capability), Ok(invalid), Ok(corrected)]);
     let policy = PermissionPolicy::default();
     let approvals = SessionApprovalStore::default();
-    let tools = vec![McpPromptTool {
-        server_id: "state".to_string(),
-        tool_name: "list".to_string(),
-        description: "List state".to_string(),
-        approval_required: false,
-        input_schema_json: r#"{"type":"object","properties":{}}"#.to_string(),
-    }];
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
         provider: &provider,
@@ -97,8 +93,8 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         ),
         subagent_scope: None,
         subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-        available_mcp_servers: vec!["state".to_string()],
-        available_mcp_tools: &tools,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
         memory_actions_enabled: false,
         issue_actions_enabled: true,
     };
@@ -111,7 +107,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
                 source: ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
-                content: "inspect missing mcp state".to_string(),
+                content: "write a short Rust program".to_string(),
             }])
             .unwrap(),
         )
@@ -119,7 +115,13 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Completed);
-    assert_eq!(provider.requests().len(), 3);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[2].messages.iter().any(|message| {
+        message.content.contains("[MAAP repair state]")
+            && message.content.contains("must not invoke MAAP action")
+            && message.content.contains("apply_patch")
+    }));
     assert!(
         execution
             .request
