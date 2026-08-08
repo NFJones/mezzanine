@@ -372,7 +372,7 @@ fn render_active_pane_border_glyphs_are_foreground_only() {
 
     assert_eq!(
         border_span.rendition.foreground,
-        Some(TerminalColor::Rgb(0x7e, 0x9c, 0xd8))
+        Some(TerminalColor::Rgb(0xd8, 0xff, 0x5a))
     );
     assert_eq!(border_span.rendition.background, None);
 }
@@ -418,7 +418,7 @@ fn render_merged_pane_frame_fills_status_bar_and_preserves_vertical_separators()
         .iter()
         .find(|span| {
             span.length >= frame_text.len()
-                && span.rendition.background == Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f))
+                && span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
         })
         .copied()
         .expect("merged status title should carry the title-pill background");
@@ -439,8 +439,8 @@ fn render_merged_pane_frame_fills_status_bar_and_preserves_vertical_separators()
         view.line_style_spans[merged_row].iter().any(|span| {
             span.start == title_span.start
                 && span.length >= frame_text.len()
-                && span.rendition.foreground == Some(TerminalColor::Rgb(0x00, 0x00, 0x00))
-                && span.rendition.background == Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f))
+                && span.rendition.foreground == Some(TerminalColor::Rgb(0x11, 0x14, 0x00))
+                && span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
         }),
         "{:?}",
         view.line_style_spans[merged_row]

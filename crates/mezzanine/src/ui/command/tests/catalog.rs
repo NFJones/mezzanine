@@ -247,7 +247,7 @@ fn agent_scoped_slash_duplicates_are_not_terminal_commands() {
 
 /// Verifies that `list-themes` has a useful offline fallback before a live
 /// runtime config is attached: it should show the built-in theme registry and
-/// mark the generated default `kanagawa` theme as active.
+/// mark the generated default `acid_lime` theme as active.
 #[test]
 fn list_themes_reports_builtin_defaults_without_runtime_config() {
     let (mut session, primary) = test_session();
@@ -264,13 +264,13 @@ fn list_themes_reports_builtin_defaults_without_runtime_config() {
             "| active | theme | preview | source | preview colors | action |\n| --- | --- | --- | --- | --- | --- |"
         )
     );
-    assert!(body.contains("| ★ active | kanagawa | █████ | builtin |"));
+    assert!(body.contains("| ★ active | acid_lime | █████ | builtin |"));
     assert!(body.contains("| — | deepforest | █████ | builtin |"));
     assert!(body.contains("| — | gruvbox_dark | █████ | builtin |"));
     assert!(body.contains("| — | catppuccin_latte | █████ | builtin |"));
     assert!(body.contains("| — | high_contrast_dark | █████ | builtin |"));
     assert!(body.contains("| — | dracula | █████ | builtin |"));
-    assert!(body.contains("[`set-theme kanagawa`](mez-agent:set-theme%20kanagawa)"));
+    assert!(body.contains("[`set-theme acid_lime`](mez-agent:set-theme%20acid_lime)"));
 }
 
 /// Verifies that the baseline command registry reports a known support level

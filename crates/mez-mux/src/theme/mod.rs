@@ -128,7 +128,7 @@ pub const BUILTIN_UI_THEME_NAMES: &[&str] = &[
 ];
 
 /// Built-in theme selected when no explicit `theme.active` setting is present.
-pub const DEFAULT_UI_THEME_NAME: &str = "kanagawa";
+pub const DEFAULT_UI_THEME_NAME: &str = "acid_lime";
 
 const THEME_PREVIEW_ALIAS_NAMES: &[&str] = &["primary", "secondary", "tertiary", "muted", "danger"];
 const THEME_PREVIEW_BLOCK: char = '█';

@@ -354,7 +354,7 @@ fn html_response_uses_themed_mez_transcript_success_page() {
     assert!(response.contains("class=\"mez-pane\""));
     assert!(response.contains("class=\"transcript-line agent-line\""));
     assert!(response.contains("<span class=\"speaker\">agent:</span>"));
-    assert!(response.contains("--accent-primary: #7e9cd8"));
+    assert!(response.contains("--accent-primary: #bfff00"));
     assert!(response.contains("No external page assets were loaded"));
     assert!(response.contains("color-scheme: dark"));
 }

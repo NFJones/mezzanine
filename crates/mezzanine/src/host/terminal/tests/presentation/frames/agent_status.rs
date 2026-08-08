@@ -265,18 +265,18 @@ fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_nam
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.start == 0
             && span.length == " 0 shell  ".len()
-            && span.rendition.background == Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f))
+            && span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
     }));
     assert!(view.line_style_spans[0].iter().any(|span| {
-        span.rendition.background == Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f))
+        span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
             && span.length == " gpt-5.5 ".len()
     }));
     assert!(view.line_style_spans[0].iter().any(|span| {
-        span.rendition.background == Some(TerminalColor::Rgb(0xe6, 0xc3, 0x84))
+        span.rendition.background == Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
             && span.length == " high ".len()
     }));
     assert!(view.line_style_spans[0].iter().any(|span| {
-        span.rendition.background == Some(TerminalColor::Rgb(0xe6, 0xc3, 0x84))
+        span.rendition.background == Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
             && span.length == " thinking ".len()
     }));
     assert!(!view.lines[0].contains("Nova"));
@@ -298,11 +298,11 @@ fn render_default_pane_frame_agent_status_uses_separate_themed_pills_without_nam
     assert!(
         status_backgrounds
             .iter()
-            .any(|color| *color != TerminalColor::Rgb(0x7e, 0x9c, 0xd8)),
+            .any(|color| *color != TerminalColor::Rgb(0xbf, 0xff, 0x00)),
         "{status_backgrounds:?}"
     );
     assert!(
-        !status_backgrounds.contains(&TerminalColor::Rgb(0xe6, 0xc3, 0x84)),
+        !status_backgrounds.contains(&TerminalColor::Rgb(0xd7, 0xff, 0x5f)),
         "running scan should derive a harmonious range from the running color instead of reusing the reasoning accent: {status_backgrounds:?}"
     );
 }
@@ -594,7 +594,7 @@ fn render_default_pane_frame_agent_status_waiting_uses_running_scan() {
     assert!(
         status_backgrounds
             .iter()
-            .any(|color| *color != TerminalColor::Rgb(0x7e, 0x9c, 0xd8)),
+            .any(|color| *color != TerminalColor::Rgb(0xbf, 0xff, 0x00)),
         "{status_backgrounds:?}"
     );
 }
@@ -655,7 +655,7 @@ fn render_default_pane_frame_agent_status_routing_uses_running_scan() {
     assert!(
         status_backgrounds
             .iter()
-            .any(|color| *color != TerminalColor::Rgb(0x7e, 0x9c, 0xd8)),
+            .any(|color| *color != TerminalColor::Rgb(0xbf, 0xff, 0x00)),
         "{status_backgrounds:?}"
     );
 }
@@ -797,6 +797,6 @@ fn render_default_pane_frame_scroll_position_has_background_without_box_drawing_
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.start == 27
             && span.length == 4
-            && span.rendition.background == Some(TerminalColor::Rgb(0xe6, 0xc3, 0x84))
+            && span.rendition.background == Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
     }));
 }

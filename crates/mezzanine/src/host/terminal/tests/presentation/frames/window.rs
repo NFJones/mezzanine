@@ -118,12 +118,12 @@ fn render_default_window_frame_uses_window_pillbox_context() {
     .unwrap()
     .unwrap();
     assert!(view.line_style_spans[2].iter().any(|span| {
-        span.start >= 10 && span.rendition.background == Some(TerminalColor::Rgb(0x7e, 0x9c, 0xd8))
+        span.start >= 10 && span.rendition.background == Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
     }));
     assert!(view.line_style_spans[2].iter().any(|span| {
         span.start == 0
             && span.rendition.background.is_some()
-            && span.rendition.background != Some(TerminalColor::Rgb(0x7e, 0x9c, 0xd8))
+            && span.rendition.background != Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
     }));
 }
 
@@ -277,7 +277,7 @@ fn render_default_window_frame_action_pills_are_clickable_and_pressed() {
     assert!(view.line_style_spans[2].iter().any(|span| {
         span.start == usize::from(new_window_start)
             && span.length == 3
-            && span.rendition.background == Some(TerminalColor::Rgb(0x7e, 0x9c, 0xd8))
+            && span.rendition.background == Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
     }));
 }
 
@@ -338,14 +338,14 @@ fn render_window_status_uses_right_aligned_themed_segments() {
     let uptime_start_bytes = view.lines[2].find(" 2d 03h 04m ").unwrap();
     let uptime_start = UnicodeWidthStr::width(&view.lines[2][..uptime_start_bytes]);
     assert!(view.line_style_spans[2].iter().any(|span| {
-        span.rendition.background == Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f))
+        span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
             && span.start == uptime_start
             && span.length == " 2d 03h 04m ".len()
     }));
     let datetime_start_bytes = view.lines[2].find(" 2026-05-05 10:11:12 ").unwrap();
     let datetime_start = UnicodeWidthStr::width(&view.lines[2][..datetime_start_bytes]);
     assert!(view.line_style_spans[2].iter().any(|span| {
-        span.rendition.background == Some(TerminalColor::Rgb(0xe6, 0xc3, 0x84))
+        span.rendition.background == Some(TerminalColor::Rgb(0xd7, 0xff, 0x5f))
             && span.start == datetime_start
             && span.length == " 2026-05-05 10:11:12 ".len()
     }));
@@ -402,7 +402,7 @@ fn render_window_status_uses_cached_command_status_pills() {
     assert!(view.line_style_spans[2].iter().any(|span| {
         span.start == pill_start
             && span.length == " CPU 42% ".len()
-            && span.rendition.background == Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f))
+            && span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f))
     }));
 }
 

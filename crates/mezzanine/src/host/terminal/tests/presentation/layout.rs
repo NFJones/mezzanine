@@ -224,7 +224,7 @@ fn client_view_offsets_style_spans_across_side_by_side_panes() {
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.start == 3
             && span.length == 1
-            && span.rendition.foreground == Some(TerminalColor::Rgb(0x7e, 0x9c, 0xd8))
+            && span.rendition.foreground == Some(TerminalColor::Rgb(0xd8, 0xff, 0x5a))
             && span.rendition.background.is_none()
     }));
 }
@@ -351,22 +351,22 @@ fn default_client_loop_config_renders_window_and_pane_state_rows() {
     assert!(view.line_style_spans[3].iter().any(|span| {
         span.start == 0
             && span.length == usize::from(window.size.columns)
-            && span.rendition.background == Some(TerminalColor::Rgb(0x1f, 0x1f, 0x28))
+            && span.rendition.background == Some(TerminalColor::Rgb(0x1b, 0x1f, 0x0a))
     }));
     assert!(
         view.line_style_spans[3]
             .iter()
-            .any(|span| span.rendition.background == Some(TerminalColor::Rgb(0x7e, 0x9c, 0xd8)))
+            .any(|span| span.rendition.background == Some(TerminalColor::Rgb(0xbf, 0xff, 0x00)))
     );
     assert!(view.line_style_spans[0].iter().any(|span| {
         span.start == 0
             && span.length == usize::from(window.size.columns)
-            && span.rendition.background == Some(TerminalColor::Rgb(0x1f, 0x1f, 0x28))
+            && span.rendition.background == Some(TerminalColor::Rgb(0x1b, 0x1f, 0x0a))
     }));
     assert!(
         view.line_style_spans[0]
             .iter()
-            .any(|span| span.rendition.background == Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f)))
+            .any(|span| span.rendition.background == Some(TerminalColor::Rgb(0x7f, 0xbf, 0x3f)))
     );
     assert!(view.cursor_visible);
     assert_eq!(view.cursor_row, 1);
@@ -1104,7 +1104,7 @@ fn render_attached_view_uses_conditional_window_group_bar() {
     assert!(multi_group_view.lines[0].contains("1 work"));
     assert!(
         multi_group_view.line_style_spans[0].iter().any(|span| {
-            span.rendition.background == Some(TerminalColor::Rgb(0x7e, 0x9c, 0xd8))
+            span.rendition.background == Some(TerminalColor::Rgb(0xbf, 0xff, 0x00))
         })
     );
 }

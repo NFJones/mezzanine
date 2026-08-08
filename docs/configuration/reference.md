@@ -260,7 +260,7 @@ Pane templates support `session.id`, `window.id`, `window.index`, `pane.id`,
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `theme.active` | string | `"kanagawa"` | Active built-in or configured theme. |
+| `theme.active` | string | `"acid_lime"` | Active built-in or configured theme. |
 | `theme.aliases.<alias>` | map value | see below | Alias to `#rgb` or `#rrggbb`. |
 | `theme.colors.<slot>` | map value | see below | UI color slot set to a hex color or alias. |
 
@@ -268,88 +268,88 @@ Default aliases:
 
 | Alias | Default declaration | Description |
 | --- | --- | --- |
-| `primary` | `"#7e9cd8"` | Primary accent. |
-| `secondary` | `"#7aa89f"` | Secondary accent. |
-| `tertiary` | `"#e6c384"` | Tertiary accent. |
-| `thinking` | `"#938aa9"` | Muted agent thinking/status accent. |
-| `danger` | `"#e82424"` | Destructive/error accent. |
+| `primary` | `"#bfff00"` | Primary accent. |
+| `secondary` | `"#7fbf3f"` | Secondary accent. |
+| `tertiary` | `"#d7ff5f"` | Tertiary accent. |
+| `thinking` | `"#c9d89a"` | Muted agent thinking/status accent. |
+| `danger` | `"#ff5c57"` | Destructive/error accent. |
 
 Default color slots:
 
 | Slot | Default declaration | Description |
 | --- | --- | --- |
-| `window_frame_fg` | `"primary"` | Window frame foreground. |
-| `window_frame_bg` | `"#1f1f28"` | Window frame background. |
-| `window_active_fg` | `"#1f1f28"` | Active window pill foreground. |
+| `window_frame_fg` | `"primary_foreground"` | Window frame foreground. |
+| `window_frame_bg` | `"surface"` | Window frame background. |
+| `window_active_fg` | `"primary_text"` | Active window pill foreground. |
 | `window_active_bg` | `"primary"` | Active window pill background. |
-| `window_inactive_fg` | `"#dcd7ba"` | Inactive window pill foreground. |
+| `window_inactive_fg` | `"secondary_text"` | Inactive window pill foreground. |
 | `window_inactive_bg` | `"secondary"` | Inactive window pill background. |
-| `pane_frame_active_fg` | `"#dcd7ba"` | Active pane frame foreground. |
+| `pane_frame_active_fg` | `"secondary_text"` | Active pane frame foreground. |
 | `pane_frame_active_bg` | `"secondary"` | Active pane frame background. |
-| `pane_frame_inactive_fg` | `"#727169"` | Inactive pane frame foreground. |
-| `pane_frame_inactive_bg` | `"#1f1f28"` | Inactive pane frame background. |
-| `pane_border_active_fg` | `"primary"` | Active pane border foreground. |
-| `pane_border_active_bg` | `"#1f1f28"` | Active pane border background. |
-| `pane_border_inactive_fg` | `"#727169"` | Inactive pane border foreground. |
-| `pane_border_inactive_bg` | `"#1f1f28"` | Inactive pane border background. |
-| `pane_divider_fg` | `"tertiary"` | Pane divider foreground. |
-| `pane_divider_bg` | `"#1f1f28"` | Pane divider background. |
-| `frame_fill_fg` | `"#dcd7ba"` | Frame fill foreground. |
-| `frame_fill_bg` | `"#1f1f28"` | Frame fill background. |
-| `scroll_indicator_fg` | `"#1f1f28"` | Scroll indicator foreground. |
+| `pane_frame_inactive_fg` | `"muted"` | Inactive pane frame foreground. |
+| `pane_frame_inactive_bg` | `"surface"` | Inactive pane frame background. |
+| `pane_border_active_fg` | `"primary_foreground"` | Active pane border foreground. |
+| `pane_border_active_bg` | `"surface"` | Active pane border background. |
+| `pane_border_inactive_fg` | `"muted"` | Inactive pane border foreground. |
+| `pane_border_inactive_bg` | `"surface"` | Inactive pane border background. |
+| `pane_divider_fg` | `"tertiary_foreground"` | Pane divider foreground. |
+| `pane_divider_bg` | `"surface"` | Pane divider background. |
+| `frame_fill_fg` | `"foreground"` | Frame fill foreground. |
+| `frame_fill_bg` | `"surface"` | Frame fill background. |
+| `scroll_indicator_fg` | `"tertiary_text"` | Scroll indicator foreground. |
 | `scroll_indicator_bg` | `"tertiary"` | Scroll indicator background. |
-| `pane_pwd_fg` | `"#1f1f28"` | Pane working-directory pill foreground. |
-| `pane_pwd_bg` | `"#727169"` | Pane working-directory pill background. |
-| `window_status_uptime_fg` | `"#1f1f28"` | Uptime status foreground. |
+| `pane_pwd_fg` | `"muted_text"` | Pane working-directory pill foreground. |
+| `pane_pwd_bg` | `"muted"` | Pane working-directory pill background. |
+| `window_status_uptime_fg` | `"secondary_text"` | Uptime status foreground. |
 | `window_status_uptime_bg` | `"secondary"` | Uptime status background. |
-| `window_status_datetime_fg` | `"#1f1f28"` | Date/time status foreground. |
+| `window_status_datetime_fg` | `"tertiary_text"` | Date/time status foreground. |
 | `window_status_datetime_bg` | `"tertiary"` | Date/time status background. |
-| `prompt_fg` | `"primary"` | Command prompt foreground. |
-| `prompt_bg` | `"#1f1f28"` | Command prompt background. |
-| `agent_prompt_fg` | `"#ffffff"` | Agent prompt foreground. |
-| `agent_prompt_bg` | `"#2a2a37"` | Agent prompt background. |
-| `agent_transcript_user_fg` | `"primary"` | Agent transcript user foreground. |
-| `agent_transcript_user_bg` | `"#1f1f28"` | Agent transcript user background. |
-| `agent_transcript_assistant_fg` | `"secondary"` | Agent transcript assistant foreground. |
-| `agent_transcript_assistant_bg` | `"#1f1f28"` | Agent transcript assistant background. |
+| `prompt_fg` | `"primary_foreground"` | Command prompt foreground. |
+| `prompt_bg` | `"surface"` | Command prompt background. |
+| `agent_prompt_fg` | `"#f8ffe0"` | Agent prompt foreground. |
+| `agent_prompt_bg` | `"#20250c"` | Agent prompt background. |
+| `agent_transcript_user_fg` | `"primary_foreground"` | Agent transcript user foreground. |
+| `agent_transcript_user_bg` | `"surface"` | Agent transcript user background. |
+| `agent_transcript_assistant_fg` | `"secondary_foreground"` | Agent transcript assistant foreground. |
+| `agent_transcript_assistant_bg` | `"surface"` | Agent transcript assistant background. |
 | `agent_transcript_status_fg` | `"thinking"` | Agent status/thinking foreground. |
-| `agent_transcript_status_bg` | `"#1f1f28"` | Agent status/thinking background. |
-| `agent_transcript_error_fg` | `"danger"` | Agent error foreground. |
-| `agent_transcript_error_bg` | `"#1f1f28"` | Agent error background. |
-| `agent_transcript_command_fg` | `"tertiary"` | Agent command foreground. |
-| `agent_transcript_command_bg` | `"#1f1f28"` | Agent command background. |
-| `agent_model_fg` | `"#1f1f28"` | Agent model pill foreground. |
+| `agent_transcript_status_bg` | `"surface"` | Agent status/thinking background. |
+| `agent_transcript_error_fg` | `"danger_foreground"` | Agent error foreground. |
+| `agent_transcript_error_bg` | `"surface"` | Agent error background. |
+| `agent_transcript_command_fg` | `"tertiary_foreground"` | Agent command foreground. |
+| `agent_transcript_command_bg` | `"surface"` | Agent command background. |
+| `agent_model_fg` | `"secondary_text"` | Agent model pill foreground. |
 | `agent_model_bg` | `"secondary"` | Agent model pill background. |
-| `agent_reasoning_fg` | `"#1f1f28"` | Agent reasoning pill foreground. |
+| `agent_reasoning_fg` | `"tertiary_text"` | Agent reasoning pill foreground. |
 | `agent_reasoning_bg` | `"tertiary"` | Agent reasoning pill background. |
-| `agent_status_idle_fg` | `"#1f1f28"` | Idle agent status foreground. |
-| `agent_status_idle_bg` | `"#727169"` | Idle agent status background. |
-| `agent_status_running_fg` | `"#1f1f28"` | Running agent status foreground. |
+| `agent_status_idle_fg` | `"muted_text"` | Idle agent status foreground. |
+| `agent_status_idle_bg` | `"muted"` | Idle agent status background. |
+| `agent_status_running_fg` | `"primary_text"` | Running agent status foreground. |
 | `agent_status_running_bg` | `"primary"` | Running agent status background. |
-| `agent_status_blocked_fg` | `"#1f1f28"` | Blocked agent status foreground. |
+| `agent_status_blocked_fg` | `"tertiary_text"` | Blocked agent status foreground. |
 | `agent_status_blocked_bg` | `"tertiary"` | Blocked agent status background. |
-| `agent_status_failed_fg` | `"#1f1f28"` | Failed agent status foreground. |
+| `agent_status_failed_fg` | `"danger_text"` | Failed agent status foreground. |
 | `agent_status_failed_bg` | `"danger"` | Failed agent status background. |
-| `display_overlay_fg` | `"secondary"` | Display overlay foreground. |
-| `display_overlay_bg` | `"#1f1f28"` | Display overlay background. |
-| `copy_selection_fg` | `"#1f1f28"` | Copy selection foreground. |
+| `display_overlay_fg` | `"secondary_foreground"` | Display overlay foreground. |
+| `display_overlay_bg` | `"surface"` | Display overlay background. |
+| `copy_selection_fg` | `"tertiary_text"` | Copy selection foreground. |
 | `copy_selection_bg` | `"tertiary"` | Copy selection background. |
-| `syntax_plain_fg` | `"#dcd7ba"` | Plain syntax foreground. |
-| `syntax_plain_bg` | `"#1f1f28"` | Plain syntax background. |
-| `syntax_keyword_fg` | `"primary"` | Keyword syntax foreground. |
-| `syntax_keyword_bg` | `"#1f1f28"` | Keyword syntax background. |
-| `syntax_string_fg` | `"tertiary"` | String syntax foreground. |
-| `syntax_string_bg` | `"#1f1f28"` | String syntax background. |
+| `syntax_plain_fg` | `"foreground"` | Plain syntax foreground. |
+| `syntax_plain_bg` | `"surface"` | Plain syntax background. |
+| `syntax_keyword_fg` | `"primary_foreground"` | Keyword syntax foreground. |
+| `syntax_keyword_bg` | `"surface"` | Keyword syntax background. |
+| `syntax_string_fg` | `"tertiary_foreground"` | String syntax foreground. |
+| `syntax_string_bg` | `"surface"` | String syntax background. |
 | `syntax_comment_fg` | `"thinking"` | Comment syntax foreground. |
-| `syntax_comment_bg` | `"#1f1f28"` | Comment syntax background. |
-| `syntax_type_fg` | `"secondary"` | Type syntax foreground. |
-| `syntax_type_bg` | `"#1f1f28"` | Type syntax background. |
-| `syntax_function_fg` | `"primary"` | Function syntax foreground. |
-| `syntax_function_bg` | `"#1f1f28"` | Function syntax background. |
-| `syntax_number_fg` | `"tertiary"` | Number syntax foreground. |
-| `syntax_number_bg` | `"#1f1f28"` | Number syntax background. |
-| `syntax_operator_fg` | `"#727169"` | Operator syntax foreground. |
-| `syntax_operator_bg` | `"#1f1f28"` | Operator syntax background. |
+| `syntax_comment_bg` | `"surface"` | Comment syntax background. |
+| `syntax_type_fg` | `"secondary_foreground"` | Type syntax foreground. |
+| `syntax_type_bg` | `"surface"` | Type syntax background. |
+| `syntax_function_fg` | `"primary_foreground"` | Function syntax foreground. |
+| `syntax_function_bg` | `"surface"` | Function syntax background. |
+| `syntax_number_fg` | `"tertiary_foreground"` | Number syntax foreground. |
+| `syntax_number_bg` | `"surface"` | Number syntax background. |
+| `syntax_operator_fg` | `"muted"` | Operator syntax foreground. |
+| `syntax_operator_bg` | `"surface"` | Operator syntax background. |
 
 ### `themes.<name>`
 

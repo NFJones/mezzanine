@@ -126,7 +126,7 @@ fn display_overlay_preserves_and_refits_retained_base_styles() {
     assert_eq!(spans[2][0].length, 2);
     assert_eq!(
         spans[2][0].rendition.foreground,
-        Some(TerminalColor::Rgb(0x7a, 0xa8, 0x9f))
+        Some(TerminalColor::Rgb(0xa8, 0xe8, 0x5a))
     );
     assert_eq!(spans[2][0].rendition.background, None);
 }

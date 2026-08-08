@@ -997,7 +997,7 @@ baseline slot names are `window_frame_fg`, `window_frame_bg`,
 `syntax_function_fg`, `syntax_function_bg`, `syntax_number_fg`,
 `syntax_number_bg`, `syntax_operator_fg`, and `syntax_operator_bg`.
 
-The built-in default theme MUST be named `kanagawa`. It MUST define at least
+The built-in default theme MUST be named `acid_lime`. It MUST define at least
 the aliases `primary`, `secondary`, and `tertiary`, and those aliases MUST be
 assigned to high-impact active window, active pane, prompt, overlay, divider,
 or selection slots so changing only those aliases significantly changes the UI
@@ -2733,7 +2733,7 @@ length. Empty output behavior MUST be one of `hide`, `show_empty`, or
 `keep_previous`.
 
 The `theme` table MUST support `active`, `aliases`, and `colors`. `theme.active`
-MUST select the active named theme and MUST default to `kanagawa`.
+MUST select the active named theme and MUST default to `acid_lime`.
 `theme.aliases` MUST be a map from alias identifiers to `#rgb` or `#rrggbb` hex
 color strings. `theme.colors` MUST be a map from the baseline UI color slots to
 either a hex color string or a configured alias name. The generated default
