@@ -753,6 +753,8 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
         "/latency ".len(),
     )
     .unwrap();
+    let status_hint =
+        shadow_hint(SelectorSurface::AgentCommand, "/status ", "/status ".len()).unwrap();
     let trust_hint = shadow_hint(
         SelectorSurface::AgentCommand,
         "/sandbox trust ",
@@ -775,6 +777,7 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
 
     assert_eq!(loop_hint.text, " [--fork|--new] [--limit <int>] <prompt>");
     assert_eq!(latency_hint.text, " <slow|default|fast>");
+    assert_eq!(status_hint.text, " [--extended]");
     assert_eq!(plan_hint.text, " <on|off|toggle|status>");
     assert_eq!(trust_hint.text, " [project-root|latest|list|pending]");
     assert_eq!(
