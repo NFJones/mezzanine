@@ -27,16 +27,17 @@ mez auth login --provider anthropic --api-key
 mez auth status
 ```
 
-Noninteractive setup must use an explicit API-key method and an out-of-band
-secret source such as an API-key file. For OpenAI, an out-of-band device-code
+Noninteractive API-key setup must use an explicit API-key method and an
+out-of-band secret source such as an API-key file. For OpenAI, a device-code
 flow is also available with `mez auth login --device-code`.
 
 ## Credential handling
 
 Use `mez auth`, not `config.toml`, for tokens, bearer credentials, and API
 keys. Authentication state is stored separately under the user configuration
-root and uses an operating-system credential store when available. Normal
-status output omits private account identifiers and credential-store references.
+root. Mez uses an operating-system credential store when available and falls
+back to a private file there when it is not. Normal status output omits private
+account identifiers and credential-store references.
 
 Successful authentication does not guarantee a particular entitlement, quota,
 or model. Select a model with `/model` or configure a model profile.

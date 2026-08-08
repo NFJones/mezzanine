@@ -44,8 +44,8 @@ running binary supports are rejected instead of interpreted best-effort.
 
 Project overlays can use `.mezzanine/config.toml`, `.mezzanine/config.yaml`,
 `.mezzanine/config.yml`, or `.mezzanine/config.json` under a project directory.
-Only one supported overlay file may exist in a directory unless explicit format
-precedence is configured. The project root is the nearest ancestor of the pane
+Only one supported overlay file may exist in a directory; multiple files are a
+configuration error. The project root is the nearest ancestor of the pane
 working directory with a `.git` directory or file; otherwise the pane working
 directory is used.
 
