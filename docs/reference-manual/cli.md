@@ -28,14 +28,15 @@ session behavior.
 | `mez new` | Start a new background session and attach when interactive. Alias: `new-session`. |
 | `mez serve` | Start a foreground session service without attaching a primary client. Alias: `daemon`. |
 | `mez list` | List resumable sessions. Alias: `list-sessions`. |
-| `mez attach [target]` | Attach a primary client or request observer access. Alias: `attach-session`. |
+| `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access with `--observer` (alias: `--observe`). Alias: `attach-session`. |
 | `mez detach` | Detach the current or selected client. Alias: `detach-client`. |
 | `mez kill-session --force` | Terminate a live session through its control socket; `--force` confirms the destructive operation. |
 | `mez snapshot` | List, create, inspect, delete, plan, or resume persisted snapshots. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez
-serve` can run without one. Use `mez --help` and `mez <command> --help` for the
-current argument and target syntax.
+serve` can run without one. An observer request also requires an interactive
+terminal and remains pending until the primary client approves it. Use `mez
+--help` and `mez <command> --help` for the current argument and target syntax.
 
 ## Configuration, identity, and integrations
 

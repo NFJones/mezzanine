@@ -30,7 +30,9 @@ Primary config discovery looks for exactly one of these files under
 - `config.json`
 
 If no primary config exists, `mez config init` creates
-`~/.config/mezzanine/config.toml` with private file permissions.
+`~/.config/mezzanine/config.toml` with private file permissions. `mez config
+set` and `mez config unset` target that user configuration by default; their
+`--scope project` option targets the applicable project overlay instead.
 
 The current config schema version is `54`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,

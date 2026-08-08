@@ -26,8 +26,10 @@ mez config layers
 ```
 
 Use `mez config default` to print the built-in baseline. `mez config set` and
-`mez config unset` persist supported scalar changes. Validate after an edit;
-invalid configuration is rejected rather than partially applied.
+`mez config unset` persist supported scalar changes to the user configuration
+by default; use their `--scope project` option only for a trusted, eligible
+project overlay. Validate after an edit; invalid configuration is rejected
+rather than partially applied.
 
 ## Understand precedence and trust
 
