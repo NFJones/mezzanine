@@ -53,6 +53,10 @@ the published manual: it retains research, audits, plans, and historical
 investigations. The published reference layer is therefore
 `docs/reference-manual/`, avoiding a collision with that preserved material.
 
+The [manual migration inventory](manual-inventory.md) records the source,
+canonical owner, coverage criteria, and eventual cleanup disposition for every
+published documentation source.
+
 ## Related top-level documents
 
 - [README.md](../README.md): product overview and quick start.
