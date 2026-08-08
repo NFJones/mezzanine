@@ -38,9 +38,10 @@ into normal scrollback or default agent context. Host bracketed paste, mouse,
 focus, application cursor, and keypad behavior follow the active pane mode
 where supported.
 
-The agent shell is a separate pane presentation surface. While it is visible,
-ordinary process input is not delivered to the hidden process surface; hiding
-the agent shell restores that retained process screen.
+The agent shell is a separate pane presentation surface whose prompt appears at
+the bottom of its pane. While it is visible, ordinary process input is captured
+by the agent prompt, but the retained process screen remains distinct and is
+restored unchanged after the prompt is hidden.
 
 ## Diagnose a mismatch
 

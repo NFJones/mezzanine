@@ -13,17 +13,25 @@ provider for model-backed work.
 ## Open and use the prompt
 
 Press `Ctrl+A a` to show or hide the agent shell for the focused pane. The
-agent conversation and prompt replace the visible pane surface, but the process
-screen remains retained and is restored unchanged when the agent shell closes.
-While the prompt is visible, input for that pane goes to the agent shell;
-hiding it asks an in-progress agent task to stop before returning input to the
-process. The agent works from the pane working directory, its conversation
-state, configured instructions, and explicit action results; it does not
-passively receive your full terminal screen, scrollback, or other panes.
+agent prompt appears at the bottom of that pane; it does not replace the pane's
+process screen. Mezzanine retains the process and agent surfaces separately, so
+showing, hiding, or rebinding a conversation does not merge their history or
+screen state. While the prompt is visible, ordinary input for that pane goes to
+the agent shell, while multiplexer bindings, pane navigation, resizing, and
+copy-mode controls remain available. Hiding the shell asks an in-progress task
+to stop and blocks ordinary pane input until the task reaches a terminal state.
+The agent works from the pane working directory, its conversation state,
+configured instructions, and explicit action results; it does not passively
+receive your full terminal screen, scrollback, or other panes.
 
 Type a request and press Enter. `Ctrl+V` pastes host clipboard text into the
 editable prompt while preserving multiline text. Prompt completion supports
 slash commands, `$` skills, `#` macros, and `@` MCP server names where enabled.
+Press `Esc` to clear a draft without hiding the prompt. `Ctrl+D` on an empty
+prompt hides it. When no task is running, press `Ctrl+C` twice within three
+seconds to hide the prompt; when a task is running, `Ctrl+C` requests an
+immediate interruption. Non-slash text submitted while a task runs is steering
+for that task rather than a separate turn.
 
 Common controls are `/help`, `/status`, `/model`, `/approval`, `/new`,
 `/resume`, and `/stop`. Use `/plan on` to enable pane-local plan-only mode;
