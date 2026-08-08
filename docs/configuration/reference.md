@@ -83,6 +83,7 @@ entry is shown.
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `version` | integer | `54` | Config schema version. Do not change this. |
+| `runtime` | table | see below | Process runtime settings. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -109,6 +110,12 @@ entry is shown.
 | `audit` | table | see below | Security audit logging. |
 | `extensions` | map | `{}` | Implementation-specific extension data. |
 
+### `runtime`
+
+| Field | Type | Default declaration | Description |
+| --- | --- | --- | --- |
+| `runtime.cpu_count` | integer | `2` | Tokio worker threads available to daemon and foreground services; must be positive. |
+
 ### `session`
 
 | Field | Type | Default declaration | Description |
@@ -125,6 +132,8 @@ entry is shown.
 | --- | --- | --- | --- |
 | `terminal.profile` | string | `"xterm-compatible"` | Terminal compatibility profile. `xterm-compatible` is Mezzanine's bounded implemented subset, not a full xterm-emulator claim; valid defaults include `xterm-compatible` and `dumb`. |
 | `terminal.term` | string | `"screen-256color"` | `TERM` value exposed to panes; must not claim host identity such as `xterm-256color`. |
+| `terminal.pane_spawn_directory` | string | `"home"` | Directory policy for newly created panes: `home` or `same-directory`. |
+| `terminal.pane_spawn_view` | string | `"shell"` | Initial pane surface: `shell` or `agent`. |
 | `terminal.true_color` | boolean | `true` | Enable true-color presentation where supported. |
 | `terminal.mouse` | boolean | `true` | Enable mouse reporting, selection, scrolling, UI clicks, and explicit visible alternate-screen selection when pane applications have not captured mouse input. |
 | `terminal.bracketed_paste` | boolean | `true` | Enable bracketed paste handling. |
@@ -137,8 +146,11 @@ entry is shown.
 | `terminal.passthrough` | boolean | `false` | Allow broader terminal passthrough behavior when configured. |
 | `terminal.emoji_width` | string | `"wide"` | Emoji status-glyph width policy: `wide` for explicit two-cell emoji-presentation sequences, `narrow` for one-cell text fallback terminals. |
 | `terminal.reduced_motion` | boolean | `false` | Disable optional frame/status animations. |
+| `terminal.completion_attention_flashing` | boolean | `true` | Whether completion-attention title pills alternate their attention color. |
 | `terminal.resize_debounce_ms` | integer | `200` | Milliseconds to debounce resize redraws. |
 | `terminal.render_rate_limit_fps` | integer | `5` | Maximum burst render frames per second; `0` disables render rate limiting. |
+| `terminal.shell_output_preview_lines` | integer | `5` | Maximum preview lines shown for shell-command output; must be positive. |
+| `terminal.agent_wrap_column_cap` | integer | `120` | Maximum presentation width for persisted agent logs and transcripts; must be positive. |
 | `terminal.cursor_style` | string | `"block"` | Cursor style: `block`, `underline`, or `bar`. |
 | `terminal.cursor_blink` | boolean | `false` | Whether Mezzanine-rendered cursors blink. |
 | `terminal.cursor_blink_interval_ms` | integer | `500` | Full blink cycle length in milliseconds. |
@@ -449,6 +461,7 @@ description.
 | `agents.compaction_raw_retention_percent` | integer | `10` | Initial percent of complete raw groups retained outside model-authored summary input; provider context-limit backoff may grow the exact tail one complete group at a time; 1 to 100. |
 | `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |
 | `agents.action_failure_retry_limit` | integer | `5` | Self-correction attempts per repeated correctable action failure signature other than `apply_patch`. |
+| `agents.loop_limit` | integer | `8` | Maximum iterations for a `/loop`; must be positive. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |
 | `agents.always_exposed_mcp_servers` | string array | `[]` | MCP server ids whose model-safe metadata and callable tools are exposed on every applicable model turn; availability alone does not instruct the model to use them. |
@@ -467,6 +480,7 @@ description.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
+| `agents.auto_sizing.root_routing_policy` | string | `"subagent"` | Where automatic sizing runs a root turn: `subagent` or `in-place`. |
 | `agents.auto_sizing.router_model_profile` | string | `"auto-size-router"` | Profile used to classify turn size. |
 | `agents.auto_sizing.small_model_profile` | string | `"auto-size-small"` | Profile for small turns. |
 | `agents.auto_sizing.medium_model_profile` | string | `"auto-size-medium"` | Profile for medium turns. |
