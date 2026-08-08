@@ -23,9 +23,11 @@ configuration can replace bindings.
 | `Ctrl+A w` / `Ctrl+A G` | Choose a window / window group interactively. |
 | `Ctrl+A n`, `Ctrl+A p`, `Ctrl+A l` | Next, previous, or last window. |
 | `Ctrl+A (` / `Ctrl+A )` | Previous or next window group. |
-| `Ctrl+A 0`–`Ctrl+A 9`, `Ctrl+A '`, `Ctrl+A .` | Select or renumber windows. |
+| `Ctrl+A 0`–`Ctrl+A 9`, `Ctrl+A '` | Select a window by index or prompt for one. |
+| `Ctrl+A .` | Prompt for a destination and move the current window. |
 | `Ctrl+A %` / `Ctrl+A "` | Split vertically / horizontally. |
-| `Ctrl+A` then arrow keys, `o`, `;`, or `q` | Select an adjacent, next, last, or indexed pane. |
+| `Ctrl+A` then arrow keys, `o`, or `;` | Select an adjacent, next, or last pane. |
+| `Ctrl+A q` | Display pane indexes and selection actions. |
 | `Ctrl+A z`, `Ctrl+A Space` | Toggle pane zoom / cycle layouts. |
 | `Ctrl+A x` / `Ctrl+A &` | Kill the active pane / current window. |
 | `Ctrl+A !`, `Ctrl+A {`, `Ctrl+A }` | Break the active pane into a window / swap it with the previous or next pane. |
