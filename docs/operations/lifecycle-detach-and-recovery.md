@@ -34,6 +34,11 @@ selections, names, and known pane working directories. It can contain sensitive
 titles and paths, but it does not retain credentials, pending approvals,
 terminal history, live MCP state, or pane processes.
 
+Snapshots are stored under Mezzanine's user-private configuration area unless
+you configure another user-private location. Treat snapshot files as sensitive
+metadata: inspect their paths and titles before sharing, copying, or backing
+them up outside your normal private storage boundary.
+
 Use `mez snapshot resume-plan <snapshot-id>` before restoring when you need to
 inspect the proposed layout recovery. Use `mez snapshot latest-plan` to inspect
 the newest matching snapshot without selecting an ID. `mez snapshot resume
