@@ -67,6 +67,7 @@ subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
   (for example, `raw`, `mez`).
 
 ## Maintainability & Documentation Standards
+- mezzanine is compatible with both Linux ad MacOS. Compatibility MUST never be broken with either OS.
 - New or substantially changed modules should include a full module-level comment describing purpose, boundaries, and key invariants.
 - Major architectural components should have long form comments explaining their purpose and how they relate to other architectural components.
 - Public and private Rust items (`pub` structs/enums/traits/functions/methods) should have rustdoc comments describing behavior, inputs/outputs, and error conditions.
