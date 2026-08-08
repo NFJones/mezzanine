@@ -480,10 +480,9 @@ sandbox = "policy-only"
 # an empty list strips all ambient supplementary groups.
 # group_whitelist = []
 # Optional variable names are read from the active pane and always redacted.
-# An omitted list forwards PATH for sandbox command lookup; an explicit list
-# replaces it and grants no filesystem authority. Include PATH when adding a
-# variable needed by sandboxed commands.
-# env_whitelist = ["PATH", "ACME_HOME"]
+# They cannot override the fixed /usr/bin:/bin command-search path or grant
+# filesystem authority. External tools run by absolute path or command-local PATH.
+# env_whitelist = ["ACME_HOME"]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
 command_rules = []

@@ -31,13 +31,15 @@ authority. When no scope is configured, a pane in a trusted project can receive
 that project's canonical root as read-write authority; a pane with neither
 source has no filesystem authority.
 
-Unavailable or unsafe configured paths are excluded with a warning rather than
-silently broadened. Symlink escapes, sensitive credential directories, and the
-multi-user `/home` root are not usable authority. A permitted home scope is
-projected through a private managed home that masks sensitive descendants.
-Configured environment forwarding names and Git identity can be selectively
-projected, but they do not grant filesystem authority and host global Git
-configuration is not inherited.
+Unavailable configured paths are excluded with a warning rather than silently
+broadening authority. The multi-user `/home` root is never usable as an
+authority scope. Scope configuration is the sole determinant of filesystem
+exposure, including credential-bearing paths, so authorize such paths only
+when their exposure is intentional. A permitted home scope is projected through
+a private managed home; Mezzanine does not copy or mount the host home,
+credentials, or user configuration into it. Configured environment forwarding
+names and Git identity can be selectively projected, but they do not grant
+filesystem authority and host global Git configuration is not inherited.
 
 ## Control network access
 
