@@ -9,7 +9,7 @@ use mez_terminal::TerminalSize as Size;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Runs the test shell operation for this subsystem.
 ///
@@ -389,8 +389,9 @@ fn pane_process_manager_polls_exits_without_forgetting_process() {
         )
         .unwrap();
 
+    let deadline = Instant::now() + Duration::from_secs(1);
     let mut exited = Vec::new();
-    for _ in 0..50 {
+    while Instant::now() < deadline {
         let activity_sequence = manager.output_activity_sequence(pane_id);
         exited = manager.poll_exited().unwrap();
         if !exited.is_empty() {
@@ -487,8 +488,9 @@ fn pane_process_manager_rejects_async_handoff_after_exit() {
         )
         .unwrap();
 
+    let deadline = Instant::now() + Duration::from_secs(1);
     let mut exited = Vec::new();
-    for _ in 0..50 {
+    while Instant::now() < deadline {
         let activity_sequence = manager.output_activity_sequence(pane_id);
         exited = manager.poll_exited().unwrap();
         if !exited.is_empty() {
