@@ -301,7 +301,7 @@ original Markdown rather than rendered diagram glyphs or terminal controls.
 Common slash commands are `/help`, `/model`, `/approval`, `/new`, and
 `/resume`. Use `/status` to inspect the active pane's session and token usage.
 For the complete command, skill, and macro reference, see
-[Agent skills and commands](docs/agent-skills-and-commands.md).
+[Agent and integrations](docs/README.md#agent-and-integrations).
 
 ### Project context
 
@@ -337,8 +337,9 @@ For the current compatibility contract, see [SPEC.md](SPEC.md).
   active pane's policy. Project overlays remain pending until explicitly
   trusted.
 
-See [Sandbox mechanism](docs/sandbox-mechanism.md) for confinement, authority,
-network, managed-home, profile, cache, and environment behavior. See
+See [Safety, trust, and security](docs/README.md#safety-trust-and-security)
+for confinement, authority, network, managed-home, profile, cache, and
+environment behavior. See
 [SPEC.md](SPEC.md) for normative security and approval requirements.
 
 ## Advanced Tasks
@@ -348,8 +349,9 @@ client before allowing them. Before trusting a project overlay, review its
 `.mezzanine/config.toml` and `AGENTS.md`, then inspect pending trust with
 `mez sandbox trust list`.
 
-See [Agent skills and commands](docs/agent-skills-and-commands.md) and
-[Sandbox mechanism](docs/sandbox-mechanism.md) for detailed workflows.
+See [Agent and integrations](docs/README.md#agent-and-integrations) and
+[Safety, trust, and security](docs/README.md#safety-trust-and-security) for
+detailed workflows.
 
 ## What Persists Across the Session
 
@@ -376,15 +378,15 @@ for a named socket.
 
 Use `mez auth status` for shareable authentication diagnostics. Credentials and
 tokens are managed by `mez auth`, not configuration files. See
-[Agent skills and commands](docs/agent-skills-and-commands.md) and
-[SPEC.md](SPEC.md) for the complete CLI, authentication, and MCP reference.
+[the manual](docs/README.md) and [SPEC.md](SPEC.md) for the complete CLI,
+authentication, and MCP reference.
 
 ## Configuration Quick Reference
 
 Use the dedicated reference for generated defaults, supported fields, and layer
 behavior:
 
-- [Configuration reference](docs/configuration-reference.md)
+- [Configuration](docs/README.md#configuration)
 - [Example config](docs/examples/config.toml)
 - [SPEC.md Section 8](SPEC.md#8-configuration)
 
@@ -407,10 +409,11 @@ Credentials belong in `mez auth`, not in config files.
 
 ## Documentation Guide
 
-Use the [documentation guide](docs/README.md) to find reference material by
-audience and task. Start with [Agent skills and commands](docs/agent-skills-and-commands.md),
-[Configuration reference](docs/configuration-reference.md), and
-[Sandbox mechanism](docs/sandbox-mechanism.md).
+Use [the manual](docs/README.md) to find documentation by audience and task.
+Start with [Getting started](docs/README.md#getting-started),
+[Agent and integrations](docs/README.md#agent-and-integrations),
+[Configuration](docs/README.md#configuration), or
+[Safety, trust, and security](docs/README.md#safety-trust-and-security).
 
 ## FAQ
 
@@ -442,7 +445,7 @@ in configuration if your terminal renders emoji with a different width.
 ### How do project instructions work?
 
 Mezzanine discovers project instructions such as `AGENTS.md` and includes them
-in the agent context. See the [Configuration reference](docs/configuration-reference.md)
+in the agent context. See [Configuration](docs/README.md#configuration)
 for discovery settings.
 
 ### How do project config overlays become trusted?

@@ -1,55 +1,60 @@
-# Mezzanine Documentation Guide
+# Mezzanine Manual
 
-This directory is the stable entry point for Mezzanine user-facing and
-reference documentation.
+This manual explains how to install, configure, operate, and contribute to
+Mezzanine. It is organized by user task; [SPEC.md](../SPEC.md) remains the
+normative behavior and compatibility contract.
 
-## Start here by audience
+## Start by audience
 
-- **New users**: begin with the repository [README](../README.md) for product
-  overview, quick start, core workflows, and the first successful agent task.
-- **Daily users and operators**: use
-  [Agent skills and commands](agent-skills-and-commands.md) for the command
-  surfaces, [MAAP action reference](maap-actions-reference.md) for structured
-  agent actions, and [Configuration reference](configuration-reference.md) for
-  exact configuration fields and defaults.
-- **Contributors**: use [AGENTS.md](../AGENTS.md) for repository workflow,
-  testing, and handoff requirements, and
-  [Workspace architecture](workspace-architecture.md) for package ownership and
-  dependency direction.
-- **Specification readers**: use [SPEC.md](../SPEC.md) as the normative source
-  for behavior, especially configuration, agent capabilities, shell commands,
-  permissions, and persistence.
+- **New users:** begin with [Getting started](getting-started/README.md), then
+  continue to [Using Mezzanine](using-mezzanine/README.md).
+- **Daily users:** use [Using Mezzanine](using-mezzanine/README.md) for panes,
+  terminal interaction, agent-shell workflows, and routine sessions.
+- **Agent users:** use [Agent and integrations](agent/README.md) for commands,
+  continuity, providers, subagents, and MCP.
+- **Safety-sensitive users and administrators:** begin with
+  [Safety, trust, and security](safety-and-trust/README.md), then review
+  [Configuration](configuration/README.md).
+- **Operators:** use [Operations and troubleshooting](operations/README.md)
+  for lifecycle, diagnostics, recovery, and known symptoms.
+- **Contributors:** use [Contributing](contributing/README.md), then consult
+  [AGENTS.md](../AGENTS.md) for repository workflow requirements.
 
-## Stable documents in this tree
+## Manual contents
 
-- [configuration-reference.md](configuration-reference.md): generated default
-  configuration, supported fields, and layer behavior.
-- [sandbox-mechanism.md](sandbox-mechanism.md): Bubblewrap confinement,
-  authority resolution, network profiles, failure handling, and inspection.
-- [terminal-compatibility-matrix.md](terminal-compatibility-matrix.md):
-  advertised terminal capabilities, current regression coverage, unsupported
-  behavior, and full-screen TUI fixture backlog.
-- [agent-skills-and-commands.md](agent-skills-and-commands.md): the three
-  interactive command surfaces, explicit skill usage, and common operator
-  workflows.
-- [cache-status-diagnostics.md](cache-status-diagnostics.md): cumulative and
-  latest-request cache reuse, immutable-context continuity, and trace fields.
-- [context-lifecycle-and-compaction.md](context-lifecycle-and-compaction.md):
-  stable, chronological, and volatile context ownership plus execution-group
-  compaction and settlement rules.
-- [routed-loop-lifecycle.md](routed-loop-lifecycle.md): route-once `/loop`
-  ownership, worker profile pinning, conversation modes, terminal handoff,
-  cancellation, and joined macro settlement.
-- [workspace-architecture.md](workspace-architecture.md): workspace package
-  ownership, dependency edges, and boundary rules.
-- [workspace-ownership-matrix.md](workspace-ownership-matrix.md): audited
-  module ownership, final adapter surfaces, and decomposition acceptance
-  evidence.
-- [examples/config.toml](examples/config.toml): the generated baseline config
-  example.
+- [Getting started](getting-started/README.md): installation, authentication,
+  and a first successful session.
+- [Using Mezzanine](using-mezzanine/README.md): sessions, panes, terminal
+  input, copy/history, the agent shell, and common workflows.
+- [Agent and integrations](agent/README.md): the pane-local agent, commands,
+  skills, subagents, context continuity, providers, and MCP.
+- [Safety, trust, and security](safety-and-trust/README.md): approvals,
+  sandboxing, project trust, instructions, and audit information.
+- [Configuration](configuration/README.md): configuration concepts, focused
+  topics, the schema reference, and examples.
+- [Operations and troubleshooting](operations/README.md): lifecycle, cache
+  diagnostics, recovery, and symptom-based guidance.
+- [Manual reference](reference-manual/README.md): exhaustive CLI, key,
+  action, and terminal-compatibility material.
+- [Contributing](contributing/README.md): workspace architecture and local
+  development validation.
 
-## Related top-level docs
+## Documentation boundaries
 
-- [README.md](../README.md): onboarding hub and daily workflow guide.
+Each manual page should state its purpose, prerequisites, related pages, and
+next step. A topic has one canonical owner; other pages summarize it and link
+to that owner. Relative links are used for repository browsing and published
+copies.
+
+The existing files in this directory are migration sources until their owning
+manual chapters are drafted and validated. Do not remove them solely because a
+manual destination exists. `docs/reference/` is intentionally excluded from
+the published manual: it retains research, audits, plans, and historical
+investigations. The published reference layer is therefore
+`docs/reference-manual/`, avoiding a collision with that preserved material.
+
+## Related top-level documents
+
+- [README.md](../README.md): product overview and quick start.
 - [SPEC.md](../SPEC.md): normative behavior and compatibility requirements.
-- [AGENTS.md](../AGENTS.md): contributor workflow and validation rules.
+- [AGENTS.md](../AGENTS.md): repository workflow and validation rules.
