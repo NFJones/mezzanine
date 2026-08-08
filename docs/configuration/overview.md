@@ -36,6 +36,23 @@ already-running session; their JSON result reports `reload_required` when the
 runtime must reload configuration to observe the change. Validate after an
 edit; invalid configuration is rejected rather than partially applied.
 
+Run `mez config path` before a mutation when several supported formats might
+exist or when you need to confirm the target. A default mutation updates the
+selected primary file; if none exists, it creates the default `config.toml`.
+Use `--file PATH` only for an existing user configuration file under the
+private configuration root. For example:
+
+```sh
+mez config set terminal.emoji_width narrow
+mez config unset terminal.emoji_width
+mez config set --scope project agents.routing true
+mez config validate
+```
+
+The project-scoped command requires a trusted project and writes the eligible
+project overlay. Use `mez config layers` afterward to confirm which layer wins
+for the setting.
+
 ## Understand precedence and trust
 
 The effective configuration layers, from lowest to highest precedence, are

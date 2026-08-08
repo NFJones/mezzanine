@@ -31,12 +31,16 @@ Primary config discovery accepts exactly one of these files under
 
 If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions. `mez config
-set` and `mez config unset` target that user configuration by default; their
-`--scope project` option targets the applicable project overlay instead. They
-persist an offline change and report `reload_required` in JSON when a running
-session must reload configuration to observe it. If multiple supported primary
-files exist, Mez reports a configuration error; remove or relocate all but the
-intended file.
+set` and `mez config unset` target the selected primary configuration by
+default; if none exists, the mutation creates the default TOML file. Their
+`--scope project` option targets an eligible trusted project overlay instead.
+Use `--file PATH` only to select an existing user configuration file under the
+private configuration root. These commands persist an offline change and report
+`reload_required` in JSON when a running session must reload configuration to
+observe it. If multiple supported primary files exist, Mez reports a
+configuration error; remove or relocate all but the intended file. See
+[Configuration overview](overview.md) for mutation examples and the layer
+selection workflow.
 
 The current config schema version is `54`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
