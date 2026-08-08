@@ -61,6 +61,9 @@ with a `.git` directory or file; otherwise the pane working directory is used.
 Configuration is conservative:
 
 - Unknown top-level keys are rejected unless placed under `extensions`.
+- The `session` table is no longer supported. Session attachment, detach, and
+  snapshot behavior is controlled by the session CLI and in-session commands,
+  rather than configuration fields.
 - `session.default_command` is removed by the v1-to-v2 primary-config
   migration and rejected if it still appears in a current-schema layer; pass
   pane commands explicitly when creating windows or panes.
@@ -93,7 +96,6 @@ entry is shown.
 | --- | --- | --- | --- |
 | `version` | integer | `54` | Config schema version. Do not change this. |
 | `runtime` | table | see below | Process runtime settings. |
-| `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
 | `keys` | table | see below | Prefix and direct key bindings. |
@@ -126,16 +128,6 @@ entry is shown.
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `runtime.cpu_count` | integer | `2` | Tokio worker threads available to daemon and foreground services; must be positive. |
-
-### `session`
-
-| Field | Type | Default declaration | Description |
-| --- | --- | --- | --- |
-| `session.detach_behavior` | string | `"keep-running"` | What happens to panes when the primary client detaches. |
-| `session.reattach_behavior` | string | `"default-session"` | How `mez attach` resolves a resumable session when no session ID is supplied. Bare `mez` attaches to an available primary session before creating a new one. |
-| `session.empty_session_behavior` | string | `"keep-open"` | What happens when the final window or pane closes. |
-| `session.restore_strategy` | string | `"live-first"` | Preference for live state versus restored state. |
-| `session.default_command` | string | rejected | Removed in schema version 2; use explicit pane or window commands. |
 
 ### `terminal`
 
