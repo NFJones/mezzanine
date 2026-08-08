@@ -7,7 +7,7 @@ security-relevant diagnostics.
 
 ## Prerequisites
 
-Read the [agent overview](../agent/README.md) and the normative security
+Read the [agent overview](../agent/overview.md) and the normative security
 requirements in [SPEC.md](../../SPEC.md).
 
 ## Chapters

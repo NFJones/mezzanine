@@ -28,7 +28,8 @@ mez auth status
 ```
 
 Noninteractive setup must use an explicit API-key method and an out-of-band
-secret source such as an API-key file.
+secret source such as an API-key file. For OpenAI, an out-of-band device-code
+flow is also available with `mez auth login --device-code`.
 
 ## Credential handling
 
