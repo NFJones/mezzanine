@@ -13,7 +13,7 @@ primary client.
 ## Invocation and global options
 
 ```text
-mez [--json] [-S PATH] [-L NAME] <command> [arguments]
+mez [--json] [-S PATH] [-L NAME] [<command> [arguments]]
 ```
 
 `--json` selects machine-readable output. `-S` selects an explicit control
@@ -31,7 +31,7 @@ session behavior.
 | `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access with `--observer`. Alias: `attach-session`. |
 | `mez detach` | Detach the current or selected client. Alias: `detach-client`. |
 | `mez kill-session --force` | Terminate a live session through its control socket; `--force` confirms the destructive operation. |
-| `mez snapshot` | List, create, inspect, delete, plan, or resume persisted snapshots. |
+| `mez snapshot` | List, create, inspect, delete, plan a resume with `resume-plan`, or resume persisted snapshots. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez
 serve` can run without one. An observer request also requires an interactive

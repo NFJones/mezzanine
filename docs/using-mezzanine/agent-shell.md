@@ -25,8 +25,10 @@ editable prompt while preserving multiline text. Prompt completion supports
 slash commands, `$` skills, `#` macros, and `@` MCP server names where enabled.
 
 Common controls are `/help`, `/status`, `/model`, `/approval`, `/new`,
-`/resume`, and `/stop`. Use `/plan on` to request a plan-only turn; that mode
-also removes write scopes for the pane while active.
+`/resume`, and `/stop`. Use `/plan on` to enable pane-local plan-only mode;
+it applies to subsequent turns until `/plan off` (or `/plan toggle`) disables
+it. While enabled, the pane has no write sandbox scopes. Use `/plan status` to
+inspect the current mode.
 
 ## Review actions and context
 

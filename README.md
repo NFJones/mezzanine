@@ -73,6 +73,7 @@ working directory. Starting a session also creates the default configuration
 when none exists:
 
 ```sh
+# Optional: create and inspect the baseline before starting a session.
 mez config init
 mez auth login
 cd /path/to/repository
