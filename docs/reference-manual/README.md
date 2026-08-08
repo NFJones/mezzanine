@@ -8,8 +8,8 @@ For normative or exhaustive contracts, follow the linked sections of `SPEC.md`.
 
 ## Prerequisites
 
-Use the task-oriented chapters in this manual for guided workflows before
-using this reference.
+Use the task-oriented chapters elsewhere in the manual for guided workflows
+before using this reference.
 
 ## Chapters
 

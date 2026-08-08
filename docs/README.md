@@ -41,10 +41,11 @@ normative behavior and compatibility contract.
 
 ## Documentation boundaries
 
-Each manual page states its purpose, prerequisites, related pages, and next
-step. A topic has one canonical owner; other pages summarize it and link to
-that owner. Relative links support both repository browsing and published
-copies.
+Task-oriented section landing pages and chapters state their purpose,
+prerequisites, related pages, and next step. Reference pages prioritize stable
+contracts and link to their normative source where applicable. A topic has one
+canonical owner; other pages summarize it and link to that owner. Relative
+links support both repository browsing and published copies.
 
 `docs/reference/` is intentionally outside the published manual. It retains
 research, audits, plans, and historical investigations. The published reference

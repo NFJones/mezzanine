@@ -19,7 +19,9 @@ Common commands are `/help`, `/status`, `/model`, `/approval`, `/permissions`,
 
 Use `/help` and the command prompt's `help` output for the effective live
 command catalog; bindings and capabilities can vary with configuration. The
-manual reference is the canonical place for exhaustive command and key data.
+manual reference covers CLI, key, action, terminal, and protocol contracts;
+the live help surfaces remain authoritative for the available slash and
+terminal commands.
 
 ## Use operational slash commands
 
