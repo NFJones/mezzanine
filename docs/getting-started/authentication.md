@@ -28,8 +28,15 @@ mez auth status
 ```
 
 Noninteractive API-key setup must use an explicit API-key method and an
-out-of-band secret source such as an API-key file. For OpenAI, a device-code
-flow is also available with `mez auth login --device-code`.
+out-of-band secret source. To read a key from a private file, pass both
+`--api-key` and `--api-key-file`; the file should contain only the key:
+
+```sh
+mez auth login --provider anthropic --api-key --api-key-file /secure/path/anthropic-api-key
+```
+
+For OpenAI, a device-code flow is also available with
+`mez auth login --device-code`.
 
 ## Credential handling
 
