@@ -62,6 +62,7 @@ automatically retried.
 - [Commands, skills, and macros](../agent/commands-skills-and-macros.md)
 - [MCP integration](../agent/mcp-integration.md)
 - [Sandboxing](../safety-and-trust/sandboxing.md)
+- [Complete `maap/1` reference](protocols/maap.md)
 - [Normative MAAP contract](../../SPEC.md#98-mezzanine-agent-action-protocol)
 
 ## Next step

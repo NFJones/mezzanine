@@ -34,8 +34,8 @@ normative behavior and compatibility contract.
   topics, the schema reference, and examples.
 - [Operations and troubleshooting](operations/README.md): lifecycle, cache
   diagnostics, recovery, and symptom-based guidance.
-- [Manual reference](reference-manual/README.md): CLI, key, action, and
-  terminal-compatibility material, with links to normative contracts.
+- [Manual reference](reference-manual/README.md): CLI, key, action, terminal,
+  and protocol-reference material, with links to normative contracts.
 - [Contributing](contributing/README.md): workspace architecture and local
   development validation.
 
