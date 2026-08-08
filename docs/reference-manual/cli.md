@@ -13,14 +13,16 @@ primary client.
 ## Invocation and global options
 
 ```text
-mez [--json] [-S PATH] [-L NAME] [<command> [arguments]]
+mez [GLOBAL OPTIONS] [COMMAND [ARGUMENTS...]]
 ```
 
-`--json` selects machine-readable output. `-S` selects an explicit control
-socket and `-L` selects a named socket in the Mez runtime directory. Without a
-subcommand, `mez` attaches to the first session that accepts a primary client;
-when none is available, it starts a new session. Use `mez new` to always start
-a new session, or `mez attach` to select an existing one.
+Global options are `--json`, `-S PATH`, and `-L NAME`; they may appear before
+or after a command. `--json` selects machine-readable output. `-S` selects an
+explicit control socket and `-L` selects a named socket in the Mez runtime
+directory. Without a subcommand, `mez` attaches to the first session that
+accepts a primary client; when none is available, it starts a new session. Use
+`mez new` to always start a new session, or `mez attach` to select an existing
+one.
 
 ## Session commands
 

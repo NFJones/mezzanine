@@ -56,6 +56,12 @@ The project-scoped command requires a trusted project and writes the eligible
 project overlay. Use `mez config layers` afterward to confirm which layer wins
 for the setting.
 
+`mez config validate [PATH]` validates the selected file as a primary user
+configuration. It does not apply project-overlay-specific rules to an
+arbitrary path. Use `mez config set --scope project` to create or update a
+managed overlay, then run `mez config layers` from that project to inspect its
+state and diagnostics.
+
 ## Understand precedence and trust
 
 The effective configuration layers, from lowest to highest precedence, are
