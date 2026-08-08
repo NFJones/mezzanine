@@ -17,7 +17,8 @@ Mezzanine accepts one primary file in `~/.config/mezzanine/`: `config.toml`,
 session creates the default TOML configuration. If more than one exists, Mez
 stops with a configuration error rather than choosing by filename precedence.
 Run `mez config init` first only when you want to create and inspect that
-baseline before starting a session:
+baseline before starting a session. It creates the default only when no primary
+file exists, so it does not replace an existing configuration:
 
 ```sh
 mez config init

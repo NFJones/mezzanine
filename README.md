@@ -58,7 +58,7 @@ while you inspect, edit, and validate work.
 - A Unix-like system with pseudoterminals and a POSIX-style shell.
 - A Rust 2024 toolchain when building from this repository.
 - A usable `$SHELL`; Mez falls back to `/bin/sh` when it is executable.
-- Provider credentials for model-backed agent work.
+- A provider account and supported sign-in method for model-backed agent work.
 
 ## Quick start
 
@@ -79,10 +79,10 @@ cd /path/to/repository
 mez
 ```
 
-The default `mez auth login` flow authenticates OpenAI interactively. Choose an
-explicit provider and credential method when using another provider or an
-API key; [Getting started](docs/getting-started/README.md) documents those
-flows.
+The default interactive `mez auth login` flow opens OpenAI's browser sign-in.
+Choose an explicit provider and credential method when using another provider,
+an API key, or noninteractive authentication; [Getting started](docs/getting-started/README.md)
+documents those flows.
 
 Press `Ctrl+A a` to open the focused pane's agent shell. Begin with a bounded
 task that asks for inspection and focused validation. Press `Ctrl+A d` to detach

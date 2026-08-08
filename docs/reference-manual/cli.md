@@ -25,7 +25,7 @@ existing one.
 
 | Command | Behavior |
 | --- | --- |
-| `mez new` | Start a new background session and attach when interactive. Alias: `new-session`. |
+| `mez new [--dry-run]` | Start a new background session and attach when interactive. `--dry-run` validates session construction without starting a daemon. Alias: `new-session`. |
 | `mez serve` | Start a foreground session service; it does not attach a primary client unless `--attach-primary` is supplied from an interactive terminal. Alias: `daemon`. |
 | `mez list` | List resumable sessions. Alias: `list-sessions`. |
 | `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access with `--observer`. Alias: `attach-session`. |
