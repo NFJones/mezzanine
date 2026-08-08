@@ -722,7 +722,7 @@ Provider options under a model profile:
 | `permissions.bubblewrap.network` | string | `"isolated"` | Private network namespace policy. |
 | `permissions.bubblewrap.environment` | string | `"minimal"` | Clear inherited variables and rebuild a fixed non-secret environment. |
 | `permissions.bubblewrap.group_whitelist` | string array | `[]` | Schema-v49 primary-user-only pane group mappings. The active pane's primary group is automatic and must not be listed. Names must be non-empty, non-numeric, and unique; at most 64 names and 8 KiB are accepted. A name unavailable in the active pane is omitted with a warning. Empty projects no supplementary group names but does not filter inherited pane credentials. |
-| `permissions.bubblewrap.env_whitelist` | string array | `[]` | Schema-v50 primary-user-only portable variable names read from the active pane process for ordinary sandboxed actions. Values are best-effort, bounded, and universally redacted from status/logs. A successfully resolved whitelisted `PATH` controls sandbox command lookup; other fixed sandbox environment invariants remain protected. Internal semantic `apply_patch` phases intentionally use the fixed environment without forwarding these optional values. |
+| `permissions.bubblewrap.env_whitelist` | string array | `["PATH"]` when omitted | Schema-v50 primary-user-only portable variable names read from the active pane process for ordinary sandboxed actions. Values are best-effort, bounded, and universally redacted from status/logs. A successfully resolved whitelisted `PATH` controls sandbox command lookup; other fixed sandbox environment invariants remain protected. Set an explicit `[]` to opt out. Internal semantic `apply_patch` phases intentionally use the fixed environment without forwarding these optional values. |
 | `permissions.bubblewrap.git_user_name` | string | omitted | Optional non-secret Git author name. Must be configured with `git_user_email`; projected only through Git command-scope configuration. |
 | `permissions.bubblewrap.git_user_email` | string | omitted | Optional non-secret Git author email. Must be configured with `git_user_name`; projected only through Git command-scope configuration. |
 | `permissions.command_rules` | array | `[]` | User/project command rule entries. |
@@ -846,10 +846,11 @@ env_whitelist = ["ACME_HOME"]
 
 `/opt/acme-sdk` is mounted read-only at the same path. `ACME_HOME` must already
 exist in the active pane, its value remains redacted from status and audit, and
-it grants no filesystem authority. The sandbox command-search path remains
-`/usr/bin:/bin`, even when `PATH` is allowlisted, so external binaries must be
-invoked by absolute path or with a command-local `PATH`. Scope every required
-loader, library, or dependency root explicitly; scoping the SDK does not expose
+it grants no filesystem authority. An omitted allowlist forwards `PATH` for
+sandbox command lookup; an explicit list replaces that default, so this example
+uses the fixed `/usr/bin:/bin` search path. Include `PATH` when sandboxed
+commands need the pane's command-search path. Scope every required loader,
+library, or dependency root explicitly; scoping the SDK does not expose
 credentials, host caches, manager state, sockets, or unrelated installations.
 
 For a trusted project, Bubblewrap uses a persistent managed home below
