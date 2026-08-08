@@ -96,6 +96,7 @@ entry is shown.
 | `memory` | table | see below | Persistent memory storage, retrieval, injection, and retention defaults. |
 | `agents` | table | see below | Agent defaults and limits. |
 | `model_profiles` | map | default profiles shown below | Model profile definitions. |
+| `model_presets` | map | built-in provider presets shown below | Named default and automatic-sizing model-profile selections. |
 | `permissions` | table | see below | Approval, command, and authority policy. |
 | `providers` | map | `providers.openai` | Provider connection profiles. |
 | `subagents` | map | `{}` | Named subagent profiles. |
@@ -725,6 +726,26 @@ Provider options under a model profile:
 | --- | --- | --- | --- |
 | `model_profiles.<name>.provider_options.reasoning_effort` | string | profile-specific | Reasoning effort sent to the provider. |
 | `model_profiles.<name>.provider_options.thinking` | string | `"enabled"` for generated DeepSeek profiles | DeepSeek thinking mode override: `enabled` or `disabled`. |
+
+### `model_presets.<name>`
+
+Model presets select a default profile and the profiles automatic sizing uses
+for a named provider-oriented choice. Each referenced profile must exist in
+`model_profiles`; omitted automatic-sizing profile fields fall back to the
+preset's `default_model_profile`.
+
+| Field | Type | Default declaration | Description |
+| --- | --- | --- | --- |
+| `model_presets.<name>.default_model_profile` | string | required | Default model-profile id for the preset. |
+| `model_presets.<name>.auto_sizing_router_model_profile` | string | `default_model_profile` when omitted | Model-profile id used to classify automatic-sizing requests. |
+| `model_presets.<name>.auto_sizing_small_model_profile` | string | `default_model_profile` when omitted | Model-profile id used for small automatically sized turns. |
+| `model_presets.<name>.auto_sizing_medium_model_profile` | string | `default_model_profile` when omitted | Model-profile id used for medium automatically sized turns. |
+| `model_presets.<name>.auto_sizing_large_model_profile` | string | `default_model_profile` when omitted | Model-profile id used for large automatically sized turns. |
+| `model_presets.<name>.allowed_reasoning_efforts` | string array | `[]` when omitted | Allowed automatic-sizing reasoning efforts: `low`, `medium`, `high`, or `xhigh`. |
+
+The generated configuration defines `openai`, `deepseek`, and `anthropic`
+presets. Select a preset through the supported model-selection controls; edit
+the referenced profiles when changing provider, model, or provider options.
 
 ### `permissions`
 
