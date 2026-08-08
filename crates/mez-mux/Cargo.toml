@@ -18,3 +18,6 @@ syntect = { version = "5.3", default-features = false, features = ["default-synt
 thiserror = "2"
 unicode-width = "0.2"
 unicode-segmentation = "1.12"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

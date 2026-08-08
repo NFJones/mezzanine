@@ -93,7 +93,7 @@ impl RuntimeSessionService {
             return Ok(());
         };
         self.bind_agent_subshell_bootstrap_marker(pane_id, &marker_id);
-        if let Err(error) = self.write_runtime_pane_input(pane_id, wrapper.as_bytes()) {
+        if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
             return Err(error);
         }
@@ -264,13 +264,19 @@ impl RuntimeSessionService {
             .pane_readiness_states
             .iter()
             .filter(|(k, v)| {
+                let has_deferred_wrapper = self
+                    .process
+                    .pane_shell_handoffs
+                    .get(k.as_str())
+                    .is_some_and(|handoff| handoff.deferred_bootstrap_wrapper.is_some());
                 self.process.pane_bootstrap_pending.contains(k.as_str())
                     && !self.pane_agent_subshell_certification_is_pending(k.as_str())
-                    && !self
-                        .process
-                        .running_shell_transactions
-                        .values()
-                        .any(|transaction| transaction.pane_id == k.as_str())
+                    && (has_deferred_wrapper
+                        || !self
+                            .process
+                            .running_shell_transactions
+                            .values()
+                            .any(|transaction| transaction.pane_id == k.as_str()))
                     && matches!(
                         v,
                         PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
@@ -280,7 +286,26 @@ impl RuntimeSessionService {
             .collect();
         let dispatches = ready_panes.len();
         for pane_id in ready_panes {
-            self.dispatch_bootstrap_to_pane(&pane_id)?;
+            let deferred = self
+                .process
+                .pane_shell_handoffs
+                .get_mut(&pane_id)
+                .and_then(|handoff| {
+                    let marker = handoff.bootstrap_marker.clone()?;
+                    let wrapper = handoff.deferred_bootstrap_wrapper.take()?;
+                    Some((marker, wrapper))
+                });
+            if let Some((marker, wrapper)) = deferred {
+                if let Err(error) =
+                    self.write_runtime_pane_shell_input(&pane_id, wrapper.as_bytes())
+                {
+                    self.fail_shell_transactions_for_pane_write_failure(&pane_id, error.message())?;
+                    return Err(error);
+                }
+                self.record_bootstrap_sent(&pane_id, &marker)?;
+            } else {
+                self.dispatch_bootstrap_to_pane(&pane_id)?;
+            }
         }
         Ok(dispatches)
     }

@@ -10,6 +10,7 @@ use mezzanine::control_client::{decode_control_frame, encode_control_body};
 use portable_pty::{Child as PtyChild, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::fs;
 use std::io::{Read, Write};
+use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,35 @@ struct ForegroundProcess {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     root: PathBuf,
+}
+
+/// Owns a detached test service and guarantees cleanup after assertion panic.
+struct DetachedServeProcess(ProcessChild);
+
+impl Deref for DetachedServeProcess {
+    type Target = ProcessChild;
+
+    /// Borrows the underlying child for ordinary process inspection.
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for DetachedServeProcess {
+    /// Mutably borrows the underlying child for bounded waits and termination.
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for DetachedServeProcess {
+    /// Reaps a detached test service that did not exit through the happy path.
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
 }
 
 impl ForegroundProcess {
@@ -246,6 +276,18 @@ impl Drop for ForegroundProcess {
     }
 }
 
+/// Reports whether a rendered frame contains the default shell pane title.
+///
+/// Linux hosts without process metadata retain the stable `shell` fallback,
+/// while Linux `/proc` and Darwin `libproc` adapters can expose the actual
+/// foreground shell name. The foreground contract requires a visible pane,
+/// not one host-specific process label.
+fn contains_default_shell_pane_frame(text: &str) -> bool {
+    ["shell", "sh", "bash", "zsh", "fish", "dash", "ksh"]
+        .into_iter()
+        .any(|name| text.contains(&format!("0 {name} ")))
+}
+
 /// Launches the real `mez serve --attach-primary` binary inside a PTY so the
 /// foreground path sees interactive stdin/stdout instead of the unit-test
 /// harness. The fixture verifies the default foreground draw includes the
@@ -271,7 +313,7 @@ fn foreground_serve_attach_primary_renders_default_frames_and_restores_presentat
                 && text.contains("\x1b[?25l")
                 && text.contains("\x1b[?1000;1002;1006h")
                 && text.contains("\x1b[2J\x1b[H")
-                && text.contains("0 shell")
+                && contains_default_shell_pane_frame(text)
         })
         .unwrap();
 
@@ -303,7 +345,7 @@ fn foreground_serve_attach_primary_exits_cleanly_without_broken_pipe_error() {
     let mut output = Vec::new();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("serving: true") && text.contains("0 shell")
+            text.contains("serving: true") && contains_default_shell_pane_frame(text)
         })
         .unwrap();
 
@@ -341,7 +383,7 @@ fn foreground_attach_exits_cleanly_without_broken_pipe_error() {
     let mut output = Vec::new();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("0 shell") && text.contains("$")
+            contains_default_shell_pane_frame(text) && text.contains("$")
         })
         .unwrap();
 
@@ -412,7 +454,7 @@ done
     let mut output = Vec::new();
     process
         .read_until(&mut output, Duration::from_secs(10), |text| {
-            text.contains("0 shell") && text.contains("$")
+            contains_default_shell_pane_frame(text) && text.contains("$")
         })
         .unwrap();
 
@@ -691,7 +733,7 @@ fn spawn_foreground_attach_with_terminal_size(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn spawn_detached_serve(home: &Path, runtime: &Path, socket: &Path) -> ProcessChild {
+fn spawn_detached_serve(home: &Path, runtime: &Path, socket: &Path) -> DetachedServeProcess {
     let mut command = Command::new(env!("CARGO_BIN_EXE_mez"));
     command.env_clear();
     command.env("HOME", home.as_os_str());
@@ -706,7 +748,7 @@ fn spawn_detached_serve(home: &Path, runtime: &Path, socket: &Path) -> ProcessCh
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    command.spawn().unwrap()
+    DetachedServeProcess(command.spawn().unwrap())
 }
 
 /// Runs the wait for path operation for this subsystem.
@@ -757,7 +799,8 @@ fn test_root(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("mez-{name}-{}-{unique}", std::process::id()))
+    let short_temp = fs::canonicalize("/tmp").unwrap_or_else(|_| std::env::temp_dir());
+    short_temp.join(format!("mez-{name}-{}-{unique}", std::process::id()))
 }
 
 /// Runs the output excerpt operation for this subsystem.

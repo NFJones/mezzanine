@@ -800,7 +800,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
         .unwrap();
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
 
-    for _ in 0..300 {
+    for _ in 0..900 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.running_shell_transactions_for_tests().is_empty() {
             break;
@@ -809,7 +809,13 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
     }
     assert!(
         service.running_shell_transactions_for_tests().is_empty(),
-        "agent transaction should have completed before checking parent shell liveness"
+        "agent transaction should have completed before checking parent shell liveness: transactions={:?} pane={}",
+        service.running_shell_transactions_for_tests(),
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
     );
     let pane_exits = service.poll_pane_processes().unwrap();
     assert!(pane_exits.is_empty(), "{pane_exits:?}");
@@ -858,6 +864,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     service
         .write_input_to_pane(&primary, Some("%1"), b"set -eu\n")
         .unwrap();
@@ -919,7 +926,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         .unwrap();
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
 
-    for _ in 0..300 {
+    for _ in 0..900 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         if service.running_shell_transactions_for_tests().is_empty() {
             break;
@@ -1379,7 +1386,8 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
     let deferred_wrapper = service.drain_pane_io_transition().side_effects;
     assert_eq!(deferred_wrapper.len(), 1);
     let wrapper_text = String::from_utf8_lossy(deferred_wrapper[0].pane_input_parts().1);
-    assert!(wrapper_text.contains("__mez_tx_"), "{wrapper_text}");
+    let wrapper_source = decoded_posix_shell_wrapper_sources(&wrapper_text);
+    assert!(wrapper_source.contains("__mez_tx_"), "{wrapper_source}");
     assert!(!wrapper_text.contains("payload-marker"), "{wrapper_text}");
     let (marker, transaction) = service
         .running_shell_transactions_for_tests()

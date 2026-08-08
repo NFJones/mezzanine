@@ -1732,6 +1732,7 @@ version = "0.1.0"
 name = "mez-mux"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mez-core",
  "mez-terminal",
  "portable-pty",

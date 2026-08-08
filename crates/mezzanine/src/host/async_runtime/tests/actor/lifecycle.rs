@@ -1115,7 +1115,8 @@ async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
         };
         let bootstrap_wrapper = std::str::from_utf8(bootstrap_bytes).unwrap();
         assert!(
-            bootstrap_wrapper.contains("MEZ_COMMAND_B64") && bootstrap_wrapper.contains("base64"),
+            bootstrap_wrapper.contains("MEZ_WRAPPER_B64")
+                && bootstrap_wrapper.contains("base64 -d"),
             "bootstrap wrapper should be queued for the pane worker"
         );
 

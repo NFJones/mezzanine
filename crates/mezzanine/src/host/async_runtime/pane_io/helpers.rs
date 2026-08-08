@@ -271,6 +271,8 @@ pub(super) async fn pane_io_events_for_side_effects<B>(
     driver: &mut AsyncPaneProcessDriver<B>,
     effects: Vec<RuntimeSideEffect>,
     pending: &mut VecDeque<RuntimeSideEffect>,
+    paced_input_requires_output: &mut bool,
+    paced_input_requires_ack: &mut bool,
 ) -> Vec<RuntimeEvent>
 where
     B: AsyncPaneProcessIo,
@@ -281,6 +283,41 @@ where
         let event = match effect {
             RuntimeSideEffect::PaneProcessIo {
                 instance,
+                effect: PaneProcessIoEffect::WriteShellInput { bytes },
+            } => {
+                if bytes.is_empty() {
+                    continue;
+                }
+                let chunk_len = pane_input_chunk_len(&bytes);
+                #[cfg(target_os = "macos")]
+                let supports_acknowledgements = driver.supports_shell_input_acknowledgements();
+                let event = driver.write_input_event(&bytes[..chunk_len]).await;
+                if let Some(written) = pane_input_written_bytes(&event)
+                    && written > 0
+                    && written < bytes.len()
+                {
+                    let existing_pending = std::mem::take(pending);
+                    pending.push_back(RuntimeSideEffect::PaneProcessIo {
+                        instance,
+                        effect: PaneProcessIoEffect::WriteShellInput {
+                            bytes: bytes[written..].to_vec(),
+                        },
+                    });
+                    pending.extend(effects);
+                    pending.extend(existing_pending);
+                    #[cfg(target_os = "macos")]
+                    if supports_acknowledgements {
+                        *paced_input_requires_output = true;
+                        *paced_input_requires_ack =
+                            mez_mux::process::shell_input_record_requires_ack(&bytes[..written]);
+                    }
+                    events.push(event);
+                    break;
+                }
+                event
+            }
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
                 effect:
                     PaneProcessIoEffect::WriteInput { bytes }
                     | PaneProcessIoEffect::WriteInputPriority { bytes },
@@ -288,9 +325,7 @@ where
                 if bytes.is_empty() {
                     continue;
                 }
-                let chunk_len = bytes
-                    .len()
-                    .min(mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES);
+                let chunk_len = pane_input_chunk_len(&bytes);
                 let event = driver.write_input_event(&bytes[..chunk_len]).await;
                 if let Some(written) = pane_input_written_bytes(&event)
                     && written > 0
@@ -338,9 +373,7 @@ where
                 if bytes.is_empty() {
                     continue;
                 }
-                let chunk_len = bytes
-                    .len()
-                    .min(mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES);
+                let chunk_len = pane_input_chunk_len(&bytes);
                 let event = driver.write_input_event(&bytes[..chunk_len]).await;
                 if let RuntimeEvent::Pane(PaneEvent::InputWritten { bytes: written, .. }) = &event
                     && *written > 0
@@ -365,6 +398,27 @@ where
         events.push(event);
     }
     events
+}
+
+/// Selects one bounded pane-input chunk without splitting a complete shell
+/// record when a newline is available.
+///
+/// Darwin PTYs can stop reporting write readiness when a bulk write leaves a
+/// partial canonical-input record at the buffer boundary. On macOS, returning
+/// one complete record at a time also gives the interactive shell an actor
+/// scheduling boundary between generated commands. Other hosts retain the
+/// higher-throughput last-record behavior. Inputs with no newline still make
+/// bounded byte progress, preserving ordinary keystroke and binary delivery.
+fn pane_input_chunk_len(bytes: &[u8]) -> usize {
+    let limit = bytes
+        .len()
+        .min(mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES);
+    let bounded = &bytes[..limit];
+    #[cfg(target_os = "macos")]
+    let newline = bounded.iter().position(|byte| *byte == b'\n');
+    #[cfg(not(target_os = "macos"))]
+    let newline = bounded.iter().rposition(|byte| *byte == b'\n');
+    newline.map_or(limit, |index| index + 1)
 }
 
 /// Performs one fresh start capture or bounded completion observation.
@@ -432,6 +486,38 @@ mod tests {
         AsyncFakePaneProcessIo, AsyncPaneForegroundProcess, AsyncPaneProcessDriverConfig,
         PaneForegroundProcessObservation,
     };
+
+    #[test]
+    /// Verifies pane-input chunks preserve an appropriate complete shell record.
+    ///
+    /// Generated wrapper transports contain many short records. Keeping the
+    /// macOS emits one record per actor turn to pace its constrained terminal
+    /// input path; other hosts retain the final bounded record for throughput.
+    fn pane_input_chunks_end_at_a_platform_appropriate_bounded_newline() {
+        let mut bytes = vec![b'a'; mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES + 20];
+        bytes[700] = b'\n';
+        bytes[900] = b'\n';
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(pane_input_chunk_len(&bytes), 701);
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(pane_input_chunk_len(&bytes), 901);
+    }
+
+    #[test]
+    /// Verifies newline-free pane input still advances by the bounded limit.
+    ///
+    /// Direct terminal keystrokes and binary protocol input need not contain a
+    /// shell record terminator, so newline-aware chunking must retain the prior
+    /// fixed-size fallback instead of waiting indefinitely for a delimiter.
+    fn pane_input_chunks_bound_newline_free_input() {
+        let bytes = vec![b'a'; mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES + 20];
+
+        assert_eq!(
+            pane_input_chunk_len(&bytes),
+            mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES
+        );
+    }
 
     /// Verifies the explicit observation ignores a transient child group and
     /// returns only after the persistent receiver group becomes foreground.

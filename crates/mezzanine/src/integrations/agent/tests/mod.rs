@@ -76,6 +76,31 @@ use std::time::Duration;
 
 mod fixtures;
 
+/// Decodes one bounded POSIX shell-wrapper assignment transport for structural
+/// assertions in the product integration tests.
+fn decoded_posix_wrapper_source(transport: &str) -> String {
+    const FIRST_PREFIX: &str = "MEZ_WRAPPER_B64='";
+    const APPEND_PREFIX: &str = "MEZ_WRAPPER_B64=$MEZ_WRAPPER_B64'";
+    let mut encoded = String::new();
+    for line in transport.lines() {
+        let chunk = line
+            .strip_prefix(FIRST_PREFIX)
+            .or_else(|| line.strip_prefix(APPEND_PREFIX));
+        if let Some(chunk) = chunk {
+            encoded.push_str(
+                chunk
+                    .split_once('\'')
+                    .map(|(chunk, _)| chunk)
+                    .expect("wrapper base64 assignments should remain shell quoted"),
+            );
+        }
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("wrapper transport should contain valid standard base64");
+    String::from_utf8(decoded).expect("generated wrapper source should be valid UTF-8")
+}
+
 /// Builds a representative MCP tool state for agent-shell display tests. The
 /// registry normalizes server id, availability, and approval from the owning
 /// server config, so tests can override only the fields relevant to each

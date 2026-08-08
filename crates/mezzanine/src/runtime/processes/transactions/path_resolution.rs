@@ -184,7 +184,7 @@ impl RuntimeSessionService {
             },
             true,
         );
-        if let Err(error) = self.write_runtime_pane_input(pane_id, wrapper.as_bytes()) {
+        if let Err(error) = self.write_runtime_pane_shell_input(pane_id, wrapper.as_bytes()) {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
             return Err(error);
         }

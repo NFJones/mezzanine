@@ -205,12 +205,16 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     assert_eq!(pane_input_effects(&enter_input).len(), 1);
     assert_eq!(enter_input[0].pane_input_parts().0, pane_id);
     let enter_text = String::from_utf8_lossy(enter_input[0].pane_input_parts().1);
+    let enter_source = decoded_posix_shell_wrapper_sources(&enter_text);
     assert!(
-        enter_text.contains("command env -u BASH_ENV -u ENV -u ZDOTDIR"),
-        "{enter_text}"
+        enter_source.contains("command env \\\n  -u BASH_ENV \\\n  -u ENV \\\n  -u ZDOTDIR"),
+        "{enter_source}"
     );
-    assert!(enter_text.contains("HISTFILE=/dev/null"), "{enter_text}");
-    assert!(enter_text.contains("'/bin/sh'"), "{enter_text}");
+    assert!(
+        enter_source.contains("HISTFILE=/dev/null"),
+        "{enter_source}"
+    );
+    assert!(enter_source.contains("'/bin/sh'"), "{enter_source}");
     assert!(service.agent_subshell_is_active(&pane_id));
     service.remember_mez_wrapper_filter_command(&pane_id, "MEZ_MARKER_TOKEN='abc'");
 
@@ -224,9 +228,10 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
     let exit_bytes = exit_inputs[0].pane_input_parts().1;
     assert!(
-        exit_bytes
+        !exit_bytes
             .windows(b"__MEZ_COMMAND_PAYLOAD_END_".len())
-            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_")
+            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_"),
+        "a prompt-gated wrapper that was never sent must not receive payload"
     );
     assert_eq!(exit_bytes.last(), Some(&b'\x04'));
     assert!(!service.agent_subshell_is_active(&pane_id));
@@ -283,10 +288,10 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     service
-        .start_initial_pane_process(Some(
-            "/bin/sh -c 'PS1=\"parent$ \"; export PS1; exec /bin/sh -i'",
-        ))
+        .write_input_to_pane(&primary, Some("%1"), b"PS1='parent$ '; export PS1\n")
         .unwrap();
     let mut initial_screen = String::new();
     for _ in 0..200 {
@@ -431,9 +436,10 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
     assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
     let exit_bytes = exit_inputs[0].pane_input_parts().1;
     assert!(
-        exit_bytes
+        !exit_bytes
             .windows(b"__MEZ_COMMAND_PAYLOAD_END_".len())
-            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_")
+            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_"),
+        "a prompt-gated wrapper that was never sent must not receive payload"
     );
     assert_eq!(exit_bytes.last(), Some(&b'\x04'));
     assert!(!service.agent_subshell_is_active(&pane_id));

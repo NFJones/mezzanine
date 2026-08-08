@@ -308,7 +308,10 @@ fn protected_ipc_socket_read_scope_is_compiled_read_only() {
     ));
     let _ = std::fs::remove_dir_all(&root);
     if let Err(error) = std::fs::create_dir_all(&root) {
-        if error.kind() == std::io::ErrorKind::PermissionDenied {
+        if matches!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+        ) {
             eprintln!(
                 "skipping IPC read-scope test: cannot create {}",
                 root.display()

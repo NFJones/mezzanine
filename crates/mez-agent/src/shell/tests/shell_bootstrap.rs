@@ -417,23 +417,19 @@ fn shell_classification_selects_matching_wrappers_and_probe_commands() {
             .render_for_classification(ShellClassification::Fish)
             .contains("command env -u BASH_ENV -u ENV -u ZDOTDIR")
     );
+    let posix = transaction.render_for_classification(ShellClassification::PosixSh);
+    assert!(decoded_posix_wrapper_source(&posix).contains("env -u MEZ_MARKER_TOKEN"));
+    let bash = ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/bash"), "true")
+        .unwrap()
+        .render_for_classification(ShellClassification::Bash);
     assert!(
-        transaction
-            .render_for_classification(ShellClassification::PosixSh)
-            .contains("env -u MEZ_MARKER_TOKEN")
-    );
-    assert!(
-        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/bash"), "true")
-            .unwrap()
-            .render_for_classification(ShellClassification::Bash)
+        decoded_posix_wrapper_source(&bash)
             .contains("'/bin/bash' --noprofile --norc \"$MEZ_COMMAND_FILE\"")
     );
-    assert!(
-        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/zsh"), "true")
-            .unwrap()
-            .render_for_classification(ShellClassification::Zsh)
-            .contains("'/bin/zsh' -f \"$MEZ_COMMAND_FILE\"")
-    );
+    let zsh = ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/zsh"), "true")
+        .unwrap()
+        .render_for_classification(ShellClassification::Zsh);
+    assert!(decoded_posix_wrapper_source(&zsh).contains("'/bin/zsh' -f \"$MEZ_COMMAND_FILE\""));
     assert_eq!(
         readiness_probe_command_for_classification(ShellClassification::Fish),
         "true"

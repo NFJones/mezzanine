@@ -485,7 +485,7 @@ impl RuntimeSessionService {
         if let Some(activity_lock) = managed_home_activity_lock {
             self.register_managed_home_activity_lock(&marker_id, activity_lock);
         }
-        if let Err(error) = self.write_runtime_pane_input(&turn.pane_id, wrapper.as_bytes()) {
+        if let Err(error) = self.write_runtime_pane_shell_input(&turn.pane_id, wrapper.as_bytes()) {
             self.remove_running_shell_transaction(&marker_id);
             self.clear_shell_transaction_protocol_state(&marker_id);
             self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Degraded);

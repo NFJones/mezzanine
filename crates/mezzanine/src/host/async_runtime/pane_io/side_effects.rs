@@ -25,6 +25,8 @@ where
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut pending_pane_io_side_effects = VecDeque::new();
+    let mut paced_input_requires_output = false;
+    let mut paced_input_requires_ack = false;
     let mut report = AsyncPaneIoSideEffectServiceReport {
         polls: 0,
         drained: 0,
@@ -70,9 +72,14 @@ where
         report.drained = report
             .drained
             .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
-        for event in
-            pane_io_events_for_side_effects(driver, effects, &mut pending_pane_io_side_effects)
-                .await
+        for event in pane_io_events_for_side_effects(
+            driver,
+            effects,
+            &mut pending_pane_io_side_effects,
+            &mut paced_input_requires_output,
+            &mut paced_input_requires_ack,
+        )
+        .await
         {
             let mut batch = RuntimeEventBatch::new();
             batch.push(event);

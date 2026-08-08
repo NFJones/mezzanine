@@ -121,6 +121,7 @@ pub fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output, Stdio};
@@ -213,6 +214,36 @@ mod tests {
         child
             .wait_with_output()
             .expect("the shell test process should finish")
+    }
+
+    /// Decodes the generated POSIX wrapper source from its bounded interactive
+    /// assignment transport.
+    ///
+    /// Structural tests should assert shell semantics against the reconstructed
+    /// source while separate bounds assertions cover its physical delivery
+    /// records. Standard base64 contains no single quotes, so the transport's
+    /// quoted assignment values can be extracted without a shell parser.
+    fn decoded_posix_wrapper_source(transport: &str) -> String {
+        const FIRST_PREFIX: &str = "MEZ_WRAPPER_B64='";
+        const APPEND_PREFIX: &str = "MEZ_WRAPPER_B64=$MEZ_WRAPPER_B64'";
+        let mut encoded = String::new();
+        for line in transport.lines() {
+            let chunk = line
+                .strip_prefix(FIRST_PREFIX)
+                .or_else(|| line.strip_prefix(APPEND_PREFIX));
+            if let Some(chunk) = chunk {
+                encoded.push_str(
+                    chunk
+                        .split_once('\'')
+                        .map(|(chunk, _)| chunk)
+                        .expect("wrapper base64 assignments should remain shell quoted"),
+                );
+            }
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("wrapper transport should contain valid standard base64");
+        String::from_utf8(decoded).expect("generated wrapper source should be valid UTF-8")
     }
 
     /// Builds a representative known environment signature for cache tests.

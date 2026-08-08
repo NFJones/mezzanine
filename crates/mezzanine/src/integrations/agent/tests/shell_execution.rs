@@ -268,7 +268,8 @@ fn shell_action_executor_receives_transaction_wrapper_and_succeeds() {
     assert_eq!(executor.requests.len(), 1);
     assert_eq!(executor.requests[0].action_id, "shell-1");
     assert_eq!(executor.requests[0].timeout_ms, Some(1000));
-    let wrapper = executor.requests[0].transaction.render_posix();
+    let transport = executor.requests[0].transaction.render_posix();
+    let wrapper = decoded_posix_wrapper_source(&transport);
     assert!(wrapper.contains("MEZ_TURN"));
     assert!(wrapper.contains("MEZ_COMMAND_B64"));
     assert!(wrapper.contains("base64 -d < \"$MEZ_COMMAND_B64\""));

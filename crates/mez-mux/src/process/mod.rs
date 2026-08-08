@@ -15,6 +15,8 @@ mod manager;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod pane;
+/// Exposes native pane-process metadata lookup behind one portable boundary.
+mod process_metadata;
 /// Exposes the pty module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -39,7 +41,10 @@ mod types;
 pub use manager::PaneProcessManager;
 pub use pane::PaneProcess;
 #[doc(hidden)]
-pub use pane::{PTY_INPUT_WRITE_CHUNK_BYTES, write_pty_fd_nonblocking_io};
+pub use pane::{
+    PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, shell_input_record_requires_ack,
+    write_pty_fd_nonblocking_io,
+};
 pub use spawn::{
     pane_command_plan, shell_command_from_argv, spawn_pane_process,
     spawn_pane_process_with_start_directory,

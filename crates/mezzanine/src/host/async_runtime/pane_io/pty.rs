@@ -66,6 +66,11 @@ impl Drop for AsyncPtyPaneProcessIo {
 }
 
 impl AsyncPaneProcessIo for AsyncPtyPaneProcessIo {
+    /// Reports whether the live pane process can acknowledge shell records.
+    fn supports_shell_input_acknowledgements(&self) -> bool {
+        self.process.supports_shell_input_acknowledgements()
+    }
+
     /// Runs the read output operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -105,6 +110,7 @@ impl AsyncPaneProcessIo for AsyncPtyPaneProcessIo {
         Box::pin(async move {
             let mut written = 0usize;
             while written < bytes.len() {
+                self.process.buffer_available_output_for_write()?;
                 let mut guard =
                     match timeout(PANE_INPUT_WRITE_READY_TIMEOUT, self.pty.writable()).await {
                         Ok(Ok(guard)) => guard,
@@ -252,16 +258,18 @@ impl AsRawFd for AsyncPanePtyFd {
     }
 }
 
-/// Runs the terminate pane process async operation for this subsystem.
+/// Terminates one pane process without blocking the async executor.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// The primary child is polled before signaling so a naturally completed pane
+/// is reaped without consulting a stale PTY foreground process group. Forced
+/// termination sends KILL immediately; graceful termination progresses through
+/// HUP, TERM, and KILL with bounded asynchronous waits. Signal and wait errors
+/// are returned to the caller.
 pub(super) async fn terminate_pane_process_async(
     process: &mut super::PaneProcess,
     force: bool,
 ) -> Result<super::PaneExitStatus> {
-    if let Some(status) = process.recorded_exit_status() {
+    if let Some(status) = process.poll_exit()? {
         return Ok(status);
     }
     if force {

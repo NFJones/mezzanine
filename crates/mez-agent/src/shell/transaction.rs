@@ -27,6 +27,17 @@ pub const DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS: u64 = 10_000;
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_BOOTSTRAP_TIMEOUT_MS: u64 = 15_000;
 
+/// Python fallback that emulates `setsid -w` from an interactive pane shell.
+///
+/// Job-control shells can start the interpreter as a process-group leader,
+/// which makes a direct `setsid` call fail with `EPERM`. Forking only in that
+/// state lets the child create a session while the foreground parent waits and
+/// propagates the child's exit status.
+const PYTHON_SETSID_WAIT_COMMAND: &str = "command python3 -c 'import os,sys;p=os.getpid()==os.getpgrp() and os.fork();p and sys.exit(os.waitstatus_to_exitcode(os.waitpid(p,0)[1]));os.setsid();os.execvp(sys.argv[1],sys.argv[1:])'";
+
+/// Perl fallback with the same group-leader fork and wait behavior as Python.
+const PERL_SETSID_WAIT_COMMAND: &str = "command perl -MPOSIX=setsid -e '$p=getpgrp()==$$&&fork();$p&&waitpid($p,0)&&exit($?&127?128+($?&127):$?>>8);setsid();exec @ARGV'";
+
 /// Carries Shell Classification state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -405,8 +416,19 @@ const AGENT_SUBSHELL_PROMPT_ENV: &[(&str, &str)] = &[
 /// Shell transaction wrappers are delivered through a PTY, so command scripts
 /// are materialized from short base64 chunks instead of heredocs. Keeping each
 /// generated line modest avoids shell line-editor and transport edge cases on
-/// remote panes.
+/// remote panes. These payload lines are consumed by the wrapper's `read`
+/// loop, after the interactive shell has relinquished its line editor.
 pub const SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES: usize = 768;
+/// Maximum base64 bytes appended by one shell wrapper transport command.
+///
+/// Wrapper source is reconstructed through interactive shell input before the
+/// ordinary command-payload receiver exists. A smaller bound leaves ample
+/// room for assignment syntax in Darwin's constrained terminal input buffers.
+#[cfg(target_os = "macos")]
+pub(crate) const SHELL_WRAPPER_BASE64_LINE_BYTES: usize = 64;
+#[cfg(not(target_os = "macos"))]
+pub(crate) const SHELL_WRAPPER_BASE64_LINE_BYTES: usize =
+    SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES;
 /// Maximum raw output bytes emitted through one base64 shell-output transport.
 pub const SHELL_OUTPUT_BASE64_MAX_RAW_BYTES: usize = 256 * 1024;
 /// Output transport used by isolated shell transactions.
@@ -464,7 +486,7 @@ fn posix_child_command_invocation_lines(
         ),
         "  elif command -v python3 >/dev/null 2>&1; then".to_string(),
         posix_child_command_line(
-            "    command python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])'",
+            PYTHON_SETSID_WAIT_COMMAND,
             child_env,
             shell_invocation,
             transport,
@@ -472,7 +494,7 @@ fn posix_child_command_invocation_lines(
         ),
         "  elif command -v perl >/dev/null 2>&1; then".to_string(),
         posix_child_command_line(
-            "    command perl -MPOSIX=setsid -e 'setsid(); exec @ARGV'",
+            PERL_SETSID_WAIT_COMMAND,
             child_env,
             shell_invocation,
             transport,
@@ -606,7 +628,7 @@ fn fish_child_command_invocation_lines(
         ),
         "else if command -q python3".to_string(),
         fish_child_command_line(
-            "    command python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' env",
+            &format!("    {PYTHON_SETSID_WAIT_COMMAND} env"),
             noninteractive_env,
             shell_invocation,
             transport,
@@ -614,7 +636,7 @@ fn fish_child_command_invocation_lines(
         ),
         "else if command -q perl".to_string(),
         fish_child_command_line(
-            "    command perl -MPOSIX=setsid -e 'setsid(); exec @ARGV' env",
+            &format!("    {PERL_SETSID_WAIT_COMMAND} env"),
             noninteractive_env,
             shell_invocation,
             transport,
@@ -904,7 +926,7 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
             child_invocation = child_invocation,
         );
         ShellTransactionInput {
-            wrapper,
+            wrapper: posix_shell_wrapper_transport(&wrapper),
             payload: command_materialization.payload,
         }
     }
@@ -1230,11 +1252,17 @@ fn posix_shell_interactive_invocation_words(
     classification: ShellClassification,
 ) -> String {
     let mut words = vec![shell_quote(shell_path)];
-    words.extend(
-        startup_suppression_args(classification)
-            .iter()
-            .map(|arg| (*arg).to_string()),
+    let startup_args = startup_suppression_args(classification);
+    words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
+    let mut exec_words = vec!["exec".to_string(), shell_quote(shell_path)];
+    exec_words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
+    exec_words.push("-i".to_string());
+    let readiness_source = format!(
+        "command printf '\\033]133;B\\033\\\\'; {}",
+        exec_words.join(" ")
     );
+    words.push("-c".to_string());
+    words.push(shell_quote(&readiness_source));
     words.join(" ")
 }
 
@@ -1249,11 +1277,17 @@ fn fish_shell_interactive_invocation_words(
     classification: ShellClassification,
 ) -> String {
     let mut words = vec![fish_quote(shell_path)];
-    words.extend(
-        startup_suppression_args(classification)
-            .iter()
-            .map(|arg| (*arg).to_string()),
+    let startup_args = startup_suppression_args(classification);
+    words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
+    let mut exec_words = vec!["exec".to_string(), fish_quote(shell_path)];
+    exec_words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
+    exec_words.push("-i".to_string());
+    let readiness_source = format!(
+        "command printf '\\e]133;B\\e\\\\'; {}",
+        exec_words.join(" ")
     );
+    words.push("-c".to_string());
+    words.push(fish_quote(&readiness_source));
     words.join(" ")
 }
 
@@ -1348,6 +1382,47 @@ fn command_payload_lines(command: &str, end_marker: &str) -> String {
     payload
 }
 
+/// Encodes a generated POSIX wrapper as bounded shell-owned assignments.
+///
+/// Each physical input line is a complete command that appends one base64
+/// chunk. This avoids overflowing small Darwin PTY and Readline typeahead
+/// buffers while preserving the requirement that every action reaches the pane
+/// as shell input. The final complete command decodes and evaluates the source.
+fn posix_shell_wrapper_transport(source: &str) -> String {
+    const ACK: &str = "printf '\\036'";
+    let source = format!("unset MEZ_WRAPPER_SOURCE\n{source}");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
+    let mut chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
+    let first = chunks
+        .next()
+        .and_then(|chunk| std::str::from_utf8(chunk).ok())
+        .unwrap_or_default();
+    let mut transport = format!(
+        "MEZ_WRAPPER_STTY=$(stty -g 2>/dev/null) || MEZ_WRAPPER_STTY=; {ACK}\n\
+MEZ_WRAPPER_PS1=${{PS1-}}; PS1=; stty -echo 2>/dev/null || :; {ACK}\n\
+MEZ_WRAPPER_BASE64_FLAG=-d; printf '' | base64 -d >/dev/null 2>&1 || MEZ_WRAPPER_BASE64_FLAG=-D; {ACK}\n\
+MEZ_WRAPPER_B64={first}; {ACK}\n",
+        first = shell_quote(first),
+    );
+    for chunk in chunks {
+        let chunk = std::str::from_utf8(chunk)
+            .expect("standard base64 output should always be valid UTF-8");
+        transport.push_str("MEZ_WRAPPER_B64=$MEZ_WRAPPER_B64");
+        transport.push_str(&shell_quote(chunk));
+        transport.push_str("; ");
+        transport.push_str(ACK);
+        transport.push('\n');
+    }
+    transport.push_str(&format!(
+        "if [ -n \"$MEZ_WRAPPER_STTY\" ]; then stty \"$MEZ_WRAPPER_STTY\" 2>/dev/null || :; fi; {ACK}\n\
+MEZ_WRAPPER_SOURCE=$(printf '%s' \"$MEZ_WRAPPER_B64\" | base64 \"$MEZ_WRAPPER_BASE64_FLAG\"); {ACK}\n\
+unset MEZ_WRAPPER_B64 MEZ_WRAPPER_STTY MEZ_WRAPPER_BASE64_FLAG; {ACK}\n\
+PS1=$MEZ_WRAPPER_PS1; unset MEZ_WRAPPER_PS1; {ACK}\n\
+eval \"$MEZ_WRAPPER_SOURCE\"\n"
+    ));
+    transport
+}
+
 /// Formats the transaction-local environment command used to launch isolated
 /// POSIX-compatible child shells.
 fn posix_noninteractive_agent_env_command_words() -> String {
@@ -1393,7 +1468,7 @@ fn fish_noninteractive_agent_env_words() -> String {
 
 /// Formats transaction-local environment words for a POSIX persistent agent
 /// subshell.
-fn posix_agent_subshell_env_words() -> String {
+fn posix_agent_subshell_env_word_list() -> Vec<String> {
     let mut words = AGENT_SHELL_STARTUP_ENV_UNSETS
         .iter()
         .map(|key| format!("-u {key}"))
@@ -1403,12 +1478,12 @@ fn posix_agent_subshell_env_words() -> String {
             .iter()
             .map(|(key, value)| format!("{key}={}", shell_quote(value))),
     );
-    words.join(" ")
+    words
 }
 
 /// Formats transaction-local environment words for a Fish persistent agent
 /// subshell.
-fn fish_agent_subshell_env_words() -> String {
+fn fish_agent_subshell_env_word_list() -> Vec<String> {
     let mut words = AGENT_SHELL_STARTUP_ENV_UNSETS
         .iter()
         .map(|key| format!("-u {key}"))
@@ -1419,7 +1494,7 @@ fn fish_agent_subshell_env_words() -> String {
             .map(|(key, value)| format!("{key}={}", fish_quote(value))),
     );
     words.push("fish_private_mode=1".to_string());
-    words.join(" ")
+    words
 }
 
 /// Formats transaction-local environment assignments for Fish shell wrappers.
@@ -1430,7 +1505,7 @@ fn fish_agent_subshell_env_words() -> String {
 /// to history before executing it, so the prologue disables history and deletes
 /// that current history entry before later wrapper lines are read.
 pub fn posix_shell_history_suppression_start() -> &'static str {
-    "MEZ_RESTORE_ERREXIT=0; case $- in *e*) MEZ_RESTORE_ERREXIT=1; set +e;; esac; MEZ_RESTORE_NOUNSET=0; case $- in *u*) MEZ_RESTORE_NOUNSET=1; set +u;; esac; MEZ_HISTORY_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{print $2; exit}')\" in on) MEZ_HISTORY_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD-1)) 2>/dev/null || :;; esac\n\
+    "MEZ_SHELL_STTY_STATE=$(stty -g 2>/dev/null) || MEZ_SHELL_STTY_STATE=; if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT=0; case $- in *e*) MEZ_RESTORE_ERREXIT=1; set +e;; esac; MEZ_RESTORE_NOUNSET=0; case $- in *u*) MEZ_RESTORE_NOUNSET=1; set +u;; esac; MEZ_HISTORY_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{print $2; exit}')\" in on) MEZ_HISTORY_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD-1)) 2>/dev/null || :;; esac\n\
 MEZ_HISTORY_HISTFILE_WAS_SET=0\n\
 if [ \"${HISTFILE+x}\" = x ]; then MEZ_HISTORY_HISTFILE_WAS_SET=1; MEZ_HISTORY_HISTFILE_SAVED=$HISTFILE; fi\n\
 HISTFILE=/dev/null\n"
@@ -1448,6 +1523,8 @@ MEZ_RESTORE_HISTORY_NOW=$MEZ_HISTORY_RESTORE\n\
 MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
 MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
 unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET\n\
+if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\n\
+unset MEZ_SHELL_STTY_STATE\n\
 if [ \"${MEZ_RESTORE_HISTORY_NOW:-0}\" = 1 ]; then set -o history 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT_APPLY=${MEZ_RESTORE_ERREXIT_NOW:-0}; MEZ_RESTORE_NOUNSET_APPLY=${MEZ_RESTORE_NOUNSET_NOW:-0}; unset MEZ_RESTORE_HISTORY_NOW MEZ_RESTORE_ERREXIT_NOW MEZ_RESTORE_NOUNSET_NOW; case \"$MEZ_RESTORE_ERREXIT_APPLY\" in 1) set -e;; esac; case \"$MEZ_RESTORE_NOUNSET_APPLY\" in 1) set -u;; esac; unset MEZ_RESTORE_ERREXIT_APPLY MEZ_RESTORE_NOUNSET_APPLY; :\n"
 }
 
@@ -1473,6 +1550,8 @@ fn posix_shell_history_marker_finish_prefix() -> &'static str {
 MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
 MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
 unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET\n\
+if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\n\
+unset MEZ_SHELL_STTY_STATE\n\
 if [ \"$MEZ_RESTORE_HISTORY_NOW\" = 1 ]; then set -o history 2>/dev/null || :; fi; "
 }
 
@@ -1493,7 +1572,8 @@ fn posix_shell_errexit_restore_suffix() -> &'static str {
 /// Fish history behavior differs by version, so this uses private-mode state
 /// plus later best-effort deletion of wrapper prefixes.
 pub(crate) fn fish_shell_history_suppression_start() -> &'static str {
-    "set -l MEZ_FISH_PRIVATE_WAS_SET 0\n\
+    "set -l MEZ_SHELL_STTY_STATE (stty -g 2>/dev/null); or set -l MEZ_SHELL_STTY_STATE ''; if test -n \"$MEZ_SHELL_STTY_STATE\"; stty -echo 2>/dev/null; or true; end\n\
+set -l MEZ_FISH_PRIVATE_WAS_SET 0\n\
 if set -q fish_private_mode\n\
   set MEZ_FISH_PRIVATE_WAS_SET 1\n\
   set -l MEZ_FISH_PRIVATE_SAVED $fish_private_mode\n\
@@ -1510,12 +1590,13 @@ history delete --prefix --case-sensitive 'set -l MEZ_AGENT' >/dev/null 2>&1\n\
 history delete --prefix --case-sensitive 'set -l MEZ_PANE' >/dev/null 2>&1\n\
 history delete --prefix --case-sensitive \"printf '\\\\033]133;\" >/dev/null 2>&1\n\
 history delete --prefix --case-sensitive 'history delete --' >/dev/null 2>&1\n\
+if test -n \"$MEZ_SHELL_STTY_STATE\"; stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null; or true; end\n\
 if test \"$MEZ_FISH_PRIVATE_WAS_SET\" = 1\n\
   set -g fish_private_mode $MEZ_FISH_PRIVATE_SAVED\n\
 else\n\
   set -e fish_private_mode\n\
 end\n\
-set -e MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED\n"
+set -e MEZ_SHELL_STTY_STATE MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED\n"
 }
 
 /// Validates model-authored shell input before Mezzanine wraps it for pane
@@ -1604,7 +1685,10 @@ pub fn fish_quote(value: &str) -> String {
 /// The command starts the configured shell in the pane's current working
 /// directory and resumes the parent shell only after the child exits. The
 /// parent wrapper suppresses shell history before launching the child so the
-/// Mezzanine-owned handoff line does not persist in the user's normal history.
+/// Mezzanine-owned handoff does not persist in the user's normal history. It
+/// defines the handoff as a multiline function before invoking it, keeping
+/// physical terminal lines within the canonical-input limits of Unix PTYs
+/// while ensuring the parent parses cleanup before the child can consume input.
 pub fn agent_subshell_enter_command(
     shell_path: &Path,
     classification: ShellClassification,
@@ -1615,41 +1699,67 @@ pub fn agent_subshell_enter_command(
         ));
     }
     let shell = shell_path.to_string_lossy();
-    if classification == ShellClassification::Fish {
-        let env_words = fish_agent_subshell_env_words();
+    let source = if classification == ShellClassification::Fish {
+        let env_words = fish_agent_subshell_env_word_list().join(" \\\n  ");
         let shell_invocation = fish_shell_interactive_invocation_words(&shell, classification);
-        Ok(format!(
-            "set -l MEZ_FISH_PRIVATE_WAS_SET 0; \
-if set -q fish_private_mode; set MEZ_FISH_PRIVATE_WAS_SET 1; set -l MEZ_FISH_PRIVATE_SAVED $fish_private_mode; end; \
-set -g fish_private_mode 1; \
-command env {env_words} {shell_invocation}; \
-set -l MEZ_SUBSHELL_STATUS $status; \
-history delete --prefix --case-sensitive 'command env -u BASH_ENV' >/dev/null 2>&1; \
-history delete --prefix --case-sensitive 'set -l MEZ_FISH_PRIVATE_WAS_SET' >/dev/null 2>&1; \
-if test \"$MEZ_FISH_PRIVATE_WAS_SET\" = 1; set -g fish_private_mode $MEZ_FISH_PRIVATE_SAVED; else; set -e fish_private_mode; end; \
-set -e MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED MEZ_SUBSHELL_STATUS\n",
+        format!(
+            "{history_start}function __mez_agent_subshell_handoff
+if test -n \"$MEZ_SHELL_STTY_STATE\"; stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null; or true; end
+set -e MEZ_SHELL_STTY_STATE
+command env \\
+  {env_words} \\
+  {shell_invocation}
+history delete --prefix --case-sensitive 'command env -u BASH_ENV' >/dev/null 2>&1
+history delete --prefix --case-sensitive 'set -l MEZ_FISH_PRIVATE_WAS_SET' >/dev/null 2>&1
+if test \"$MEZ_FISH_PRIVATE_WAS_SET\" = 1; set -g fish_private_mode $MEZ_FISH_PRIVATE_SAVED; else; set -e fish_private_mode; end
+set -e MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED
+end
+__mez_agent_subshell_handoff; functions --erase __mez_agent_subshell_handoff
+",
+            history_start = fish_shell_history_suppression_start(),
             env_words = env_words,
             shell_invocation = shell_invocation,
-        ))
+        )
     } else {
-        let env_words = posix_agent_subshell_env_words();
+        let env_words = posix_agent_subshell_env_word_list().join(" \\\n  ");
         let shell_invocation = posix_shell_interactive_invocation_words(&shell, classification);
-        Ok(format!(
-            "MEZ_RESTORE_ERREXIT=0; case $- in *e*) MEZ_RESTORE_ERREXIT=1; set +e;; esac; \
-MEZ_RESTORE_NOUNSET=0; case $- in *u*) MEZ_RESTORE_NOUNSET=1; set +u;; esac; \
-MEZ_HISTORY_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{{print $2; exit}}')\" in on) MEZ_HISTORY_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD-1)) 2>/dev/null || :;; esac; \
-MEZ_HISTORY_HISTFILE_WAS_SET=0; if [ \"${{HISTFILE+x}}\" = x ]; then MEZ_HISTORY_HISTFILE_WAS_SET=1; MEZ_HISTORY_HISTFILE_SAVED=$HISTFILE; fi; \
-HISTFILE=/dev/null; command env {env_words} {shell_invocation}; MEZ_SUBSHELL_STATUS=$?; \
-if [ \"$MEZ_HISTORY_HISTFILE_WAS_SET\" = 1 ]; then HISTFILE=$MEZ_HISTORY_HISTFILE_SAVED; else unset HISTFILE; fi; \
-MEZ_RESTORE_HISTORY_NOW=$MEZ_HISTORY_RESTORE; MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT; MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET; \
-unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET MEZ_SUBSHELL_STATUS; \
-if [ \"${{MEZ_RESTORE_HISTORY_NOW:-0}}\" = 1 ]; then set -o history 2>/dev/null || :; fi; \
-MEZ_RESTORE_ERREXIT_APPLY=${{MEZ_RESTORE_ERREXIT_NOW:-0}}; MEZ_RESTORE_NOUNSET_APPLY=${{MEZ_RESTORE_NOUNSET_NOW:-0}}; \
-unset MEZ_RESTORE_HISTORY_NOW MEZ_RESTORE_ERREXIT_NOW MEZ_RESTORE_NOUNSET_NOW; \
-case \"$MEZ_RESTORE_ERREXIT_APPLY\" in 1) set -e;; esac; case \"$MEZ_RESTORE_NOUNSET_APPLY\" in 1) set -u;; esac; \
-unset MEZ_RESTORE_ERREXIT_APPLY MEZ_RESTORE_NOUNSET_APPLY; :\n",
+        format!(
+            "{history_start}__mez_agent_subshell_handoff() {{
+if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi
+unset MEZ_SHELL_STTY_STATE
+command env \\
+  {env_words} \\
+  {shell_invocation}
+:
+}}
+__mez_agent_subshell_cleanup() {{
+if [ \"$MEZ_HISTORY_HISTFILE_WAS_SET\" = 1 ]; then HISTFILE=$MEZ_HISTORY_HISTFILE_SAVED; else unset HISTFILE; fi
+MEZ_RESTORE_HISTORY_NOW=$MEZ_HISTORY_RESTORE
+MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT
+MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET
+unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET
+:
+}}
+__mez_agent_subshell_restore_options() {{
+if [ \"${{MEZ_RESTORE_HISTORY_NOW:-0}}\" = 1 ]; then set -o history 2>/dev/null || :; fi
+MEZ_RESTORE_ERREXIT_APPLY=${{MEZ_RESTORE_ERREXIT_NOW:-0}}
+MEZ_RESTORE_NOUNSET_APPLY=${{MEZ_RESTORE_NOUNSET_NOW:-0}}
+unset MEZ_RESTORE_HISTORY_NOW MEZ_RESTORE_ERREXIT_NOW MEZ_RESTORE_NOUNSET_NOW
+case \"$MEZ_RESTORE_ERREXIT_APPLY\" in 1) set -e;; esac
+case \"$MEZ_RESTORE_NOUNSET_APPLY\" in 1) set -u;; esac
+unset MEZ_RESTORE_ERREXIT_APPLY MEZ_RESTORE_NOUNSET_APPLY
+:
+}}
+__mez_agent_subshell_handoff; __mez_agent_subshell_cleanup; unset -f __mez_agent_subshell_handoff __mez_agent_subshell_cleanup 2>/dev/null || :; __mez_agent_subshell_restore_options; unset -f __mez_agent_subshell_restore_options 2>/dev/null || :
+",
+            history_start = posix_shell_history_suppression_start(),
             env_words = env_words,
             shell_invocation = shell_invocation,
-        ))
+        )
+    };
+    if classification == ShellClassification::Fish {
+        Ok(source)
+    } else {
+        Ok(posix_shell_wrapper_transport(&source))
     }
 }

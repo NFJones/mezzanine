@@ -30,9 +30,11 @@ fmt:
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Run tests
+# Run tests below the short physical system temporary directory. macOS exposes
+# /tmp through /private/tmp while its inherited TMPDIR is both symlink-bearing
+# and too long for test-specific Unix-domain socket names.
 test:
-    cargo test --workspace --all-targets --all-features --no-fail-fast --quiet
+    canonical_tmp="$(cd /tmp && pwd -P)"; if [ "$(uname -s)" = Darwin ]; then TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet -- --test-threads=1; else TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet; fi
 
 # Run the strict routed lifecycle acceptance with genuine Bubblewrap confinement
 test-real-bubblewrap:

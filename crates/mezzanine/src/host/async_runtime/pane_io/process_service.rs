@@ -34,6 +34,8 @@ where
     let mut report = AsyncPaneProcessServiceReport::new(*lifecycle_watcher.borrow());
     let mut last_foreground_metadata_poll: Option<Instant> = None;
     let mut pending_pane_io_side_effects = VecDeque::new();
+    let mut paced_input_requires_output = false;
+    let mut paced_input_requires_ack = false;
 
     while report.polls < config.max_polls {
         let state = *lifecycle_watcher.borrow_and_update();
@@ -52,7 +54,7 @@ where
         let mut observed_output = false;
         let mut pane_exited = false;
 
-        if drain_pane_output_events(
+        let (drained_output, shell_input_acknowledged) = drain_pane_output_events(
             handle,
             driver,
             config.output_drain_limit,
@@ -60,10 +62,14 @@ where
             &mut report.submitted_events,
             &mut report.applied_events,
         )
-        .await?
-        {
+        .await?;
+        if drained_output {
             made_progress = true;
             observed_output = true;
+            if !paced_input_requires_ack || shell_input_acknowledged {
+                paced_input_requires_output = false;
+                paced_input_requires_ack = false;
+            }
         }
 
         let foreground_metadata_due = last_foreground_metadata_poll
@@ -82,7 +88,9 @@ where
             }
         }
 
-        let effects = if pending_pane_io_side_effects.is_empty() {
+        let effects = if paced_input_requires_output {
+            Vec::new()
+        } else if pending_pane_io_side_effects.is_empty() {
             if let Some(instance) = driver.process_instance().cloned() {
                 handle
                     .drain_pane_process_io_side_effects(instance, config.drain_limit)
@@ -103,9 +111,14 @@ where
             report.drained = report
                 .drained
                 .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
-            for event in
-                pane_io_events_for_side_effects(driver, effects, &mut pending_pane_io_side_effects)
-                    .await
+            for event in pane_io_events_for_side_effects(
+                driver,
+                effects,
+                &mut pending_pane_io_side_effects,
+                &mut paced_input_requires_output,
+                &mut paced_input_requires_ack,
+            )
+            .await
             {
                 pane_exited |= is_process_exit_event(&event);
                 submit_pane_runtime_event(
@@ -181,7 +194,7 @@ pub(super) async fn drain_pane_output_events<B>(
     output_events: &mut u64,
     submitted_events: &mut usize,
     applied_events: &mut usize,
-) -> Result<bool>
+) -> Result<(bool, bool)>
 where
     B: AsyncPaneProcessIo,
 {
@@ -214,13 +227,14 @@ where
         }
     }
     if bytes.is_empty() {
-        return Ok(false);
+        return Ok((false, false));
     }
+    let shell_input_acknowledged = bytes.contains(&mez_mux::process::SHELL_INPUT_RECORD_ACK_BYTE);
     let event = driver.scope_event(RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }));
     let ingress = submit_batched_pane_output_event(handle, event).await?;
     *submitted_events = submitted_events.saturating_add(ingress.accepted);
     *applied_events = applied_events.saturating_add(ingress.applied);
-    Ok(true)
+    Ok((true, shell_input_acknowledged))
 }
 
 /// Submits coalesced pane output bytes as one ordered runtime event.

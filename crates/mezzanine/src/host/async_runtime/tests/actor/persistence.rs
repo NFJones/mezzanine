@@ -622,13 +622,11 @@ async fn async_actor_defers_project_approval_config_to_persistence_worker() {
     let primary = service
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 10)
         .unwrap();
-    let started = service
-        .start_initial_pane_process(Some("sleep 30"))
-        .unwrap();
+    let started = service.start_initial_pane_process(Some("cat")).unwrap();
     service
         .apply_pane_foreground_process_event(
             started.pane_id.clone(),
-            "sleep",
+            "cat",
             started.primary_pid,
             Some(root.to_string_lossy().to_string()),
         )

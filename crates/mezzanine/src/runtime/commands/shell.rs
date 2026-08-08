@@ -1083,9 +1083,10 @@ impl RuntimeSessionService {
     /// to the original interactive shell without inheriting prompt, option, or
     /// environment changes made inside the agent context.
     ///
-    /// Bootstrap delivery is intentionally two-phase: the ordered handoff sends
-    /// the child-shell launch plus transaction wrapper, while the registered
-    /// payload remains deferred until the wrapper's start marker is observed.
+    /// Bootstrap delivery is intentionally prompt-gated: this method sends only
+    /// the child-shell handoff. The ordinary pending-bootstrap state machine
+    /// observes the new child's prompt before it registers and sends the
+    /// wrapper, whose command payload remains deferred until its start marker.
     pub(crate) fn enter_agent_subshell_if_needed(&mut self, pane_id: &str) -> Result<bool> {
         if self.agent_subshell_is_active(pane_id)
             || self.primary_pid_for_live_pane_process(pane_id).is_none()
@@ -1104,18 +1105,14 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
-        let mut handoff_input = shell_command.into_bytes();
         if let Some((marker, wrapper)) = prepared_bootstrap.as_ref() {
             self.bind_agent_subshell_bootstrap_marker(pane_id, marker);
-            handoff_input.extend_from_slice(wrapper.as_bytes());
+            self.defer_agent_subshell_bootstrap_wrapper(pane_id, marker, wrapper.clone());
         }
-        match self.write_runtime_pane_input(pane_id, &handoff_input) {
+        match self.write_runtime_pane_shell_input(pane_id, shell_command.as_bytes()) {
             Ok(()) => {
                 self.enter_agent_subshell(pane_id);
                 self.take_agent_subshell_command_exit(pane_id);
-                if let Some((marker, _)) = prepared_bootstrap {
-                    self.record_bootstrap_sent(pane_id, &marker)?;
-                }
                 self.remember_hidden_shell_render_suppression(pane_id);
                 Ok(true)
             }

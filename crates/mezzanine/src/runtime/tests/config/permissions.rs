@@ -465,7 +465,7 @@ fn runtime_control_project_approval_requires_explicit_trust_before_deciding() {
         .unwrap();
     let descriptor = service.initial_pane_descriptor().unwrap();
     service
-        .start_pane_process_with_start_directory(descriptor, Some("sleep 30"), Some(&root))
+        .start_pane_process_with_start_directory(descriptor, Some("cat"), Some(&root))
         .unwrap();
     let approval_id = service
         .queue_blocked_approval(BlockedApprovalRequest {
@@ -634,10 +634,7 @@ fn runtime_control_project_approval_decisions_persist_exact_command_rules() {
     let primary = service
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
         .unwrap();
-    let descriptor = service.initial_pane_descriptor().unwrap();
-    service
-        .start_pane_process_with_start_directory(descriptor, Some("sleep 30"), Some(&root))
-        .unwrap();
+    service.set_pane_current_working_directory("%1".to_string(), root.clone());
 
     let allow_id = service
         .queue_blocked_approval(BlockedApprovalRequest {

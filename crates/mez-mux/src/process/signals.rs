@@ -17,7 +17,7 @@ pub(super) fn send_signal_to_pane_process_group(
     process_group_leader: i32,
     signal: Signal,
 ) -> Result<()> {
-    if process_group_leader < 0 {
+    if process_group_leader <= 0 {
         return Err(MezError::invalid_state("pane process group id is invalid"));
     }
     let pid = Pid::from_raw(process_group_leader)
@@ -25,6 +25,12 @@ pub(super) fn send_signal_to_pane_process_group(
     match kill_process_group(pid, signal) {
         Ok(()) => Ok(()),
         Err(Errno::SRCH) => Ok(()),
+        // Darwin can report EPERM for a PTY foreground process group whose
+        // session leader has exited but has not yet become observable through
+        // wait. Treat that teardown race like ESRCH; the subsequent bounded
+        // child wait still fails if an owned process actually remains alive.
+        #[cfg(target_os = "macos")]
+        Err(Errno::PERM) => Ok(()),
         Err(error) => Err(MezError::io(format!(
             "failed to send signal {} to pane process group {}: {error}",
             signal.as_raw(),
@@ -81,7 +87,7 @@ pub(super) fn signal_number_from_portable_name(name: &str) -> Option<i32> {
 /// declaration makes the boundary available to the crate.
 #[cfg(test)]
 mod tests {
-    use super::signal_number_from_portable_name;
+    use super::{send_signal_to_pane_process_group, signal_number_from_portable_name};
     use rustix::process::Signal;
 
     /// Verifies resolves standard signal names.
@@ -153,5 +159,18 @@ mod tests {
         assert!(signal_number_from_portable_name("sigcont").is_none());
         assert!(signal_number_from_portable_name("").is_none());
         assert!(signal_number_from_portable_name("unknown signal").is_none());
+    }
+
+    /// Verifies a zero process-group identifier is rejected before Rustix.
+    ///
+    /// Darwin PTY metadata can transiently report group zero while a shell is
+    /// exiting. Rustix reserves zero and asserts before issuing a syscall, so
+    /// teardown must convert the value into an ordinary typed error instead of
+    /// panicking during test or production cleanup.
+    #[test]
+    fn rejects_zero_process_group_without_panicking() {
+        let error = send_signal_to_pane_process_group(0, Signal::TERM).unwrap_err();
+
+        assert!(error.message().contains("process group id is invalid"));
     }
 }

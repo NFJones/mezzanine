@@ -24,6 +24,11 @@ pub struct AsyncPaneForegroundProcess {
 
 /// Async backend for one pane process and its PTY.
 pub trait AsyncPaneProcessIo {
+    /// Reports whether generated shell records emit explicit acknowledgements.
+    fn supports_shell_input_acknowledgements(&self) -> bool {
+        false
+    }
+
     /// Reads the next available PTY output chunk.
     fn read_output<'a>(&'a mut self, max_bytes: usize) -> AsyncPaneIoFuture<'a, Option<Vec<u8>>>;
 
@@ -179,6 +184,14 @@ impl<B> AsyncPaneProcessDriver<B> {
         B: AsyncPaneProcessIo,
     {
         self.backend.output_activity()
+    }
+
+    /// Reports whether the backend owns an acknowledgement-capable shell.
+    pub fn supports_shell_input_acknowledgements(&self) -> bool
+    where
+        B: AsyncPaneProcessIo,
+    {
+        self.backend.supports_shell_input_acknowledgements()
     }
 
     /// Returns the wrapped backend after test or migration use.

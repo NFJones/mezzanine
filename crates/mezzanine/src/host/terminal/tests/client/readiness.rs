@@ -159,7 +159,7 @@ fn attached_terminal_readiness_reports_hangup() {
     assert!(!readiness[0].error);
 }
 
-/// Verifies attached terminal readiness reports pipe error.
+/// Verifies attached terminal readiness reports a closed output pipe.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
@@ -175,7 +175,11 @@ fn attached_terminal_readiness_reports_pipe_error() {
         poll_attached_terminal_fd_readiness(&[descriptor], Some(Duration::ZERO)).unwrap();
 
     assert_eq!(readiness.len(), 1);
-    assert!(readiness[0].error);
+    assert!(
+        readiness[0].error || readiness[0].hangup,
+        "Unix poll implementations report a closed pipe as error or hangup: {:?}",
+        readiness[0]
+    );
 }
 
 /// Verifies attached terminal readiness rejects invalid fd.

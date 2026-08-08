@@ -29,30 +29,62 @@ fn agent_subshell_enter_command_rejects_relative_shell_path() {
 /// handoff must remove startup and prompt-hook variables and use shell-specific
 /// no-rc flags so user prompt customization cannot block agent delivery.
 fn agent_subshell_enter_command_suppresses_shell_startup_hooks() {
-    let bash =
+    let bash_transport =
         agent_subshell_enter_command(Path::new("/bin/bash"), ShellClassification::Bash).unwrap();
-    let zsh =
+    let zsh_transport =
         agent_subshell_enter_command(Path::new("/bin/zsh"), ShellClassification::Zsh).unwrap();
+    let bash = decoded_posix_wrapper_source(&bash_transport);
+    let zsh = decoded_posix_wrapper_source(&zsh_transport);
     let fish =
         agent_subshell_enter_command(Path::new("/bin/fish"), ShellClassification::Fish).unwrap();
 
     assert!(
-        bash.contains("command env -u BASH_ENV -u ENV -u ZDOTDIR"),
+        bash.contains("command env \\\n  -u BASH_ENV \\\n  -u ENV \\\n  -u ZDOTDIR"),
         "{bash}"
     );
     assert!(bash.contains("PROMPT_COMMAND=''"), "{bash}");
     assert!(bash.contains("'/bin/bash' --noprofile --norc"), "{bash}");
     assert!(
-        zsh.contains("command env -u BASH_ENV -u ENV -u ZDOTDIR"),
+        zsh.contains("command env \\\n  -u BASH_ENV \\\n  -u ENV \\\n  -u ZDOTDIR"),
         "{zsh}"
     );
     assert!(zsh.contains("'/bin/zsh' -f"), "{zsh}");
     assert!(
-        fish.contains("command env -u BASH_ENV -u ENV -u ZDOTDIR"),
+        fish.contains("command env \\\n  -u BASH_ENV \\\n  -u ENV \\\n  -u ZDOTDIR"),
         "{fish}"
     );
     assert!(fish.contains("fish_private_mode=1"), "{fish}");
     assert!(fish.contains("'/bin/fish' --no-config"), "{fish}");
+}
+
+#[test]
+/// Verifies persistent-subshell handoffs remain safe for canonical Unix PTYs.
+///
+/// Darwin accepts substantially shorter canonical input lines than Linux. The
+/// parent pane shell must therefore parse a multiline function definition
+/// before launching the child, keeping every physical line at or below the
+/// portable bound while retaining cleanup in parent-owned parsed input.
+fn agent_subshell_enter_command_keeps_physical_lines_pty_safe() {
+    for (path, classification) in [
+        ("/bin/sh", ShellClassification::PosixSh),
+        ("/bin/bash", ShellClassification::Bash),
+        ("/bin/zsh", ShellClassification::Zsh),
+        ("/bin/fish", ShellClassification::Fish),
+    ] {
+        let handoff = agent_subshell_enter_command(Path::new(path), classification).unwrap();
+
+        assert!(
+            handoff.lines().all(|line| line.len() <= 700),
+            "{classification:?} contains an oversized physical line (max={}):\n{handoff}",
+            handoff.lines().map(str::len).max().unwrap_or(0)
+        );
+        let source = if classification == ShellClassification::Fish {
+            handoff.clone()
+        } else {
+            decoded_posix_wrapper_source(&handoff)
+        };
+        assert!(source.contains("__mez_agent_subshell_handoff"), "{source}");
+    }
 }
 
 #[test]
@@ -78,11 +110,11 @@ fn bash_wrapper_unsets_bash_env_before_child_shell_startup() {
     )
     .unwrap();
     let input = transaction.render_for_classification_input(ShellClassification::Bash);
-    let wrapper = input.combined();
+    let wrapper_source = decoded_posix_wrapper_source(&input.wrapper);
 
     assert!(
-        wrapper.contains("'/bin/bash' --noprofile --norc \"$MEZ_COMMAND_FILE\""),
-        "{wrapper}"
+        wrapper_source.contains("'/bin/bash' --noprofile --norc \"$MEZ_COMMAND_FILE\""),
+        "{wrapper_source}"
     );
     let mut command = Command::new("env");
     command.arg(format!("BASH_ENV={}", hook.display()));
@@ -187,10 +219,11 @@ fn marker_token_requires_128_bits_of_hex() {
 /// the behavior that keeps agent-mode prompt mutations scoped away from the
 /// user's original pane shell.
 fn posix_agent_subshell_enter_command_preserves_parent_shell_after_child_exit() {
-    let handoff =
+    let handoff_transport =
         agent_subshell_enter_command(Path::new("/bin/sh"), ShellClassification::PosixSh).unwrap();
+    let handoff = decoded_posix_wrapper_source(&handoff_transport);
     let script = format!(
-        "set -eu\n{handoff}case $- in *e*u*|*u*e*) printf '%s\\n' STRICT_PARENT_ALIVE;; *) printf '%s\\n' STRICT_PARENT_LOST:$-;; esac\n"
+        "set -eu\n{handoff_transport}case $- in *e*u*|*u*e*) printf '%s\\n' STRICT_PARENT_ALIVE;; *) printf '%s\\n' STRICT_PARENT_LOST:$-;; esac\n"
     );
 
     let output = Command::new("/bin/sh")
@@ -202,7 +235,7 @@ fn posix_agent_subshell_enter_command_preserves_parent_shell_after_child_exit() 
 
     assert!(output.status.success(), "{output:?}");
     assert!(
-        handoff.contains("command env -u BASH_ENV -u ENV -u ZDOTDIR"),
+        handoff.contains("command env \\\n  -u BASH_ENV \\\n  -u ENV \\\n  -u ZDOTDIR"),
         "{handoff}"
     );
     assert!(handoff.contains("HISTFILE=/dev/null"), "{handoff}");
@@ -264,7 +297,8 @@ fn posix_wrapper_contains_start_and_end_markers() {
     let transaction =
         ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), "pwd").unwrap();
 
-    let wrapper = transaction.render_posix();
+    let transport = transaction.render_posix();
+    let wrapper = decoded_posix_wrapper_source(&transport);
 
     assert!(wrapper.contains("]133;C;mez_marker="));
     assert!(wrapper.contains("]133;D;%s;mez_marker="));
@@ -289,6 +323,8 @@ fn posix_wrapper_contains_start_and_end_markers() {
     assert!(wrapper.contains("command printf '\\033]133;C;"));
     assert!(wrapper.contains("/bin/sh"));
     assert!(wrapper.contains("command setsid -w"), "{wrapper}");
+    assert!(wrapper.contains("os.getpid()==os.getpgrp()"), "{wrapper}");
+    assert!(wrapper.contains("os.fork()"), "{wrapper}");
     let start_marker = wrapper.find("command printf '\\033]133;C;").unwrap();
     let payload_receiver = wrapper
         .find("while IFS= read -r MEZ_COMMAND_LINE; do")
@@ -305,11 +341,7 @@ fn posix_wrapper_contains_start_and_end_markers() {
     let invocation = "__mez_tx_0123456789abcdef";
     let payload_end = "__MEZ_COMMAND_PAYLOAD_END_0123456789abcdef0123456789abcdef__";
     assert!(wrapper.contains(&format!("\n{invocation}\n")), "{wrapper}");
-    assert_eq!(wrapper.trim_end().lines().last(), Some(payload_end));
-    assert!(
-        wrapper.find(invocation).unwrap() < wrapper.find(payload_end).unwrap(),
-        "{wrapper}"
-    );
+    assert_eq!(transport.trim_end().lines().last(), Some(payload_end));
     assert!(!wrapper.contains("command cat > \"$MEZ_COMMAND_FILE\""));
     assert!(!wrapper.contains("<<"));
     assert!(!wrapper.contains("\npwd\n"));
@@ -466,8 +498,9 @@ fn posix_wrapper_streams_large_command_payload_after_receiver_start() {
         ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), &command).unwrap();
     let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
 
-    assert!(input.wrapper.len() < 8 * 1024, "{}", input.wrapper.len());
-    assert!(input.payload.len() > input.wrapper.len());
+    let wrapper_source = decoded_posix_wrapper_source(&input.wrapper);
+    assert!(wrapper_source.len() < 8 * 1024, "{}", wrapper_source.len());
+    assert!(input.payload.len() > wrapper_source.len());
     assert!(
         !input.wrapper.contains("payloadpayload"),
         "{}",
@@ -570,9 +603,10 @@ fn typed_child_launch_quotes_arguments_without_shell_fragments() {
     .unwrap()
     .with_child_launch(launch);
 
-    let posix = transaction
+    let posix_transport = transaction
         .render_for_classification_input(ShellClassification::PosixSh)
         .wrapper;
+    let posix = decoded_posix_wrapper_source(&posix_transport);
     assert!(
         posix.contains("'/usr/bin/sandbox helper' '--label'"),
         "{posix}"
@@ -602,6 +636,8 @@ fn typed_child_launch_quotes_arguments_without_shell_fragments() {
 /// wrapper lines while preserving its one-argument argv boundary at execution.
 /// Forwarded sandbox environment values can exceed terminal line-discipline
 /// limits, so the wrapper must remain executable after source-line splitting.
+/// The bound includes command syntax around each configured base64 chunk and
+/// is 128 bytes on Darwin, protecting the Bash 3.2 interactive input path.
 fn typed_child_launch_bounds_long_posix_argument_lines() {
     let long_argument = "sandbox-path-segment:".repeat(200);
     let launch = ShellChildLaunch::new(
@@ -623,7 +659,9 @@ fn typed_child_launch_bounds_long_posix_argument_lines() {
     let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
 
     assert!(
-        input.wrapper.lines().all(|line| line.len() <= 1024),
+        input.wrapper.lines().all(|line| {
+            line.len() <= crate::shell::transaction::SHELL_WRAPPER_BASE64_LINE_BYTES + 64
+        }),
         "{}",
         input.wrapper
     );

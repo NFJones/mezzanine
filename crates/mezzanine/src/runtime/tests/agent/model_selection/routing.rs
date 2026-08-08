@@ -1438,6 +1438,11 @@ bootstrap\tcomplete\t1714500000\n",
         .pane_processes()
         .primary_pid(&worker_turn.pane_id)
         .unwrap();
+    service.set_pane_readiness(
+        &worker_turn.pane_id,
+        crate::runtime::PaneReadinessState::PromptCandidate,
+    );
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
     service
         .pane_processes_mut()
         .set_foreground_process_group_id_for_test(&worker_turn.pane_id, Some(process_group_id));

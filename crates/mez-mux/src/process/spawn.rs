@@ -132,6 +132,7 @@ pub fn spawn_pane_process_with_start_directory(
         output_backlog_limit_bytes: super::pane::DEFAULT_OUTPUT_BACKLOG_LIMIT_BYTES,
         output_activity_sequence: 0,
         output_closed: false,
+        shell_input_acknowledgements_supported: explicit_command.is_none(),
         primary_pid,
         process_group_leader,
         initial_working_directory,

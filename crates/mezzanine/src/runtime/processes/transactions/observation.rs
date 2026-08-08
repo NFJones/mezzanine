@@ -204,6 +204,7 @@ impl RuntimeSessionService {
                 primary_process_id,
                 interaction_generation,
                 bootstrap_marker: None,
+                deferred_bootstrap_wrapper: None,
             },
         );
         self.process.pane_environment_signatures.remove(pane_id);
@@ -232,6 +233,21 @@ impl RuntimeSessionService {
             && handoff.bootstrap_marker.is_none()
         {
             handoff.bootstrap_marker = Some(marker.to_string());
+        }
+    }
+
+    /// Holds a registered bootstrap wrapper until the new child shell reports
+    /// prompt readiness.
+    pub(crate) fn defer_agent_subshell_bootstrap_wrapper(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+        wrapper: String,
+    ) {
+        if let Some(handoff) = self.process.pane_shell_handoffs.get_mut(pane_id)
+            && handoff.bootstrap_marker.as_deref() == Some(marker)
+        {
+            handoff.deferred_bootstrap_wrapper = Some(wrapper);
         }
     }
 
@@ -1000,6 +1016,12 @@ impl RuntimeSessionService {
             .get(pane_id)
             .and_then(|handoff| handoff.bootstrap_marker.clone());
         let marker = marker?;
+        let wrapper_was_deferred = self
+            .process
+            .pane_shell_handoffs
+            .get_mut(pane_id)
+            .and_then(|handoff| handoff.deferred_bootstrap_wrapper.take())
+            .is_some();
         let removable = self
             .process
             .running_shell_transactions
@@ -1025,7 +1047,11 @@ impl RuntimeSessionService {
             .pending_agent_subshell_start_observations
             .remove(pane_id);
         self.process.pane_bootstrap_pending.remove(pane_id);
-        payload
+        if wrapper_was_deferred {
+            Some(Vec::new())
+        } else {
+            payload
+        }
     }
 
     /// Invalidates child-environment evidence and schedules discovery after

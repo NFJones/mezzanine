@@ -19,6 +19,7 @@ use rustix::process::Signal;
 use crate::{MuxError as MezError, Result};
 use mez_terminal::TerminalSize;
 
+use super::process_metadata::{current_working_directory_for_pid, process_name_for_pid};
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
 use super::signals::send_signal_to_pane_process_group;
 use super::types::PaneExitStatus;
@@ -42,6 +43,15 @@ const PANE_INPUT_WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// bounded progress steps instead of one fragile all-or-nothing write.
 #[doc(hidden)]
 pub const PTY_INPUT_WRITE_CHUNK_BYTES: usize = 1024;
+/// Raw acknowledgement byte emitted after one generated shell-input record.
+#[doc(hidden)]
+pub const SHELL_INPUT_RECORD_ACK_BYTE: u8 = 0x1e;
+
+/// Reports whether a generated shell-input record requests acknowledgement.
+#[doc(hidden)]
+pub fn shell_input_record_requires_ack(record: &[u8]) -> bool {
+    record.ends_with(b"printf '\\036'\n")
+}
 
 #[cfg(test)]
 mod tests {
@@ -117,6 +127,8 @@ pub struct PaneProcess {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) output_closed: bool,
+    /// Whether the pane was launched as its configured interactive shell.
+    pub(super) shell_input_acknowledgements_supported: bool,
     /// Stores the primary pid value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -185,6 +197,12 @@ impl PaneProcess {
         process_name_for_pid(self.primary_pid)
     }
 
+    /// Reports whether this process can acknowledge generated shell records.
+    #[doc(hidden)]
+    pub fn supports_shell_input_acknowledgements(&self) -> bool {
+        self.shell_input_acknowledgements_supported
+    }
+
     /// Returns the foreground process-group id currently owning the pane PTY.
     ///
     /// Interactive shells move foreground jobs into their own process group; this
@@ -224,14 +242,143 @@ impl PaneProcess {
             .map_err(|error| MezError::invalid_state(format!("pane PTY resize failed: {error}")))
     }
 
-    /// Runs the write input operation for this subsystem.
+    /// Writes complete input bytes while preserving concurrent pane output.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// PTY terminal echo can fill the master output buffer while a large shell
+    /// transaction is still being written, especially on macOS. When a write
+    /// would block this method drains available output into the normal bounded
+    /// backlog before waiting for writability. It returns an error if no write
+    /// progress occurs within the configured stall timeout or the output
+    /// backlog cannot accept enough data to unblock the terminal.
     pub fn write_input(&mut self, input: &[u8]) -> Result<()> {
-        write_all_to_pty_fd_blocking(self.master_fd()?, input)?;
+        let fd = self.master_fd()?;
+        let mut written = 0usize;
+        let mut last_progress = Instant::now();
+        while written < input.len() {
+            let chunk_end = written
+                .saturating_add(PTY_INPUT_WRITE_CHUNK_BYTES)
+                .min(input.len());
+            match write_pty_fd_nonblocking_io(fd, &input[written..chunk_end]) {
+                Ok(0) => {
+                    return Err(MezError::invalid_state(
+                        "pane PTY write accepted zero bytes",
+                    ));
+                }
+                Ok(count) => {
+                    written = written.saturating_add(count);
+                    last_progress = Instant::now();
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    self.buffer_available_output(self.output_backlog_limit_bytes)?;
+                    if last_progress.elapsed() >= PANE_INPUT_WRITE_STALL_TIMEOUT {
+                        return Err(MezError::invalid_state(format!(
+                            "pane PTY input write timed out after {} ms",
+                            PANE_INPUT_WRITE_STALL_TIMEOUT.as_millis()
+                        )));
+                    }
+                    let _ = wait_for_pty_fd_writability(Some(fd), Duration::from_millis(50))?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
         Ok(())
+    }
+
+    /// Writes generated shell source one complete interactive record at a time.
+    ///
+    /// Darwin can accept several terminal records before its interactive shell
+    /// consumes the first one, overflowing the shell's own typeahead buffer.
+    /// macOS therefore waits for fresh pane output after every record while
+    /// retaining that output in the ordinary backlog. Other Unix hosts use the
+    /// normal streaming writer.
+    pub fn write_shell_input(&mut self, input: &[u8]) -> Result<()> {
+        #[cfg(not(target_os = "macos"))]
+        return self.write_input(input);
+
+        #[cfg(target_os = "macos")]
+        {
+            if !self.supports_shell_input_acknowledgements() {
+                return self.write_input(input);
+            }
+            let mut written = 0usize;
+            while written < input.len() {
+                let limit = written
+                    .saturating_add(PTY_INPUT_WRITE_CHUNK_BYTES)
+                    .min(input.len());
+                let bounded = &input[written..limit];
+                let record_len = bounded
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(bounded.len(), |index| index + 1);
+                let record = &bounded[..record_len];
+                let activity = self.output_activity_sequence();
+                let acknowledgement_count = self
+                    .output_backlog
+                    .iter()
+                    .filter(|byte| **byte == SHELL_INPUT_RECORD_ACK_BYTE)
+                    .count();
+                self.write_input(record)?;
+                written = written.saturating_add(record_len);
+                if written < input.len() {
+                    let acknowledged = if shell_input_record_requires_ack(record) {
+                        self.wait_for_shell_input_ack_after(
+                            acknowledgement_count,
+                            PANE_INPUT_WRITE_STALL_TIMEOUT,
+                        )?
+                    } else {
+                        self.wait_for_output_activity_after(
+                            activity,
+                            PANE_INPUT_WRITE_STALL_TIMEOUT,
+                        )
+                    };
+                    if !acknowledged {
+                        return Err(MezError::invalid_state(format!(
+                            "pane shell input pacing timed out after {} ms",
+                            PANE_INPUT_WRITE_STALL_TIMEOUT.as_millis()
+                        )));
+                    }
+                    self.buffer_available_output_for_write()?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// Waits until the pane shell emits one additional record acknowledgement.
+    fn wait_for_shell_input_ack_after(
+        &mut self,
+        acknowledgement_count: usize,
+        timeout: Duration,
+    ) -> Result<bool> {
+        let started = Instant::now();
+        loop {
+            self.buffer_available_output_for_write()?;
+            if self
+                .output_backlog
+                .iter()
+                .filter(|byte| **byte == SHELL_INPUT_RECORD_ACK_BYTE)
+                .count()
+                > acknowledgement_count
+            {
+                return Ok(true);
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= timeout
+                || !wait_for_pty_fd_readiness(self.master_fd().ok(), timeout - elapsed)?
+            {
+                return Ok(false);
+            }
+        }
+    }
+
+    /// Buffers currently readable PTY output without consuming the backlog.
+    ///
+    /// Async pane writers call this between write-readiness attempts so
+    /// terminal echo cannot deadlock a large input write. Buffered bytes remain
+    /// available through `read_available_output` in their original order.
+    #[doc(hidden)]
+    pub fn buffer_available_output_for_write(&mut self) -> Result<()> {
+        self.buffer_available_output(self.output_backlog_limit_bytes)
     }
 
     /// Runs the read available output operation for this subsystem.
@@ -392,13 +539,15 @@ impl PaneProcess {
         Ok(status)
     }
 
-    /// Runs the terminate operation for this subsystem.
+    /// Terminates the pane process group and returns the primary child status.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// An already-exited child is polled and reaped before any signal is sent,
+    /// preventing a stale PTY foreground-group identifier from targeting a
+    /// reused process group. Live children receive HUP, TERM, and KILL with the
+    /// supplied grace period between stages. Signal or wait failures are
+    /// returned to the caller.
     pub fn terminate(&mut self, grace: Duration) -> Result<PaneExitStatus> {
-        if let Some(status) = self.exit_status {
+        if let Some(status) = self.poll_exit()? {
             return Ok(status);
         }
 
@@ -533,43 +682,6 @@ pub fn write_pty_fd_nonblocking_io(fd: RawFd, bytes: &[u8]) -> io::Result<usize>
     rustix_write(borrow_raw_pty_fd(fd), bytes).map_err(io::Error::from)
 }
 
-/// Runs the write all to pty fd blocking operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn write_all_to_pty_fd_blocking(fd: RawFd, input: &[u8]) -> Result<()> {
-    let mut written = 0usize;
-    let mut last_progress = Instant::now();
-    while written < input.len() {
-        let chunk_end = written
-            .saturating_add(PTY_INPUT_WRITE_CHUNK_BYTES)
-            .min(input.len());
-        match write_pty_fd_nonblocking_io(fd, &input[written..chunk_end]) {
-            Ok(0) => {
-                return Err(MezError::invalid_state(
-                    "pane PTY write accepted zero bytes",
-                ));
-            }
-            Ok(count) => {
-                written = written.saturating_add(count);
-                last_progress = Instant::now();
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if last_progress.elapsed() >= PANE_INPUT_WRITE_STALL_TIMEOUT {
-                    return Err(MezError::invalid_state(format!(
-                        "pane PTY input write timed out after {} ms",
-                        PANE_INPUT_WRITE_STALL_TIMEOUT.as_millis()
-                    )));
-                }
-                let _ = wait_for_pty_fd_writability(Some(fd), Duration::from_millis(50))?;
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Ok(())
-}
-
 /// Runs the wait for pty fd readiness operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -697,50 +809,5 @@ fn foreground_process_group_id(fd: std::os::fd::RawFd) -> Option<u32> {
 /// on duplicated control-flow logic.
 #[cfg(not(unix))]
 fn foreground_process_group_id(_fd: i32) -> Option<u32> {
-    None
-}
-
-/// Runs the process name for pid operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-#[cfg(target_os = "linux")]
-pub(super) fn process_name_for_pid(pid: u32) -> Option<String> {
-    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
-    let name = name
-        .trim_end_matches('\n')
-        .trim_end_matches('\r')
-        .to_string();
-    (!name.is_empty()).then_some(name)
-}
-
-/// Runs the process name for pid operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-#[cfg(not(target_os = "linux"))]
-pub(super) fn process_name_for_pid(_pid: u32) -> Option<String> {
-    None
-}
-
-/// Runs the current working directory for pid operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-#[cfg(target_os = "linux")]
-fn current_working_directory_for_pid(pid: u32) -> Option<PathBuf> {
-    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
-}
-
-/// Runs the current working directory for pid operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-#[cfg(not(target_os = "linux"))]
-fn current_working_directory_for_pid(_pid: u32) -> Option<PathBuf> {
     None
 }

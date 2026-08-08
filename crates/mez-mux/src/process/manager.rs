@@ -321,6 +321,15 @@ impl PaneProcessManager {
         process.write_input(input)
     }
 
+    /// Writes generated shell input using the pane's platform-native pacing.
+    pub fn write_pane_shell_input(&mut self, pane_id: &str, input: &[u8]) -> Result<()> {
+        let process = self
+            .processes
+            .get_mut(pane_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane process not found"))?;
+        process.write_shell_input(input)
+    }
+
     /// Runs the read available output operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -147,8 +147,12 @@ async fn async_fd_attached_terminal_io_reads_and_writes_socket_pair() {
 async fn async_fd_attached_terminal_io_unbounded_write_completes_large_frame() {
     let (driver, mut peer) = StdUnixStream::pair().unwrap();
     let driver_output = driver.try_clone().unwrap();
-    peer.set_read_timeout(Some(Duration::from_millis(200)))
-        .unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        peer.read_to_end(&mut output).unwrap();
+        output
+    });
 
     let mut io =
         AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
@@ -166,11 +170,10 @@ async fn async_fd_attached_terminal_io_unbounded_write_completes_large_frame() {
     assert!(bytes > DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES);
     assert_eq!(io.pending_output_bytes(), 0);
 
-    let mut output = Vec::new();
     drop(io);
     drop(driver_output);
     drop(driver);
-    peer.read_to_end(&mut output).unwrap();
+    let output = reader.join().expect("terminal output reader should finish");
     let output = String::from_utf8_lossy(&output);
     assert!(output.contains("tail-marker"), "{output:?}");
 }

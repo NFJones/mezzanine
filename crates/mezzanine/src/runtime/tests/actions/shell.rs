@@ -59,9 +59,8 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    service
-        .start_initial_pane_process(Some("cat >/dev/null"))
-        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 20).unwrap();
     screen.feed(b"ready\n");
     service.set_pane_screen("%1".to_string(), screen);
@@ -396,6 +395,7 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -462,7 +462,13 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
     }
     assert!(
         service.running_shell_transactions_for_tests().is_empty(),
-        "agent shell command should settle before checking verbose presentation"
+        "agent shell command should settle before checking verbose presentation: transactions={:?} pane={}",
+        service.running_shell_transactions_for_tests(),
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
     );
     let pane_text = service
         .pane_screen("%1")
@@ -491,6 +497,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -567,7 +574,13 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
     }
     assert!(
         context_text.contains("agent-hidden-output"),
-        "{context_text}"
+        "context={context_text} transactions={:?} pane={}",
+        service.running_shell_transactions_for_tests(),
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
     );
     let pane_text = service
         .pane_screen("%1")
@@ -623,6 +636,7 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -684,7 +698,16 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
         thread::yield_now();
     }
-    assert!(service.agent_provider_task_is_pending("turn-1"));
+    assert!(
+        service.agent_provider_task_is_pending("turn-1"),
+        "transactions={:?} pane={}",
+        service.running_shell_transactions_for_tests(),
+        service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+    );
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -727,9 +750,8 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
     let primary = service
         .attach_primary("primary", true, Size::new(24, 8).unwrap(), 120)
         .unwrap();
-    service
-        .start_initial_pane_process(Some("cat >/dev/null"))
-        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(24, 8).unwrap(), 20).unwrap(),
@@ -938,6 +960,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
     mark_test_pane_ready(&mut service, "%1");
     service.permission_policy_mut().set_approval_bypass(true);
     service

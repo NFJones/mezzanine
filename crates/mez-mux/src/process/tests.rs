@@ -196,7 +196,7 @@ fn spawns_explicit_command_from_start_directory() {
 
 /// Verifies that live pane processes can expose the host-reported process name,
 /// which feeds `pane.process_name` frame fields when the platform supports it.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 /// Verifies pane process exposes host process name when available.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -229,7 +229,7 @@ fn pane_process_exposes_host_process_name_when_available() {
 /// program even when the program does not emit output or OSC title sequences.
 /// Runtime pane/window titles use this path for mux-like automatic title
 /// updates while foreground jobs are running.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 /// Verifies pane process exposes foreground process name when available.
 ///
 /// This regression scenario documents the behavior being protected so a

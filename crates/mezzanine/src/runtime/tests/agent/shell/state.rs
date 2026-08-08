@@ -1470,6 +1470,7 @@ fn runtime_bubblewrap_unsupported_preparation_offers_exact_fallback_approval() {
 /// Verifies a policy-denied network requirement remains terminal and cannot
 /// be converted into an approval-gated unsandboxed retry.
 #[test]
+#[cfg(target_os = "linux")]
 fn runtime_bubblewrap_hard_preparation_failure_does_not_offer_fallback() {
     let root = temp_root("runtime-bubblewrap-hard-preparation-failure");
     fs::create_dir_all(&root).unwrap();
@@ -1488,7 +1489,12 @@ fn runtime_bubblewrap_hard_preparation_failure_does_not_offer_fallback() {
     settle_bubblewrap_probe_for_preparation_test(&mut service, &turn_id, &action_id, &root);
 
     assert!(service.blocked_approvals().pending().is_empty());
-    assert!(service.agent_turn_executions().get(&turn_id).is_none());
+    assert!(
+        service.agent_turn_executions().get(&turn_id).is_none(),
+        "hard preparation failure should settle the execution: execution={:?} transactions={:?}",
+        service.agent_turn_executions().get(&turn_id),
+        service.running_shell_transactions_for_tests()
+    );
     assert_eq!(
         service
             .agent_turn_ledger()
@@ -3408,9 +3414,10 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
     assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
     let exit_bytes = exit_inputs[0].pane_input_parts().1;
     assert!(
-        exit_bytes
+        !exit_bytes
             .windows(b"__MEZ_COMMAND_PAYLOAD_END_".len())
-            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_")
+            .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_"),
+        "a prompt-gated wrapper that was never sent must not receive payload"
     );
     assert_eq!(exit_bytes.last(), Some(&b'\x04'));
     assert!(!service.agent_subshell_is_active(&pane_id));

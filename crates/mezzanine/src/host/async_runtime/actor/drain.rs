@@ -373,6 +373,12 @@ impl AsyncRuntimeSessionActor {
                             bytes,
                         }
                     }
+                    crate::runtime::PaneProcessIoEffect::WriteShellInput { bytes } => {
+                        RuntimeSideEffect::WritePaneInput {
+                            pane_id: instance.pane_id,
+                            bytes,
+                        }
+                    }
                     crate::runtime::PaneProcessIoEffect::WriteInputPriority { bytes } => {
                         RuntimeSideEffect::WritePaneInputPriority {
                             pane_id: instance.pane_id,

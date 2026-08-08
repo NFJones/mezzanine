@@ -116,10 +116,10 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
     assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
     let exit_bytes = exit_inputs[0].pane_input_parts().1;
     assert!(
-        exit_bytes
+        !exit_bytes
             .windows(b"__MEZ_COMMAND_PAYLOAD_END_".len())
             .any(|window| window == b"__MEZ_COMMAND_PAYLOAD_END_"),
-        "an unreleased bootstrap payload must be completed before agent-subshell EOF"
+        "a prompt-gated wrapper that was never sent must not receive payload"
     );
     assert_eq!(exit_bytes.last(), Some(&b'\x04'));
 

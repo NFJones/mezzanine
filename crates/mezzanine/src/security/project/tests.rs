@@ -68,7 +68,7 @@ fn discovers_nearest_git_project_root() {
     let nested = root.join("a/b/c");
     fs::create_dir_all(&nested).unwrap();
 
-    assert_eq!(discover_project_root(&nested), root);
+    assert_eq!(discover_project_root(&nested), root.canonicalize().unwrap());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -84,7 +84,10 @@ fn no_git_marker_uses_current_directory_as_root() {
     let nested = root.join("a/b");
     fs::create_dir_all(&nested).unwrap();
 
-    assert_eq!(discover_project_root(&nested), nested);
+    assert_eq!(
+        discover_project_root(&nested),
+        nested.canonicalize().unwrap()
+    );
 
     let _ = fs::remove_dir_all(root);
 }
@@ -214,7 +217,7 @@ fn trust_prompt_lists_discovered_overlays_and_blocks_pending_root() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(prompt.project_root, root);
+    assert_eq!(prompt.project_root, root.canonicalize().unwrap());
     assert_eq!(prompt.state, TrustDecision::Pending);
     assert!(prompt.blocks_until_primary_decision);
     assert_eq!(prompt.overlay_files.len(), 2);

@@ -226,6 +226,10 @@ impl RuntimeSideEffectTestExt for RuntimeSideEffect {
             } => (&instance.pane_id, bytes, false),
             RuntimeSideEffect::PaneProcessIo {
                 instance,
+                effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { bytes },
+            } => (&instance.pane_id, bytes, false),
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
                 effect: crate::runtime::PaneProcessIoEffect::WriteInputPriority { bytes },
             } => (&instance.pane_id, bytes, true),
             effect => panic!("expected pane-input side effect, got {effect:?}"),
@@ -244,12 +248,59 @@ fn pane_input_effects(effects: &[RuntimeSideEffect]) -> Vec<&RuntimeSideEffect> 
                     | RuntimeSideEffect::WritePaneInputPriority { .. }
                     | RuntimeSideEffect::PaneProcessIo {
                         effect: crate::runtime::PaneProcessIoEffect::WriteInput { .. }
+                            | crate::runtime::PaneProcessIoEffect::WriteShellInput { .. }
                             | crate::runtime::PaneProcessIoEffect::WriteInputPriority { .. },
                         ..
                     }
             )
         })
         .collect()
+}
+
+/// Decodes all bounded POSIX wrapper transports concatenated in pane input.
+///
+/// Runtime handoff input can contain both the persistent child-shell handoff
+/// and its bootstrap transaction wrapper. Structural assertions should inspect
+/// their reconstructed shell source while delivery tests inspect the bounded
+/// assignment records themselves.
+fn decoded_posix_shell_wrapper_sources(transport: &str) -> String {
+    const FIRST_PREFIX: &str = "MEZ_WRAPPER_B64='";
+    const APPEND_PREFIX: &str = "MEZ_WRAPPER_B64=$MEZ_WRAPPER_B64'";
+    let mut encoded_sources = Vec::new();
+    let mut encoded = String::new();
+    for line in transport.lines() {
+        if let Some(chunk) = line.strip_prefix(FIRST_PREFIX) {
+            if !encoded.is_empty() {
+                encoded_sources.push(std::mem::take(&mut encoded));
+            }
+            encoded.push_str(
+                chunk
+                    .split_once('\'')
+                    .map(|(chunk, _)| chunk)
+                    .expect("wrapper base64 assignments should remain shell quoted"),
+            );
+        } else if let Some(chunk) = line.strip_prefix(APPEND_PREFIX) {
+            encoded.push_str(
+                chunk
+                    .split_once('\'')
+                    .map(|(chunk, _)| chunk)
+                    .expect("wrapper base64 assignments should remain shell quoted"),
+            );
+        }
+    }
+    if !encoded.is_empty() {
+        encoded_sources.push(encoded);
+    }
+    encoded_sources
+        .into_iter()
+        .map(|encoded| {
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .expect("wrapper transport should contain valid standard base64");
+            String::from_utf8(decoded).expect("generated wrapper source should be valid UTF-8")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Defines the TEST HOST CLIPBOARD WRITES static used by this subsystem.
@@ -355,7 +406,8 @@ fn temp_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("mez-runtime-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
-    root
+    root.canonicalize()
+        .expect("runtime test temporary root should canonicalize")
 }
 
 /// Carries Runtime Echo Provider state for this subsystem.

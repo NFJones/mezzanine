@@ -211,6 +211,8 @@ struct RuntimePaneShellHandoff {
     interaction_generation: u64,
     /// Exact bootstrap marker registered after the handoff command.
     bootstrap_marker: Option<String>,
+    /// Registered bootstrap wrapper held until the child prompt is observed.
+    deferred_bootstrap_wrapper: Option<String>,
 }
 
 /// Persistent shell receiver observed when a handoff bootstrap emitted its start marker.
@@ -2039,6 +2041,48 @@ impl RuntimeSessionService {
     /// moved across the actor boundary.
     pub(super) fn write_runtime_pane_input(&mut self, pane_id: &str, input: &[u8]) -> Result<()> {
         self.write_runtime_pane_input_with_priority(pane_id, input, false)
+    }
+
+    /// Writes generated interactive shell source using platform-native pacing.
+    ///
+    /// Darwin's terminal stack can accept multiple complete records before an
+    /// interactive shell has consumed the preceding one. Adapter-owned macOS
+    /// panes therefore wait for fresh shell output between bounded records;
+    /// Linux and synchronously owned panes retain the ordinary write path.
+    pub(super) fn write_runtime_pane_shell_input(
+        &mut self,
+        pane_id: &str,
+        input: &[u8],
+    ) -> Result<()> {
+        #[cfg(not(target_os = "macos"))]
+        return self.write_runtime_pane_input(pane_id, input);
+
+        #[cfg(target_os = "macos")]
+        {
+            if input.is_empty() {
+                return Err(MezError::invalid_args("pane input must not be empty"));
+            }
+            if self.process.pane_processes.contains_pane(pane_id) {
+                return Ok(self
+                    .process
+                    .pane_processes
+                    .write_pane_shell_input(pane_id, input)?);
+            }
+            if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
+                self.persistence
+                    .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
+                        instance,
+                        effect: PaneProcessIoEffect::WriteShellInput {
+                            bytes: input.to_vec(),
+                        },
+                    });
+                return Ok(());
+            }
+            Err(MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "pane process not found",
+            ))
+        }
     }
 
     /// Writes pane input with optional async queue priority.
