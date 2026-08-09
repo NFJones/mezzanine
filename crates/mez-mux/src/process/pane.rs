@@ -129,6 +129,7 @@ pub struct PaneProcess {
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) output_closed: bool,
     /// Whether the pane was launched as its configured interactive shell.
+    #[cfg(target_os = "macos")]
     pub(super) shell_input_acknowledgements_supported: bool,
     /// Stores the primary pid value for this data structure.
     ///
@@ -200,6 +201,7 @@ impl PaneProcess {
 
     /// Reports whether this process can acknowledge generated shell records.
     #[doc(hidden)]
+    #[cfg(target_os = "macos")]
     pub fn supports_shell_input_acknowledgements(&self) -> bool {
         self.shell_input_acknowledgements_supported
     }
@@ -363,6 +365,7 @@ impl PaneProcess {
     }
 
     /// Waits until the pane shell emits one additional record acknowledgement.
+    #[cfg(target_os = "macos")]
     fn wait_for_shell_input_ack_after(
         &mut self,
         acknowledgement_count: usize,

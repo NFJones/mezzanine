@@ -54,6 +54,7 @@ use mez_terminal::DEFAULT_PANE_TERM;
 use mez_terminal::{TerminalColor, TerminalOscEvent, TerminalScreen, TerminalStyledLine};
 use std::cell::RefCell;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use unicode_width::UnicodeWidthStr;
 
 const EXPECTED_MARKDOWN_BLOCK_DIVIDER_GLYPH: char = '─';
@@ -61,6 +62,9 @@ const EXPECTED_MARKDOWN_INLINE_CODE_FOREGROUND: TerminalColor =
     TerminalColor::Rgb(0xe6, 0xe6, 0xe6);
 const EXPECTED_MARKDOWN_TABLE_ALTERNATE_ROW_FOREGROUND: TerminalColor =
     TerminalColor::Rgb(0xe6, 0xe6, 0xe6);
+
+/// Monotonic suffix for runtime test temporary directories in this process.
+static NEXT_TEMP_ROOT_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Test-only canonical event projection used to assert causal identity rather
 /// than relying on rendered text or block placement alone.
@@ -407,7 +411,11 @@ fn mark_test_pane_ready(service: &mut RuntimeSessionService, pane_id: &str) {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn temp_root(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("mez-runtime-{name}-{}", std::process::id()));
+    let unique = NEXT_TEMP_ROOT_ID.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!(
+        "mez-runtime-{name}-{}-{unique}",
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     root.canonicalize()
