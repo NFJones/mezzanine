@@ -128,6 +128,20 @@ current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions
 and [Terminal input, copy, and history](docs/using-mezzanine/terminal-input-copy-and-history.md)
 for in-session work.
 
+### Shell completion
+
+Generate completions from the installed `mez` binary; they cover the same clap
+commands, aliases, and options accepted by the binary. For the current zsh
+session, run:
+
+```sh
+source <(mez completion zsh)
+```
+
+The `completion` command also supports `bash`, `fish`, `elvish`, and
+`powershell`. Install its generated output using the completion-directory
+conventions for your shell so it is available in future sessions.
+
 ## Safety at a glance
 
 The agent works from its pane's working directory, configured guidance, and

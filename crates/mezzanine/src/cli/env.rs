@@ -80,6 +80,8 @@ pub(super) enum CliCommand {
     Memory(super::memory::MemoryCliArgs),
     /// Inspects and manages sandbox workflows.
     Sandbox(super::sandbox::SandboxCliArgs),
+    /// Generates shell completion definitions.
+    Completion(CompletionCliArgs),
     /// Prints version information.
     Version,
 }
@@ -168,6 +170,14 @@ pub(super) struct KillSessionCliArgs {
     /// Confirms intentional termination of the live session.
     #[arg(short, long)]
     pub(super) force: bool,
+}
+
+/// Typed process CLI arguments for `mez completion`.
+#[derive(Debug, Clone, Args)]
+pub(super) struct CompletionCliArgs {
+    /// Shell syntax used for the generated completion definition.
+    #[arg(value_enum)]
+    pub(super) shell: clap_complete::Shell,
 }
 
 impl CliInvocation {

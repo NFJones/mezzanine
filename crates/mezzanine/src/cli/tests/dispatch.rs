@@ -70,6 +70,40 @@ fn help_mentions_mez_commands() {
     let _ = fs::remove_dir_all(home);
 }
 
+/// Verifies completion generation exposes the complete typed clap command tree.
+///
+/// Shell definitions are generated from the same `CliArgv` parser used for
+/// process dispatch, so new commands and options are included without a
+/// separately maintained completion catalog.
+#[test]
+fn completion_command_generates_zsh_definition_from_cli_tree() {
+    let (env, home) = test_env("completion-zsh");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    run_with_plain(
+        vec![
+            "mez".to_string(),
+            "completion".to_string(),
+            "zsh".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    let output = String::from_utf8(stdout).unwrap();
+    assert!(output.contains("#compdef mez"), "{output}");
+    assert!(output.contains("completion"), "{output}");
+    assert!(output.contains("sandbox"), "{output}");
+    assert!(output.contains("--json"), "{output}");
+    assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
 /// Verifies clap renders command-local help while preserving the legacy
 /// no-subcommand config usage path.
 ///

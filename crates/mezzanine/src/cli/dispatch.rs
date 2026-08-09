@@ -4,6 +4,9 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use clap::CommandFactory;
+
+use super::env::CliArgv;
 use super::{
     CliCommand, CliInvocation, CliInvocationParse, ConfigPaths, IsTerminal, MezError, OsString,
     PathBuf, Result, RuntimeEnv, Write, cli_idempotency_key, ensure_private_socket_directory, io,
@@ -149,6 +152,10 @@ pub async fn run_with<W: Write, E: Write>(
             .await?;
         }
         Some(CliCommand::Version) => write!(stdout, "{}", super::render_cli_version()?)?,
+        Some(CliCommand::Completion(args)) => {
+            let mut command = CliArgv::command();
+            clap_complete::generate(args.shell, &mut command, "mez", stdout);
+        }
         Some(CliCommand::Config(args)) => run_config(args, env, output_format, stdout)?,
         Some(CliCommand::New(args)) => {
             run_new(
