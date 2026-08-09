@@ -57,6 +57,7 @@ fn client_presentation_highlights_current_pager_search_match() {
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: false,
+        readline_input_active: false,
     };
 
     let (lines, line_style_spans) = compose_client_presentation_with_styles(&view, None);

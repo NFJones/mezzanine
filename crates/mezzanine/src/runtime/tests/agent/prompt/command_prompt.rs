@@ -23,6 +23,7 @@ fn runtime_primary_command_prompt_submits_and_clears_through_terminal_step() {
         .unwrap()
         .unwrap();
     assert!(prompt_view.primary_prompt_active);
+    assert!(prompt_view.readline_input_active);
     assert_eq!(
         prompt_view.lines.last().map(|line| line.trim_end()),
         Some("▐ :")
@@ -54,6 +55,7 @@ fn runtime_primary_command_prompt_submits_and_clears_through_terminal_step() {
         .unwrap()
         .unwrap();
     assert!(!display_view.primary_prompt_active);
+    assert!(!display_view.readline_input_active);
     assert_eq!(display_view.lines[0].trim_end(), "mezzanine command output");
     assert!(
         display_view

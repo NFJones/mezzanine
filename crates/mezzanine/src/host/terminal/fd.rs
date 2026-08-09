@@ -130,6 +130,8 @@ pub struct TerminalClientLoopConfig {
     /// When set, mouse clicks and wheel events are routed to the overlay before
     /// pane, frame, or application hit testing.
     pub primary_display_overlay_active: bool,
+    /// Whether Mez-owned readline prompts may request enhanced keyboard input.
+    pub enhanced_keyboard_reporting: bool,
     /// Stores the mouse border cells value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -303,6 +305,7 @@ impl Default for TerminalClientLoopConfig {
             mouse_selection_autoscroll_position: None,
             scrollback_copy_mode_active: false,
             primary_display_overlay_active: false,
+            enhanced_keyboard_reporting: false,
             mouse_border_cells: Vec::new(),
             mouse_window_frame_cells: Vec::new(),
             mouse_window_action_frame_cells: Vec::new(),

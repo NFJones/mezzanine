@@ -135,7 +135,10 @@ auto_reasoning_enabled = true
     assert_eq!(plan.from_version, 1);
     assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
     assert!(plan.changed);
-    assert!(plan.text.contains("version = 54"));
+    assert!(
+        plan.text
+            .contains(&format!("version = {CURRENT_CONFIG_SCHEMA_VERSION}"))
+    );
     assert!(plan.text.contains("emoji_width = \"wide\""));
     assert!(plan.text.contains("agent_wrap_column_cap = 120"));
     assert!(!plan.text.contains("detach_behavior"));
@@ -1535,6 +1538,47 @@ fn migrates_schema_53_with_always_exposed_mcp_servers() {
                 serde_json::json!("GitHub"),
                 serde_json::json!("state")
             ])
+        );
+    }
+}
+
+/// Verifies schema v55 adds disabled enhanced keyboard reporting in every
+/// supported format while preserving an explicit user opt-in.
+#[test]
+fn migrates_schema_54_with_enhanced_keyboard_reporting() {
+    for (format, missing, explicit) in [
+        (
+            ConfigFormat::Toml,
+            "version = 54\n[terminal]\nmouse = true\n",
+            "version = 54\n[terminal]\nenhanced_keyboard_reporting = true\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":54,"terminal":{"mouse":true}}"#,
+            r#"{"version":54,"terminal":{"enhanced_keyboard_reporting":true}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 54\nterminal:\n  mouse: true\n",
+            "version: 54\nterminal:\n  enhanced_keyboard_reporting: true\n",
+        ),
+    ] {
+        let missing_plan = migrate_config_text(format, missing).unwrap();
+        let missing_values = extract_config_values(format, &missing_plan.text);
+        assert_eq!(missing_plan.from_version, 54);
+        assert_eq!(missing_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            missing_values.get("terminal.enhanced_keyboard_reporting"),
+            Some(&"false".to_string())
+        );
+
+        let explicit_plan = migrate_config_text(format, explicit).unwrap();
+        let explicit_values = extract_config_values(format, &explicit_plan.text);
+        assert_eq!(explicit_plan.from_version, 54);
+        assert_eq!(explicit_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            explicit_values.get("terminal.enhanced_keyboard_reporting"),
+            Some(&"true".to_string())
         );
     }
 }

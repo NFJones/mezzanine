@@ -227,6 +227,7 @@ impl RuntimeSessionService {
         view.cursor_row = presentation.cursor_row;
         view.cursor_column = presentation.cursor_column;
         view.primary_prompt_active = true;
+        view.readline_input_active = true;
     }
 
     /// Clips existing style spans so an overlay fully owns one column range.
@@ -384,6 +385,7 @@ impl RuntimeSessionService {
         view.cursor_row = 0;
         view.cursor_column = 0;
         view.primary_prompt_active = false;
+        view.readline_input_active = false;
     }
 
     /// Overlays a transient error notice on the window status bar row.
@@ -742,6 +744,10 @@ impl RuntimeSessionService {
         config.resize_debounce_ms = self.presentation.settings.terminal_resize_debounce_ms;
         config.render_rate_limit_fps = self.presentation.settings.terminal_render_rate_limit_fps;
         config.ui_theme = self.presentation.settings.ui_theme.clone();
+        config.enhanced_keyboard_reporting = self
+            .presentation
+            .settings
+            .terminal_enhanced_keyboard_reporting;
         config.primary_display_overlay_active = self.presentation.primary_display_overlay.is_some();
         let frame_context = self.terminal_frame_context();
         config.mouse_border_cells = self.active_window_mouse_border_cells();

@@ -359,6 +359,7 @@ fn terminal_output_style_spans_drop_focused_overlay_spans_for_mismatched_diff_ro
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: true,
+        readline_input_active: true,
     };
     let output_lines = vec!["+ value: Some(None)".to_string()];
 
@@ -415,6 +416,7 @@ fn terminal_output_style_spans_drop_hidden_spans_for_matching_diff_row_slices() 
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: false,
+        readline_input_active: false,
     };
     let output_lines = vec!["+ value: Some(None)".to_string()];
 

@@ -132,6 +132,68 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
     let _ = fs::remove_dir_all(config_root);
 }
 
+/// Verifies a live enhanced-keyboard opt-in takes effect while a primary
+/// command prompt already owns input, without requiring the prompt to reopen.
+///
+/// The output lifecycle consumes the semantic ownership bit on the next
+/// rendered frame, so the persisted setting, loop configuration, and rendered
+/// activation predicate must agree immediately after the config change.
+#[test]
+fn runtime_config_change_applies_enhanced_keyboard_reporting_to_active_prompt() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.enter_primary_command_prompt("").unwrap();
+    let config_root = temp_root("runtime-agent-config-change-enhanced-keyboard");
+    service.set_config_root(config_root.clone());
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-config-enhanced-keyboard".to_string(),
+        conversation_id: "conversation-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        initial_capability: None,
+        state: AgentTurnState::Running,
+    };
+    let action = mez_agent::AgentAction {
+        id: "config-enhanced-keyboard".to_string(),
+        rationale: String::new(),
+        payload: mez_agent::AgentActionPayload::ConfigChange {
+            setting_path: "terminal.enhanced_keyboard_reporting".to_string(),
+            operation: "set".to_string(),
+            value: Some("true".to_string()),
+        },
+    };
+
+    let result = service
+        .execute_config_change_action_for_turn(&turn, &action, &primary, "approved")
+        .unwrap();
+
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    let config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    assert!(config.enhanced_keyboard_reporting);
+    let view = service
+        .render_client_view(ClientViewRole::Primary, Size::new(80, 24).unwrap(), &config)
+        .unwrap()
+        .unwrap();
+    assert!(view.readline_input_active);
+    assert!(view.enhanced_keyboard_reporting_active(config.enhanced_keyboard_reporting));
+    let config_text = fs::read_to_string(config_root.join("config.toml")).unwrap();
+    assert!(
+        config_text.contains("enhanced_keyboard_reporting = true"),
+        "{config_text}"
+    );
+    let _ = fs::remove_dir_all(config_root);
+}
+
 /// Verifies model-authored config changes cannot redefine sandbox authority.
 ///
 /// Approval is intentionally insufficient for these paths: sandbox backend,

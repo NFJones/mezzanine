@@ -651,6 +651,7 @@ fn attached_terminal_client_step_routes_input_and_composes_output() {
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: false,
+        readline_input_active: false,
     };
     let readiness = vec![
         AttachedTerminalFdReadiness {
@@ -739,6 +740,7 @@ fn attached_terminal_client_step_forwards_raw_input_when_primary_prompt_is_activ
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: true,
+        readline_input_active: true,
     };
     let readiness = vec![AttachedTerminalFdReadiness {
         role: AttachedTerminalFdRole::Input,

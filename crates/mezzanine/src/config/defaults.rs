@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 54
+version = 55
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -38,6 +38,8 @@ nested_multiplexer = "auto"
 passthrough = false
 emoji_width = "wide"
 reduced_motion = false
+# Opt in to enhanced keyboard reporting only while a Mez readline prompt owns input.
+enhanced_keyboard_reporting = false
 # Whether completion-attention title pills alternate their attention color.
 completion_attention_flashing = true
 resize_debounce_ms = 200

@@ -317,6 +317,7 @@ fn observer_client_presentation_uses_local_viewport_offset() {
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: false,
+        readline_input_active: false,
     };
 
     apply_client_view_offset(&mut view, 2, 4);

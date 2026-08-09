@@ -98,6 +98,8 @@ pub(crate) struct RuntimePresentationSettings {
     terminal_agent_wrap_column_cap: usize,
     /// Whether optional terminal animation is disabled.
     terminal_reduced_motion: bool,
+    /// Whether Mez-owned readline prompts may request enhanced keyboard input.
+    terminal_enhanced_keyboard_reporting: bool,
     /// Whether completion-attention title pills alternate their attention color.
     terminal_completion_attention_flashing: bool,
     /// Resolved color and rendition policy for product UI surfaces.
@@ -139,6 +141,7 @@ impl Default for RuntimePresentationSettings {
             terminal_render_rate_limit_fps: 5,
             terminal_agent_wrap_column_cap: crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
+            terminal_enhanced_keyboard_reporting: false,
             terminal_completion_attention_flashing: true,
             ui_theme: UiTheme::default(),
             key_bindings: KeyBindings::default(),
@@ -184,6 +187,8 @@ impl RuntimePresentationSettings {
             terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
                 root,
             )?,
+            terminal_enhanced_keyboard_reporting:
+                crate::runtime::runtime_terminal_enhanced_keyboard_reporting_from_config(root)?,
             terminal_completion_attention_flashing:
                 crate::runtime::runtime_terminal_completion_attention_flashing_from_config(root)?,
             ui_theme: crate::runtime::runtime_ui_theme_from_config(root)?,

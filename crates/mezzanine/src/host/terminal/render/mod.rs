@@ -258,6 +258,11 @@ pub fn render_attached_client_view_with_screen_resolvers<'a>(
     }
     let (cursor_row, cursor_column, cursor_visible) =
         rendered_cursor(window, visual_screen_for_pane, config, role)?;
+    let readline_input_active = role == ClientViewRole::Primary
+        && window
+            .panes()
+            .get(window.active_pane_index())
+            .is_some_and(|pane| pane_agent_shell_visible(&config.frame_context, pane.id.as_str()));
     let agent_prompt_region = active_agent_prompt_region(window, config, role)?;
     align_active_agent_prompt_block_to_region(
         window,
@@ -306,6 +311,7 @@ pub fn render_attached_client_view_with_screen_resolvers<'a>(
         ui_theme: config.ui_theme.clone(),
         agent_prompt_region,
         primary_prompt_active: false,
+        readline_input_active,
     }))
 }
 

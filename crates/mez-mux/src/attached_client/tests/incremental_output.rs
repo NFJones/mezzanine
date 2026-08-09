@@ -654,6 +654,7 @@ fn terminal_output_style_spans_drop_styles_for_matching_row_slice() {
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: false,
+        readline_input_active: false,
     };
     let output_lines = vec!["beta match".to_string()];
     let style_spans =

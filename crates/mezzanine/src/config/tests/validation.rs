@@ -808,7 +808,7 @@ fn rejects_invalid_terminal_term_and_profile_values() {
 fn rejects_invalid_terminal_presentation_values() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[terminal]\npane_spawn_directory = \"daemon\"\npane_spawn_view = \"editor\"\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nemoji_width = \"auto\"\nreduced_motion = \"sometimes\"\ncompletion_attention_flashing = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\nrender_rate_limit_fps = -1\n",
+        "[terminal]\npane_spawn_directory = \"daemon\"\npane_spawn_view = \"editor\"\ncursor_style = \"beam\"\ncursor_blink = \"sometimes\"\nemoji_width = \"auto\"\nreduced_motion = \"sometimes\"\nenhanced_keyboard_reporting = \"sometimes\"\ncompletion_attention_flashing = \"sometimes\"\ncursor_blink_interval_ms = 0\nresize_debounce_ms = 0\nrender_rate_limit_fps = -1\n",
         ConfigScope::Primary,
     );
 
@@ -832,6 +832,10 @@ fn rejects_invalid_terminal_presentation_values() {
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.reduced_motion"
             && diagnostic.message == "terminal.reduced_motion must be true or false"
+    }));
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "terminal.enhanced_keyboard_reporting"
+            && diagnostic.message == "terminal.enhanced_keyboard_reporting must be true or false"
     }));
     assert!(validation.diagnostics.iter().any(|diagnostic| {
         diagnostic.path == "terminal.completion_attention_flashing"

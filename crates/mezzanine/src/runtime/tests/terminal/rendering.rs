@@ -55,6 +55,11 @@ fn runtime_render_uses_selected_surface_and_process_protocol_state() {
         assert!(!view.alternate_screen, "{role:?}");
         assert!(!view.application_keypad, "{role:?}");
         assert!(view.bracketed_paste, "{role:?}");
+        assert_eq!(
+            view.readline_input_active,
+            role == ClientViewRole::Primary,
+            "{role:?}"
+        );
     }
 
     service.agent_shell_store_mut().request_exit("%1").unwrap();
@@ -70,6 +75,7 @@ fn runtime_render_uses_selected_surface_and_process_protocol_state() {
         .render_client_view(ClientViewRole::Primary, size, &config)
         .unwrap()
         .unwrap();
+    assert!(!process_view.readline_input_active);
     let process_text = process_view.lines.join("\n");
     assert!(process_text.contains("process-alternate"), "{process_text}");
     assert!(!process_text.contains("agent-only"), "{process_text}");

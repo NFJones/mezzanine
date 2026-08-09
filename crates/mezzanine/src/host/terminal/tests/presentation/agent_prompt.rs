@@ -159,6 +159,7 @@ fn readline_prompt_client_presentation_places_prompt_on_status_row() {
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: false,
+        readline_input_active: false,
     };
     let mut prompt =
         crate::ui::readline::ReadlinePrompt::new(crate::ui::readline::ReadlinePromptKind::Command);
@@ -208,6 +209,7 @@ fn readline_prompt_client_presentation_styles_agent_prompt_by_display_width() {
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: false,
+        readline_input_active: false,
     };
     let mut prompt =
         crate::ui::readline::ReadlinePrompt::new(crate::ui::readline::ReadlinePromptKind::Agent);
@@ -744,6 +746,7 @@ fn render_attached_client_view_reserves_agent_prompt_row() {
     .unwrap();
 
     assert_eq!(view.lines[3], format!("{:<30}", "▐ mez> "));
+    assert!(view.readline_input_active);
     assert_eq!(
         view.agent_prompt_region,
         Some(ReadlinePromptRegion {
@@ -753,6 +756,17 @@ fn render_attached_client_view_reserves_agent_prompt_row() {
             rows: 3,
         })
     );
+
+    let observer = render_attached_client_view(
+        ClientViewRole::Observer,
+        &window,
+        &screens,
+        &config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(!observer.readline_input_active);
 }
 
 /// Verifies that copy mode keeps the pane-local agent prompt reservation while

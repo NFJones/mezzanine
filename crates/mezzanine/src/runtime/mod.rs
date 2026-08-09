@@ -480,6 +480,7 @@ use config::{
     runtime_terminal_cursor_blink_from_config,
     runtime_terminal_cursor_blink_interval_ms_from_config,
     runtime_terminal_cursor_style_from_config, runtime_terminal_emoji_width_from_config,
+    runtime_terminal_enhanced_keyboard_reporting_from_config,
     runtime_terminal_reduced_motion_from_config,
     runtime_terminal_render_rate_limit_fps_from_config,
     runtime_terminal_resize_debounce_ms_from_config,

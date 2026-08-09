@@ -38,6 +38,7 @@ fn client_presentation_renders_status_line_inside_authoritative_size() {
         ui_theme: UiTheme::default(),
         agent_prompt_region: None,
         primary_prompt_active: false,
+        readline_input_active: false,
     };
 
     let lines = compose_client_presentation(

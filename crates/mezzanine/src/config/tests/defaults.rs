@@ -34,6 +34,16 @@ fn default_config_pane_frame_template_uses_padded_title_pill() {
     );
 }
 
+/// Verifies enhanced keyboard reporting remains an explicit opt-in in newly
+/// generated configuration files.
+#[test]
+fn default_config_disables_enhanced_keyboard_reporting() {
+    assert!(
+        DEFAULT_CONFIG_TOML.contains("enhanced_keyboard_reporting = false"),
+        "{DEFAULT_CONFIG_TOML}"
+    );
+}
+
 /// Verifies that first-run default config creation can run on Tokio filesystem
 /// APIs while preserving the same selected path and default text as the
 /// synchronous setup path.

@@ -383,6 +383,21 @@ pub(crate) fn runtime_terminal_reduced_motion_from_config(root: &Value) -> Resul
         .ok_or_else(|| MezError::config("terminal.reduced_motion must be true or false"))
 }
 
+/// Returns whether Mez-owned readline prompts may request enhanced keyboard input.
+pub(crate) fn runtime_terminal_enhanced_keyboard_reporting_from_config(
+    root: &Value,
+) -> Result<bool> {
+    let Some(terminal) = runtime_json_object(root, "terminal") else {
+        return Ok(false);
+    };
+    let Some(value) = terminal.get("enhanced_keyboard_reporting") else {
+        return Ok(false);
+    };
+    value.as_bool().ok_or_else(|| {
+        MezError::config("terminal.enhanced_keyboard_reporting must be true or false")
+    })
+}
+
 /// Returns whether completion-attention title pills should alternate colors.
 pub(crate) fn runtime_terminal_completion_attention_flashing_from_config(
     root: &Value,

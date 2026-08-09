@@ -134,6 +134,15 @@ pub struct RenderedClientView {
     pub agent_prompt_region: Option<ReadlinePromptRegion>,
     /// Whether the primary prompt is active.
     pub primary_prompt_active: bool,
+    /// Whether a Mez-owned readline prompt semantically owns client input.
+    pub readline_input_active: bool,
+}
+
+impl RenderedClientView {
+    /// Reports whether configured enhanced keyboard reporting should be active.
+    pub fn enhanced_keyboard_reporting_active(&self, configured: bool) -> bool {
+        configured && self.role == ClientViewRole::Primary && self.readline_input_active
+    }
 }
 
 /// Composes a rendered viewport and optional semantic status row as plain text.
@@ -769,6 +778,49 @@ mod tests {
         assert_eq!(TerminalFrameStyle::default(), TerminalFrameStyle::Default);
     }
 
+    /// Verifies enhanced keyboard reporting requires an explicit opt-in, a
+    /// primary client, and semantic ownership by a Mez readline prompt.
+    #[test]
+    fn enhanced_keyboard_reporting_requires_primary_readline_ownership() {
+        let mut view = RenderedClientView {
+            role: ClientViewRole::Primary,
+            authoritative_size: Size::new(8, 2).unwrap(),
+            client_size: Size::new(8, 2).unwrap(),
+            lines: vec!["pane".to_owned(), "prompt".to_owned()],
+            line_style_spans: vec![Vec::new(), Vec::new()],
+            selection: None,
+            requires_client_scroll: false,
+            viewport_row: 0,
+            viewport_column: 0,
+            cursor_row: 1,
+            cursor_column: 0,
+            cursor_visible: true,
+            cursor_style: TerminalCursorStyle::Block,
+            cursor_blink: false,
+            cursor_blink_interval_ms: 500,
+            application_keypad: false,
+            bracketed_paste: false,
+            focus_events: false,
+            alternate_screen: false,
+            host_mouse_reporting: true,
+            animation_refresh_interval_ms: 0,
+            ui_theme: Default::default(),
+            agent_prompt_region: None,
+            primary_prompt_active: true,
+            readline_input_active: true,
+        };
+
+        assert!(!view.enhanced_keyboard_reporting_active(false));
+        assert!(view.enhanced_keyboard_reporting_active(true));
+
+        view.role = ClientViewRole::Observer;
+        assert!(!view.enhanced_keyboard_reporting_active(true));
+
+        view.role = ClientViewRole::Primary;
+        view.readline_input_active = false;
+        assert!(!view.enhanced_keyboard_reporting_active(true));
+    }
+
     /// Verifies the mux-owned viewport compositor clips text and style spans,
     /// highlights the visible copy selection, and clamps requested offsets
     /// without relying on the product terminal-rendering adapter.
@@ -816,6 +868,7 @@ mod tests {
             ui_theme: Default::default(),
             agent_prompt_region: None,
             primary_prompt_active: false,
+            readline_input_active: false,
         };
 
         let (lines, spans) = compose_client_viewport(&view);
@@ -880,6 +933,7 @@ mod tests {
             ui_theme: Default::default(),
             agent_prompt_region: None,
             primary_prompt_active: false,
+            readline_input_active: false,
         };
 
         let (lines, spans) = compose_client_viewport(&view);
@@ -946,6 +1000,7 @@ mod tests {
             ui_theme: Default::default(),
             agent_prompt_region: None,
             primary_prompt_active: false,
+            readline_input_active: false,
         };
         let status = ClientStatusLine {
             kind: ClientStatusKind::CopyMode,
