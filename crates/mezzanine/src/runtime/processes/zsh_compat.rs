@@ -66,10 +66,18 @@ fi
 
 const MANAGED_ZSHRC: &str = r#"# Mezzanine-managed zsh interactive startup compatibility.
 ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
+typeset -g MEZ_ZSH_SYSTEM_HISTFILE_WAS_SET=${+HISTFILE}
+typeset -g MEZ_ZSH_SYSTEM_HISTFILE=${HISTFILE-}
 if [[ -r ${ZDOTDIR}/.zshrc ]]; then
   builtin source -- ${ZDOTDIR}/.zshrc
 fi
 typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
+if [[ ${MEZ_ZSH_SYSTEM_HISTFILE_WAS_SET} == 1 && \
+      ${HISTFILE-} == ${MEZ_ZSH_SYSTEM_HISTFILE} && \
+      ${HISTFILE} == "${MEZ_ZSH_MANAGED_ZDOTDIR}"/* ]]; then
+  HISTFILE="${MEZ_ZSH_USER_ZDOTDIR}${HISTFILE:${#MEZ_ZSH_MANAGED_ZDOTDIR}}"
+fi
+unset MEZ_ZSH_SYSTEM_HISTFILE MEZ_ZSH_SYSTEM_HISTFILE_WAS_SET
 if (( ${+functions[zshaddhistory]} )); then
   functions[__mez_user_zshaddhistory]=$functions[zshaddhistory]
 else
@@ -506,6 +514,128 @@ function zshaddhistory() {{\n\
             drop(compatibility);
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    /// Verifies a system-provided history path derived from the managed
+    /// `ZDOTDIR` is rebased to the user's startup directory and remains
+    /// available when a later regular pane uses a different managed shim.
+    ///
+    /// macOS `/etc/zshrc` configures `HISTFILE` from the effective `ZDOTDIR`.
+    /// Supplying that state through the environment keeps this regression
+    /// deterministic on Linux while distinct compatibility owners model two
+    /// independent Mez sessions.
+    #[test]
+    fn managed_zsh_compatibility_preserves_system_history_across_regular_panes() {
+        let zsh = Path::new("/bin/zsh");
+        if !zsh.exists() {
+            return;
+        }
+
+        let root =
+            std::env::temp_dir().join(format!("mez-zsh-regular-history-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let user_zdotdir = root.join("user-zdotdir");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&user_zdotdir).unwrap();
+        fs::write(user_zdotdir.join(".zshrc"), "PS1=\n").unwrap();
+        let user_history = user_zdotdir.join(".zsh_history");
+
+        let first_compatibility = ManagedZshCompatibility::create(
+            &root.join("control.sock"),
+            "%1",
+            MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap(),
+            Some(user_zdotdir.as_os_str().to_os_string()),
+        )
+        .unwrap();
+        let first_managed_history = first_compatibility.directory().join(".zsh_history");
+        let first_launch =
+            first_compatibility.configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()));
+        let first_command_plan = pane_command_plan(&first_launch, None).unwrap();
+        let mut first_command = Command::new(first_command_plan.program);
+        first_command
+            .arg("-d")
+            .args(first_command_plan.args)
+            .env("HOME", &home)
+            .env("HISTFILE", &first_managed_history)
+            .env("HISTSIZE", "200")
+            .env("SAVEHIST", "200")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in first_launch.environment() {
+            first_command.env(key, value);
+        }
+        let mut first_child = first_command.spawn().unwrap();
+        first_child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"print -r -- REGULAR_SESSION_ONE\nexit\n")
+            .unwrap();
+        drop(first_child.stdin.take());
+        let first_output = first_child.wait_with_output().unwrap();
+        assert!(
+            first_output.status.success(),
+            "stdout={:?} stderr={:?}",
+            String::from_utf8_lossy(&first_output.stdout),
+            String::from_utf8_lossy(&first_output.stderr)
+        );
+        drop(first_compatibility);
+
+        let second_compatibility = ManagedZshCompatibility::create(
+            &root.join("control.sock"),
+            "%2",
+            MarkerToken::new("fedcba9876543210fedcba9876543210").unwrap(),
+            Some(user_zdotdir.as_os_str().to_os_string()),
+        )
+        .unwrap();
+        let second_managed_history = second_compatibility.directory().join(".zsh_history");
+        let second_launch =
+            second_compatibility.configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()));
+        let second_command_plan = pane_command_plan(&second_launch, None).unwrap();
+        let mut second_command = Command::new(second_command_plan.program);
+        second_command
+            .arg("-d")
+            .args(second_command_plan.args)
+            .env("HOME", &home)
+            .env("HISTFILE", &second_managed_history)
+            .env("HISTSIZE", "200")
+            .env("SAVEHIST", "200")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in second_launch.environment() {
+            second_command.env(key, value);
+        }
+        let mut second_child = second_command.spawn().unwrap();
+        second_child.stdin.as_mut().unwrap().write_all(
+            b"print -r -- __REGULAR_HISTORY_BEGIN__\nfc -l -100\nprint -r -- __REGULAR_HISTORY_END__\nexit\n",
+        ).unwrap();
+        drop(second_child.stdin.take());
+        let second_output = second_child.wait_with_output().unwrap();
+        let second_stdout = String::from_utf8_lossy(&second_output.stdout);
+        let second_stderr = String::from_utf8_lossy(&second_output.stderr);
+        assert!(
+            second_output.status.success(),
+            "stdout={second_stdout:?} stderr={second_stderr:?}"
+        );
+        let restarted_history = second_stdout
+            .split_once("__REGULAR_HISTORY_BEGIN__\n")
+            .and_then(|(_, tail)| tail.split_once("__REGULAR_HISTORY_END__"))
+            .map(|(history, _)| history)
+            .unwrap_or_default();
+        assert!(
+            restarted_history.contains("REGULAR_SESSION_ONE"),
+            "{restarted_history}"
+        );
+        let persisted = fs::read_to_string(&user_history).unwrap();
+        assert!(persisted.contains("REGULAR_SESSION_ONE"), "{persisted}");
+        assert!(!first_managed_history.exists());
+        assert!(!second_managed_history.exists());
+
+        drop(second_compatibility);
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// Verifies a persistent agent child preserves the user-configured zsh
