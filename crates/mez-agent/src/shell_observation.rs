@@ -166,17 +166,15 @@ pub fn mez_wrapper_echo_line_is_possible_prefix(line: &[u8], command_lines: &[St
         "if [ -n \"$MEZ_COMMAND_FILE\"",
         "if [ -n \"$MEZ_COMMAND_B64\"",
         "if [ \"$MEZ_WRITE_STATUS\"",
-        "else",
         "elif command -v",
-        "fi",
         "MEZ_WRITE_STATUS=$?",
         "MEZ_STATUS=$MEZ_WRITE_STATUS",
         "rm -f -- \"$MEZ_COMMAND_FILE\"",
         "rm -f -- \"$MEZ_COMMAND_B64\"",
         "unset MEZ_COMMAND_FILE",
         "unset MEZ_COMMAND_FILE MEZ_COMMAND_B64",
-        "fish_private_mode",
-        "history delete --",
+        "MEZ_FISH_PRIVATE_",
+        "MEZ_SHELL_STTY_STATE",
         "printf",
         "f '\\n%s\\n' '__MEZ_SHELL_OUTPUT_BASE64_",
         "f '%s %s\\n'",
@@ -192,10 +190,6 @@ pub fn mez_wrapper_echo_line_is_possible_prefix(line: &[u8], command_lines: &[St
         "MEZ_COMMAND_",
         ">",
         "$",
-        "begin",
-        "end",
-        "{",
-        "}",
         "command ",
         "eval ",
     ]
@@ -257,31 +251,13 @@ pub fn mez_wrapper_filter_bytes_may_contain_boilerplate(bytes: &[u8]) -> bool {
 /// Each marker is checked against both the normalized line and its
 /// prompt-stripped variant so a single update here covers both branches.
 const WRAPPER_MARKERS: &[&str] = &[
-    "MEZ_MARKER_TOKEN",
-    "MEZ_TURN",
-    "MEZ_AGENT",
-    "MEZ_PANE",
-    "MEZ_STATUS",
-    "MEZ_RESTORE_ERREXIT",
-    "MEZ_RESTORE_NOUNSET",
-    "MEZ_RESTORE_HISTORY",
-    "MEZ_HISTORY_",
-    "MEZ_ZSH_HISTORY_ACTIVE",
     "fc -P",
     "__mez_agent_subshell_handoff",
-    "MEZ_COMMAND_FILE",
-    "MEZ_COMMAND_B64",
-    "MEZ_COMMAND_",
-    "MEZ_OUTPUT_FILE",
-    "MEZ_WRITE_STATUS",
     "HISTFILE=/dev/null",
     "set +o history",
     "set -o history",
     "history -d",
-    "fish_private_mode",
-    "history delete --",
     "case $- in *e*)",
-    "mez_marker=",
     "printf '\\033]133;C;mez_marker",
     "printf '\\033]133;D;%s;mez_marker",
     "env -u MEZ_MARKER_TOKEN -u MEZ_TURN -u MEZ_AGENT -u MEZ_PANE",
@@ -296,11 +272,73 @@ const WRAPPER_MARKERS: &[&str] = &[
     "set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS",
 ];
 
-/// Exact-match tokens for wrapper text (case-sensitive).
-const WRAPPER_EXACT_TOKENS: &[&str] = &["else", "fi", ">", "$", "begin", "end", "{", "}"];
+/// Exact prompt tokens that are never command output before a shell boundary.
+const WRAPPER_EXACT_TOKENS: &[&str] = &[">", "$"];
 
 /// Prefix patterns that identify wrapper lines.
 const WRAPPER_PREFIXES: &[&str] = &["if [ \"$M", "eval "];
+
+/// Returns whether one line uses Mezzanine-owned variables as shell source.
+///
+/// Bare mentions of an internal variable name are legitimate program output.
+/// Wrapper ownership therefore requires assignment or shell-control syntax,
+/// rather than an arbitrary substring match.
+fn mez_wrapper_echo_text_has_owned_variable_syntax(text: &str) -> bool {
+    let text = text.trim();
+    let first_word = text.split_whitespace().next().unwrap_or_default();
+    if first_word.starts_with("MEZ_") && first_word.contains('=') {
+        return true;
+    }
+    if [
+        "set -l ",
+        "set -g ",
+        "set -e ",
+        "set ",
+        "unset ",
+        "env -u ",
+        "command env -u ",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix) && text.contains("MEZ_"))
+    {
+        return true;
+    }
+    ((text.starts_with("if ") || text.starts_with("while ") || text.starts_with("case "))
+        && text.contains("$MEZ_"))
+        || (text.starts_with("builtin history delete --exact --case-sensitive")
+            && text.contains("MEZ_"))
+}
+
+/// Returns whether terminal wrapping left a line made only from multiple
+/// Mezzanine-owned variable-name fragments.
+///
+/// A single internal name can be legitimate application output. Requiring at
+/// least two owned tokens distinguishes wrapped source such as quoted marker
+/// argument lists and cleanup variable lists from an ordinary diagnostic.
+fn mez_wrapper_echo_text_is_owned_variable_fragment(text: &str) -> bool {
+    const OWNED_VARIABLES: &[&str] = &[
+        "MEZ_MARKER_TOKEN",
+        "MEZ_TURN",
+        "MEZ_AGENT",
+        "MEZ_PANE",
+        "MEZ_STATUS",
+        "MEZ_RESTORE_ERREXIT",
+        "MEZ_RESTORE_NOUNSET",
+        "MEZ_RESTORE_HISTORY",
+    ];
+
+    let tokens = text
+        .split_whitespace()
+        .map(|token| token.trim_matches(['$', '\"', '\'', ';', ',']))
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    tokens.len() >= 2
+        && tokens.iter().all(|token| {
+            OWNED_VARIABLES.iter().any(|variable| {
+                *token == *variable || (token.len() >= 4 && variable.ends_with(token))
+            })
+        })
+}
 
 /// Runs the mez wrapper echo text is hidden operation for this subsystem.
 ///
@@ -310,9 +348,13 @@ const WRAPPER_PREFIXES: &[&str] = &["if [ \"$M", "eval "];
 /// the definition only lives in one place.
 pub fn mez_wrapper_echo_text_is_hidden(normalized: &str, command_lines: &[String]) -> bool {
     let promptless = mez_wrapper_echo_text_without_inline_prompts(normalized);
-    if WRAPPER_MARKERS
-        .iter()
-        .any(|m| normalized.contains(m) || promptless.contains(m))
+    if mez_wrapper_echo_text_has_owned_variable_syntax(normalized)
+        || mez_wrapper_echo_text_has_owned_variable_syntax(&promptless)
+        || mez_wrapper_echo_text_is_owned_variable_fragment(normalized)
+        || mez_wrapper_echo_text_is_owned_variable_fragment(&promptless)
+        || WRAPPER_MARKERS
+            .iter()
+            .any(|m| normalized.contains(m) || promptless.contains(m))
         || WRAPPER_EXACT_TOKENS
             .iter()
             .any(|t| normalized == *t || promptless == *t)
@@ -543,39 +585,42 @@ pub fn latest_agent_shell_transaction_output_lines(output: &str, max_lines: usiz
     }
     let raw_output = output;
     let decoded = decode_shell_output_transport_with_diagnostics(output);
-    let output = if decoded.diagnostics.saw_begin_marker {
-        let mut output = decoded.output;
+    let output_is_framed = decoded.diagnostics.saw_begin_marker;
+    let empty_commands: Vec<String> = Vec::new();
+    let normalized_lines = |text: &str, trust_content: bool| {
+        text.replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .lines()
+            .map(sanitized_shell_output_status_line)
+            .map(|line| line.trim_end().to_string())
+            .filter(|line| {
+                let trimmed = line.trim();
+                !trimmed.is_empty()
+                    && (trust_content
+                        || (!trimmed.starts_with("$ ")
+                            && !trimmed.starts_with("> ")
+                            && !trimmed.starts_with("__MEZ_SHELL_OUTPUT_BASE64_")
+                            && !mez_wrapper_echo_text_is_hidden(trimmed, &empty_commands)
+                            && !shell_observation_line_looks_like_prompt(trimmed)))
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut lines = if output_is_framed {
+        let mut lines = normalized_lines(&decoded.output, true);
         if let Some((_before, tail)) = raw_output.rsplit_once("__MEZ_SHELL_OUTPUT_BASE64_END__")
             && !tail.trim().is_empty()
             && !tail.contains("__MEZ_SHELL_OUTPUT_BASE64_")
             && !tail.contains("__MEZ_SHELL_STATUS_BASE64_")
         {
-            output.push_str(tail);
+            lines.extend(normalized_lines(tail, false));
         }
-        output
+        lines
     } else {
-        output.to_string()
+        normalized_lines(output, false)
     };
-    let empty_commands: Vec<String> = Vec::new();
-    let mut lines = output
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .lines()
-        .rev()
-        .map(sanitized_shell_output_status_line)
-        .map(|line| line.trim_end().to_string())
-        .filter(|line| {
-            let trimmed = line.trim();
-            !trimmed.is_empty()
-                && !trimmed.starts_with("$ ")
-                && !trimmed.starts_with("> ")
-                && !trimmed.starts_with("__MEZ_SHELL_OUTPUT_BASE64_")
-                && !mez_wrapper_echo_text_is_hidden(trimmed, &empty_commands)
-                && !shell_observation_line_looks_like_prompt(trimmed)
-        })
-        .take(max_lines)
-        .collect::<Vec<_>>();
-    lines.reverse();
+    if lines.len() > max_lines {
+        lines.drain(..lines.len() - max_lines);
+    }
     lines
 }
 
@@ -652,24 +697,18 @@ mod tests {
             "set +o history",
             "set -o history",
             "history -d 1",
-            "fish_private_mode on",
-            "history delete --prefix mez",
+            "set -l MEZ_FISH_PRIVATE_SAVED original",
+            "set -l MEZ_SHELL_STTY_STATE sane",
             "case $- in *e*)",
-            "mez_marker=abc123",
+            "printf '\\033]133;C;mez_marker=abc123'",
             "printf '\\033]133;C;mez_marker=abc;mez_turn=t1'",
             "printf '\\033]133;D;%s;mez_marker=abc'",
             "printf '%s\\n' __MEZ_SHELL_OUTPUT_BASE64_BEGIN__",
             "printf '\\n%s\\n' __MEZ_SHELL_OUTPUT_BASE64_END__",
             "env -u MEZ_MARKER_TOKEN -u MEZ_TURN -u MEZ_AGENT -u MEZ_PANE",
             "cat > \"$MEZ_COMMAND_FILE\" <<\\MEZ_CMD",
-            "else",
-            "fi",
             ">",
             "$",
-            "begin",
-            "end",
-            "{",
-            "}",
             "if command -v bash",
             "elif command -v zsh",
             "setsid(); exec @ARGV",
@@ -700,6 +739,17 @@ mod tests {
             "test result: ok. 42 passed; 0 failed",
             "Permission denied",
             "MEZ_ is not a real variable",
+            "begin",
+            "end",
+            "else",
+            "fi",
+            "{",
+            "}",
+            "done",
+            "fish_private_mode is enabled by the caller",
+            "history delete --prefix is interactive",
+            "MEZ_MARKER_TOKEN is application output",
+            "mez_marker=application output",
         ];
         let empty_commands: Vec<String> = Vec::new();
         for line in &visible_lines {
@@ -708,6 +758,25 @@ mod tests {
                 "line should be visible: {line}"
             );
         }
+    }
+
+    /// Verifies leading Fish-like command output remains visible before any
+    /// ordinary text establishes the start of user output.
+    ///
+    /// Wrapper cleanup historically matched generic control words and broad
+    /// history/private-mode substrings. Those values are valid diagnostics and
+    /// program output, so content resemblance alone must not discard them.
+    #[test]
+    fn agent_shell_transaction_observation_preserves_fish_like_leading_output() {
+        let output = agent_shell_transaction_observation_bytes(
+            b"printf diagnostics\r\nbegin\r\nend\r\nelse\r\nfish_private_mode is enabled by the caller\r\nhistory delete --prefix is interactive\r\n",
+            "printf diagnostics",
+        );
+
+        assert_eq!(
+            String::from_utf8_lossy(&output),
+            "begin\nend\nelse\nfish_private_mode is enabled by the caller\nhistory delete --prefix is interactive\n"
+        );
     }
 
     /// Verifies wrapper-only cleanup and transport lines stay hidden even when
@@ -788,6 +857,32 @@ mod tests {
         let lines = latest_agent_shell_transaction_output_lines(output, 5);
 
         assert_eq!(lines, vec!["ASYNC_PANE_STILL_ALIVE".to_string()]);
+    }
+
+    /// Verifies decoded transport payload is authoritative command output even
+    /// when its content resembles Fish syntax or Mezzanine wrapper fields.
+    ///
+    /// Content inside the authenticated output frame must not pass through the
+    /// heuristic wrapper-echo filter a second time.
+    #[test]
+    fn latest_agent_shell_transaction_output_lines_preserves_fish_like_framed_output() {
+        let output = "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nYmVnaW4KZW5kCmVsc2UKZmlzaF9wcml2YXRlX21vZGUgaXMgZW5hYmxlZCBieSB0aGUgY2FsbGVyCmhpc3RvcnkgZGVsZXRlIC0tcHJlZml4IGlzIGludGVyYWN0aXZlCk1FWl9NQVJLRVJfVE9LRU4gaXMgYXBwbGljYXRpb24gb3V0cHV0Cm1lel9tYXJrZXI9YXBwbGljYXRpb24gb3V0cHV0CnN0ZG91dCByZWNvcmQKc3RkZXJyIHJlY29yZAo=\n__MEZ_SHELL_OUTPUT_BASE64_END__\n";
+        let lines = latest_agent_shell_transaction_output_lines(output, 10);
+
+        assert_eq!(
+            lines,
+            vec![
+                "begin",
+                "end",
+                "else",
+                "fish_private_mode is enabled by the caller",
+                "history delete --prefix is interactive",
+                "MEZ_MARKER_TOKEN is application output",
+                "mez_marker=application output",
+                "stdout record",
+                "stderr record",
+            ]
+        );
     }
 
     /// Verifies Bubblewrap's private status transport after encoded command
