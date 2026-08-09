@@ -190,6 +190,43 @@ fn runtime_deferred_foreground_input_synchronizes_active_window_panes() {
     assert_eq!(pane_inputs[1].pane_input_parts().1, b"a");
 }
 
+/// Verifies ordinary deferred pane input does not synchronously render a stale
+/// client frame before the pane process has emitted its editor redraw.
+///
+/// Foreground process input is asynchronous. A client render must instead be
+/// driven by the later pane-output transition, because a line editor can make
+/// a valid state change without writing any terminal bytes.
+#[test]
+fn runtime_deferred_foreground_input_defers_client_render_until_pane_output() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+
+    let (report, deferred) = service
+        .apply_attached_terminal_step_transition(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\x1bOA".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(report.forwarded_bytes, 3);
+    assert!(!report.view_refresh_required);
+    assert!(
+        deferred
+            .side_effects
+            .iter()
+            .all(|effect| !matches!(effect, RuntimeSideEffect::RenderClient { .. }))
+    );
+}
+
 /// Verifies synchronized foreground input reaches only panes whose process
 /// surface is presented, including while an agent shell is waiting to hide.
 #[test]
