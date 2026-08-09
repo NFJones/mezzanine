@@ -7,11 +7,12 @@
 use super::{
     ApprovalDecision, ApprovalPolicy, BTreeMap, BlockedApprovalQueue, BlockedApprovalRequest,
     BlockedApprovalState, CandidateEvaluation, CommandRule, CommandRuleScope, CommandRuleStore,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeclaredCommandEffects, EffectCompleteness,
-    EffectiveCommandEffects, MezError, PathScopes, PermissionAuthorityChange, PermissionEvaluation,
-    PermissionPolicy, PermissionPreset, Result, RuleDecision, RuleMatch, SessionApprovalStore,
-    analyze_shell, classify_tokens, decode_rule_record, encode_rule_record, exact_command_sha256,
-    normalize_exact_command_text, tokenize_shell_words, tokenize_single_candidate,
+    CommandShellDialect, DEFAULT_COMMAND_SHELL_CLASSIFICATION, DeclaredCommandEffects,
+    EffectCompleteness, EffectiveCommandEffects, MezError, PathScopes, PermissionAuthorityChange,
+    PermissionEvaluation, PermissionPolicy, PermissionPreset, Result, RuleDecision, RuleMatch,
+    SessionApprovalStore, analyze_shell_for_dialect, classify_tokens, decode_rule_record,
+    encode_rule_record, exact_command_sha256, normalize_exact_command_text, tokenize_shell_words,
+    tokenize_single_candidate,
 };
 // Permission policy evaluation and authority comparisons.
 
@@ -352,7 +353,25 @@ impl PermissionPolicy {
     /// Evaluates one shell policy command into authorization and resource
     /// effects without requiring later consumers to rematch command text.
     pub fn evaluate_shell_command_structured(&self, command: &str) -> PermissionEvaluation {
-        self.evaluate_shell_command_structured_scoped(command, None)
+        self.evaluate_shell_command_structured_scoped_with_classification(
+            command,
+            None,
+            DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+        )
+    }
+
+    /// Evaluates one command using the grammar selected by the live pane shell
+    /// classification.
+    pub fn evaluate_shell_command_structured_for_shell_classification(
+        &self,
+        command: &str,
+        shell_classification: &str,
+    ) -> PermissionEvaluation {
+        self.evaluate_shell_command_structured_scoped_with_classification(
+            command,
+            None,
+            shell_classification,
+        )
     }
 
     /// Evaluates one shell policy command with shell-resolved path evidence.
@@ -361,23 +380,33 @@ impl PermissionPolicy {
         command: &str,
         scopes: &PathScopes,
     ) -> PermissionEvaluation {
-        self.evaluate_shell_command_structured_scoped(command, Some(scopes))
+        self.evaluate_shell_command_structured_scoped_with_classification(
+            command,
+            Some(scopes),
+            DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+        )
     }
 
-    fn evaluate_shell_command_structured_scoped(
+    fn evaluate_shell_command_structured_scoped_with_classification(
         &self,
         command: &str,
         scopes: Option<&PathScopes>,
+        shell_classification: &str,
     ) -> PermissionEvaluation {
-        let decision = self.evaluate_shell_command_scoped(command, scopes);
-        let analysis = analyze_shell(command);
+        let decision = self.evaluate_shell_command_scoped_with_classification(
+            command,
+            scopes,
+            shell_classification,
+        );
+        let dialect = CommandShellDialect::from_shell_classification(shell_classification);
+        let analysis = analyze_shell_for_dialect(command, dialect);
         let mut candidates = Vec::with_capacity(analysis.candidates.len());
         for candidate in analysis.candidates {
             candidates.push(self.evaluate_candidate_structured(
                 candidate,
                 scopes,
                 analysis.unsafe_syntax,
-                DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+                shell_classification,
             ));
         }
         let effects = aggregate_candidate_effects(&candidates);
@@ -569,7 +598,8 @@ impl PermissionPolicy {
                 .any(|trusted| cwd_starts_with(&s.current_directory, trusted))
         });
 
-        let analysis = analyze_shell(command);
+        let dialect = CommandShellDialect::from_shell_classification(shell_classification);
+        let analysis = analyze_shell_for_dialect(command, dialect);
         if analysis.candidates.is_empty() {
             return self.apply_approval_policy(RuleDecision::Prompt, cwd_trusted);
         };
@@ -680,11 +710,36 @@ impl PermissionPolicy {
         approvals: &SessionApprovalStore,
         scopes: Option<&PathScopes>,
     ) -> PermissionEvaluation {
-        let mut evaluation = self.evaluate_shell_command_structured_scoped(command, scopes);
+        self.evaluate_shell_command_structured_with_approvals_scoped_for_shell_classification(
+            command,
+            approvals,
+            scopes,
+            DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+        )
+    }
+
+    /// Applies approval state after analyzing a command with the grammar tied
+    /// to the live pane shell classification.
+    pub fn evaluate_shell_command_structured_with_approvals_scoped_for_shell_classification(
+        &self,
+        command: &str,
+        approvals: &SessionApprovalStore,
+        scopes: Option<&PathScopes>,
+        shell_classification: &str,
+    ) -> PermissionEvaluation {
+        let mut evaluation = self.evaluate_shell_command_structured_scoped_with_classification(
+            command,
+            scopes,
+            shell_classification,
+        );
         let base_decision = evaluation.decision;
         let scope_requires_fresh_approval = scopes.is_some()
             && base_decision == RuleDecision::Prompt
-            && self.evaluate_shell_command(command) == RuleDecision::Allow;
+            && self.evaluate_shell_command_scoped_with_classification(
+                command,
+                None,
+                shell_classification,
+            ) == RuleDecision::Allow;
         evaluation.decision = match approvals.evaluate(command) {
             Some(ApprovalDecision::Approve)
                 if base_decision == RuleDecision::Prompt && !scope_requires_fresh_approval =>

@@ -162,11 +162,13 @@ impl RuntimeSessionService {
         } else {
             self.path_scopes_for_pane(&turn.pane_id)
         };
+        let permission_shell_classification = self.shell_classification_for_pane(&turn.pane_id);
         let current_permission_evaluation = permission_policy
-            .evaluate_shell_command_structured_with_approvals_scoped(
+            .evaluate_shell_command_structured_with_approvals_scoped_for_shell_classification(
                 &policy_command,
                 self.session_approvals(),
                 path_scopes.as_ref(),
+                permission_shell_classification.as_str(),
             );
         match current_permission_evaluation.decision {
             mez_agent::permissions::RuleDecision::Forbid => {

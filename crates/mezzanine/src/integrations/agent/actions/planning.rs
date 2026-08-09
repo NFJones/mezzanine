@@ -27,6 +27,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                 scope,
                 action,
                 &plan.policy_command,
+                self.permissions.shell_classification(),
             )
             .map_err(MezError::invalid_args)?,
             _ => None,

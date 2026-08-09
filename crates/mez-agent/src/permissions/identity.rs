@@ -85,6 +85,12 @@ pub trait PermissionPlanning: Send + Sync {
     /// the original shell-shaped policy command.
     fn evaluate_command_structured(&self, command: &str) -> super::PermissionEvaluation;
 
+    /// Returns the shell classification whose grammar is used for command
+    /// analysis and whose executable will receive the authorized source.
+    fn shell_classification(&self) -> &str {
+        super::DEFAULT_COMMAND_SHELL_CLASSIFICATION
+    }
+
     /// Returns the effective decision for one shell-shaped policy command.
     fn evaluate_command(&self, command: &str) -> RuleDecision {
         self.evaluate_command_structured(command).decision

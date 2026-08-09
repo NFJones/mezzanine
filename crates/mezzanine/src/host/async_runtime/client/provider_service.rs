@@ -599,6 +599,7 @@ async fn execute_runtime_agent_provider_dispatch(
         provider,
         permission_policy,
         sandbox_first_local_prompts,
+        shell_classification,
         session_approvals,
         path_scopes,
         subagent_scope,
@@ -737,6 +738,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &session_approvals,
                     path_scopes.as_ref(),
                 )
+                .with_shell_classification(&shell_classification)
                 .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
@@ -770,6 +772,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &session_approvals,
                     path_scopes.as_ref(),
                 )
+                .with_shell_classification(&shell_classification)
                 .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
@@ -803,6 +806,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &session_approvals,
                     path_scopes.as_ref(),
                 )
+                .with_shell_classification(&shell_classification)
                 .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
@@ -836,6 +840,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &session_approvals,
                     path_scopes.as_ref(),
                 )
+                .with_shell_classification(&shell_classification)
                 .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,

@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{EffectiveCommandEffects, MezError, PathScopes, Result};
+use super::{CommandShellDialect, EffectiveCommandEffects, MezError, PathScopes, Result};
 
 // Shell candidate splitting, tokenization, and effect classification.
 
@@ -31,6 +31,19 @@ pub(super) struct ShellAnalysis {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn analyze_shell(command: &str) -> ShellAnalysis {
+    analyze_shell_for_dialect(command, CommandShellDialect::Posix)
+}
+
+/// Analyzes shell input using the grammar selected by the executing pane.
+///
+/// Fish analysis accepts only the simple-command subset whose quoting and
+/// token boundaries can be represented without executing expansion. Native
+/// expansion, blocks, textual control operators, assignments, redirects, and
+/// comments remain unclassified so authorization fails closed.
+pub(super) fn analyze_shell_for_dialect(
+    command: &str,
+    dialect: CommandShellDialect,
+) -> ShellAnalysis {
     let mut candidates = Vec::new();
     let mut current = String::new();
     let mut chars = command.chars().peekable();
@@ -49,6 +62,9 @@ pub(super) fn analyze_shell(command: &str) -> ShellAnalysis {
                     current.push(ch);
                 }
                 '\\' => {
+                    if dialect == CommandShellDialect::Fish {
+                        unsafe_syntax = true;
+                    }
                     current.push(ch);
                     if let Some(next) = chars.next() {
                         current.push(next);
@@ -64,10 +80,18 @@ pub(super) fn analyze_shell(command: &str) -> ShellAnalysis {
                 '&' => {
                     if chars.peek() == Some(&'&') {
                         let _ = chars.next();
+                    } else if dialect == CommandShellDialect::Fish {
+                        unsafe_syntax = true;
                     }
                     push_candidate(&mut candidates, &mut current);
                 }
                 '<' | '>' | '`' | '$' | '(' | ')' => {
+                    unsafe_syntax = true;
+                    current.push(ch);
+                }
+                '*' | '?' | '{' | '}' | '[' | ']' | '~' | '^' | '#' | '%'
+                    if dialect == CommandShellDialect::Fish =>
+                {
                     unsafe_syntax = true;
                     current.push(ch);
                 }
@@ -82,7 +106,10 @@ pub(super) fn analyze_shell(command: &str) -> ShellAnalysis {
             QuoteState::Double => {
                 if ch == '"' {
                     quote = QuoteState::Ground;
-                } else if ch == '$' || ch == '`' {
+                } else if ch == '$'
+                    || ch == '`'
+                    || (dialect == CommandShellDialect::Fish && matches!(ch, '(' | ')'))
+                {
                     unsafe_syntax = true;
                 }
                 current.push(ch);
@@ -95,10 +122,56 @@ pub(super) fn analyze_shell(command: &str) -> ShellAnalysis {
     }
     push_candidate(&mut candidates, &mut current);
 
+    if dialect == CommandShellDialect::Fish
+        && candidates.iter().any(|candidate| {
+            tokenize_shell_words(candidate).is_none_or(|tokens| fish_tokens_are_unsafe(&tokens))
+        })
+    {
+        unsafe_syntax = true;
+    }
+
     ShellAnalysis {
         candidates,
         unsafe_syntax,
     }
+}
+
+/// Returns whether tokenized Fish source uses control or assignment syntax
+/// outside the common simple-command subset.
+fn fish_tokens_are_unsafe(tokens: &[String]) -> bool {
+    let Some(first) = tokens.first().map(String::as_str) else {
+        return true;
+    };
+    matches!(
+        first,
+        "and"
+            | "or"
+            | "not"
+            | "begin"
+            | "end"
+            | "if"
+            | "else"
+            | "for"
+            | "while"
+            | "switch"
+            | "case"
+            | "function"
+            | "break"
+            | "continue"
+            | "return"
+    ) || fish_command_assignment(first)
+}
+
+/// Recognizes Fish's command-scoped `NAME=value command` assignment form.
+fn fish_command_assignment(token: &str) -> bool {
+    let Some((name, _value)) = token.split_once('=') else {
+        return false;
+    };
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 /// Carries Quote State state for this subsystem.

@@ -8315,6 +8315,14 @@ The command rule evaluator MUST NOT perform shell expansion while evaluating a
 command. It MUST NOT expand variables, command substitutions, globs, aliases,
 functions, process substitutions, or arithmetic expressions.
 
+Command analysis MUST use the grammar selected by the same pane shell identity
+that will receive the authorized source. For Fish panes, Mezzanine MUST parse
+only a conservatively supported simple-command subset. Fish command
+substitutions, variable or list expansion, globs, brace expansion, command-local
+variable overrides, redirects, blocks, textual `and`/`or` control forms, and
+other unsupported Fish-native syntax MUST remain unclassified and require
+approval unless an exact user-approved or managed rule permits that form.
+
 If proposed shell input contains command substitution, process substitution,
 redirection that may write, here-documents, here-strings, aliases or functions
 that cannot be resolved safely, unparsed shell syntax, or other constructs that

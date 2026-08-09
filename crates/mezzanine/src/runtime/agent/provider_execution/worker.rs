@@ -227,6 +227,7 @@ impl RuntimeSessionService {
         } else {
             self.path_scopes_for_pane(&turn.pane_id)
         };
+        let shell_classification = self.shell_classification_for_pane(&turn.pane_id);
         let permission_policy = self.permission_policy_for_turn(&turn);
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         let sandbox_first_local_prompts = crate::runtime::config::bubblewrap_applies_to_policy(
@@ -248,6 +249,7 @@ impl RuntimeSessionService {
                     self.session_approvals(),
                     path_scopes.as_ref(),
                 )
+                .with_shell_classification(shell_classification.as_str())
                 .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
@@ -539,6 +541,7 @@ impl RuntimeSessionService {
         } else {
             self.path_scopes_for_pane(&turn.pane_id)
         };
+        let shell_classification = self.shell_classification_for_pane(&turn.pane_id);
         let permission_policy = self.permission_policy_for_turn(&turn);
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         let sandbox_first_local_prompts = crate::runtime::config::bubblewrap_applies_to_policy(
@@ -560,6 +563,7 @@ impl RuntimeSessionService {
                     self.session_approvals(),
                     path_scopes.as_ref(),
                 )
+                .with_shell_classification(shell_classification.as_str())
                 .with_sandbox_first_local_prompts(sandbox_first_local_prompts),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,

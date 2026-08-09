@@ -42,19 +42,20 @@ pub use policy::{
     compare_permission_preset_authority,
 };
 pub use rules::{
-    builtin_rules, classify_shell_command, exact_command_sha256, normalize_exact_command_text,
+    builtin_rules, classify_shell_command, classify_shell_command_for_shell_classification,
+    exact_command_sha256, normalize_exact_command_text,
 };
 pub use types::{
     ApprovalDecision, ApprovalGrant, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
     BlockedApprovalRequest, BlockedApprovalState, CandidateEvaluation, CommandRule,
-    CommandRuleScope, CommandRuleStore, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+    CommandRuleScope, CommandRuleStore, CommandShellDialect, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
     DeclaredCommandEffects, EffectCompleteness, EffectiveCommandEffects, PathResolutionStatus,
     PathScopes, PermissionAuthorityChange, PermissionEvaluation, PermissionPolicy,
     ResolvedPathEvidence, ResolvedPathKind, RuleMatch, SessionApprovalStore,
 };
 
 use classification::{
-    analyze_shell, classify_tokens, tokenize_shell_words, tokenize_single_candidate,
+    analyze_shell_for_dialect, classify_tokens, tokenize_shell_words, tokenize_single_candidate,
     validate_git_read_only_subcommand,
 };
 use rules::{decode_rule_record, encode_rule_record};

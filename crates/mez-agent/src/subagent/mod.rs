@@ -76,6 +76,17 @@ pub trait SubagentScopeEnforcement: Send + Sync {
         command: &str,
     ) -> Result<Option<String>, String>;
 
+    /// Returns a violation after classifying source with the grammar tied to
+    /// the shell executable that will receive it.
+    fn shell_command_violation_for_shell_classification(
+        &self,
+        scope: &SubagentScopeDeclaration,
+        command: &str,
+        _shell_classification: &str,
+    ) -> Result<Option<String>, String> {
+        self.shell_command_violation(scope, command)
+    }
+
     /// Returns a user-facing violation for one semantic patch action.
     fn apply_patch_violation(
         &self,
@@ -94,12 +105,17 @@ pub fn subagent_action_scope_violation(
     scope: &SubagentScopeDeclaration,
     action: &AgentAction,
     policy_command: &str,
+    shell_classification: &str,
 ) -> Result<Option<String>, String> {
     match &action.payload {
         AgentActionPayload::ApplyPatch { patch, .. } => {
             enforcement.apply_patch_violation(scope, patch)
         }
-        _ => enforcement.shell_command_violation(scope, policy_command),
+        _ => enforcement.shell_command_violation_for_shell_classification(
+            scope,
+            policy_command,
+            shell_classification,
+        ),
     }
 }
 

@@ -504,12 +504,14 @@ impl RuntimeSessionService {
                     return Ok(false);
                 };
                 let subagent_scope = self.subagent_scope_declaration_for_turn(turn);
+                let shell_classification = self.shell_classification_for_pane(&turn.pane_id);
                 if let Some(scope) = subagent_scope.as_ref()
                     && let Some(_message) =
-                        mez_agent::SubagentScopeEnforcement::shell_command_violation(
+                        mez_agent::SubagentScopeEnforcement::shell_command_violation_for_shell_classification(
                             &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                             scope,
                             &plan.policy_command,
+                            shell_classification.as_str(),
                         )
                         .map_err(MezError::invalid_args)?
                 {
@@ -521,11 +523,12 @@ impl RuntimeSessionService {
                     self.path_scopes_for_pane(&turn.pane_id)
                 };
                 Ok(matches!(
-                    permission_policy.evaluate_shell_command_with_approvals_scoped(
+                    permission_policy.evaluate_shell_command_structured_with_approvals_scoped_for_shell_classification(
                         &plan.policy_command,
                         self.session_approvals(),
                         path_scopes.as_ref(),
-                    ),
+                        shell_classification.as_str(),
+                    ).decision,
                     RuleDecision::Allow
                 ) || (permission_policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
                     && mez_agent::action_supports_auto_allow(
@@ -685,16 +688,21 @@ impl RuntimeSessionService {
                 let command = plan.command.as_str();
                 let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
                 let permission_policy = self.permission_policy_for_turn(&turn);
+                let shell_classification = self.shell_classification_for_pane(&turn.pane_id);
                 let path_scopes = if subagent_scope.is_some() {
                     None
                 } else {
                     self.path_scopes_for_pane(&turn.pane_id)
                 };
-                match permission_policy.evaluate_shell_command_with_approvals_scoped(
-                    &plan.policy_command,
-                    self.session_approvals(),
-                    path_scopes.as_ref(),
-                ) {
+                match permission_policy
+                    .evaluate_shell_command_structured_with_approvals_scoped_for_shell_classification(
+                        &plan.policy_command,
+                        self.session_approvals(),
+                        path_scopes.as_ref(),
+                        shell_classification.as_str(),
+                    )
+                    .decision
+                {
                     RuleDecision::Allow => {}
                     RuleDecision::Prompt
                         if approval.state
