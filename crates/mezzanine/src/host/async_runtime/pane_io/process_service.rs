@@ -1,6 +1,9 @@
 //! Combined per-pane output and side-effect worker loop.
 
-use super::delivery::{PendingShellInputDelivery, shell_input_acknowledgement_count};
+use super::delivery::{
+    PendingShellInputDelivery, filter_shell_input_acknowledgements,
+    shell_input_acknowledgement_count,
+};
 use super::helpers::{
     drain_pending_pane_io_side_effects, is_process_exit_event, pane_input_written_bytes,
     pane_io_events_for_side_effects, submit_pane_runtime_event,
@@ -54,10 +57,14 @@ where
         let mut observed_output = false;
         let mut pane_exited = false;
 
+        let filter_acknowledgements = pending_shell_input
+            .as_ref()
+            .is_some_and(PendingShellInputDelivery::is_waiting_for_acknowledgement);
         let (drained_output, shell_input_acknowledgements) = drain_pane_output_events(
             handle,
             driver,
             config.output_drain_limit,
+            filter_acknowledgements,
             &mut report.output_events,
             &mut report.submitted_events,
             &mut report.applied_events,
@@ -321,6 +328,7 @@ pub(super) async fn drain_pane_output_events<B>(
     handle: &AsyncRuntimeSessionHandle,
     driver: &mut AsyncPaneProcessDriver<B>,
     limit: usize,
+    filter_acknowledgements: bool,
     output_events: &mut u64,
     submitted_events: &mut usize,
     applied_events: &mut usize,
@@ -359,7 +367,14 @@ where
     if bytes.is_empty() {
         return Ok((false, 0));
     }
-    let shell_input_acknowledgements = shell_input_acknowledgement_count(&bytes);
+    let shell_input_acknowledgements = if filter_acknowledgements {
+        filter_shell_input_acknowledgements(&mut bytes)
+    } else {
+        shell_input_acknowledgement_count(&bytes)
+    };
+    if bytes.is_empty() {
+        return Ok((true, shell_input_acknowledgements));
+    }
     let event = driver.scope_event(RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }));
     let ingress = submit_batched_pane_output_event(handle, event).await?;
     *submitted_events = submitted_events.saturating_add(ingress.accepted);

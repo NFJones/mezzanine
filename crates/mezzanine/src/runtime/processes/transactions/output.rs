@@ -184,7 +184,10 @@ impl RuntimeSessionService {
                 if appended < text.len() {
                     transaction.observed_output_truncated = true;
                 }
-                if let RunningShellTransactionKind::AgentAction { action_id } = &transaction.kind {
+                if let RunningShellTransactionKind::AgentAction { action_id } = &transaction.kind
+                    && apply_patch_transaction_phase(&transaction.command)
+                        != Some(ApplyPatchTransactionPhase::Read)
+                {
                     let lines = latest_agent_shell_transaction_output_lines(
                         &transaction.observed_output_preview,
                         output_preview_lines,

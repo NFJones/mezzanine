@@ -135,6 +135,11 @@ impl PendingShellInputDelivery {
         self.wait.is_some()
     }
 
+    /// Reports whether fresh receiver acknowledgements belong to this delivery.
+    pub(super) fn is_waiting_for_acknowledgement(&self) -> bool {
+        self.wait == Some(ShellInputProgressWait::Acknowledgement)
+    }
+
     /// Reports whether the current record exceeded its bounded progress window.
     pub(super) fn timed_out(&self, now: Instant) -> bool {
         now >= self.deadline
@@ -228,6 +233,13 @@ pub(super) fn shell_input_acknowledgement_count(bytes: &[u8]) -> usize {
         .count()
 }
 
+/// Removes receiver-owned acknowledgement bytes while preserving visible output.
+pub(super) fn filter_shell_input_acknowledgements(bytes: &mut Vec<u8>) -> usize {
+    let acknowledgements = shell_input_acknowledgement_count(bytes);
+    bytes.retain(|byte| *byte != SHELL_INPUT_RECORD_ACK_BYTE);
+    acknowledgements
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,10 +327,12 @@ mod tests {
         );
     }
 
-    /// Verifies acknowledgement counting preserves visible bytes and reports
+    /// Verifies acknowledgement filtering preserves visible bytes and reports
     /// every receiver progress byte in a coalesced output read.
     #[test]
-    fn acknowledgement_count_handles_visible_output_batches() {
-        assert_eq!(shell_input_acknowledgement_count(b"visible\x1emore\x1e"), 2);
+    fn acknowledgement_filter_handles_visible_output_batches() {
+        let mut bytes = b"visible\x1emore\x1e".to_vec();
+        assert_eq!(filter_shell_input_acknowledgements(&mut bytes), 2);
+        assert_eq!(bytes, b"visiblemore");
     }
 }

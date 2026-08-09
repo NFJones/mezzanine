@@ -8,6 +8,7 @@ mod pane_supervision;
 mod persistence;
 mod providers;
 mod rendering;
+mod semantic_patch;
 mod side_effects;
 mod terminal_io;
 mod terminal_loop;
