@@ -16,6 +16,8 @@ use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use mez_agent::MarkerToken;
+#[cfg(test)]
+use mez_agent::{ShellClassification, agent_subshell_enter_command_with_zsh_history_token};
 use mez_mux::process::PaneProcessLaunch;
 
 use super::{MezError, Result};
@@ -406,6 +408,93 @@ function zshaddhistory() {{\n\
             drop(compatibility);
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    /// Verifies a persistent agent child preserves the user-configured zsh
+    /// history file after its private Mez handoff frame closes. The child must
+    /// retain ordinary commands while neither the authenticated control record
+    /// nor generated transport source reaches memory or the saved history.
+    #[test]
+    fn persistent_agent_zsh_child_persists_user_history_after_handoff() {
+        let zsh = Path::new("/bin/zsh");
+        if !zsh.exists() {
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-zsh-agent-child-history-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let user_zdotdir = root.join("user-zdotdir");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&user_zdotdir).unwrap();
+        let history = home.join("history");
+        fs::write(
+            user_zdotdir.join(".zshrc"),
+            format!(
+                "HISTFILE={}\nHISTSIZE=200\nSAVEHIST=200\nsetopt INC_APPEND_HISTORY\nPS1=\n",
+                shell_single_quote_path(&history),
+            ),
+        )
+        .unwrap();
+
+        let token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let compatibility = ManagedZshCompatibility::create(
+            &root.join("control.sock"),
+            "%1",
+            token.clone(),
+            Some(user_zdotdir.as_os_str().to_os_string()),
+        )
+        .unwrap();
+        let launch = compatibility.configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()));
+        let handoff = agent_subshell_enter_command_with_zsh_history_token(
+            zsh,
+            ShellClassification::Zsh,
+            Some(&token),
+        )
+        .unwrap();
+
+        let mut command = Command::new(launch.program());
+        command
+            .args(["-d", "-i"])
+            .env("HOME", &home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in launch.environment() {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.as_mut().unwrap();
+        stdin.write_all(handoff.as_bytes()).unwrap();
+        stdin.write_all(b"print -r -- USER_CHILD\n").unwrap();
+        stdin.write_all(b"print -r -- __HISTORY_BEGIN__\nfc -l -100\nprint -r -- __HISTORY_END__\nexit\nexit\n").unwrap();
+        drop(child.stdin.take());
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "stdout={stdout:?} stderr={stderr:?}"
+        );
+
+        let persisted = fs::read_to_string(&history).unwrap();
+        let in_memory = stdout
+            .split_once("__HISTORY_BEGIN__\n")
+            .and_then(|(_, tail)| tail.split_once("__HISTORY_END__"))
+            .map(|(history, _)| history)
+            .unwrap_or_default();
+        for observed in [&persisted, in_memory] {
+            assert!(observed.contains("USER_CHILD"), "{observed}");
+            assert!(!observed.contains("MEZ_"), "{observed}");
+            assert!(!observed.contains(token.as_str()), "{observed}");
+            assert!(!observed.contains("fc -p"), "{observed}");
+        }
+
+        drop(compatibility);
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// Quotes one test path as a literal zsh word.

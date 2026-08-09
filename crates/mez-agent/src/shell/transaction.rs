@@ -413,7 +413,6 @@ const AGENT_SHELL_STARTUP_ENV_UNSETS: &[&str] = &[
 /// the parent pane exported prompt variables. Non-stateful action commands run
 /// in further child shells and do not rely on these prompt values.
 const AGENT_SUBSHELL_PROMPT_ENV: &[(&str, &str)] = &[
-    ("HISTFILE", "/dev/null"),
     ("PROMPT_COMMAND", ""),
     ("PS0", ""),
     ("PS1", "$ "),
@@ -1347,8 +1346,27 @@ fn posix_shell_interactive_invocation_words(
     shell_path: &str,
     classification: ShellClassification,
 ) -> String {
+    posix_shell_interactive_invocation_words_with_startup_suppression(
+        shell_path,
+        classification,
+        true,
+    )
+}
+
+/// Renders a persistent POSIX-shell child invocation with optional startup
+/// suppression. Managed zsh children retain their pane-scoped startup shim so
+/// ordinary user commands keep the user's history configuration.
+fn posix_shell_interactive_invocation_words_with_startup_suppression(
+    shell_path: &str,
+    classification: ShellClassification,
+    suppress_startup: bool,
+) -> String {
     let mut words = vec![shell_quote(shell_path)];
-    let startup_args = startup_suppression_args(classification);
+    let startup_args = if suppress_startup {
+        startup_suppression_args(classification)
+    } else {
+        &[]
+    };
     words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
     let mut exec_words = vec!["exec".to_string(), shell_quote(shell_path)];
     exec_words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
@@ -1360,6 +1378,24 @@ fn posix_shell_interactive_invocation_words(
     words.push("-c".to_string());
     words.push(shell_quote(&readiness_source));
     words.join(" ")
+}
+
+/// Formats persistent-shell environment words while retaining managed zsh
+/// startup state for a token-authenticated agent child.
+fn posix_agent_subshell_env_word_list_for_classification(
+    classification: ShellClassification,
+) -> Vec<String> {
+    let mut words = AGENT_SHELL_STARTUP_ENV_UNSETS
+        .iter()
+        .filter(|key| classification != ShellClassification::Zsh || **key != "ZDOTDIR")
+        .map(|key| format!("-u {key}"))
+        .collect::<Vec<_>>();
+    words.extend(
+        AGENT_SUBSHELL_PROMPT_ENV
+            .iter()
+            .map(|(key, value)| format!("{key}={}", shell_quote(value))),
+    );
+    words
 }
 
 /// Renders a Fish command word sequence that starts the persistent agent-mode
@@ -1626,16 +1662,7 @@ fn fish_noninteractive_agent_env_words() -> String {
 /// Formats transaction-local environment words for a POSIX persistent agent
 /// subshell.
 fn posix_agent_subshell_env_word_list() -> Vec<String> {
-    let mut words = AGENT_SHELL_STARTUP_ENV_UNSETS
-        .iter()
-        .map(|key| format!("-u {key}"))
-        .collect::<Vec<_>>();
-    words.extend(
-        AGENT_SUBSHELL_PROMPT_ENV
-            .iter()
-            .map(|(key, value)| format!("{key}={}", shell_quote(value))),
-    );
-    words
+    posix_agent_subshell_env_word_list_for_classification(ShellClassification::PosixSh)
 }
 
 /// Formats transaction-local environment words for a Fish persistent agent
@@ -1911,8 +1938,13 @@ __mez_agent_subshell_handoff; functions --erase __mez_agent_subshell_handoff
             shell_invocation = shell_invocation,
         )
     } else if classification == ShellClassification::Zsh && zsh_history_token.is_some() {
-        let env_words = posix_agent_subshell_env_word_list().join(" \\\n  ");
-        let shell_invocation = posix_shell_interactive_invocation_words(&shell, classification);
+        let env_words =
+            posix_agent_subshell_env_word_list_for_classification(classification).join(" \\\n  ");
+        let shell_invocation = posix_shell_interactive_invocation_words_with_startup_suppression(
+            &shell,
+            classification,
+            false,
+        );
         format!(
             "{history_start}__mez_agent_subshell_handoff() {{
 if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi

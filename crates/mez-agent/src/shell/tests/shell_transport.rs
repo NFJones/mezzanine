@@ -49,6 +49,7 @@ fn agent_subshell_enter_command_suppresses_shell_startup_hooks() {
         "{zsh}"
     );
     assert!(zsh.contains("'/bin/zsh' -f"), "{zsh}");
+    assert!(zsh.contains("HISTFILE=/dev/null"), "{zsh}");
     assert!(
         fish.contains("command env \\\n  -u BASH_ENV \\\n  -u ENV \\\n  -u ZDOTDIR"),
         "{fish}"
