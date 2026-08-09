@@ -886,6 +886,23 @@ fn client_loop_translates_plain_arrows_in_application_cursor_mode() {
     );
 }
 
+/// Verifies repeated arrows delivered in one host read are all translated for
+/// application cursor mode instead of depending on terminal read boundaries.
+/// Zsh history navigation can emit repeated keypresses quickly enough for the
+/// attached terminal to batch them into one ordinary input segment.
+#[test]
+fn client_loop_translates_batched_arrows_in_application_cursor_mode() {
+    let mut config = TerminalClientLoopConfig::default();
+    config.mouse_policy.pane_application_cursor_mode = true;
+
+    assert_eq!(
+        route_client_input_actions(b"\x1b[A\x1b[A\x1b[B", &config).unwrap(),
+        vec![TerminalClientLoopAction::ForwardToPane(
+            b"\x1bOA\x1bOA\x1bOB".to_vec()
+        )]
+    );
+}
+
 /// Verifies client loop forwards application keypad sequences without rewriting digits.
 ///
 /// This regression scenario documents the behavior being protected so a

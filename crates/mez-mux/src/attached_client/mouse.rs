@@ -212,13 +212,20 @@ pub fn application_cursor_forwarding_bytes(input: &[u8], policy: MousePolicy) ->
     if !policy.pane_application_cursor_mode {
         return None;
     }
-    match input {
-        b"\x1b[A" => Some(b"\x1bOA".to_vec()),
-        b"\x1b[B" => Some(b"\x1bOB".to_vec()),
-        b"\x1b[C" => Some(b"\x1bOC".to_vec()),
-        b"\x1b[D" => Some(b"\x1bOD".to_vec()),
-        _ => None,
+
+    let mut forwarded = Vec::with_capacity(input.len());
+    let mut remaining = input;
+    let mut rewritten = false;
+    while let Some(index) = remaining.windows(3).position(|bytes| {
+        bytes[0] == b'\x1b' && bytes[1] == b'[' && matches!(bytes[2], b'A'..=b'D')
+    }) {
+        forwarded.extend_from_slice(&remaining[..index]);
+        forwarded.extend_from_slice(&[b'\x1b', b'O', remaining[index + 2]]);
+        remaining = &remaining[index + 3..];
+        rewritten = true;
     }
+    forwarded.extend_from_slice(remaining);
+    rewritten.then_some(forwarded)
 }
 
 /// Encodes one event using xterm SGR mouse syntax.
