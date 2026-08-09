@@ -226,11 +226,13 @@ mod tests {
             .expect("the shell test process should finish")
     }
 
-    /// Parses a complete generated wrapper with a real Fish process under a
-    /// finite deadline, or returns `None` when Fish is not installed.
-    fn parse_fish_wrapper(wrapper: &str) -> Option<Output> {
-        let mut command = Command::new("fish");
-        command.args(["--no-config", "--no-execute"]);
+    /// Runs one stdin-fed command under a finite deadline, returning `None`
+    /// when the requested executable is not installed.
+    fn run_optional_command_stdin_bounded(
+        command: &mut Command,
+        script: &str,
+        label: &str,
+    ) -> Option<Output> {
         let mut child = match command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -244,31 +246,39 @@ mod tests {
         child
             .stdin
             .as_mut()
-            .expect("the Fish parser stdin should be piped")
-            .write_all(wrapper.as_bytes())
-            .expect("the Fish wrapper should be written");
+            .unwrap_or_else(|| panic!("the {label} stdin should be piped"))
+            .write_all(script.as_bytes())
+            .unwrap_or_else(|error| panic!("the {label} input should be written: {error}"));
         drop(child.stdin.take());
 
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if child
                 .try_wait()
-                .expect("the Fish parser process should remain observable")
+                .unwrap_or_else(|error| {
+                    panic!("the {label} process should remain observable: {error}")
+                })
                 .is_some()
             {
-                return Some(
-                    child
-                        .wait_with_output()
-                        .expect("the Fish parser output should be collected"),
-                );
+                return Some(child.wait_with_output().unwrap_or_else(|error| {
+                    panic!("the {label} output should be collected: {error}")
+                }));
             }
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("the Fish parser exceeded its five-second deadline");
+                panic!("the {label} process exceeded its five-second deadline");
             }
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Parses a complete generated wrapper with a real Fish process under a
+    /// finite deadline, or returns `None` when Fish is not installed.
+    fn parse_fish_wrapper(wrapper: &str) -> Option<Output> {
+        let mut command = Command::new("fish");
+        command.args(["--no-config", "--no-execute"]);
+        run_optional_command_stdin_bounded(&mut command, wrapper, "Fish parser")
     }
 
     /// Decodes the generated POSIX wrapper source from its bounded interactive

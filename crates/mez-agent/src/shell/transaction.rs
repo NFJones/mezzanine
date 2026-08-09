@@ -1147,10 +1147,9 @@ if test -n \"$MEZ_COMMAND_B64\"; command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/nul
 if test -n \"$MEZ_OUTPUT_FILE\"; command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_STATUS_FILE\"; command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1; or true; end\n\
 set -e MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
+{history_restore}\
 printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
 $MEZ_STATUS $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE\n\
-{history_restore}\
-set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS\n\
 end\n",
             history_start = fish_shell_history_suppression_start(),
             history_restore = fish_shell_history_restore(),
@@ -1186,10 +1185,9 @@ begin\n\
 eval {command}\n\
 end\n\
 set -l MEZ_STATUS $status\n\
+{history_restore}\
 printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
 $MEZ_STATUS $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE\n\
-{history_restore}\
-set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS\n\
 end\n",
             history_start = fish_shell_history_suppression_start(),
             history_restore = fish_shell_history_restore(),
@@ -1776,37 +1774,33 @@ fn posix_shell_errexit_restore_suffix() -> &'static str {
     "MEZ_RESTORE_ERREXIT_APPLY=${MEZ_RESTORE_ERREXIT_NOW:-0}; MEZ_RESTORE_NOUNSET_APPLY=${MEZ_RESTORE_NOUNSET_NOW:-0}; unset MEZ_RESTORE_HISTORY_NOW MEZ_RESTORE_ERREXIT_NOW MEZ_RESTORE_NOUNSET_NOW; case \"$MEZ_RESTORE_ERREXIT_APPLY\" in 1) set -e;; esac; case \"$MEZ_RESTORE_NOUNSET_APPLY\" in 1) set -u;; esac; unset MEZ_RESTORE_ERREXIT_APPLY MEZ_RESTORE_NOUNSET_APPLY; :"
 }
 
+/// Complete Fish input record that enters transaction-owned history isolation.
+///
+/// Fish records complete physical input lines. Keeping all setup that precedes
+/// private mode on one stable line lets cleanup delete that exact owned record
+/// without matching similarly prefixed user commands.
+const FISH_HISTORY_ISOLATION_RECORD: &str = "set -l MEZ_SHELL_STTY_STATE (stty -g 2>/dev/null); or set -l MEZ_SHELL_STTY_STATE ''; if test -n \"$MEZ_SHELL_STTY_STATE\"; stty -echo 2>/dev/null; or true; end; set -l MEZ_FISH_PRIVATE_WAS_SET 0; set -l MEZ_FISH_PRIVATE_SAVED; if set -q fish_private_mode; set MEZ_FISH_PRIVATE_WAS_SET 1; set MEZ_FISH_PRIVATE_SAVED $fish_private_mode; end; set -g fish_private_mode 1";
+
 /// Returns a Fish-native prologue that asks Fish to avoid writing Mez-injected
 /// wrapper commands to the user's normal fish history.
-///
-/// Fish history behavior differs by version, so this uses private-mode state
-/// plus later best-effort deletion of wrapper prefixes.
-pub(crate) fn fish_shell_history_suppression_start() -> &'static str {
-    "set -l MEZ_SHELL_STTY_STATE (stty -g 2>/dev/null); or set -l MEZ_SHELL_STTY_STATE ''; if test -n \"$MEZ_SHELL_STTY_STATE\"; stty -echo 2>/dev/null; or true; end\n\
-set -l MEZ_FISH_PRIVATE_WAS_SET 0\n\
-if set -q fish_private_mode\n\
-  set MEZ_FISH_PRIVATE_WAS_SET 1\n\
-  set -l MEZ_FISH_PRIVATE_SAVED $fish_private_mode\n\
-end\n\
-set -g fish_private_mode 1\n"
+pub(crate) fn fish_shell_history_suppression_start() -> String {
+    format!("{FISH_HISTORY_ISOLATION_RECORD}\n")
 }
 
-/// Returns Fish-native cleanup that removes known Mez wrapper prefixes from
+/// Returns Fish-native cleanup that removes exact Mez wrapper records from
 /// Fish history and restores the previous private-mode variable state.
-pub(crate) fn fish_shell_history_restore() -> &'static str {
-    "history delete --prefix --case-sensitive 'set -l MEZ_MARKER_TOKEN' >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive 'set -l MEZ_TURN' >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive 'set -l MEZ_AGENT' >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive 'set -l MEZ_PANE' >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive \"printf '\\\\033]133;\" >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive 'history delete --' >/dev/null 2>&1\n\
+pub(crate) fn fish_shell_history_restore() -> String {
+    format!(
+        "builtin history delete --exact --case-sensitive {isolation_record} >/dev/null 2>&1\n\
 if test -n \"$MEZ_SHELL_STTY_STATE\"; stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null; or true; end\n\
 if test \"$MEZ_FISH_PRIVATE_WAS_SET\" = 1\n\
   set -g fish_private_mode $MEZ_FISH_PRIVATE_SAVED\n\
 else\n\
   set -e fish_private_mode\n\
 end\n\
-set -e MEZ_SHELL_STTY_STATE MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED\n"
+set -e MEZ_SHELL_STTY_STATE MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED\n",
+        isolation_record = fish_quote(FISH_HISTORY_ISOLATION_RECORD),
+    )
 }
 
 /// Validates model-authored shell input before Mezzanine wraps it for pane
@@ -1933,14 +1927,12 @@ set -e MEZ_SHELL_STTY_STATE
 command env \\
   {env_words} \\
   {shell_invocation}
-history delete --prefix --case-sensitive 'command env -u BASH_ENV' >/dev/null 2>&1
-history delete --prefix --case-sensitive 'set -l MEZ_FISH_PRIVATE_WAS_SET' >/dev/null 2>&1
-if test \"$MEZ_FISH_PRIVATE_WAS_SET\" = 1; set -g fish_private_mode $MEZ_FISH_PRIVATE_SAVED; else; set -e fish_private_mode; end
-set -e MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED
+{history_restore}
 end
 __mez_agent_subshell_handoff; functions --erase __mez_agent_subshell_handoff
 ",
             history_start = fish_shell_history_suppression_start(),
+            history_restore = fish_shell_history_restore(),
             env_words = env_words,
             shell_invocation = shell_invocation,
         )

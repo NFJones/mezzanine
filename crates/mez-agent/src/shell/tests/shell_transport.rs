@@ -3,6 +3,7 @@
 //! This bounded leaf owns the scenarios for this concern while shared
 //! fixtures remain in the parent module.
 
+use super::super::transaction::{fish_shell_history_restore, fish_shell_history_suppression_start};
 use super::*;
 use crate::{
     SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER, decode_shell_output_transport_with_diagnostics,
@@ -191,7 +192,10 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
 
     assert!(wrapper.contains("set -l MEZ_MARKER_TOKEN '"));
     assert!(wrapper.contains("fish_private_mode"));
-    assert!(wrapper.contains("history delete --prefix --case-sensitive"));
+    assert!(
+        wrapper.contains("builtin history delete --exact --case-sensitive"),
+        "{wrapper}"
+    );
     assert!(wrapper.contains("TERM='dumb'"), "{wrapper}");
     assert!(wrapper.contains("PAGER='cat'"), "{wrapper}");
     assert!(wrapper.contains("GIT_PAGER='cat'"), "{wrapper}");
@@ -269,6 +273,152 @@ fn non_stateful_fish_wrappers_parse_as_complete_programs() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+/// Verifies Fish wrappers save private-mode state in a surviving scope, use
+/// noninteractive exact history deletion, and restore shell state before OSC D.
+///
+/// Completion is a post-cleanup protocol guarantee. Both stateful and isolated
+/// renderers must therefore finish history, terminal, and private-mode cleanup
+/// before announcing the saved command status.
+fn fish_wrappers_complete_only_after_deterministic_cleanup() {
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/fish"), "true").unwrap();
+    let wrappers = [
+        transaction.render_fish_input().wrapper,
+        transaction.render_fish_stateful(),
+    ];
+
+    for wrapper in wrappers {
+        let saved_declaration = wrapper
+            .find("set -l MEZ_FISH_PRIVATE_SAVED;")
+            .expect("private-mode saved value should be predeclared");
+        let private_probe = wrapper
+            .find("if set -q fish_private_mode")
+            .expect("private-mode presence should be probed");
+        let exact_delete = wrapper
+            .rfind("builtin history delete --exact --case-sensitive")
+            .expect("wrapper-owned history records should be deleted exactly");
+        let private_restore = wrapper
+            .rfind("set -g fish_private_mode $MEZ_FISH_PRIVATE_SAVED")
+            .expect("the original private-mode value should be restored");
+        let completion = wrapper
+            .find("printf '\\033]133;D;")
+            .expect("the completion marker should be rendered");
+
+        assert!(saved_declaration < private_probe, "{wrapper}");
+        assert!(!wrapper.contains("history delete --prefix"), "{wrapper}");
+        assert!(exact_delete < completion, "{wrapper}");
+        assert!(private_restore < completion, "{wrapper}");
+    }
+}
+
+#[test]
+/// Verifies complete stateful Fish transactions restore private mode when it
+/// began unset, set to an empty value, or set to a nonempty value.
+///
+/// Success and failure commands are both exercised because cleanup must use
+/// the saved command status without allowing that status to skip restoration.
+fn fish_stateful_cleanup_restores_private_mode_for_success_and_failure() {
+    for (setup, expected_state) in [
+        ("set -e fish_private_mode", "__MEZ_STATE__unset"),
+        (
+            "set -g fish_private_mode ''",
+            "__MEZ_STATE__set count=1 length=0",
+        ),
+        (
+            "set -g fish_private_mode original",
+            "__MEZ_STATE__set count=1 length=8",
+        ),
+    ] {
+        for (command_source, expected_status) in [("true", 0), ("false", 1)] {
+            let wrapper = ShellTransaction::new(
+                marker(),
+                "t1",
+                "a1",
+                "p1",
+                Path::new("/bin/fish"),
+                command_source,
+            )
+            .unwrap()
+            .render_fish_stateful();
+            let script = format!(
+                "{setup}\n{wrapper}\nif set -q fish_private_mode\n  printf '__MEZ_STATE__set count=%s length=%s\\n' (count $fish_private_mode) (string length -- \"$fish_private_mode\")\nelse\n  printf '__MEZ_STATE__unset\\n'\nend\n"
+            );
+            let mut fish = Command::new("fish");
+            fish.arg("--no-config");
+            let Some(output) =
+                run_optional_command_stdin_bounded(&mut fish, &script, "Fish cleanup probe")
+            else {
+                eprintln!("skipping real-Fish cleanup assertion because fish is unavailable");
+                return;
+            };
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            assert!(
+                output.status.success(),
+                "setup={setup:?} command={command_source:?} output={output:?}"
+            );
+            assert!(stdout.contains(expected_state), "{stdout:?}");
+            assert!(
+                stdout.contains(&format!("\u{1b}]133;D;{expected_status};")),
+                "{stdout:?}"
+            );
+        }
+    }
+}
+
+#[test]
+/// Verifies Fish's noninteractive exact deletion removes only the owned history
+/// record while preserving a user record with the same prefix.
+///
+/// Cleanup must not broaden a wrapper-owned record into a prefix deletion,
+/// because the latter both prompts and can select unrelated user commands.
+fn fish_exact_history_cleanup_preserves_similarly_prefixed_user_record() {
+    let temp = test_temp_dir("fish-exact-history-cleanup");
+    let fish_data = temp.join("fish");
+    std::fs::create_dir_all(&fish_data).expect("the Fish data directory should be created");
+    let history_path = fish_data.join("mez_cleanup_history");
+    let owned_record = fish_shell_history_suppression_start()
+        .trim_end()
+        .to_string();
+    let user_record = format!("{owned_record}; printf user-owned");
+    std::fs::write(
+        &history_path,
+        format!("- cmd: {owned_record}\n  when: 1\n- cmd: {user_record}\n  when: 2\n"),
+    )
+    .expect("the isolated Fish history should be seeded");
+
+    let exact_delete = fish_shell_history_restore()
+        .lines()
+        .next()
+        .expect("Fish cleanup should begin with exact history deletion")
+        .to_string();
+    let cleanup = format!("set -g fish_history mez_cleanup; {exact_delete}; builtin history save");
+    let mut fish = Command::new("fish");
+    fish.args(["--no-config", "-c", &cleanup])
+        .env("XDG_DATA_HOME", &temp);
+    let Some(output) =
+        run_optional_command_stdin_bounded(&mut fish, "", "Fish exact history cleanup probe")
+    else {
+        eprintln!("skipping real-Fish history assertion because fish is unavailable");
+        std::fs::remove_dir_all(temp).unwrap();
+        return;
+    };
+    let history = std::fs::read_to_string(&history_path)
+        .expect("the isolated Fish history should remain readable");
+    std::fs::remove_dir_all(temp).unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !history.contains(&format!("- cmd: {owned_record}\n")),
+        "{history}"
+    );
+    assert!(
+        history.contains(&format!("- cmd: {user_record}\n")),
+        "{history}"
+    );
 }
 
 #[test]
