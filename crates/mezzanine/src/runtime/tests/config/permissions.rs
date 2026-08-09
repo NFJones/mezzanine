@@ -164,7 +164,9 @@ fn runtime_adds_user_authoring_directories_to_sandbox_scopes() {
 fn runtime_allows_unix_sockets_in_configured_read_scopes() {
     use std::os::unix::net::UnixListener;
 
-    let root = temp_root("configured-scope-object-types");
+    let root = std::path::PathBuf::from("/tmp").join(format!("mez-scope-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
     let regular_file = root.join("allowed.txt");
     let socket = root.join("daemon.sock");
     fs::write(&regular_file, "allowed").unwrap();

@@ -196,11 +196,8 @@ async fn async_control_listener_registers_observer_while_primary_connection_rema
         body
     }
 
-    let path = std::env::temp_dir().join(format!(
-        "mez-async-control-listener-{}-{}.sock",
-        std::process::id(),
-        "observer-concurrent"
-    ));
+    let path = std::path::PathBuf::from("/tmp")
+        .join(format!("mez-ctl-{}-observer.sock", std::process::id()));
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
