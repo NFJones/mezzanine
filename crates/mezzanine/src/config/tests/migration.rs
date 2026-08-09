@@ -1624,6 +1624,47 @@ fn migrates_schema_55_with_active_turn_sleep_inhibition() {
     }
 }
 
+/// Verifies schema v57 moves the former pane TERM default to xterm-256color
+/// in every supported format while preserving explicit alternative values.
+#[test]
+fn migrates_schema_56_with_xterm_pane_term_default() {
+    for (format, old_default, explicit) in [
+        (
+            ConfigFormat::Toml,
+            "version = 56\n[terminal]\nterm = \"screen-256color\"\n",
+            "version = 56\n[terminal]\nterm = \"dumb\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":56,"terminal":{"term":"screen-256color"}}"#,
+            r#"{"version":56,"terminal":{"term":"dumb"}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 56\nterminal:\n  term: screen-256color\n",
+            "version: 56\nterminal:\n  term: dumb\n",
+        ),
+    ] {
+        let default_plan = migrate_config_text(format, old_default).unwrap();
+        let default_values = extract_config_values(format, &default_plan.text);
+        assert_eq!(default_plan.from_version, 56);
+        assert_eq!(default_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            default_values.get("terminal.term"),
+            Some(&"xterm-256color".to_string())
+        );
+
+        let explicit_plan = migrate_config_text(format, explicit).unwrap();
+        let explicit_values = extract_config_values(format, &explicit_plan.text);
+        assert_eq!(explicit_plan.from_version, 56);
+        assert_eq!(explicit_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            explicit_values.get("terminal.term"),
+            Some(&"dumb".to_string())
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

@@ -884,23 +884,19 @@ fn rejects_invalid_terminal_presentation_values() {
     }));
 }
 
-/// Verifies rejects host terminal identity in default profile.
+/// Verifies the xterm-compatible default profile accepts xterm terminfo.
 ///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// The pane TERM is user-configurable, so accepting the standard xterm name
+/// keeps explicit configuration consistent with the default profile.
 #[test]
-fn rejects_host_terminal_identity_in_default_profile() {
+fn accepts_xterm_terminal_identity_in_default_profile() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
         "[terminal]\nterm = \"xterm-256color\"\n",
         ConfigScope::Primary,
     );
 
-    assert!(!validation.valid);
-    assert!(validation.diagnostics.iter().any(|diagnostic| {
-        diagnostic.path == "terminal.term" && diagnostic.message.contains("host terminal")
-    }));
+    assert!(validation.valid, "{:?}", validation.diagnostics);
 }
 
 /// Verifies that the root auto-sizing routing policy accepts stable policy

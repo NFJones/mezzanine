@@ -718,11 +718,6 @@ pub(super) fn validate_terminal_value(path: &str, value: &str) -> Option<String>
         "terminal.term" => {
             if value.trim().is_empty() || value.bytes().any(|byte| byte.is_ascii_control()) {
                 Some("terminal.term must be a non-empty printable string".to_string())
-            } else if is_host_terminal_identity(value) {
-                Some(
-                    "terminal.term must identify Mezzanine or a safe fallback terminfo entry, not the host terminal identity"
-                        .to_string(),
-                )
             } else {
                 None
             }
@@ -871,15 +866,6 @@ fn theme_color_value_path(path: &str) -> bool {
     let segments = path.split('.').collect::<Vec<_>>();
     matches!(segments.as_slice(), ["theme", "colors", _])
         || matches!(segments.as_slice(), ["themes", _, "colors", _])
-}
-
-/// Runs the is host terminal identity operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn is_host_terminal_identity(value: &str) -> bool {
-    matches!(value, "xterm" | "xterm-256color")
 }
 
 /// Runs the compose effective config operation for this subsystem.

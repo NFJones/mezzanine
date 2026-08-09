@@ -51,6 +51,7 @@ mod v52_v53;
 mod v53_v54;
 mod v54_v55;
 mod v55_v56;
+mod v56_v57;
 
 #[cfg(test)]
 pub use driver::migrate_config_text;

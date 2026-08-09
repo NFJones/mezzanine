@@ -133,7 +133,7 @@ Use the relevant task and reference pages to inspect those live facilities.
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `terminal.profile` | string | `"xterm-compatible"` | Terminal compatibility profile. `xterm-compatible` is Mezzanine's bounded implemented subset, not a full xterm-emulator claim; valid defaults include `xterm-compatible` and `dumb`. |
-| `terminal.term` | string | `"screen-256color"` | `TERM` value exposed to panes; must not claim host identity such as `xterm-256color`. |
+| `terminal.term` | string | `"xterm-256color"` | `TERM` value exposed to panes. |
 | `terminal.pane_spawn_directory` | string | `"home"` | Directory policy for newly created panes: `home` or `same-directory`. |
 | `terminal.pane_spawn_view` | string | `"shell"` | Initial pane surface: `shell` or `agent`. |
 | `terminal.true_color` | boolean | `true` | Enable true-color presentation where supported. |

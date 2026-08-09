@@ -1229,7 +1229,7 @@ produce no effects.
 Mezzanine MUST set the `TERM` value visible to panes to a value consistent with
 the active terminal compatibility profile.
 
-The default pane `TERM` value MUST be `screen-256color`. Mezzanine MAY also
+The default pane `TERM` value MUST be `xterm-256color`. Mezzanine MAY also
 provide `mez-256color` and `mezzanine-256color` as custom terminfo names for
 users who explicitly select them.
 
@@ -1255,22 +1255,15 @@ the safest installed fallback in this order:
 3. `vt100`
 4. `dumb`
 
-Mezzanine MUST NOT fall back to `xterm-256color` or another host-terminal
-identity in the default terminal profile. Mezzanine MAY use `xterm-256color`
-only when the active terminal profile is an explicit direct-passthrough profile
-configured by the user. Mezzanine MUST warn the user when it falls back from a
-Mezzanine-specific terminfo entry and MUST make the selected fallback and
-degraded capability set visible in diagnostics.
+Mezzanine MUST warn the user when it falls back from a Mezzanine-specific
+terminfo entry and MUST make the selected fallback and degraded capability set
+visible in diagnostics.
 
 If none of the listed fallback terminfo entries is installed, Mezzanine MUST use
 a documented built-in `dumb` compatibility profile, set pane `TERM` to `dumb`,
 and advertise no capabilities beyond safe line-oriented terminal output. This
 state MUST be visible in diagnostics and SHOULD include instructions for
 installing or printing the Mezzanine-specific terminfo entry.
-
-Mezzanine MUST NOT set pane `TERM` to `xterm`, `xterm-256color`, or another
-host-terminal identity by default. A pane application sees Mezzanine as the
-terminal, not the containing terminal emulator.
 
 Attached foreground clients MUST keep the containing terminal emulator on its
 normal screen while rendering pane-local alternate-screen contents. Mezzanine

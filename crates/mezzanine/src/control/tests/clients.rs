@@ -34,7 +34,7 @@ fn dispatches_client_and_observer_methods() {
     assert!(list_response.contains(r#""descriptor":{"name":"primary""#));
     assert!(
         list_response.contains(
-            r#""descriptor":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"screen-256color"}}"#
+            r#""descriptor":{"name":"primary","interactive":true,"terminal":{"columns":80,"rows":24,"term":"xterm-256color"}}"#
         ),
         "{list_response}"
     );

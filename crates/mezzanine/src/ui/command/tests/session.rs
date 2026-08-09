@@ -283,7 +283,7 @@ fn list_commands_return_session_state() {
     assert!(clients.contains("attached_at="), "{clients}");
     assert!(clients.contains("last_seen_at="), "{clients}");
     assert!(
-        clients.contains("terminal=80x24:term=screen-256color"),
+        clients.contains("terminal=80x24:term=xterm-256color"),
         "{clients}"
     );
     assert!(

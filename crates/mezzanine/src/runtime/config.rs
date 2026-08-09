@@ -214,11 +214,6 @@ pub(super) fn validate_runtime_terminal_term(term: &str) -> Result<()> {
             "terminal.term must be a non-empty printable string",
         ));
     }
-    if matches!(term, "xterm" | "xterm-256color") {
-        return Err(MezError::config(
-            "terminal.term must not use the host terminal identity in the default profile",
-        ));
-    }
     Ok(())
 }
 

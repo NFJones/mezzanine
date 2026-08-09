@@ -243,6 +243,55 @@ pub(super) fn set_json_default_usize_if_absent_or_old_default(
     Ok(())
 }
 
+/// Sets a TOML string default when a path is absent or still has the previous
+/// schema's built-in default.
+///
+/// # Parameters
+/// - `document`: The TOML document being migrated.
+/// - `path`: The dotted config path to update.
+/// - `old_default`: The previous schema default value.
+/// - `new_default`: The replacement schema default value.
+pub(super) fn set_toml_default_string_if_absent_or_old_default(
+    document: &mut toml_edit::DocumentMut,
+    path: &str,
+    old_default: &str,
+    new_default: &str,
+) -> Result<()> {
+    let should_set = match toml_item_at(document.as_table(), path) {
+        None => true,
+        Some(toml_edit::Item::Value(value)) => value.as_str() == Some(old_default),
+        Some(_) => false,
+    };
+    if should_set {
+        set_toml_path_item(document, path, toml_edit::value(new_default))?;
+    }
+    Ok(())
+}
+
+/// Sets a JSON-compatible string default when a path is absent or still has
+/// the previous schema's built-in default.
+///
+/// # Parameters
+/// - `document`: The JSON-compatible document being migrated.
+/// - `path`: The dotted config path to update.
+/// - `old_default`: The previous schema default value.
+/// - `new_default`: The replacement schema default value.
+pub(super) fn set_json_default_string_if_absent_or_old_default(
+    document: &mut serde_json::Value,
+    path: &str,
+    old_default: &str,
+    new_default: &str,
+) -> Result<()> {
+    let should_set = match json_value_at(document, path) {
+        None => true,
+        Some(value) => value.as_str() == Some(old_default),
+    };
+    if should_set {
+        set_json_path_value(document, path, serde_json::json!(new_default))?;
+    }
+    Ok(())
+}
+
 /// Backfills the API compatibility selector for every TOML provider that still
 /// relies on historical provider-kind defaults.
 ///

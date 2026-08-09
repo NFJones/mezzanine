@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 56
+version = 57
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -7,7 +7,7 @@ cpu_count = 2
 
 [terminal]
 profile = "xterm-compatible"
-term = "screen-256color"
+term = "xterm-256color"
 pane_spawn_directory = "home"
 pane_spawn_view = "shell"
 true_color = true

@@ -504,13 +504,13 @@ fn runtime_control_config_project_persistence_requires_trusted_root() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies runtime config applies safe terminal term to new panes.
+/// Verifies runtime config applies the xterm terminal term to new panes.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
 #[test]
-fn runtime_config_applies_safe_terminal_term_to_new_panes() {
+fn runtime_config_applies_xterm_terminal_term_to_new_panes() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
@@ -522,7 +522,7 @@ fn runtime_config_applies_safe_terminal_term_to_new_panes() {
             format: ConfigFormat::Toml,
             scope: ConfigScope::Primary,
             trusted: true,
-            text: "[terminal]\nterm = \"screen-256color\"\n".to_string(),
+            text: "[terminal]\nterm = \"xterm-256color\"\n".to_string(),
         }])
         .unwrap();
     let output = std::env::temp_dir().join(format!("mez-runtime-term-test-{}", std::process::id()));
@@ -535,8 +535,8 @@ fn runtime_config_applies_safe_terminal_term_to_new_panes() {
     let updates = poll_until_exit(&mut service);
     let observed = fs::read_to_string(&output).unwrap();
 
-    assert_eq!(service.terminal_term(), "screen-256color");
+    assert_eq!(service.terminal_term(), "xterm-256color");
     assert_eq!(started.pane_id, updates[0].pane_id);
-    assert_eq!(observed, "screen-256color");
+    assert_eq!(observed, "xterm-256color");
     let _ = fs::remove_file(output);
 }
