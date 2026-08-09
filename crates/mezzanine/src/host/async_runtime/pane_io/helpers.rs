@@ -287,6 +287,7 @@ where
                 instance,
                 effect: PaneProcessIoEffect::WriteShellInput { delivery },
             } => {
+                #[cfg(target_os = "macos")]
                 let generated_source = matches!(
                     delivery.pacing,
                     mez_mux::process::ShellInputPacing::GeneratedSource

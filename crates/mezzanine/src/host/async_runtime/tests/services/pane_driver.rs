@@ -2,6 +2,25 @@
 
 use super::super::*;
 
+/// Verifies the pane driver capability query remains available on every host
+/// even when its backend does not implement shell-input acknowledgements.
+///
+/// The runtime's typed delivery state machine queries this capability on Linux
+/// and macOS alike. Backends without the macOS acknowledgement protocol must
+/// therefore retain the trait default instead of conditionally removing the
+/// driver method and breaking non-macOS compilation.
+#[test]
+fn async_pane_process_driver_defaults_shell_input_acknowledgements_to_false() {
+    let driver = AsyncPaneProcessDriver::new(
+        "%1",
+        AsyncFakePaneProcessIo::default(),
+        AsyncPaneProcessDriverConfig::default(),
+    )
+    .unwrap();
+
+    assert!(!driver.supports_shell_input_acknowledgements());
+}
+
 /// Verifies that the per-pane async driver converts PTY output from its backend
 /// into an ordered runtime event without mutating shared session state. This is
 /// the first step toward replacing global pane-output polling with one

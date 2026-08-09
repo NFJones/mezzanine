@@ -269,6 +269,7 @@ mod tests {
 
     /// Verifies unrelated output cannot advance strict receiver delivery but a
     /// fresh acknowledgement advances exactly one complete record.
+    #[cfg(target_os = "macos")]
     #[test]
     fn receiver_delivery_ignores_unrelated_output() {
         let effect = RuntimeSideEffect::WritePaneShellInput {
@@ -305,7 +306,41 @@ mod tests {
         assert_eq!(pending.pending_record_suffix(), b"cdef\n");
         assert!(!pending.is_waiting());
         pending.record_write(5, true).unwrap();
-        assert!(pending.is_waiting());
+        if cfg!(target_os = "macos") {
+            assert!(pending.is_waiting());
+            assert_eq!(pending.pending_record_suffix(), b"");
+        } else {
+            assert!(!pending.is_waiting());
+            assert_eq!(pending.pending_record_suffix(), b"final\n");
+        }
+    }
+
+    /// Verifies hosts without shell-input pacing stream complete receiver
+    /// records without waiting for acknowledgements that their backend cannot
+    /// emit.
+    ///
+    /// Linux uses ordinary PTY streaming, so retaining a receiver-acknowledged
+    /// delivery must neither reject the delivery nor leave it permanently
+    /// waiting after a complete record has been accepted.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn receiver_delivery_streams_without_acknowledgements_when_pacing_is_disabled() {
+        let effect = RuntimeSideEffect::WritePaneShellInput {
+            pane_id: "%1".to_string(),
+            delivery: ShellInputDelivery::receiver_acknowledged(
+                b"first\nfinal\n".to_vec(),
+                "delivery-1",
+                true,
+            ),
+        };
+        let mut pending = PendingShellInputDelivery::from_effect(&effect).unwrap();
+
+        pending.record_write(b"first\n".len(), false).unwrap();
+        assert!(!pending.is_waiting());
+        assert_eq!(pending.pending_record_suffix(), b"final\n");
+
+        pending.record_write(b"final\n".len(), false).unwrap();
+        assert!(pending.is_complete());
     }
 
     /// Verifies generated wrapper source retains its historical contract: an

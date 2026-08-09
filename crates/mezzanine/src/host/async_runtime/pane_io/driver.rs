@@ -25,7 +25,6 @@ pub struct AsyncPaneForegroundProcess {
 /// Async backend for one pane process and its PTY.
 pub trait AsyncPaneProcessIo {
     /// Reports whether generated shell records emit explicit acknowledgements.
-    #[cfg(target_os = "macos")]
     fn supports_shell_input_acknowledgements(&self) -> bool {
         false
     }
@@ -188,7 +187,6 @@ impl<B> AsyncPaneProcessDriver<B> {
     }
 
     /// Reports whether the backend owns an acknowledgement-capable shell.
-    #[cfg(target_os = "macos")]
     pub fn supports_shell_input_acknowledgements(&self) -> bool
     where
         B: AsyncPaneProcessIo,
