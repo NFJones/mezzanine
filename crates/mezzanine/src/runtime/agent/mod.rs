@@ -16,26 +16,27 @@ use super::service_state::{
     RuntimeAgentPatchRecord, RuntimeApplyPatchBatchState, RuntimePendingApplyPatchPhase,
 };
 use super::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentScheduler,
-    AgentShellSession, AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
-    AuditActor, AuditRecord, BTreeMap, BTreeSet, BlockedAgentApprovalRef, BlockedApprovalRequest,
-    ContextBlock, ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
-    DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
-    DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_SUBAGENT_WAIT_POLICY, Envelope, EventKind,
-    HookEvent, JoinedSubagentDependency, McpToolCallRequest, MezError, ModelProfile, ModelResponse,
-    PaneId, PaneReadinessState, PathBuf, PathScopes, PendingFocusedShellHookContinuation,
-    PermissionPolicy, ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result,
-    RuleDecision, RunningShellTransactionKind, RunningShellTransactionRef,
-    RuntimeAgentCompactionTask, RuntimeAgentCopyOutput, RuntimeAgentLoopState,
-    RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentModifiedFileSummary,
-    RuntimeAgentPreShellHookCompletion, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberTask,
-    RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
-    RuntimeApprovedMcpActionDispatch, RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch,
-    RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
-    RuntimeMcpActionExecutor, RuntimeProviderConfig, RuntimeSandboxFailureAssessment,
-    RuntimeSandboxFallbackAudit, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    RuntimeSideEffect, RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
+    ActionResult, ActionStatus, ActiveTurnSleepInhibition, AgentAction, AgentActionPayload,
+    AgentId, AgentScheduler, AgentShellSession, AgentShellVisibility, AgentTurnExecution,
+    AgentTurnRecord, AgentTurnState, AuditActor, AuditRecord, BTreeMap, BTreeSet,
+    BlockedAgentApprovalRef, BlockedApprovalRequest, ContextBlock, ContextSourceKind,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
+    DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
+    DEFAULT_SUBAGENT_WAIT_POLICY, Envelope, EventKind, HookEvent, JoinedSubagentDependency,
+    McpToolCallRequest, MezError, ModelProfile, ModelResponse, PaneId, PaneReadinessState, PathBuf,
+    PathScopes, PendingFocusedShellHookContinuation, PermissionPolicy, ReadinessOverrideRevocation,
+    Recipient, ReqwestProviderHttpTransport, Result, RuleDecision, RunningShellTransactionKind,
+    RunningShellTransactionRef, RuntimeAgentCompactionTask, RuntimeAgentCopyOutput,
+    RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
+    RuntimeAgentModifiedFileSummary, RuntimeAgentPreShellHookCompletion,
+    RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
+    RuntimeAgentRememberTask, RuntimeApprovedExternalActionDispatch,
+    RuntimeApprovedExternalActionOutcome, RuntimeApprovedMcpActionDispatch,
+    RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
+    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
+    RuntimeProviderConfig, RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
+    RuntimeSessionService, RuntimeShellTransactionActionFailure, RuntimeSideEffect,
+    RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
     ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
     SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
     TranscriptRole, assemble_model_request, current_unix_millis, current_unix_seconds,
@@ -180,6 +181,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_routing: bool,
     /// Explicit pane-local provider-routing overrides.
     agent_routing_overrides: BTreeMap<String, bool>,
+    /// User-controlled host power policy for active agent turns.
+    active_turn_sleep_inhibition: ActiveTurnSleepInhibition,
     /// Percent of raw context retained after compaction.
     agent_compaction_raw_retention_percent: usize,
     /// Default model and reasoning auto-sizing policy.
@@ -1823,6 +1826,17 @@ impl RuntimeSessionService {
     /// Returns the raw-context percentage retained after compaction.
     pub(crate) fn agent_compaction_raw_retention_percent(&self) -> usize {
         self.agent.agent_compaction_raw_retention_percent
+    }
+
+    /// Returns the configured host power policy for active agent turns.
+    #[cfg(test)]
+    pub(crate) fn active_turn_sleep_inhibition(&self) -> ActiveTurnSleepInhibition {
+        self.agent.active_turn_sleep_inhibition
+    }
+
+    /// Replaces the configured host power policy for active agent turns.
+    pub(crate) fn set_active_turn_sleep_inhibition(&mut self, policy: ActiveTurnSleepInhibition) {
+        self.agent.active_turn_sleep_inhibition = policy;
     }
 
     /// Replaces the raw-context percentage retained after compaction.

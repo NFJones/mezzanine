@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 55
+version = 56
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -191,6 +191,8 @@ database_path = ""
 [agents]
 default_provider = "openai"
 default_model_profile = "default"
+# Prevent automatic idle sleep during active agent turns only when explicitly enabled.
+active_turn_sleep_inhibition = "disabled"
 shell_only = true
 compaction_raw_retention_percent = 10
 routing = false

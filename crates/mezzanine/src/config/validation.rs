@@ -467,6 +467,13 @@ pub fn validate_config_text(
                         .to_string(),
                 });
             }
+        } else if path == "agents.active_turn_sleep_inhibition"
+            && !matches!(value.as_str(), "disabled" | "system" | "system-and-display")
+        {
+            diagnostics.push(ConfigDiagnostic {
+                path,
+                message: "agents.active_turn_sleep_inhibition must be disabled, system, or system-and-display".to_string(),
+            });
         } else if path == "agents.subagent_wait_policy"
             && !matches!(
                 value.as_str(),

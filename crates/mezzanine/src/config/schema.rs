@@ -383,6 +383,15 @@ pub(crate) fn config_change_path_is_user_only_sandbox_policy(path: &str) -> bool
     ) || path.starts_with("permissions.bubblewrap.")
 }
 
+/// Reports whether a configuration path controls host power policy.
+///
+/// Power inhibition affects the primary user's machine outside the agent's
+/// sandbox, so model-authored changes must not enable, weaken, or disable it.
+/// Direct user configuration interfaces remain available for this setting.
+pub(crate) fn config_change_path_is_user_only_host_power_policy(path: &str) -> bool {
+    path == "agents.active_turn_sleep_inhibition"
+}
+
 /// Defines backend-neutral command-effect keys accepted by schema v21.
 pub(super) const COMMAND_RULE_EFFECT_KEYS: &[&str] = &[
     "completeness",
@@ -531,6 +540,7 @@ pub(super) const ISSUE_KEYS: &[&str] = &["enabled", "database_path"];
 pub(super) const AGENT_KEYS: &[&str] = &[
     "default_provider",
     "default_model_profile",
+    "active_turn_sleep_inhibition",
     "shell_only",
     "compaction_raw_retention_percent",
     "routing",

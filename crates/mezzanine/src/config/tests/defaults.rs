@@ -44,6 +44,16 @@ fn default_config_disables_enhanced_keyboard_reporting() {
     );
 }
 
+/// Verifies active-turn sleep inhibition remains disabled until the primary
+/// user explicitly chooses a host power policy in generated configuration.
+#[test]
+fn default_config_disables_active_turn_sleep_inhibition() {
+    assert!(
+        DEFAULT_CONFIG_TOML.contains("active_turn_sleep_inhibition = \"disabled\""),
+        "{DEFAULT_CONFIG_TOML}"
+    );
+}
+
 /// Verifies that first-run default config creation can run on Tokio filesystem
 /// APIs while preserving the same selected path and default text as the
 /// synchronous setup path.

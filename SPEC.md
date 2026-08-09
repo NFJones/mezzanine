@@ -2787,7 +2787,7 @@ The `memory` table MUST support `enabled`, `max_records`, `max_bytes`,
 The `issues` table MUST support `enabled` and `database_path`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
-`shell_only`, `compaction_raw_retention_percent`, `routing`,
+`active_turn_sleep_inhibition`, `shell_only`, `compaction_raw_retention_percent`, `routing`,
 `action_failure_retry_limit`, `loop_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_root_subagents`, `max_subagents_per_subagent`,
@@ -2796,6 +2796,15 @@ The `agents` table MUST support `default_provider`, `default_model_profile`,
 MUST default to `10`, and MUST apply to manual compaction and provider
 context-limit recovery rather than proactive threshold compaction.
 `agents.routing` MUST be a boolean and MUST default to `false`.
+`agents.active_turn_sleep_inhibition` MUST default to `disabled` and accept
+only `disabled`, `system`, or `system-and-display`. `system` requests
+best-effort prevention of automatic idle system sleep only while an agent turn
+is Running. `system-and-display` additionally requests display wakefulness
+where supported and MAY use substantially more battery power. Neither mode
+MUST claim to prevent explicit sleep, lid-close sleep, thermal protection, or
+critical-battery protection. This host power policy MUST be changed only by a
+direct user configuration interface and MUST be rejected for model-authored
+`config_change` actions.
 `agents.action_failure_retry_limit` MUST be a positive integer and MUST default
 to `5`. It bounds model self-correction attempts per identical
 model-correctable failed-action signature rather than per action batch, so one

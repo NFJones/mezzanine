@@ -433,6 +433,7 @@ description.
 | --- | --- | --- | --- |
 | `agents.default_provider` | string | `"openai"` | Provider profile used by default. |
 | `agents.default_model_profile` | string | `"default"` | Model profile used by default. |
+| `agents.active_turn_sleep_inhibition` | string | `"disabled"` | Primary-user-only host power policy: `disabled`, `system` (prevent automatic idle system sleep), or `system-and-display` (also request display wakefulness where supported; higher battery use). It applies only to Running agent turns and cannot override explicit sleep, lid-close, thermal, or critical-battery safeguards. |
 | `agents.shell_only` | boolean | `true` | Require local system actions to go through the pane shell. |
 | `agents.compaction_raw_retention_percent` | integer | `10` | Initial percent of complete raw groups retained outside model-authored summary input; provider context-limit backoff may grow the exact tail one complete group at a time; 1 to 100. |
 | `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |

@@ -766,6 +766,31 @@ fn rejects_invalid_subagent_wait_policy_values() {
     );
 }
 
+/// Verifies active-turn sleep inhibition accepts only its explicit host-power
+/// policy values, preventing misspellings from silently disabling or enabling
+/// idle-sleep behavior.
+#[test]
+fn rejects_invalid_active_turn_sleep_inhibition_values() {
+    let valid = validate_config_text(
+        ConfigFormat::Toml,
+        "[agents]\nactive_turn_sleep_inhibition = \"system-and-display\"\n",
+        ConfigScope::Primary,
+    );
+    let invalid = validate_config_text(
+        ConfigFormat::Toml,
+        "[agents]\nactive_turn_sleep_inhibition = \"always\"\n",
+        ConfigScope::Primary,
+    );
+
+    assert!(valid.valid);
+    assert!(!invalid.valid);
+    assert!(invalid.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "agents.active_turn_sleep_inhibition"
+            && diagnostic.message
+                == "agents.active_turn_sleep_inhibition must be disabled, system, or system-and-display"
+    }));
+}
+
 /// Verifies rejects unsupported local action executor values.
 ///
 /// The executor setting controls whether accepted local MAAP actions are sent

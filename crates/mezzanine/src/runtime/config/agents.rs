@@ -18,6 +18,41 @@ use super::{
 };
 use mez_agent::AutoSizingRoutingPolicy;
 
+/// User-selected policy for idle sleep inhibition during active agent turns.
+///
+/// The configuration contract is platform-neutral. Platform backends may
+/// report unsupported or partial activation without changing agent execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ActiveTurnSleepInhibition {
+    /// Preserve current host power behavior.
+    #[default]
+    Disabled,
+    /// Prevent automatic idle system sleep while a turn is running.
+    System,
+    /// Also request display wakefulness where the platform supports it.
+    SystemAndDisplay,
+}
+
+/// Parses the user-controlled active-turn sleep-inhibition policy.
+pub(crate) fn runtime_active_turn_sleep_inhibition_from_config(
+    root: &Value,
+) -> Result<ActiveTurnSleepInhibition> {
+    let Some(agents) = runtime_json_object(root, "agents") else {
+        return Ok(ActiveTurnSleepInhibition::Disabled);
+    };
+    let Some(value) = agents.get("active_turn_sleep_inhibition") else {
+        return Ok(ActiveTurnSleepInhibition::Disabled);
+    };
+    match runtime_json_string(Some(value)) {
+        Some("disabled") => Ok(ActiveTurnSleepInhibition::Disabled),
+        Some("system") => Ok(ActiveTurnSleepInhibition::System),
+        Some("system-and-display") => Ok(ActiveTurnSleepInhibition::SystemAndDisplay),
+        _ => Err(MezError::config(
+            "agents.active_turn_sleep_inhibition must be disabled, system, or system-and-display",
+        )),
+    }
+}
+
 /// Parses the maximum number of concurrently scheduled agent turns.
 pub(crate) fn runtime_max_concurrent_agents_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(

@@ -30,6 +30,7 @@ mod terminal_options;
 mod theme;
 mod trust;
 pub(super) use agents::{
+    ActiveTurnSleepInhibition, runtime_active_turn_sleep_inhibition_from_config,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,
@@ -352,9 +353,40 @@ mod tests {
     use mez_terminal::{TerminalEmojiWidth, active_terminal_text_width};
 
     use super::{
+        ActiveTurnSleepInhibition, runtime_active_turn_sleep_inhibition_from_config,
         runtime_fit_status_line, runtime_terminal_agent_wrap_column_cap_from_config,
         runtime_terminal_emoji_width_from_config,
     };
+
+    /// Verifies the active-turn sleep-inhibition reader defaults to disabled,
+    /// accepts both explicit opt-in modes, and rejects unsupported strings.
+    #[test]
+    fn parses_active_turn_sleep_inhibition_from_config() {
+        assert_eq!(
+            runtime_active_turn_sleep_inhibition_from_config(&serde_json::json!({})).unwrap(),
+            ActiveTurnSleepInhibition::Disabled
+        );
+        assert_eq!(
+            runtime_active_turn_sleep_inhibition_from_config(&serde_json::json!({
+                "agents": { "active_turn_sleep_inhibition": "system" }
+            }))
+            .unwrap(),
+            ActiveTurnSleepInhibition::System
+        );
+        assert_eq!(
+            runtime_active_turn_sleep_inhibition_from_config(&serde_json::json!({
+                "agents": { "active_turn_sleep_inhibition": "system-and-display" }
+            }))
+            .unwrap(),
+            ActiveTurnSleepInhibition::SystemAndDisplay
+        );
+        assert!(
+            runtime_active_turn_sleep_inhibition_from_config(&serde_json::json!({
+                "agents": { "active_turn_sleep_inhibition": "always" }
+            }))
+            .is_err()
+        );
+    }
 
     /// Verifies that fitting ASCII text truncates to the requested display width.
     #[test]

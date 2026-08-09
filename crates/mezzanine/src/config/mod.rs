@@ -64,10 +64,13 @@ pub use defaults::{DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML};
 pub use migration::migrate_config_text;
 pub use migration::{CURRENT_CONFIG_SCHEMA_VERSION, migrate_config_file};
 pub use paths::ConfigPaths;
-pub(crate) use schema::config_change_path_is_user_only_sandbox_policy;
 pub use schema::{
     BASELINE_TOP_LEVEL_KEYS, PRIMARY_CONFIG_FILENAMES,
     config_change_setting_path_annotations_markdown, config_change_setting_path_description,
+};
+pub(crate) use schema::{
+    config_change_path_is_user_only_host_power_policy,
+    config_change_path_is_user_only_sandbox_policy,
 };
 pub use types::{
     ConfigBatchMutationPlan, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation,

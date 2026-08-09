@@ -444,7 +444,8 @@ use commands_support::{
     runtime_write_agent_trace_log_for_pane,
 };
 use config::{
-    RUNTIME_LATENCY_PREFERENCES, json_escape, optional_i32_json,
+    ActiveTurnSleepInhibition, RUNTIME_LATENCY_PREFERENCES, json_escape, optional_i32_json,
+    runtime_active_turn_sleep_inhibition_from_config,
     runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,

@@ -1,6 +1,7 @@
 //! Runtime tests for actions config behavior.
 
 use super::*;
+use crate::runtime::ActiveTurnSleepInhibition;
 
 /// Verifies runtime-owned config changes render with the same stylized
 /// normal-mode action line as other non-shell actions.
@@ -263,6 +264,78 @@ fn runtime_config_change_rejects_user_only_sandbox_policy() {
 
     assert!(!config_root.join("config.toml").exists());
     let _ = fs::remove_dir_all(config_root);
+}
+
+/// Verifies model-authored configuration changes cannot alter host power
+/// policy, even after approval, because sleep inhibition affects the primary
+/// user's machine outside the agent sandbox.
+#[test]
+fn runtime_config_change_rejects_user_only_host_power_policy() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let config_root = temp_root("runtime-agent-config-change-host-power-policy");
+    service.set_config_root(config_root.clone());
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-config-host-power-policy".to_string(),
+        conversation_id: "conversation-1".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        initial_capability: None,
+        state: AgentTurnState::Running,
+    };
+    let action = mez_agent::AgentAction {
+        id: "config-host-power-policy".to_string(),
+        rationale: String::new(),
+        payload: mez_agent::AgentActionPayload::ConfigChange {
+            setting_path: "agents.active_turn_sleep_inhibition".to_string(),
+            operation: "set".to_string(),
+            value: Some("system".to_string()),
+        },
+    };
+
+    let result = service
+        .execute_config_change_action_for_turn(&turn, &action, &primary, "approved")
+        .unwrap();
+
+    assert_eq!(result.status, ActionStatus::Denied);
+    assert_eq!(
+        result.error.as_ref().map(|error| error.code.as_str()),
+        Some("user_only_host_power_policy")
+    );
+    assert!(!config_root.join("config.toml").exists());
+    let _ = fs::remove_dir_all(config_root);
+}
+
+/// Verifies direct configuration application updates the runtime-owned active
+/// turn sleep-inhibition policy without requiring a daemon restart. The power
+/// backend is separate, but it must observe the newly selected mode here.
+#[test]
+fn runtime_config_layers_apply_active_turn_sleep_inhibition() {
+    let mut service = test_runtime_service();
+
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nactive_turn_sleep_inhibition = \"system\"\n".to_string(),
+        }])
+        .unwrap();
+
+    assert_eq!(
+        service.active_turn_sleep_inhibition(),
+        ActiveTurnSleepInhibition::System
+    );
 }
 
 /// Verifies model-authored mutations cannot select host access through either

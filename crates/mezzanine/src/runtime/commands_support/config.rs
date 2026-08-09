@@ -829,6 +829,7 @@ pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
                 | "agents.max_depth"
                 | "agents.compaction_raw_retention_percent"
                 | "agents.routing"
+                | "agents.active_turn_sleep_inhibition"
                 | "agents.action_failure_retry_limit"
                 | "agents.loop_limit"
                 | "agents.shell_only"

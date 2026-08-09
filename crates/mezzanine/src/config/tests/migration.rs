@@ -1583,6 +1583,47 @@ fn migrates_schema_54_with_enhanced_keyboard_reporting() {
     }
 }
 
+/// Verifies schema v56 adds the disabled active-turn sleep-inhibition policy
+/// in every supported format while preserving explicit user selections.
+#[test]
+fn migrates_schema_55_with_active_turn_sleep_inhibition() {
+    for (format, missing, explicit) in [
+        (
+            ConfigFormat::Toml,
+            "version = 55\n[agents]\nrouting = false\n",
+            "version = 55\n[agents]\nactive_turn_sleep_inhibition = \"system\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":55,"agents":{"routing":false}}"#,
+            r#"{"version":55,"agents":{"active_turn_sleep_inhibition":"system"}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 55\nagents:\n  routing: false\n",
+            "version: 55\nagents:\n  active_turn_sleep_inhibition: system\n",
+        ),
+    ] {
+        let missing_plan = migrate_config_text(format, missing).unwrap();
+        let missing_values = extract_config_values(format, &missing_plan.text);
+        assert_eq!(missing_plan.from_version, 55);
+        assert_eq!(missing_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            missing_values.get("agents.active_turn_sleep_inhibition"),
+            Some(&"disabled".to_string())
+        );
+
+        let explicit_plan = migrate_config_text(format, explicit).unwrap();
+        let explicit_values = extract_config_values(format, &explicit_plan.text);
+        assert_eq!(explicit_plan.from_version, 55);
+        assert_eq!(explicit_plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            explicit_values.get("agents.active_turn_sleep_inhibition"),
+            Some(&"system".to_string())
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

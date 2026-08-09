@@ -9,8 +9,8 @@ use super::{
     ModelProfile, Path, PathBuf, Result, RuntimeConfigApplyReport, RuntimePresentationSettings,
     RuntimeProviderConfig, RuntimeSessionService, SnapshotRepository, TrustDecision,
     compose_effective_config, current_unix_seconds, discover_existing_overlays,
-    discover_project_root, fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
-    runtime_agent_auto_sizing_from_config,
+    discover_project_root, fs, json_escape, runtime_active_turn_sleep_inhibition_from_config,
+    runtime_agent_action_failure_retry_limit_from_config, runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,
     runtime_agent_personality_profiles_from_config, runtime_agent_root_routing_policy_from_config,
@@ -324,6 +324,9 @@ impl RuntimeSessionService {
             runtime_max_subagent_depth_from_config(&structured)?,
             runtime_subagent_wait_policy_from_config(&structured)?,
         );
+        self.set_active_turn_sleep_inhibition(runtime_active_turn_sleep_inhibition_from_config(
+            &structured,
+        )?);
         self.set_agent_compaction_raw_retention_percent(
             runtime_agent_compaction_raw_retention_percent_from_config(&structured)?,
         );
