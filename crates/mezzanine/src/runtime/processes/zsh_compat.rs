@@ -45,8 +45,11 @@ else
   function zshaddhistory() {
     emulate -L zsh
     local mez_line=${1%$'\n'}
-    local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'"
-    if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ${mez_line} == ${mez_expected} ]]; then
+    # ZLE passes parsed assignments without quote characters, while pipe input
+    # retains the original single-quoted assignment text.
+    local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}"
+    local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'"
+    if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} ) ]]; then
       return 1
     fi
     if (( ${+functions[__mez_user_zshaddhistory]} )); then
@@ -86,8 +89,11 @@ fi
 function zshaddhistory() {
   emulate -L zsh
   local mez_line=${1%$'\n'}
-  local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'"
-  if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ${mez_line} == ${mez_expected} ]]; then
+  # ZLE passes parsed assignments without quote characters, while pipe input
+  # retains the original single-quoted assignment text.
+  local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}"
+  local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'"
+  if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} ) ]]; then
     return 1
   fi
   if (( ${+functions[__mez_user_zshaddhistory]} )); then
