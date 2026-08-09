@@ -3,7 +3,9 @@
 //! This bounded leaf owns the scenarios for this concern while shared
 //! fixtures remain in the parent module.
 
-use super::super::transaction::{fish_shell_history_restore, fish_shell_history_suppression_start};
+use super::super::transaction::{
+    fish_shell_history_restore, fish_shell_history_suppression_start, fish_typed_child_launch_words,
+};
 use super::*;
 use crate::{
     SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER, decode_shell_output_transport_with_diagnostics,
@@ -993,13 +995,16 @@ fn typed_child_launch_quotes_arguments_without_shell_fragments() {
         .render_for_classification_input(ShellClassification::Fish)
         .wrapper;
     assert!(
-        fish.contains("'/usr/bin/sandbox helper' '--label'"),
+        fish.contains("'/usr/bin/sandbox helper' \\\n'--label'"),
         "{fish}"
     );
     assert!(
-        fish.contains("'space \\' quote $HOME $(false)' \"$MEZ_COMMAND_FILE\" 'tail; false'"),
+        fish.contains(
+            "'space \\' quote $HOME $(false)' \\\n\"$MEZ_COMMAND_FILE\" \\\n'tail; false'"
+        ),
         "{fish}"
     );
+    assert!(fish.lines().all(|line| line.len() <= 700), "{fish}");
     assert!(!fish.contains("TERM='dumb'"), "{fish}");
 }
 
@@ -1042,6 +1047,82 @@ fn typed_child_launch_bounds_long_posix_argument_lines() {
         output.status.success(),
         "status={:?} stderr={:?}",
         output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+/// Verifies a large typed Fish child launch stays below the portable PTY line
+/// bound while preserving every literal as exactly one argv element.
+///
+/// The launch covers empty, quoted, whitespace, backslash, Unicode, and
+/// command-substitution-like literals in addition to a long repeated value.
+/// Real Fish execution proves source chunking does not split or evaluate argv.
+fn typed_child_launch_bounds_fish_lines_and_preserves_argv() {
+    if Command::new("fish").arg("--version").output().is_err() {
+        eprintln!("skipping real-Fish argv assertion because fish is unavailable");
+        return;
+    }
+
+    let long_argument = "sandbox-path-segment:".repeat(200);
+    let launch = ShellChildLaunch::new(
+        "/bin/sh",
+        vec![
+            ShellChildArgument::Literal("-c".to_string()),
+            ShellChildArgument::Literal(
+                "test -f \"$1\" && test \"$2\" = '' && test \"$3\" = \"space ' quote\" && test \"$4\" = 'back\\slash' && test \"$5\" = 'snowman-☃' && test \"$6\" = \"$7\" && test \"$8\" = '$(false)'"
+                    .to_string(),
+            ),
+            ShellChildArgument::Literal("sh".to_string()),
+            ShellChildArgument::MaterializedCommandFile,
+            ShellChildArgument::Literal(String::new()),
+            ShellChildArgument::Literal("space ' quote".to_string()),
+            ShellChildArgument::Literal("back\\slash".to_string()),
+            ShellChildArgument::Literal("snowman-☃".to_string()),
+            ShellChildArgument::Literal(long_argument.clone()),
+            ShellChildArgument::Literal(long_argument),
+            ShellChildArgument::Literal("$(false)".to_string()),
+        ],
+    )
+    .unwrap();
+    let launch_words = fish_typed_child_launch_words(&launch);
+    let input = ShellTransaction::new(
+        marker(),
+        "t1",
+        "a1",
+        "p1",
+        Path::new("/bin/fish"),
+        "printf typed-fish-launch",
+    )
+    .unwrap()
+    .with_child_launch(launch)
+    .render_for_classification_input(ShellClassification::Fish);
+
+    assert!(
+        input.wrapper.lines().all(|line| line.len() <= 700),
+        "max={}\n{}",
+        input.wrapper.lines().map(str::len).max().unwrap_or(0),
+        input.wrapper
+    );
+
+    let temp = test_temp_dir("fish-typed-child-launch");
+    let command_file = temp.join("command.fish");
+    std::fs::write(&command_file, "printf typed-fish-launch\n")
+        .expect("the materialized command fixture should be written");
+    let source = format!(
+        "set -l MEZ_COMMAND_FILE {}\n{launch_words}\n",
+        fish_quote(&command_file.to_string_lossy())
+    );
+    let mut fish = Command::new("fish");
+    fish.args(["--no-config", "-c", &source]);
+    let output = run_optional_command_stdin_bounded(&mut fish, "", "Fish typed child launch")
+        .expect("Fish availability was checked before executing the typed launch");
+    std::fs::remove_dir_all(temp).unwrap();
+    assert!(
+        output.status.success(),
+        "status={:?} stdout={:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }

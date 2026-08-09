@@ -788,15 +788,42 @@ fn posix_shell_quoted_argument(value: &str) -> String {
     chunks.join("\\\n")
 }
 
+/// Renders one Fish argument without creating an oversized physical source line.
+///
+/// Adjacent quoted fragments remain one Fish word across escaped newlines, so
+/// chunking preserves the argv element without evaluating any literal content.
+fn fish_shell_quoted_argument(value: &str) -> String {
+    const MAX_QUOTED_ARGUMENT_LINE_BYTES: usize = 512;
+
+    if fish_quote(value).len() <= MAX_QUOTED_ARGUMENT_LINE_BYTES {
+        return fish_quote(value);
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for character in value.chars() {
+        current.push(character);
+        if fish_quote(&current).len() >= MAX_QUOTED_ARGUMENT_LINE_BYTES {
+            let remainder = current.pop().map(|character| character.to_string());
+            chunks.push(fish_quote(&current));
+            current = remainder.unwrap_or_default();
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(fish_quote(&current));
+    }
+    chunks.join("\\\n")
+}
+
 /// Renders one typed child launch as Fish shell words.
-fn fish_typed_child_launch_words(launch: &ShellChildLaunch) -> String {
+pub(super) fn fish_typed_child_launch_words(launch: &ShellChildLaunch) -> String {
     std::iter::once(fish_quote(&launch.executable))
         .chain(launch.arguments.iter().map(|argument| match argument {
-            ShellChildArgument::Literal(value) => fish_quote(value),
+            ShellChildArgument::Literal(value) => fish_shell_quoted_argument(value),
             ShellChildArgument::MaterializedCommandFile => "\"$MEZ_COMMAND_FILE\"".to_string(),
         }))
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" \\\n")
 }
 
 impl ShellTransaction {
