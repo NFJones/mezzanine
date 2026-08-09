@@ -449,8 +449,8 @@ pub(crate) fn runtime_default_models_for_provider(kind: &str) -> Result<&'static
         ]),
         "anthropic" => Ok(&[
             "claude-fable-5",
-            "claude-opus-4-8",
-            "claude-sonnet-4-6",
+            "claude-opus-5",
+            "claude-sonnet-5",
             "claude-haiku-4-5-20251001",
         ]),
         "deepseek" => Ok(&["deepseek-v4-pro", "deepseek-v4-flash"]),

@@ -3570,17 +3570,17 @@ after unsupported local profile options are omitted. Local
 `provider_options.prompt_cache_retention` values MUST NOT affect the emitted
 OpenAI Responses body or the provider request-shape diagnostics.
 
-The built-in OpenAI provider default model MUST be `gpt-5.5` unless the user
+The built-in OpenAI provider default model MUST be `gpt-5.6-sol` unless the user
 overrides it through provider or model-profile configuration. The built-in
 OpenAI provider model list SHOULD include only coding-agent harness models:
-`gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`,
-`gpt-5.3-codex-spark`, and `gpt-5.2`. When a provider configuration leaves
+`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and
+`gpt-5.4-mini`. When a provider configuration leaves
 `models` empty, Mezzanine MUST load the provider's built-in code-defined model
 list instead of treating the provider as having no selectable models.
 The built-in Anthropic provider default model MUST be `claude-fable-5` unless
 the user overrides it through provider or model-profile configuration. The
 built-in Anthropic provider model list SHOULD include `claude-fable-5`,
-`claude-opus-4-8`, `claude-sonnet-4-6`, and
+`claude-opus-5`, `claude-sonnet-5`, and
 `claude-haiku-4-5-20251001`; generated Anthropic profiles SHOULD use built-in
 context metadata for those Claude model families.
 The built-in DeepSeek provider default model MUST be `deepseek-v4-pro` unless

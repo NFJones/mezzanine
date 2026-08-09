@@ -351,8 +351,8 @@ base_url = ""
 # Anthropic model IDs supported by the built-in Claude provider defaults.
 models = [
     "claude-fable-5",
-    "claude-opus-4-8",
-    "claude-sonnet-4-6",
+    "claude-opus-5",
+    "claude-sonnet-5",
     "claude-haiku-4-5-20251001",
 ]
 default_model = "claude-fable-5"
