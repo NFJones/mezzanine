@@ -19,6 +19,7 @@ use super::{
 const UNIX_SOCKET_PATH_MAX_BYTES: usize = 103;
 #[cfg(not(target_os = "macos"))]
 const UNIX_SOCKET_PATH_MAX_BYTES: usize = 107;
+#[cfg(target_os = "macos")]
 const LONGEST_DEFAULT_SOCKET_NAME: &str = "default.message.sock";
 #[cfg(test)]
 use super::{
@@ -657,7 +658,8 @@ pub(super) fn validate_socket_path_length(path: &Path, endpoint: &str) -> Result
     Ok(())
 }
 
-/// Reports whether a socket path can be represented by the host socket API.
+/// Reports whether a socket path can be represented by the macOS socket API.
+#[cfg(target_os = "macos")]
 pub(super) fn socket_path_fits(path: &Path) -> bool {
     path.as_os_str().as_encoded_bytes().len() <= UNIX_SOCKET_PATH_MAX_BYTES
 }
