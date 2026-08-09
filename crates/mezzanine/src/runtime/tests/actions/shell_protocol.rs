@@ -667,11 +667,18 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
 
     assert!(response.contains(r#""visibility":"hidden""#), "{response}");
     let exit_inputs = service.drain_pane_io_transition().side_effects;
-    assert_eq!(exit_inputs.len(), 2);
-    assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
-    assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x03");
+    assert_eq!(exit_inputs.len(), 3);
+    assert!(matches!(
+        &exit_inputs[0],
+        RuntimeSideEffect::PaneProcessIo {
+            instance,
+            effect: crate::runtime::PaneProcessIoEffect::CancelShellInput { delivery_id },
+        } if instance.pane_id == pane_id && delivery_id == "marker-grep"
+    ));
     assert_eq!(exit_inputs[1].pane_input_parts().0, pane_id);
-    assert_eq!(exit_inputs[1].pane_input_parts().1, b"exit\n");
+    assert_eq!(exit_inputs[1].pane_input_parts().1, b"\x03");
+    assert_eq!(exit_inputs[2].pane_input_parts().0, pane_id);
+    assert_eq!(exit_inputs[2].pane_input_parts().1, b"exit\n");
     assert!(!service.agent_subshell_is_active(&pane_id));
     assert!(!service.agent_subshell_command_exit_is_pending_for_tests(&pane_id));
     let _ = process.terminate(Duration::from_millis(10));

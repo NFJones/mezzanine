@@ -39,6 +39,11 @@ pub enum PaneProcessIoEffect {
     WriteInput { bytes: Vec<u8> },
     /// Write typed generated shell input without losing delivery semantics.
     WriteShellInput { delivery: ShellInputDelivery },
+    /// Cancel the unsent tail of one matching generated shell delivery.
+    CancelShellInput {
+        /// Transaction-scoped delivery identity to discard.
+        delivery_id: String,
+    },
     /// Write input bytes ahead of already queued input for this instance.
     WriteInputPriority { bytes: Vec<u8> },
     /// Resize this process's PTY.

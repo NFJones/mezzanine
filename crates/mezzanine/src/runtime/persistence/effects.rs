@@ -3,6 +3,31 @@
 use super::{RuntimePersistenceComponent, RuntimeSideEffect, TerminalSize};
 
 impl RuntimePersistenceComponent {
+    /// Cancels one queued or active shell delivery for an exact process.
+    pub(crate) fn queue_shell_input_cancellation(
+        &mut self,
+        instance: crate::runtime::PaneProcessInstance,
+        delivery_id: String,
+    ) {
+        self.queued_pane_input_effects.retain(|effect| {
+            !matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: queued_instance,
+                    effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+                } if queued_instance == &instance
+                    && delivery.delivery_id.as_deref() == Some(delivery_id.as_str())
+            )
+        });
+        self.queued_pane_input_effects.insert(
+            0,
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: crate::runtime::PaneProcessIoEffect::CancelShellInput { delivery_id },
+            },
+        );
+    }
+
     /// Queues one pane-input effect in dispatch order.
     pub(crate) fn queue_pane_input(&mut self, effect: RuntimeSideEffect) {
         let priority_pane_id = match &effect {

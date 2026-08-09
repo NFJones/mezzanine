@@ -2404,6 +2404,7 @@ bootstrap\tcomplete\t1714500000\n",
         .running_shell_transactions_mut_for_tests()
         .get_mut(&marker)
         .unwrap();
+    transaction.pending_input_payload = None;
     transaction.observed_output_bytes = output.len();
     transaction.observed_output_preview = output;
 

@@ -652,6 +652,7 @@ impl RuntimeSessionService {
 
         let mut interrupted_panes = BTreeSet::new();
         for (marker, pane_id) in &cancelled {
+            self.cancel_runtime_pane_shell_delivery(pane_id, marker);
             self.remove_running_shell_transaction(marker);
             self.clear_shell_transaction_protocol_state(marker);
             if interrupted_panes.insert(pane_id.clone()) {

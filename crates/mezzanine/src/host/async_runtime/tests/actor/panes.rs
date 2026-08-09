@@ -779,6 +779,104 @@ async fn async_actor_preserves_typed_shell_delivery_and_priority_order() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies shell-delivery cancellation removes only the matching transaction
+/// payload for the exact process generation that owns it.
+///
+/// Pane ids can be reused while an old worker retires. A stale cancellation
+/// must therefore leave a different delivery and replacement generation
+/// untouched while placing the matching cancellation ahead of later input.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_cancels_only_matching_shell_delivery_generation() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let current = PaneProcessInstance {
+        pane_id: "%1".to_string(),
+        generation: 7,
+    };
+    let replacement = PaneProcessInstance {
+        pane_id: "%1".to_string(),
+        generation: 8,
+    };
+    let matching = mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+        b"matching\n".to_vec(),
+        "delivery-1",
+        true,
+    );
+    let unrelated = mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+        b"unrelated\n".to_vec(),
+        "delivery-2",
+        true,
+    );
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: current.clone(),
+                    effect: PaneProcessIoEffect::WriteShellInput {
+                        delivery: matching.clone(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: current.clone(),
+                    effect: PaneProcessIoEffect::WriteShellInput {
+                        delivery: unrelated.clone(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: replacement.clone(),
+                    effect: PaneProcessIoEffect::WriteShellInput {
+                        delivery: matching.clone(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: current.clone(),
+                    effect: PaneProcessIoEffect::CancelShellInput {
+                        delivery_id: "delivery-1".to_string(),
+                    },
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(current.clone(), 8)
+                .await
+                .unwrap(),
+            vec![
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: current.clone(),
+                    effect: PaneProcessIoEffect::CancelShellInput {
+                        delivery_id: "delivery-1".to_string(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: current,
+                    effect: PaneProcessIoEffect::WriteShellInput {
+                        delivery: unrelated,
+                    },
+                },
+            ]
+        );
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(replacement.clone(), 8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::PaneProcessIo {
+                instance: replacement,
+                effect: PaneProcessIoEffect::WriteShellInput { delivery: matching },
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that pane close commands produce async termination side effects
 /// after pane process ownership has moved out of the manager. A foreground
 /// process callback can race with that termination after the pane has left the

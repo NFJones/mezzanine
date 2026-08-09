@@ -2185,6 +2185,20 @@ impl RuntimeSessionService {
         ))
     }
 
+    /// Cancels the unsent tail of one transaction-scoped shell delivery.
+    ///
+    /// Cancellation is bound to the current adapter-owned process generation,
+    /// so a stale transaction cannot discard input queued for a replacement
+    /// process that reused the same pane id. Synchronously owned panes have no
+    /// deferred delivery tail and therefore require no cancellation effect.
+    pub(super) fn cancel_runtime_pane_shell_delivery(&mut self, pane_id: &str, delivery_id: &str) {
+        let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) else {
+            return;
+        };
+        self.persistence
+            .queue_shell_input_cancellation(instance, delivery_id.to_string());
+    }
+
     /// Writes pane input with optional async queue priority.
     fn write_runtime_pane_input_with_priority(
         &mut self,

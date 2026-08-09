@@ -23,7 +23,7 @@ use super::process_metadata::{current_working_directory_for_pid, process_name_fo
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
 use super::signals::send_signal_to_pane_process_group;
 use super::types::PaneExitStatus;
-use super::types::ShellInputDelivery;
+use super::types::{ShellInputDelivery, ShellInputPacing};
 
 /// Defines the DEFAULT OUTPUT BACKLOG LIMIT BYTES const used by this subsystem.
 ///
@@ -304,6 +304,16 @@ impl PaneProcess {
 
         #[cfg(target_os = "macos")]
         {
+            let receiver_acknowledged =
+                matches!(delivery.pacing, ShellInputPacing::ReceiverAcknowledged);
+            if receiver_acknowledged
+                && (!delivery.receiver_acknowledgements
+                    || !self.supports_shell_input_acknowledgements())
+            {
+                return Err(MezError::invalid_state(
+                    "receiver-acknowledged shell delivery was not negotiated",
+                ));
+            }
             if !self.supports_shell_input_acknowledgements() {
                 return self.write_input(input);
             }
@@ -326,18 +336,19 @@ impl PaneProcess {
                     .count();
                 self.write_input(record)?;
                 written = written.saturating_add(record_len);
-                if written < input.len() {
-                    let acknowledged = if shell_input_record_requires_ack(record) {
-                        self.wait_for_shell_input_ack_after(
-                            acknowledgement_count,
-                            PANE_INPUT_WRITE_STALL_TIMEOUT,
-                        )?
-                    } else {
-                        self.wait_for_output_activity_after(
-                            activity,
-                            PANE_INPUT_WRITE_STALL_TIMEOUT,
-                        )
-                    };
+                if receiver_acknowledged || written < input.len() {
+                    let acknowledged =
+                        if receiver_acknowledged || shell_input_record_requires_ack(record) {
+                            self.wait_for_shell_input_ack_after(
+                                acknowledgement_count,
+                                PANE_INPUT_WRITE_STALL_TIMEOUT,
+                            )?
+                        } else {
+                            self.wait_for_output_activity_after(
+                                activity,
+                                PANE_INPUT_WRITE_STALL_TIMEOUT,
+                            )
+                        };
                     if !acknowledged {
                         return Err(MezError::invalid_state(format!(
                             "pane shell input pacing timed out after {} ms",

@@ -4079,9 +4079,19 @@ so no shell action can outlive its enclosing turn. Non-stateful shell
 transactions that wait for a deferred command payload receiver MUST also use a
 short implementation-defined start timeout as a handoff watchdog, not as the
 normal sequencing mechanism; if the receiver start marker is not observed before
-that timeout, Mezzanine MUST treat the transaction as timed out. Readiness
-probes, bootstrap probes, and other internal health checks MAY use shorter
-implementation-defined probe timeouts.
+that timeout, Mezzanine MUST treat the transaction as timed out. On macOS,
+deferred generated-shell payloads MUST retain their typed delivery identity and
+priority through the PTY owner. A receiver-acknowledged payload MUST be written
+as complete bounded records, retry an exact unwritten suffix after a partial
+PTY write, and require one fresh receiver acknowledgement for every data record
+and the final authenticated sentinel before later same-pane input may resume.
+Unrelated pane output MUST NOT satisfy that wait. Missing negotiation, write
+failure, cancellation, process retirement, or a bounded per-record progress
+timeout MUST discard only the matching unsent delivery tail, fail the affected
+transaction without logging payload bytes, and require managed-shell recovery;
+a stale process generation MUST NOT cancel delivery owned by its replacement.
+Readiness probes, bootstrap probes, and other internal health checks MAY use
+shorter implementation-defined probe timeouts.
 
 A marker MUST NOT be accepted as authoritative merely because its marker token
 matches the currently active transaction for the pane.

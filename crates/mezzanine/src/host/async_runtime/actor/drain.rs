@@ -379,6 +379,14 @@ impl AsyncRuntimeSessionActor {
                             delivery,
                         }
                     }
+                    crate::runtime::PaneProcessIoEffect::CancelShellInput { delivery_id } => {
+                        RuntimeSideEffect::PaneProcessIo {
+                            instance,
+                            effect: crate::runtime::PaneProcessIoEffect::CancelShellInput {
+                                delivery_id,
+                            },
+                        }
+                    }
                     crate::runtime::PaneProcessIoEffect::WriteInputPriority { bytes } => {
                         RuntimeSideEffect::WritePaneInputPriority {
                             pane_id: instance.pane_id,

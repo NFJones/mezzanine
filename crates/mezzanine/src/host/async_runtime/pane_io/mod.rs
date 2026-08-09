@@ -29,6 +29,7 @@ use tokio::time::{Instant, sleep, timeout};
 /// write failure so runtime transaction timeouts and diagnostics can proceed.
 const PANE_INPUT_WRITE_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
+mod delivery;
 mod driver;
 #[cfg(test)]
 mod driver_service;

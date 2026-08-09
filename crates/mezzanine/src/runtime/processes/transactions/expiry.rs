@@ -28,6 +28,7 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut expired_count = 0usize;
         for (marker, transaction, timeout_ms, elapsed_ms) in expired {
+            self.cancel_runtime_pane_shell_delivery(&transaction.pane_id, &marker);
             if self
                 .process
                 .running_shell_transactions

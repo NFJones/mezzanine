@@ -353,6 +353,10 @@ where
                 event
             }
             RuntimeSideEffect::PaneProcessIo {
+                effect: PaneProcessIoEffect::CancelShellInput { .. },
+                ..
+            } => continue,
+            RuntimeSideEffect::PaneProcessIo {
                 effect: PaneProcessIoEffect::Resize { size },
                 ..
             } => driver.resize_event(size).await,
@@ -500,7 +504,7 @@ where
 }
 
 /// Returns the accepted byte count from legacy or instance-scoped write events.
-fn pane_input_written_bytes(event: &RuntimeEvent) -> Option<usize> {
+pub(super) fn pane_input_written_bytes(event: &RuntimeEvent) -> Option<usize> {
     match event {
         RuntimeEvent::Pane(PaneEvent::InputWritten { bytes, .. })
         | RuntimeEvent::PaneProcess {

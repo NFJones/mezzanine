@@ -1,8 +1,9 @@
 //! Combined per-pane output and side-effect worker loop.
 
+use super::delivery::{PendingShellInputDelivery, shell_input_acknowledgement_count};
 use super::helpers::{
-    drain_pending_pane_io_side_effects, is_process_exit_event, pane_io_events_for_side_effects,
-    submit_pane_runtime_event,
+    drain_pending_pane_io_side_effects, is_process_exit_event, pane_input_written_bytes,
+    pane_io_events_for_side_effects, submit_pane_runtime_event,
 };
 use super::{
     AsyncPaneProcessDriver, AsyncPaneProcessIo, AsyncPaneProcessServiceConfig,
@@ -34,8 +35,7 @@ where
     let mut report = AsyncPaneProcessServiceReport::new(*lifecycle_watcher.borrow());
     let mut last_foreground_metadata_poll: Option<Instant> = None;
     let mut pending_pane_io_side_effects = VecDeque::new();
-    let mut paced_input_requires_output = false;
-    let mut paced_input_requires_ack = false;
+    let mut pending_shell_input: Option<PendingShellInputDelivery> = None;
 
     while report.polls < config.max_polls {
         let state = *lifecycle_watcher.borrow_and_update();
@@ -54,7 +54,7 @@ where
         let mut observed_output = false;
         let mut pane_exited = false;
 
-        let (drained_output, shell_input_acknowledged) = drain_pane_output_events(
+        let (drained_output, shell_input_acknowledgements) = drain_pane_output_events(
             handle,
             driver,
             config.output_drain_limit,
@@ -66,10 +66,37 @@ where
         if drained_output {
             made_progress = true;
             observed_output = true;
-            if !paced_input_requires_ack || shell_input_acknowledged {
-                paced_input_requires_output = false;
-                paced_input_requires_ack = false;
+            if let Some(delivery) = pending_shell_input.as_mut() {
+                delivery.observe_output(true, shell_input_acknowledgements);
+                if delivery.is_complete() {
+                    pending_shell_input = None;
+                }
             }
+        }
+
+        if pending_shell_input
+            .as_ref()
+            .is_some_and(|delivery| delivery.timed_out(Instant::now()))
+        {
+            let delivery = pending_shell_input
+                .take()
+                .expect("timed out delivery exists");
+            let delivery_id = delivery.delivery_id().unwrap_or("unidentified");
+            let event = driver.scope_event(RuntimeEvent::Pane(PaneEvent::WriteFailed {
+                pane_id: delivery.pane_id().to_string(),
+                error: format!(
+                    "InvalidState: shell delivery {delivery_id} record progress timed out after {} ms",
+                    super::delivery::SHELL_INPUT_RECORD_PROGRESS_TIMEOUT.as_millis()
+                ),
+            }));
+            submit_pane_runtime_event(
+                handle,
+                event,
+                &mut report.submitted_events,
+                &mut report.applied_events,
+            )
+            .await?;
+            made_progress = true;
         }
 
         let foreground_metadata_due = last_foreground_metadata_poll
@@ -88,9 +115,7 @@ where
             }
         }
 
-        let effects = if paced_input_requires_output {
-            Vec::new()
-        } else if pending_pane_io_side_effects.is_empty() {
+        let effects = if pending_pane_io_side_effects.is_empty() {
             if let Some(instance) = driver.process_instance().cloned() {
                 handle
                     .drain_pane_process_io_side_effects(instance, config.drain_limit)
@@ -106,17 +131,57 @@ where
                 config.drain_limit,
             )
         };
-        if !effects.is_empty() {
+        let mut effects = VecDeque::from(effects);
+        let mut ordinary_effects = Vec::new();
+        while let Some(effect) = effects.pop_front() {
+            if let RuntimeSideEffect::PaneProcessIo {
+                effect: super::PaneProcessIoEffect::CancelShellInput { delivery_id },
+                ..
+            } = &effect
+            {
+                if pending_shell_input
+                    .as_ref()
+                    .is_some_and(|delivery| delivery.matches_delivery_id(delivery_id))
+                {
+                    pending_shell_input = None;
+                }
+                continue;
+            }
+            let terminates_process = matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: super::PaneProcessIoEffect::Terminate { .. },
+                    ..
+                } | RuntimeSideEffect::TerminatePane { .. }
+            );
+            if pending_shell_input.is_some() && !terminates_process {
+                pending_pane_io_side_effects.push_back(effect);
+                pending_pane_io_side_effects.extend(effects);
+                break;
+            }
+            if terminates_process {
+                pending_shell_input = None;
+            }
+            if let Some(delivery) = PendingShellInputDelivery::from_effect(&effect) {
+                if !delivery.is_complete() {
+                    pending_shell_input = Some(delivery);
+                }
+                pending_pane_io_side_effects.extend(effects);
+                break;
+            }
+            ordinary_effects.push(effect);
+        }
+        if !ordinary_effects.is_empty() {
             made_progress = true;
             report.drained = report
                 .drained
-                .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
+                .saturating_add(u64::try_from(ordinary_effects.len()).unwrap_or(u64::MAX));
             for event in pane_io_events_for_side_effects(
                 driver,
-                effects,
+                ordinary_effects,
                 &mut pending_pane_io_side_effects,
-                &mut paced_input_requires_output,
-                &mut paced_input_requires_ack,
+                &mut false,
+                &mut false,
             )
             .await
             {
@@ -128,6 +193,65 @@ where
                     &mut report.applied_events,
                 )
                 .await?;
+            }
+        }
+
+        while pending_shell_input
+            .as_ref()
+            .is_some_and(|delivery| !delivery.is_waiting())
+        {
+            let event = {
+                let delivery = pending_shell_input
+                    .as_mut()
+                    .expect("active delivery exists");
+                driver
+                    .write_input_event(delivery.pending_record_suffix())
+                    .await
+            };
+            let written = pane_input_written_bytes(&event);
+            submit_pane_runtime_event(
+                handle,
+                event,
+                &mut report.submitted_events,
+                &mut report.applied_events,
+            )
+            .await?;
+            made_progress = true;
+            let Some(written) = written else {
+                pending_shell_input = None;
+                break;
+            };
+            let supports_acknowledgements = driver.supports_shell_input_acknowledgements();
+            let progress = pending_shell_input
+                .as_mut()
+                .expect("active delivery exists")
+                .record_write(written, supports_acknowledgements);
+            if let Err(error) = progress {
+                let pane_id = pending_shell_input
+                    .as_ref()
+                    .expect("invalid delivery exists")
+                    .pane_id()
+                    .to_string();
+                pending_shell_input = None;
+                let event = driver.scope_event(RuntimeEvent::Pane(PaneEvent::WriteFailed {
+                    pane_id,
+                    error: format!("InvalidState: {error}"),
+                }));
+                submit_pane_runtime_event(
+                    handle,
+                    event,
+                    &mut report.submitted_events,
+                    &mut report.applied_events,
+                )
+                .await?;
+                break;
+            }
+            if pending_shell_input
+                .as_ref()
+                .is_some_and(PendingShellInputDelivery::is_complete)
+            {
+                pending_shell_input = None;
+                break;
             }
         }
 
@@ -150,7 +274,13 @@ where
         }
 
         if !made_progress && report.polls < config.max_polls {
-            let idle_delay = pane_process_quiet_delay(last_foreground_metadata_poll, config);
+            let idle_delay = pending_shell_input.as_ref().map_or_else(
+                || pane_process_quiet_delay(last_foreground_metadata_poll, config),
+                |delivery| {
+                    pane_process_quiet_delay(last_foreground_metadata_poll, config)
+                        .min(delivery.remaining_progress_time(Instant::now()))
+                },
+            );
             if let Some(output_activity) = driver.output_activity() {
                 tokio::select! {
                     result = output_activity => result?,
@@ -194,7 +324,7 @@ pub(super) async fn drain_pane_output_events<B>(
     output_events: &mut u64,
     submitted_events: &mut usize,
     applied_events: &mut usize,
-) -> Result<(bool, bool)>
+) -> Result<(bool, usize)>
 where
     B: AsyncPaneProcessIo,
 {
@@ -227,14 +357,14 @@ where
         }
     }
     if bytes.is_empty() {
-        return Ok((false, false));
+        return Ok((false, 0));
     }
-    let shell_input_acknowledged = bytes.contains(&mez_mux::process::SHELL_INPUT_RECORD_ACK_BYTE);
+    let shell_input_acknowledgements = shell_input_acknowledgement_count(&bytes);
     let event = driver.scope_event(RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }));
     let ingress = submit_batched_pane_output_event(handle, event).await?;
     *submitted_events = submitted_events.saturating_add(ingress.accepted);
     *applied_events = applied_events.saturating_add(ingress.applied);
-    Ok((true, shell_input_acknowledged))
+    Ok((true, shell_input_acknowledgements))
 }
 
 /// Submits coalesced pane output bytes as one ordered runtime event.

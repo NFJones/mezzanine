@@ -1558,6 +1558,11 @@ bootstrap\tcomplete\t1714500000\n",
         .pane_processes_mut()
         .set_foreground_process_group_id_for_test(&worker_turn.pane_id, Some(process_group_id));
     service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&bootstrap_marker)
+        .unwrap()
+        .pending_input_payload = None;
+    service
         .observe_agent_shell_transaction_start(
             &worker_turn.pane_id,
             &bootstrap_marker,
