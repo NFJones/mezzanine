@@ -55,6 +55,12 @@ configuration sources and command expansions. Do not assume a key arrives when
 a terminal emulator or nested multiplexer intercepts it; configure the binding
 or outer environment deliberately.
 
+Run `list-key-presets` to choose from the interactive preset table. The
+`default` preset preserves the prefix-only defaults above. The `simple` preset
+keeps `Ctrl+A` as the prefix and adds direct Alt bindings for splits, windows,
+groups, and the agent shell plus Ctrl+Alt navigation bindings. Use
+`set-key-preset <name>` to apply and persist a built-in or configured preset.
+
 ## Related pages
 
 - [Terminal input, copy, and history](../using-mezzanine/terminal-input-copy-and-history.md)

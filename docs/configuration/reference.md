@@ -184,6 +184,20 @@ The prefix key table remains available even when direct bindings are omitted.
 | `keys.focus_next_group` | string | omitted | Optional direct next-group key. Prefix default is `Ctrl+A )`. |
 | `keys.command_bindings` | map | `{}` | User-defined key to Mezzanine command bindings. |
 
+### `key_preset` and `key_presets`
+
+`key_preset.active` selects a built-in or configured key-assignment preset.
+The generated default is `default`, which preserves the prefix-only bindings.
+The built-in `simple` preset keeps `C-a` as the prefix and adds the direct
+bindings documented by `list-key-presets`.
+
+Configured presets live under `key_presets.<name>` and accept the same fields
+as `keys`. Omitted fields inherit the `default` preset; `null` explicitly
+disables an optional direct binding. `set-key-preset <name>` materializes the
+selected preset into `keys`, reconciles `keys.command_bindings`, applies it to
+the live session, and persists it to the primary config. Later `bind-key`,
+`unbind-key`, or `keys.*` changes remain explicit low-level overrides.
+
 ### `frames.window`
 
 | Field | Type | Default declaration | Description |

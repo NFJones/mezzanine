@@ -47,3 +47,37 @@ fn rejects_unknown_nested_schema_keys() {
             && diagnostic.message == "unknown provider configuration key"
     }));
 }
+
+/// Verifies active and configured key-preset tables accept the same fixed and
+/// command-binding fields as the materialized key table.
+#[test]
+fn accepts_key_preset_schema_paths() {
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        "version = 57\n[key_preset]\nactive = \"custom\"\n[key_presets.custom]\nescape = \"C-a\"\nnew_window = \"A-n\"\n[key_presets.custom.command_bindings]\nx = \"new-window\"\n",
+        ConfigScope::Primary,
+    );
+
+    assert!(validation.valid, "{:?}", validation.diagnostics);
+}
+
+/// Verifies misspelled active-selector and configured-preset fields are
+/// rejected rather than silently ignored.
+#[test]
+fn rejects_unknown_key_preset_schema_paths() {
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        "version = 57\n[key_preset]\nselected = \"simple\"\n[key_presets.custom]\nunknown = \"A-x\"\n",
+        ConfigScope::Primary,
+    );
+
+    assert!(!validation.valid);
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "key_preset.selected"
+            && diagnostic.message == "unknown key_preset configuration key"
+    }));
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "key_presets.custom.unknown"
+            && diagnostic.message == "unknown key preset configuration key"
+    }));
+}

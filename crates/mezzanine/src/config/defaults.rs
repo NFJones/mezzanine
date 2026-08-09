@@ -98,7 +98,7 @@ fn retain_named_tables(
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 56
+version = 57
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -143,6 +143,9 @@ cursor_blink_interval_ms = 500
 escape = "C-a"
 
 [keys.command_bindings]
+
+[key_preset]
+active = "default"
 
 [frames.window]
 enabled = true

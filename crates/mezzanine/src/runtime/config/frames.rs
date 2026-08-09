@@ -16,7 +16,9 @@ use crate::error::{MezError, Result};
 use crate::runtime::service_state::RuntimeCommandBinding;
 use crate::ui::command::key_chord_notation;
 
-use super::{runtime_json_object, runtime_json_string, runtime_json_string_array};
+use super::{
+    runtime_active_key_preset, runtime_json_object, runtime_json_string, runtime_json_string_array,
+};
 
 /// Runs the runtime pane frames enabled from config operation for this subsystem.
 ///
@@ -321,10 +323,10 @@ fn frame_template_from_visible_fields(fields: &[String]) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(crate) fn runtime_key_bindings_from_config(root: &Value) -> Result<KeyBindings> {
+    let (_, defaults, _) = runtime_active_key_preset(root)?;
     let Some(keys) = runtime_json_object(root, "keys") else {
-        return Ok(KeyBindings::default());
+        return Ok(defaults);
     };
-    let defaults = KeyBindings::default();
     Ok(KeyBindings {
         escape: runtime_key_binding_value(keys, "escape", defaults.escape)?,
         split_vertical: runtime_optional_key_binding_value(
@@ -423,9 +425,27 @@ pub(crate) fn runtime_optional_key_binding_value(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(crate) fn runtime_command_bindings_from_effective(
+    root: &Value,
     effective: &EffectiveConfig,
 ) -> Result<BTreeMap<KeyChord, RuntimeCommandBinding>> {
     let mut bindings = BTreeMap::new();
+    let (preset_name, _, preset) = runtime_active_key_preset(root)?;
+    for (config_key, command) in preset.command_bindings {
+        let (chord, notation) = runtime_chord_from_binding_config_key(&config_key)?;
+        parse_command_sequence(&command).map_err(|error| {
+            MezError::config(format!(
+                "key preset `{preset_name}` command binding `{config_key}` is invalid: {error}"
+            ))
+        })?;
+        bindings.insert(
+            chord,
+            RuntimeCommandBinding {
+                notation,
+                command,
+                source_layer: format!("key-preset:{preset_name}"),
+            },
+        );
+    }
     for (path, value) in effective.values() {
         let Some(config_key) = path.strip_prefix("keys.command_bindings.") else {
             continue;

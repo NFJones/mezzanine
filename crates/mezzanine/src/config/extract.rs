@@ -8,11 +8,12 @@ use super::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, BTreeMap,
     BUBBLEWRAP_PERMISSION_KEYS, COMMAND_RULE_EFFECT_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS,
     ConfigDiagnostic, ConfigFormat, ConfigScope, HISTORY_KEYS, HOOK_KEYS, INSTRUCTION_KEYS,
-    ISSUE_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS, LAYOUT_KEYS, MCP_SERVER_KEYS,
-    MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS, PANE_FRAME_KEYS,
-    PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, RUNTIME_KEYS, SESSION_KEYS,
-    SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
-    exact_command_sha256, normalize_exact_command_text, parse_config_json_value_best_effort,
+    ISSUE_KEYS, JsonPathParser, JsonValueParser, KEY_BINDING_KEYS, KEY_PRESET_KEYS, LAYOUT_KEYS,
+    MCP_SERVER_KEYS, MEMORY_KEYS, MESSAGE_PROTOCOL_KEYS, MODEL_PRESET_KEYS, MODEL_PROFILE_KEYS,
+    PANE_FRAME_KEYS, PERMISSION_KEYS, PERSONALITY_PROFILE_KEYS, PROVIDER_KEYS, RUNTIME_KEYS,
+    SESSION_KEYS, SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS,
+    WINDOW_FRAME_KEYS, exact_command_sha256, normalize_exact_command_text,
+    parse_config_json_value_best_effort,
 };
 use mez_mux::theme::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
 
@@ -294,6 +295,8 @@ pub(super) fn validate_known_schema_path(path: &str) -> Option<String> {
         "keys" => {
             validate_static_table_path(&segments, "keys", KEY_BINDING_KEYS, &["command_bindings"])
         }
+        "key_preset" => validate_static_table_path(&segments, "key_preset", KEY_PRESET_KEYS, &[]),
+        "key_presets" => validate_key_presets_path(&segments),
         "layout" => validate_static_table_path(&segments, "layout", LAYOUT_KEYS, &[]),
         "frames" => validate_frames_path(&segments),
         "theme" => validate_theme_path(&segments),
@@ -483,6 +486,28 @@ pub(super) fn validate_theme_path(segments: &[&str]) -> Option<String> {
         "colors" => validate_theme_color_path(segments, 2),
         _ => None,
     }
+}
+
+/// Validates one configured key-preset path.
+///
+/// Preset entries accept the same fixed fields and command-binding map as the
+/// materialized `[keys]` table, while the second segment is a preset name.
+pub(super) fn validate_key_presets_path(segments: &[&str]) -> Option<String> {
+    if segments.len() == 1 {
+        return None;
+    }
+    if !valid_color_alias_name(segments[1]) {
+        return Some("key preset name must be an identifier".to_string());
+    }
+    if segments.len() == 2 {
+        return None;
+    }
+    validate_static_table_path(
+        &segments[1..],
+        "key preset",
+        KEY_BINDING_KEYS,
+        &["command_bindings"],
+    )
 }
 
 /// Runs the validate themes path operation for this subsystem.

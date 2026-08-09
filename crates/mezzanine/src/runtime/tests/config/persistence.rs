@@ -540,3 +540,37 @@ fn runtime_config_applies_safe_terminal_term_to_new_panes() {
     assert_eq!(observed, "screen-256color");
     let _ = fs::remove_file(output);
 }
+
+/// Verifies selecting the built-in simple preset immediately enables direct
+/// routing and selecting default again removes it while preserving the prefix.
+#[test]
+fn runtime_key_preset_switching_updates_live_input_bindings() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "set-key-preset simple")
+        .unwrap();
+    assert_eq!(
+        classify_direct_binding(KeyChord::alt(KeyCode::Char('=')), service.key_bindings()),
+        Some(MuxAction::NewWindow)
+    );
+    assert_eq!(
+        service.key_bindings().escape,
+        KeyChord::ctrl(KeyCode::Char('a'))
+    );
+
+    service
+        .execute_terminal_command(&primary, "set-key-preset default")
+        .unwrap();
+    assert_eq!(
+        classify_direct_binding(KeyChord::alt(KeyCode::Char('=')), service.key_bindings()),
+        None
+    );
+    assert_eq!(
+        service.key_bindings().escape,
+        KeyChord::ctrl(KeyCode::Char('a'))
+    );
+}

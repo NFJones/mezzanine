@@ -514,7 +514,24 @@ impl RuntimeSessionService {
 
     /// Builds dynamic primary command prompt selector candidates.
     pub(super) fn runtime_command_selector_extra_candidates(&self) -> Vec<SelectorExtraCandidate> {
-        Vec::new()
+        crate::runtime::runtime_effective_config_value(self.integration.config_layers())
+            .ok()
+            .and_then(|root| {
+                root.get("key_presets")
+                    .and_then(serde_json::Value::as_object)
+                    .cloned()
+            })
+            .into_iter()
+            .flat_map(|presets| presets.into_iter().map(|(name, _)| name))
+            .map(|name| {
+                SelectorExtraCandidate::new(
+                    SelectorSurface::MezzanineCommand,
+                    "set-key-preset",
+                    SelectorCandidate::new(name, SelectorCandidateKind::Value, true)
+                        .with_detail("configured key preset"),
+                )
+            })
+            .collect()
     }
 
     /// Installs selector candidates that require no filesystem or database I/O.

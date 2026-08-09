@@ -10,10 +10,11 @@ use super::{
     bind_key_args, capture_pane_display, choose_buffer_display, clear_history_display,
     command_help_display, command_target_pane_id, copy_mode_display, copy_selection_display,
     create_buffer_display, export_history_display, key_chord_notation, list_baseline_commands,
-    list_buffers_display, list_default_key_bindings, list_default_themes, load_layout_selector,
-    mark_pane_ready_audit_record, mark_pane_ready_warning_display, mutated_pane_command_outcome,
-    pane_readiness_state_name, paste_buffer_display, paste_clipboard_display, pipe_pane_display,
-    save_buffer_display, save_layout_name, search_history_display, set_option_args, set_theme_arg,
+    list_buffers_display, list_default_key_bindings, list_default_key_presets, list_default_themes,
+    load_layout_selector, mark_pane_ready_audit_record, mark_pane_ready_warning_display,
+    mutated_pane_command_outcome, pane_readiness_state_name, paste_buffer_display,
+    paste_clipboard_display, pipe_pane_display, save_buffer_display, save_layout_name,
+    search_history_display, set_key_preset_arg, set_option_args, set_theme_arg,
     show_default_options, show_messages_display, show_metrics_display,
 };
 #[cfg(test)]
@@ -669,6 +670,10 @@ pub fn execute_command(
             command: invocation.name.clone(),
             body: list_default_themes(),
         }),
+        "list-key-presets" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: list_default_key_presets(),
+        }),
         "send-prefix" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: "sent=false:reason=live-terminal-state-unavailable".to_string(),
@@ -793,6 +798,20 @@ pub fn execute_command(
             Ok(CommandOutcome::Display {
                 command: invocation.name.clone(),
                 body: format!("theme={theme}:changed=false:reason=live-config-control-unavailable"),
+            })
+        }
+        "set-key-preset" => {
+            let preset = set_key_preset_arg(invocation)?;
+            if !mez_mux::key_preset::BUILTIN_KEY_PRESET_NAMES.contains(&preset) {
+                return Err(MezError::invalid_args(format!(
+                    "set-key-preset unknown preset `{preset}`; run list-key-presets to see available presets"
+                )));
+            }
+            Ok(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: format!(
+                    "key_preset={preset}:changed=false:reason=live-config-control-unavailable"
+                ),
             })
         }
         "source-file" => {

@@ -58,6 +58,16 @@ fn selector_plans_mezzanine_command_argument_candidates() {
     assert_eq!(theme_plan.replacement_start, "set-theme ".len());
     assert_eq!(theme_plan.candidates[0].value, "tokyo_night");
     assert_eq!(theme_plan.candidates[0].kind, SelectorCandidateKind::Value);
+
+    let preset_plan = plan_selector(
+        SelectorSurface::MezzanineCommand,
+        "set-key-preset si",
+        "set-key-preset si".len(),
+    )
+    .unwrap();
+    assert_eq!(preset_plan.replacement_start, "set-key-preset ".len());
+    assert_eq!(preset_plan.candidates[0].value, "simple");
+    assert_eq!(preset_plan.candidates[0].kind, SelectorCandidateKind::Value);
 }
 
 /// Verifies selector plans agent argument candidates.
@@ -682,6 +692,14 @@ fn selector_shadow_hint_hides_placeholder_after_param_input() {
     )
     .unwrap();
     assert_eq!(theme_placeholder.text, " <theme>");
+
+    let preset_placeholder = shadow_hint(
+        SelectorSurface::MezzanineCommand,
+        "set-key-preset ",
+        "set-key-preset ".len(),
+    )
+    .unwrap();
+    assert_eq!(preset_placeholder.text, " <preset>");
 
     let rename_session_placeholder = shadow_hint(
         SelectorSurface::MezzanineCommand,

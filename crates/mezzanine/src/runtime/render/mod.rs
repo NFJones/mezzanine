@@ -193,7 +193,9 @@ impl RuntimePresentationSettings {
                 crate::runtime::runtime_terminal_completion_attention_flashing_from_config(root)?,
             ui_theme: crate::runtime::runtime_ui_theme_from_config(root)?,
             key_bindings: crate::runtime::runtime_key_bindings_from_config(root)?,
-            command_bindings: crate::runtime::runtime_command_bindings_from_effective(effective)?,
+            command_bindings: crate::runtime::runtime_command_bindings_from_effective(
+                root, effective,
+            )?,
             terminal_clipboard: crate::runtime::runtime_terminal_clipboard_from_config(root)?,
         })
     }

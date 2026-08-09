@@ -30,7 +30,7 @@ state can affect what is available.
 | Manage windows and panes | `new-window`, `split-window`, `select-pane`, `resize-pane`, `rename-pane`, `list-windows`, and `list-panes` |
 | Work with sessions and clients | `list-sessions`, `attach-session`, `detach-client`, `list-clients`, and `kill-session` |
 | Copy and retain output | `copy-mode`, `copy-selection`, `paste-clipboard`, `paste-buffer`, `list-buffers`, `search-history`, `export-history`, and `clear-history` |
-| Inspect and adjust the interface | `show-messages`, `list-keys`, `list-themes`, `set-theme`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
+| Inspect and adjust the interface | `show-messages`, `list-keys`, `list-key-presets`, `set-key-preset`, `list-themes`, `set-theme`, `show-options`, `set-option`, `bind-key`, and `unbind-key` |
 | Save or load layout state | `save-layout` and `load-layout` |
 
 Some commands require an active runtime, control endpoint, or primary-client

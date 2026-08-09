@@ -1624,6 +1624,83 @@ fn migrates_schema_55_with_active_turn_sleep_inhibition() {
     }
 }
 
+/// Verifies schema v57 classifies typed legacy key maps as the built-in
+/// default or simple preset in every supported primary-config format.
+#[test]
+fn migrates_schema_56_to_builtin_key_presets() {
+    for (format, default_text, simple_text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 56\n[keys]\nescape = \"C-a\"\n",
+            "version = 56\n[keys]\nescape = \"C-a\"\nsplit_vertical = \"A-\\\\\"\nsplit_horizontal = \"A--\"\nnew_window = \"A-=\"\nnew_group = \"A-S-=\"\nagent_shell = \"A-]\"\nfocus_up = \"C-A-Up\"\nfocus_down = \"C-A-Down\"\nfocus_left = \"C-A-Left\"\nfocus_right = \"C-A-Right\"\nfocus_previous_window = \"C-A-PageUp\"\nfocus_next_window = \"C-A-PageDown\"\nfocus_previous_group = \"C-A-S-PageUp\"\nfocus_next_group = \"C-A-S-PageDown\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":56,"keys":{"escape":"C-a"}}"#,
+            r#"{"version":56,"keys":{"escape":"C-a","split_vertical":"A-\\","split_horizontal":"A--","new_window":"A-=","new_group":"A-S-=","agent_shell":"A-]","focus_up":"C-A-Up","focus_down":"C-A-Down","focus_left":"C-A-Left","focus_right":"C-A-Right","focus_previous_window":"C-A-PageUp","focus_next_window":"C-A-PageDown","focus_previous_group":"C-A-S-PageUp","focus_next_group":"C-A-S-PageDown"}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 56\nkeys:\n  escape: C-a\n",
+            "version: 56\nkeys:\n  escape: C-a\n  split_vertical: 'A-\\'\n  split_horizontal: A--\n  new_window: A-=\n  new_group: A-S-=\n  agent_shell: A-]\n  focus_up: C-A-Up\n  focus_down: C-A-Down\n  focus_left: C-A-Left\n  focus_right: C-A-Right\n  focus_previous_window: C-A-PageUp\n  focus_next_window: C-A-PageDown\n  focus_previous_group: C-A-S-PageUp\n  focus_next_group: C-A-S-PageDown\n",
+        ),
+    ] {
+        for (text, expected) in [(default_text, "default"), (simple_text, "simple")] {
+            let plan = migrate_config_text(format, text).unwrap();
+            let document = parse_config_json_value(format, &plan.text).unwrap();
+            assert_eq!(plan.from_version, 56);
+            assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+            assert_eq!(
+                document
+                    .pointer("/key_preset/active")
+                    .and_then(serde_json::Value::as_str),
+                Some(expected)
+            );
+        }
+    }
+}
+
+/// Verifies non-built-in legacy maps become a selected custom preset and keep
+/// command bindings and explicit disabled direct bindings intact.
+#[test]
+fn migrates_schema_56_custom_key_map_to_migrated_preset() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 56\n[keys]\nescape = \"C-b\"\nnew_window = \"A-n\"\n[keys.command_bindings]\nx = \"new-window\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":56,"keys":{"escape":"C-b","new_window":"A-n","new_group":null,"command_bindings":{"x":"new-window"}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 56\nkeys:\n  escape: C-b\n  new_window: A-n\n  new_group: null\n  command_bindings:\n    x: new-window\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let document = parse_config_json_value(format, &plan.text).unwrap();
+        assert_eq!(
+            document
+                .pointer("/key_preset/active")
+                .and_then(serde_json::Value::as_str),
+            Some("migrated")
+        );
+        assert_eq!(
+            document
+                .pointer("/key_presets/migrated/escape")
+                .and_then(serde_json::Value::as_str),
+            Some("C-b")
+        );
+        assert_eq!(
+            document
+                .pointer("/key_presets/migrated/command_bindings/x")
+                .and_then(serde_json::Value::as_str),
+            Some("new-window")
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs
