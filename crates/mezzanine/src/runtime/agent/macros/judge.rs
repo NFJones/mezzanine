@@ -232,6 +232,7 @@ impl RuntimeSessionService {
                 self.agent.agent_scheduler.wait_running(&turn.turn_id)?;
                 self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, AgentTurnState::Blocked)?;
+                self.reconcile_active_turn_sleep_inhibition();
                 self.append_agent_trace_turn_transition(
                     turn,
                     AgentTurnState::Running,
@@ -306,6 +307,7 @@ impl RuntimeSessionService {
                 self.agent.agent_scheduler.wait_running(&turn.turn_id)?;
                 self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, AgentTurnState::Blocked)?;
+                self.reconcile_active_turn_sleep_inhibition();
                 self.append_agent_trace_turn_transition(
                     turn,
                     AgentTurnState::Running,

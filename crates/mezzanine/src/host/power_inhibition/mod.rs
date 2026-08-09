@@ -54,11 +54,21 @@ pub(crate) enum PowerInhibitionResource {
 }
 
 /// Native host interface used by the transition controller.
-pub(crate) trait PowerInhibitionBackend {
+pub(crate) trait PowerInhibitionBackend: std::fmt::Debug + Send {
     /// Acquires one resource and returns an opaque host lease identifier.
     fn acquire(&mut self, resource: PowerInhibitionResource) -> std::result::Result<u32, String>;
     /// Releases exactly one previously acquired host lease identifier.
     fn release(&mut self, lease_id: u32) -> std::result::Result<(), String>;
+}
+
+impl<B: PowerInhibitionBackend + ?Sized> PowerInhibitionBackend for Box<B> {
+    fn acquire(&mut self, resource: PowerInhibitionResource) -> std::result::Result<u32, String> {
+        (**self).acquire(resource)
+    }
+
+    fn release(&mut self, lease_id: u32) -> std::result::Result<(), String> {
+        (**self).release(lease_id)
+    }
 }
 
 /// Owns the assertions Mez successfully created through one platform backend.
@@ -182,16 +192,16 @@ impl<B: PowerInhibitionBackend> Drop for PowerInhibitionController<B> {
 /// Creates the production controller for the current host platform.
 #[cfg(target_os = "macos")]
 pub(crate) fn production_power_inhibition_controller()
--> PowerInhibitionController<MacOsPowerInhibitionBackend> {
-    PowerInhibitionController::new(MacOsPowerInhibitionBackend::new())
+-> PowerInhibitionController<Box<dyn PowerInhibitionBackend>> {
+    PowerInhibitionController::new(Box::new(MacOsPowerInhibitionBackend::new()))
 }
 
 /// Creates the unavailable production controller on platforms without a
 /// backend in this milestone.
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn production_power_inhibition_controller()
--> PowerInhibitionController<UnsupportedPowerInhibitionBackend> {
-    PowerInhibitionController::new(UnsupportedPowerInhibitionBackend)
+-> PowerInhibitionController<Box<dyn PowerInhibitionBackend>> {
+    PowerInhibitionController::new(Box::new(UnsupportedPowerInhibitionBackend))
 }
 
 #[cfg(test)]

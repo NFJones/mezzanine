@@ -961,6 +961,7 @@ impl RuntimeSessionService {
             let previous_state = parent_turn.state;
             self.agent_turn_ledger_mut()
                 .finish_turn(&parent_turn.turn_id, AgentTurnState::Failed)?;
+            self.reconcile_active_turn_sleep_inhibition();
             self.append_agent_trace_turn_transition(
                 &parent_turn,
                 previous_state,
@@ -1283,6 +1284,7 @@ impl RuntimeSessionService {
             let _ = self.agent.agent_scheduler.cancel(&parent_turn_id);
             self.agent_turn_ledger_mut()
                 .finish_turn(&parent_turn_id, AgentTurnState::Failed)?;
+            self.reconcile_active_turn_sleep_inhibition();
             self.append_agent_trace_turn_transition(
                 &parent_turn,
                 parent_previous_state,

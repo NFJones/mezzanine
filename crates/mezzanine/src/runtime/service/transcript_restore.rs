@@ -392,6 +392,7 @@ impl RuntimeSessionService {
                 );
                 if let Some(ledger) = staged_ledger {
                     *self.agent_turn_ledger_mut() = ledger;
+                    self.reconcile_active_turn_sleep_inhibition();
                 }
                 Ok(())
             })();

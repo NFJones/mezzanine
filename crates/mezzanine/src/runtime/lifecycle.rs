@@ -273,6 +273,7 @@ impl RuntimeSessionService {
         }
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Stopping);
+        self.reconcile_active_turn_sleep_inhibition();
         if let Err(error) = self.session.kill_session(primary_client_id, force) {
             self.session.set_lifecycle_state(previous_state);
             return Err(error.into());
@@ -377,6 +378,7 @@ impl RuntimeSessionService {
         }
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Stopping);
+        self.reconcile_active_turn_sleep_inhibition();
         self.session.state = mez_mux::session::SessionState::Stopping;
 
         if !force {
@@ -459,6 +461,7 @@ impl RuntimeSessionService {
         let terminated_mcp_servers = self.clear_runtime_mcp_transports();
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Failed);
+        self.reconcile_active_turn_sleep_inhibition();
         self.session.state = mez_mux::session::SessionState::Failed;
         self.append_lifecycle_event(
             EventKind::Diagnostic,

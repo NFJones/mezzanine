@@ -1,6 +1,7 @@
 //! Runtime tests for agent scheduling behavior.
 
 use super::*;
+use crate::runtime::ActiveTurnSleepInhibition;
 
 /// Verifies that runtime hook diagnostics use the same canonical event label as
 /// hook audit records and hook configuration. This matters because blocked
@@ -50,6 +51,8 @@ fn runtime_hook_lifecycle_maps_cancelled_turns_to_agent_turn_end() {
 #[test]
 fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
     let mut service = test_runtime_service();
+    service.install_test_active_turn_power_inhibition_backend();
+    service.set_active_turn_sleep_inhibition(ActiveTurnSleepInhibition::System);
     let primary = service
         .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
         .unwrap();
@@ -80,6 +83,10 @@ fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
         })
         .unwrap();
     assert_eq!(started.running_turn_id.as_deref(), Some("turn-1"));
+    assert_eq!(
+        service.active_turn_power_inhibition_state_for_tests(),
+        crate::host::power_inhibition::PowerInhibitionState::System
+    );
 
     let agents = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agents","method":"agent/list","params":{}}"#,
@@ -119,6 +126,10 @@ fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
         .unwrap();
     assert_eq!(finished.running_turn_id, None);
     assert_eq!(finished.visibility, AgentShellVisibility::Hidden);
+    assert_eq!(
+        service.active_turn_power_inhibition_state_for_tests(),
+        crate::host::power_inhibition::PowerInhibitionState::Inactive
+    );
 
     let completed_tasks = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"tasks2","method":"agent/task/list","params":{"target":{"pane_id":"%1"}}}"#,
@@ -127,6 +138,49 @@ fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
     assert!(
         completed_tasks.contains(r#""state":"completed""#),
         "{completed_tasks}"
+    );
+}
+
+/// Verifies forced runtime shutdown releases the daemon-wide power inhibitor
+/// even when a canonical agent turn is still running. The deterministic
+/// backend ensures this lifecycle regression never changes host power state.
+#[test]
+fn runtime_shutdown_releases_active_turn_power_inhibition() {
+    let mut service = test_runtime_service();
+    service.install_test_active_turn_power_inhibition_backend();
+    service.set_active_turn_sleep_inhibition(ActiveTurnSleepInhibition::System);
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .start_agent_turn(mez_agent::AgentTurnRecord {
+            turn_id: "turn-shutdown-power".to_string(),
+            conversation_id: "conversation-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 200,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            state: mez_agent::AgentTurnState::Queued,
+            initial_capability: None,
+        })
+        .unwrap();
+
+    assert_eq!(
+        service.active_turn_power_inhibition_state_for_tests(),
+        crate::host::power_inhibition::PowerInhibitionState::System
+    );
+    service.kill_session(&primary, true).unwrap();
+    assert_eq!(
+        service.active_turn_power_inhibition_state_for_tests(),
+        crate::host::power_inhibition::PowerInhibitionState::Inactive
     );
 }
 

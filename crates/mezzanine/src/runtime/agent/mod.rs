@@ -60,6 +60,11 @@ use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope,
 };
+#[cfg(test)]
+use crate::host::power_inhibition::PowerInhibitionState;
+use crate::host::power_inhibition::{
+    PowerInhibitionController, PowerInhibitionMode, production_power_inhibition_controller,
+};
 use crate::integrations::agent::provider::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     openai_compatible_provider_from_auth_store_with_provider_options,
@@ -183,6 +188,10 @@ pub(crate) struct RuntimeAgentComponent {
     agent_routing_overrides: BTreeMap<String, bool>,
     /// User-controlled host power policy for active agent turns.
     active_turn_sleep_inhibition: ActiveTurnSleepInhibition,
+    /// Daemon-wide host power lease retained while canonical turns are running.
+    active_turn_power_inhibition: Option<
+        PowerInhibitionController<Box<dyn crate::host::power_inhibition::PowerInhibitionBackend>>,
+    >,
     /// Percent of raw context retained after compaction.
     agent_compaction_raw_retention_percent: usize,
     /// Default model and reasoning auto-sizing policy.
@@ -399,6 +408,29 @@ pub(crate) struct RuntimeAgentComponent {
     agent_persisted_execution_transcripts: BTreeSet<(String, String)>,
     /// Action execution state keyed by turn id.
     agent_turn_executions: BTreeMap<String, AgentTurnExecution>,
+}
+
+/// Test-only backend that records no host-side power state while preserving
+/// controller transition semantics for runtime lifecycle regressions.
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct TestPowerInhibitionBackend {
+    next_lease_id: u32,
+}
+
+#[cfg(test)]
+impl crate::host::power_inhibition::PowerInhibitionBackend for TestPowerInhibitionBackend {
+    fn acquire(
+        &mut self,
+        _: crate::host::power_inhibition::PowerInhibitionResource,
+    ) -> std::result::Result<u32, String> {
+        self.next_lease_id = self.next_lease_id.saturating_add(1);
+        Ok(self.next_lease_id)
+    }
+
+    fn release(&mut self, _: u32) -> std::result::Result<(), String> {
+        Ok(())
+    }
 }
 
 /// State removed when a compaction worker reports failure.
@@ -1837,6 +1869,62 @@ impl RuntimeSessionService {
     /// Replaces the configured host power policy for active agent turns.
     pub(crate) fn set_active_turn_sleep_inhibition(&mut self, policy: ActiveTurnSleepInhibition) {
         self.agent.active_turn_sleep_inhibition = policy;
+        self.reconcile_active_turn_sleep_inhibition();
+    }
+
+    /// Reconciles the one daemon-wide host power lease from canonical Running
+    /// ledger state rather than pane-local shell-session bookkeeping.
+    pub(crate) fn reconcile_active_turn_sleep_inhibition(&mut self) {
+        let runtime_is_live = matches!(
+            self.session.lifecycle_state(),
+            crate::runtime::RuntimeLifecycleState::Running
+                | crate::runtime::RuntimeLifecycleState::Detached
+        );
+        let running = runtime_is_live
+            && self
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .any(|turn| turn.state == AgentTurnState::Running);
+        let mode = if running {
+            match self.agent.active_turn_sleep_inhibition {
+                ActiveTurnSleepInhibition::Disabled => PowerInhibitionMode::Disabled,
+                ActiveTurnSleepInhibition::System => PowerInhibitionMode::System,
+                ActiveTurnSleepInhibition::SystemAndDisplay => {
+                    PowerInhibitionMode::SystemAndDisplay
+                }
+            }
+        } else {
+            PowerInhibitionMode::Disabled
+        };
+        if self.agent.active_turn_power_inhibition.is_none()
+            && mode != PowerInhibitionMode::Disabled
+        {
+            self.agent.active_turn_power_inhibition =
+                Some(production_power_inhibition_controller());
+        }
+        if let Some(controller) = self.agent.active_turn_power_inhibition.as_mut() {
+            controller.reconcile(mode);
+        }
+    }
+
+    /// Returns the effective host power-inhibition state for focused tests.
+    #[cfg(test)]
+    pub(crate) fn active_turn_power_inhibition_state_for_tests(&self) -> PowerInhibitionState {
+        self.agent
+            .active_turn_power_inhibition
+            .as_ref()
+            .map(PowerInhibitionController::state)
+            .unwrap_or(PowerInhibitionState::Inactive)
+    }
+
+    /// Installs a deterministic backend before exercising runtime lifecycle
+    /// reconciliation in tests.
+    #[cfg(test)]
+    pub(crate) fn install_test_active_turn_power_inhibition_backend(&mut self) {
+        self.agent.active_turn_power_inhibition = Some(PowerInhibitionController::new(Box::new(
+            TestPowerInhibitionBackend::default(),
+        )));
     }
 
     /// Replaces the raw-context percentage retained after compaction.

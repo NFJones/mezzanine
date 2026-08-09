@@ -338,6 +338,82 @@ fn runtime_config_layers_apply_active_turn_sleep_inhibition() {
     );
 }
 
+/// Verifies live configuration changes reconcile the daemon-wide inhibitor
+/// against an already-running canonical turn without creating host power
+/// assertions in the test process. Enabling, strengthening, and disabling the
+/// policy must respectively acquire, upgrade, and release the retained lease.
+#[test]
+fn runtime_config_layers_reconcile_active_turn_sleep_inhibition_while_running() {
+    let mut service = test_runtime_service();
+    service.install_test_active_turn_power_inhibition_backend();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .start_agent_turn(mez_agent::AgentTurnRecord {
+            turn_id: "turn-live-power-policy".to_string(),
+            conversation_id: "conversation-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 200,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            state: mez_agent::AgentTurnState::Queued,
+            initial_capability: None,
+        })
+        .unwrap();
+
+    for (policy, state) in [
+        (
+            "system",
+            crate::host::power_inhibition::PowerInhibitionState::System,
+        ),
+        (
+            "system-and-display",
+            crate::host::power_inhibition::PowerInhibitionState::SystemAndDisplay,
+        ),
+        (
+            "disabled",
+            crate::host::power_inhibition::PowerInhibitionState::Inactive,
+        ),
+    ] {
+        service
+            .replace_config_layers(vec![ConfigLayer {
+                name: format!("active-turn-power-{policy}"),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: format!("[agents]\nactive_turn_sleep_inhibition = \"{policy}\"\n"),
+            }])
+            .unwrap();
+        assert_eq!(
+            service.active_turn_power_inhibition_state_for_tests(),
+            state
+        );
+    }
+
+    service
+        .finish_agent_turn(
+            "%1",
+            "turn-live-power-policy",
+            mez_agent::AgentTurnState::Completed,
+        )
+        .unwrap();
+    assert_eq!(
+        service.active_turn_power_inhibition_state_for_tests(),
+        crate::host::power_inhibition::PowerInhibitionState::Inactive
+    );
+    service.kill_session(&primary, true).unwrap();
+}
+
 /// Verifies model-authored mutations cannot select host access through either
 /// the global approval policy or a model-profile policy, even when approved.
 #[test]

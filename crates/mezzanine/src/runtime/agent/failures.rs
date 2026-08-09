@@ -89,6 +89,7 @@ impl RuntimeSessionService {
         let _ = self
             .agent_turn_ledger_mut()
             .finish_turn(&turn.turn_id, AgentTurnState::Failed);
+        self.reconcile_active_turn_sleep_inhibition();
         let _ = self.append_agent_trace_turn_transition(
             turn,
             current_state.unwrap_or(turn.state),

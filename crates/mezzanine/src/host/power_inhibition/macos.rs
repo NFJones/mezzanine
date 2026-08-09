@@ -119,7 +119,9 @@ impl<A> MacOsPowerInhibitionBackend<A> {
     }
 }
 
-impl<A: MacOsPowerInhibitionApi> PowerInhibitionBackend for MacOsPowerInhibitionBackend<A> {
+impl<A: MacOsPowerInhibitionApi + std::fmt::Debug + Send> PowerInhibitionBackend
+    for MacOsPowerInhibitionBackend<A>
+{
     fn acquire(&mut self, resource: PowerInhibitionResource) -> std::result::Result<u32, String> {
         self.api.acquire(resource)
     }

@@ -36,6 +36,7 @@ impl RuntimeSessionService {
         }
 
         self.agent_turn_ledger_mut().start_turn(turn.clone())?;
+        self.reconcile_active_turn_sleep_inhibition();
         self.integration
             .runtime_metrics_mut()
             .record_agent_turn_started();
@@ -131,6 +132,7 @@ impl RuntimeSessionService {
             .runtime_metrics_mut()
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut().finish_turn(turn_id, state)?;
+        self.reconcile_active_turn_sleep_inhibition();
         if turn.parent_turn_id.is_none()
             && matches!(
                 state,
@@ -253,6 +255,7 @@ impl RuntimeSessionService {
             .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut()
             .finish_turn(&turn.turn_id, state)?;
+        self.reconcile_active_turn_sleep_inhibition();
         if pane_present
             && conversation_still_owned
             && turn.parent_turn_id.is_none()
@@ -387,12 +390,14 @@ impl RuntimeSessionService {
                 AgentTurnState::Queued => {
                     self.agent_turn_ledger_mut()
                         .mark_turn_running(&running.turn_id)?;
+                    self.reconcile_active_turn_sleep_inhibition();
                     self.agent_shell_store_mut()
                         .start_turn(&turn.pane_id, running.turn_id.clone())?;
                 }
                 AgentTurnState::Blocked => {
                     self.agent_turn_ledger_mut()
                         .resume_blocked_turn(&running.turn_id)?;
+                    self.reconcile_active_turn_sleep_inhibition();
                     match self
                         .agent_shell_store()
                         .get(&turn.pane_id)
@@ -513,6 +518,7 @@ impl RuntimeSessionService {
                     .record_agent_turn_finished(AgentTurnState::Failed);
                 self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
+                self.reconcile_active_turn_sleep_inhibition();
                 self.append_agent_trace_turn_transition(
                     &turn,
                     turn.state,
