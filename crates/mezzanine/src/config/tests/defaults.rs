@@ -16,6 +16,7 @@ fn creates_default_config_file() {
 
     assert_eq!(path, root.join("config.toml"));
     assert_eq!(fs::read_to_string(path).unwrap(), DEFAULT_CONFIG_TOML);
+    assert!(root.join("macros").is_dir());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -71,6 +72,7 @@ async fn creates_default_config_file_async() {
         tokio::fs::read_to_string(path).await.unwrap(),
         DEFAULT_CONFIG_TOML
     );
+    assert!(root.join("macros").is_dir());
 
     let _ = fs::remove_dir_all(root);
 }

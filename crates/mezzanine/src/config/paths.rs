@@ -147,6 +147,11 @@ impl ConfigPaths {
     /// on duplicated control-flow logic.
     pub fn ensure_default_config(&self) -> Result<PathBuf> {
         ensure_private_dir(&self.root)?;
+        ensure_private_dir(
+            &self
+                .root
+                .join(crate::integrations::macros::MACROS_DIRECTORY_NAME),
+        )?;
 
         if let Some(path) = self.select_primary_file()? {
             return Ok(path);
@@ -175,6 +180,12 @@ impl ConfigPaths {
     #[cfg(test)]
     pub async fn ensure_default_config_async(&self) -> Result<PathBuf> {
         ensure_private_dir_async(&self.root).await?;
+        ensure_private_dir_async(
+            &self
+                .root
+                .join(crate::integrations::macros::MACROS_DIRECTORY_NAME),
+        )
+        .await?;
 
         if let Some(path) = self.select_primary_file_async().await? {
             return Ok(path);
