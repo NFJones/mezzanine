@@ -316,6 +316,10 @@ impl TerminalScreen {
             self.line_feed_newline_enabled = final_byte == 'h';
             return;
         }
+        if matches!(final_byte, 'h' | 'l') && params == "4" {
+            self.insert_mode_enabled = final_byte == 'h';
+            return;
+        }
         if final_byte == 's'
             && let Some(modes) = parse_dec_private_mode_params(params)
         {
@@ -388,6 +392,7 @@ impl TerminalScreen {
             normal_viewport_detached_from_history: self.normal_viewport_detached_from_history,
             size: self.size,
             autowrap_enabled: self.autowrap_enabled,
+            insert_mode_enabled: self.insert_mode_enabled,
             origin_mode_enabled: self.origin_mode_enabled,
             scroll_region: self.scroll_region,
         }
@@ -408,6 +413,7 @@ impl TerminalScreen {
         self.normal_viewport_detached_from_history = state.normal_viewport_detached_from_history;
         self.size = state.size;
         self.autowrap_enabled = state.autowrap_enabled;
+        self.insert_mode_enabled = state.insert_mode_enabled;
         self.origin_mode_enabled = state.origin_mode_enabled;
         self.scroll_region = state.scroll_region;
 

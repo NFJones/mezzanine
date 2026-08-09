@@ -7,6 +7,7 @@ fn terminal_mode_state_defaults_match_terminal_baseline() {
 
     assert!(state.cursor_visible);
     assert!(state.autowrap_enabled);
+    assert!(!state.insert_mode_enabled);
     assert!(!state.bracketed_paste_enabled);
     assert!(!state.sgr_mouse_enabled);
 }

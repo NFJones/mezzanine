@@ -297,6 +297,32 @@ fn terminal_screen_handles_insertion_deletion_and_scroll_regions() {
     assert!(screen.history().is_empty());
 }
 
+/// Verifies ANSI insert/replace mode shifts existing cells while applications
+/// paint inserted text, then immediately returns to overwrite behavior once
+/// mode 4 is reset. Nano uses this sequence for ordinary buffer insertion.
+#[test]
+fn terminal_screen_ansi_insert_mode_shifts_printed_text_until_reset() {
+    let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"abcd\x1b[1;3H\x1b[4hXY\x1b[4lZ");
+
+    assert_eq!(screen.visible_lines()[0], "abXYZd");
+}
+
+/// Verifies ANSI insert mode truncates the right margin safely and survives
+/// alternate-screen switching, as full-screen editors can enable the mode
+/// while painting their temporary viewport.
+#[test]
+fn terminal_screen_ansi_insert_mode_handles_right_margin_and_alternate_screen() {
+    let mut screen = TerminalScreen::new(Size::new(4, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"abcd\x1b[1;4H\x1b[4hX");
+    assert_eq!(screen.visible_lines()[0], "abcX");
+
+    screen.feed(b"\x1b[?1049h\x1b[4hxy\x1b[H\x1b[4hZ\x1b[?1049lY");
+    assert_eq!(screen.visible_lines()[0], "abcY");
+}
+
 /// Verifies VT-style LF, IND, and NEL line movement semantics, including LNM
 /// defaults and explicit transitions. Full-screen applications use these
 /// controls inside scroll regions, so LF/IND must keep the current column
@@ -490,6 +516,7 @@ fn terminal_screen_restores_terminal_mode_state() {
         application_cursor_enabled: true,
         origin_mode_enabled: false,
         autowrap_enabled: false,
+        insert_mode_enabled: false,
         application_keypad_enabled: true,
         focus_events_enabled: true,
     };

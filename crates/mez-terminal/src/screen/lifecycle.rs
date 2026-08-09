@@ -31,6 +31,7 @@ struct RetainedDisplayMetadata {
     saved_cursor: Option<Cursor>,
     graphic_rendition: GraphicRendition,
     autowrap_enabled: bool,
+    insert_mode_enabled: bool,
     origin_mode_enabled: bool,
     scroll_region: Option<(usize, usize)>,
 }
@@ -45,6 +46,7 @@ impl RetainedDisplayMetadata {
             saved_cursor: screen.saved_cursor,
             graphic_rendition: screen.graphic_rendition,
             autowrap_enabled: screen.autowrap_enabled,
+            insert_mode_enabled: screen.insert_mode_enabled,
             origin_mode_enabled: screen.origin_mode_enabled,
             scroll_region: screen.scroll_region,
         }
@@ -58,6 +60,7 @@ impl RetainedDisplayMetadata {
         screen.saved_cursor = self.saved_cursor;
         screen.graphic_rendition = self.graphic_rendition;
         screen.autowrap_enabled = self.autowrap_enabled;
+        screen.insert_mode_enabled = self.insert_mode_enabled;
         screen.origin_mode_enabled = self.origin_mode_enabled;
         screen.scroll_region = self.scroll_region;
     }
@@ -144,6 +147,7 @@ struct SavedNormalScreenMetadata {
     graphic_rendition: GraphicRendition,
     size: Size,
     autowrap_enabled: bool,
+    insert_mode_enabled: bool,
     origin_mode_enabled: bool,
     scroll_region: Option<(usize, usize)>,
 }
@@ -159,6 +163,7 @@ impl SavedNormalScreenMetadata {
             graphic_rendition: screen.graphic_rendition,
             size: screen.size,
             autowrap_enabled: screen.autowrap_enabled,
+            insert_mode_enabled: screen.insert_mode_enabled,
             origin_mode_enabled: screen.origin_mode_enabled,
             scroll_region: screen.scroll_region,
         }
@@ -174,6 +179,7 @@ impl SavedNormalScreenMetadata {
         screen.graphic_rendition = self.graphic_rendition;
         screen.size = self.size;
         screen.autowrap_enabled = self.autowrap_enabled;
+        screen.insert_mode_enabled = self.insert_mode_enabled;
         screen.origin_mode_enabled = self.origin_mode_enabled;
         screen.scroll_region = self.scroll_region;
     }
@@ -194,6 +200,7 @@ impl SavedNormalScreenMetadata {
             normal_viewport_detached_from_history: content.normal_viewport_detached_from_history,
             size: self.size,
             autowrap_enabled: self.autowrap_enabled,
+            insert_mode_enabled: self.insert_mode_enabled,
             origin_mode_enabled: self.origin_mode_enabled,
             scroll_region: self.scroll_region,
         }
@@ -231,6 +238,7 @@ impl TerminalScreen {
             cursor: Cursor { row: 0, column: 0 },
             cursor_visible: true,
             autowrap_enabled: true,
+            insert_mode_enabled: false,
             wrap_pending: false,
             saved_cursor: None,
             parser_state: ParserState::Ground,

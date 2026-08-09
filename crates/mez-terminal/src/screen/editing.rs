@@ -36,6 +36,9 @@ impl TerminalScreen {
         self.clear_line_copy_text(self.cursor.row);
         let row = self.cursor.row;
         let column = self.cursor.column;
+        if self.insert_mode_enabled {
+            self.insert_blank_chars(width);
+        }
         if !self.autowrap_enabled && column.saturating_add(width) > self.cells[row].len() {
             for target_column in column..self.cells[row].len() {
                 self.clear_cell_footprint(row, target_column, self.graphic_rendition);

@@ -451,20 +451,26 @@ impl SessionSnapshotPayload {
                         && fields.len() != 11
                         && fields.len() != 12
                         && fields.len() != 13
+                        && fields.len() != 14
                     {
                         return Err(MezError::invalid_args(
                             "invalid snapshot pane terminal modes field count",
                         ));
                     }
-                    let (has_cursor_visible, has_independent_mouse_modes, has_autowrap_mode) =
-                        match fields.len() {
-                            9 => (false, false, false),
-                            10 => (true, false, false),
-                            11 => (false, true, false),
-                            12 => (true, true, false),
-                            13 => (true, true, true),
-                            _ => unreachable!("validated pane terminal mode field count"),
-                        };
+                    let (
+                        has_cursor_visible,
+                        has_independent_mouse_modes,
+                        has_autowrap_mode,
+                        has_insert_mode,
+                    ) = match fields.len() {
+                        9 => (false, false, false, false),
+                        10 => (true, false, false, false),
+                        11 => (false, true, false, false),
+                        12 => (true, true, false, false),
+                        13 => (true, true, true, false),
+                        14 => (true, true, true, true),
+                        _ => unreachable!("validated pane terminal mode field count"),
+                    };
                     let mode_offset = usize::from(has_cursor_visible);
                     let pane = payload_pane_mut(&mut payload, &fields[1])?;
                     let (
@@ -506,14 +512,28 @@ impl SessionSnapshotPayload {
                         } else {
                             true
                         },
+                        insert_mode_enabled: if has_insert_mode {
+                            parse_bool(&fields[sgr_mode_index + 3])?
+                        } else {
+                            false
+                        },
                         application_keypad_enabled: parse_bool(
-                            &fields[sgr_mode_index + 2 + usize::from(has_autowrap_mode)],
+                            &fields[sgr_mode_index
+                                + 2
+                                + usize::from(has_autowrap_mode)
+                                + usize::from(has_insert_mode)],
                         )?,
                         focus_events_enabled: parse_bool(
-                            &fields[sgr_mode_index + 3 + usize::from(has_autowrap_mode)],
+                            &fields[sgr_mode_index
+                                + 3
+                                + usize::from(has_autowrap_mode)
+                                + usize::from(has_insert_mode)],
                         )?,
                         title: non_empty_string(
-                            &fields[sgr_mode_index + 4 + usize::from(has_autowrap_mode)],
+                            &fields[sgr_mode_index
+                                + 4
+                                + usize::from(has_autowrap_mode)
+                                + usize::from(has_insert_mode)],
                         ),
                     };
                 }

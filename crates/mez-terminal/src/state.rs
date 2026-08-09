@@ -27,6 +27,11 @@ pub struct TerminalModeState {
     pub origin_mode_enabled: bool,
     /// Whether DEC autowrap mode is active.
     pub autowrap_enabled: bool,
+    /// Whether ANSI insert/replace mode is active.
+    ///
+    /// When enabled by `CSI 4 h`, printable output inserts cells at the
+    /// cursor instead of replacing existing cells.
+    pub insert_mode_enabled: bool,
     /// Whether application keypad mode is active.
     pub application_keypad_enabled: bool,
     /// Whether focus event reporting is active.
@@ -46,6 +51,7 @@ impl Default for TerminalModeState {
             application_cursor_enabled: false,
             origin_mode_enabled: false,
             autowrap_enabled: true,
+            insert_mode_enabled: false,
             application_keypad_enabled: false,
             focus_events_enabled: false,
         }

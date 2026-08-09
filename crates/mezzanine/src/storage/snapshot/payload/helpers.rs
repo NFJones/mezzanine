@@ -407,7 +407,7 @@ pub(super) fn encode_frame_settings(
 /// on duplicated control-flow logic.
 pub(super) fn encode_terminal_modes(pane_id: &str, modes: &TerminalModeState, output: &mut String) {
     output.push_str(&format!(
-        "pane_terminal_modes\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        "pane_terminal_modes\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         escape_field(pane_id),
         modes.cursor_visible,
         modes.bracketed_paste_enabled,
@@ -417,6 +417,7 @@ pub(super) fn encode_terminal_modes(pane_id: &str, modes: &TerminalModeState, ou
         modes.sgr_mouse_enabled,
         modes.application_cursor_enabled,
         modes.autowrap_enabled,
+        modes.insert_mode_enabled,
         modes.application_keypad_enabled,
         modes.focus_events_enabled,
         escape_field(modes.title.as_deref().unwrap_or(""))

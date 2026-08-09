@@ -616,6 +616,7 @@ fn session_snapshot_payload_preserves_terminal_and_transcript_refs() {
         terminal_modes: TerminalModeState {
             title: Some("snapshot-title".to_string()),
             bracketed_paste_enabled: true,
+            insert_mode_enabled: true,
             ..TerminalModeState::default()
         },
         terminal_saved_state: TerminalSavedState {

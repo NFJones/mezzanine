@@ -240,6 +240,8 @@ pub(super) struct SavedNormalScreenState {
     pub(super) size: Size,
     /// Stored DEC autowrap mode for the normal screen.
     pub(super) autowrap_enabled: bool,
+    /// Stored ANSI insert/replace mode for the normal screen.
+    pub(super) insert_mode_enabled: bool,
     /// Stored DEC origin mode for the normal screen.
     pub(super) origin_mode_enabled: bool,
     /// Stored active scroll region for the normal screen.
@@ -557,6 +559,11 @@ pub struct TerminalScreen {
     /// is disabled, printing at the right margin stays on the last column
     /// instead of deferring a wrap to the next printable character.
     pub(super) autowrap_enabled: bool,
+    /// Whether ANSI insert/replace mode is active.
+    ///
+    /// Mode 4 inserts printable graphemes at the cursor and shifts the row
+    /// suffix right instead of replacing the cells under the cursor.
+    pub(super) insert_mode_enabled: bool,
     /// Stores the wrap pending value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
