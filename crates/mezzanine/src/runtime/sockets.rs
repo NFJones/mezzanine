@@ -14,6 +14,12 @@ use super::{
     RuntimeRegistryUpdatePlan, SessionId, SessionRegistry, SocketDirectory, SocketDirectorySource,
     UnixListener, UnixStream, WindowId, fs, geteuid,
 };
+
+#[cfg(target_os = "macos")]
+const UNIX_SOCKET_PATH_MAX_BYTES: usize = 103;
+#[cfg(not(target_os = "macos"))]
+const UNIX_SOCKET_PATH_MAX_BYTES: usize = 107;
+const LONGEST_DEFAULT_SOCKET_NAME: &str = "default.message.sock";
 #[cfg(test)]
 use super::{
     ControlConnectionState, ControlIdempotencyCache, Read, RuntimeSessionService, Session, Write,
@@ -56,10 +62,13 @@ pub fn default_socket_directory(env: &RuntimeEnv) -> Result<SocketDirectory> {
     #[cfg(target_os = "macos")]
     if let Some(path) = non_empty_path(&env.tmpdir) {
         ensure_absolute(path)?;
-        return Ok(SocketDirectory {
-            path: path.join(format!("mez-{}", env.uid)),
-            source: SocketDirectorySource::MacOsTmpdir,
-        });
+        let directory = path.join(format!("mez-{}", env.uid));
+        if socket_path_fits(&directory.join(LONGEST_DEFAULT_SOCKET_NAME)) {
+            return Ok(SocketDirectory {
+                path: directory,
+                source: SocketDirectorySource::MacOsTmpdir,
+            });
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -107,7 +116,9 @@ pub fn ensure_private_socket_directory(path: &Path, owner_uid: u32) -> Result<()
 pub fn socket_path_for_name(directory: &Path, name: &str) -> Result<PathBuf> {
     ensure_absolute(directory)?;
     validate_socket_name(name)?;
-    Ok(directory.join(name))
+    let path = directory.join(name);
+    validate_socket_path_length(&path, "named socket")?;
+    Ok(path)
 }
 
 /// Runs the auxiliary socket path for control socket operation for this subsystem.
@@ -121,6 +132,7 @@ pub fn auxiliary_socket_path_for_control_socket(
 ) -> Result<PathBuf> {
     ensure_absolute(control_socket)?;
     ensure_no_mez_separator(control_socket)?;
+    validate_socket_path_length(control_socket, "control socket")?;
     let directory = control_socket.parent().ok_or_else(|| {
         MezError::invalid_args("control socket path must have a parent directory")
     })?;
@@ -140,7 +152,9 @@ pub fn auxiliary_socket_path_for_control_socket(
         AuxiliarySocketKind::Message => "message",
         AuxiliarySocketKind::Event => "event",
     };
-    socket_path_for_name(directory, &format!("{stem}.{suffix}.sock"))
+    let path = socket_path_for_name(directory, &format!("{stem}.{suffix}.sock"))?;
+    validate_socket_path_length(&path, "auxiliary socket")?;
+    Ok(path)
 }
 
 /// Runs the bind control socket operation for this subsystem.
@@ -149,6 +163,7 @@ pub fn auxiliary_socket_path_for_control_socket(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn bind_control_socket(path: &Path, owner_uid: u32) -> Result<UnixListener> {
+    validate_socket_path_length(path, "socket")?;
     let directory = path
         .parent()
         .ok_or_else(|| MezError::invalid_args("socket path must have a parent directory"))?;
@@ -624,6 +639,27 @@ pub(super) fn validate_socket_name(name: &str) -> Result<()> {
         ));
     }
     ensure_no_mez_separator(path)
+}
+
+/// Verifies that a filesystem socket pathname fits the platform socket address.
+///
+/// Unix-domain socket APIs reserve one byte in `sun_path` for a trailing NUL,
+/// so this guard uses a conservative platform-specific pathname limit before
+/// filesystem preparation or listener binding can fail with an opaque OS error.
+pub(super) fn validate_socket_path_length(path: &Path, endpoint: &str) -> Result<()> {
+    let length = path.as_os_str().as_encoded_bytes().len();
+    if length > UNIX_SOCKET_PATH_MAX_BYTES {
+        return Err(MezError::invalid_args(format!(
+            "{endpoint} path is {length} bytes and exceeds the {UNIX_SOCKET_PATH_MAX_BYTES}-byte Unix socket limit: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Reports whether a socket path can be represented by the host socket API.
+pub(super) fn socket_path_fits(path: &Path) -> bool {
+    path.as_os_str().as_encoded_bytes().len() <= UNIX_SOCKET_PATH_MAX_BYTES
 }
 
 /// Runs the set private socket permissions operation for this subsystem.

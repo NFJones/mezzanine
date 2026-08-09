@@ -69,6 +69,28 @@ fn default_socket_directory_uses_macos_user_tmpdir() {
     );
 }
 
+/// Verifies macOS avoids a per-user temporary root that cannot hold all
+/// default runtime endpoints.
+///
+/// The message endpoint is longer than the control endpoint. Falling back
+/// before the directory is created prevents a daemon from starting and then
+/// failing only while binding its auxiliary listener.
+#[cfg(target_os = "macos")]
+#[test]
+fn default_socket_directory_uses_tmp_when_macos_tmpdir_is_too_long() {
+    let env = RuntimeEnv {
+        mez_tmpdir: None,
+        xdg_runtime_dir: None,
+        tmpdir: Some(OsString::from(format!("/{}", "a".repeat(128)))),
+        uid: 1000,
+    };
+
+    let directory = default_socket_directory(&env).unwrap();
+
+    assert_eq!(directory.source, SocketDirectorySource::Tmp);
+    assert_eq!(directory.path, PathBuf::from("/tmp/mez-1000"));
+}
+
 /// Verifies macOS never falls back to a Linux-style XDG runtime path.
 ///
 /// A stripped-down launch environment may omit `TMPDIR`. In that case macOS
@@ -162,6 +184,21 @@ fn socket_name_must_be_single_component() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
 }
 
+/// Verifies named socket construction rejects a pathname before the operating
+/// system reports an implementation-specific bind failure.
+///
+/// A typed error lets callers distinguish invalid endpoint selection from
+/// directory ownership or listener startup errors on every supported Unix host.
+#[test]
+fn socket_path_for_name_rejects_paths_beyond_the_platform_limit() {
+    let directory = Path::new("/").join("a".repeat(128));
+
+    let error = socket_path_for_name(&directory, "control.sock").unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.message().contains("Unix socket limit"));
+}
+
 /// Verifies auxiliary socket paths are derived from control socket name.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -193,6 +230,23 @@ fn auxiliary_socket_paths_preserve_nonstandard_control_socket_names() {
         auxiliary_socket_path_for_control_socket(control, AuxiliarySocketKind::Message).unwrap();
 
     assert_eq!(message, PathBuf::from("/tmp/mez-1000/control.message.sock"));
+}
+
+/// Verifies auxiliary endpoint derivation rejects a suffix that crosses the
+/// platform pathname limit even though its control endpoint is valid.
+///
+/// This protects foreground services from binding a control socket successfully
+/// and failing later when they derive the message or event listener path.
+#[test]
+fn auxiliary_socket_paths_reject_suffixes_beyond_the_platform_limit() {
+    let directory = Path::new("/").join("a".repeat(94));
+    let control = directory.join("x.sock");
+
+    let error = auxiliary_socket_path_for_control_socket(&control, AuxiliarySocketKind::Message)
+        .unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.message().contains("Unix socket limit"));
 }
 
 /// Verifies unix peer uid authorization rejects uid mismatch.

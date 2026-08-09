@@ -431,8 +431,10 @@ under the default Mezzanine socket directory.
 
 The default Mezzanine socket directory SHOULD be `$MEZ_TMPDIR/mez-$UID` when
 `MEZ_TMPDIR` is set. On macOS, it SHOULD otherwise be `$TMPDIR/mez-$UID`, using
-the operating system's per-user temporary directory, and then
-`/tmp/mez-$UID` if `TMPDIR` is unavailable. On other Unix platforms, it SHOULD
+the operating system's per-user temporary directory, when the longest default
+socket endpoint fits the platform Unix-domain socket pathname limit; it MUST
+otherwise use `/tmp/mez-$UID`. It MUST also use `/tmp/mez-$UID` if `TMPDIR` is
+unavailable. On other Unix platforms, it SHOULD
 otherwise be `$XDG_RUNTIME_DIR/mez` when `XDG_RUNTIME_DIR` is set, and then
 `/tmp/mez-$UID`. The default socket directory MUST be private to the current
 user and MUST NOT be world-readable, world-writable, or world-executable.

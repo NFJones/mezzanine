@@ -37,9 +37,11 @@ use crate::storage::snapshot::{SnapshotManifest, SnapshotPaneCapture, SnapshotSt
 use mez_mux::layout::Size;
 use mez_mux::session::Session;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -50,7 +52,18 @@ use std::time::{Duration, Instant};
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn test_env(name: &str) -> (CliEnv, PathBuf) {
-    let home = std::env::temp_dir().join(format!("mez-cli-test-{name}-{}", std::process::id()));
+    let mut name_hasher = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut name_hasher);
+    let temporary_root = if cfg!(target_os = "macos") {
+        Path::new("/private/tmp")
+    } else {
+        Path::new("/tmp")
+    };
+    let home = temporary_root.join(format!(
+        "mez-cli-{}-{:x}",
+        std::process::id(),
+        name_hasher.finish()
+    ));
     let runtime_tmp = home.join("runtime");
     let _ = fs::remove_dir_all(&home);
     fs::create_dir_all(&runtime_tmp).unwrap();
