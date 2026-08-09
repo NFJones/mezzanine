@@ -179,7 +179,11 @@ database_path = ""
 [agents]
 default_provider = "openai"
 default_model_profile = "default"
-# Prevent automatic idle sleep during active agent turns only when explicitly enabled.
+# Disabled by default. `system` inhibits automatic idle system sleep only while
+# a canonical agent turn is Running; `system-and-display` also requests display
+# wakefulness where supported. Detached sessions retain the request while work
+# runs. Backends are best-effort and never override explicit sleep, lid-close,
+# thermal, or critical-battery safeguards.
 active_turn_sleep_inhibition = "disabled"
 shell_only = true
 compaction_raw_retention_percent = 10

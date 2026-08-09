@@ -91,6 +91,16 @@ Press `Ctrl+A a` to open the focused pane's agent shell. Begin with a bounded
 task that asks for inspection and focused validation. Press `Ctrl+A d` to detach
 without normally stopping the session.
 
+To prevent automatic idle sleep during active agent work, a primary user may
+set `[agents].active_turn_sleep_inhibition` to `system` or
+`system-and-display`; it is disabled by default. Mez holds one best-effort
+request only while canonical agent turns are Running, including while the
+session is detached, and releases it after the final turn settles or the
+runtime stops. macOS requests native system and display assertions; other
+platforms currently treat the request as unavailable without interrupting
+agent work. This never overrides explicit sleep, lid-close, thermal, or
+critical-battery safeguards, and model-authored configuration cannot change it.
+
 For a complete first-session guide, including API-key and noninteractive
 authentication, see [Getting started](docs/getting-started/README.md).
 

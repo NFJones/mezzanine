@@ -2804,7 +2804,13 @@ where supported and MAY use substantially more battery power. Neither mode
 MUST claim to prevent explicit sleep, lid-close sleep, thermal protection, or
 critical-battery protection. This host power policy MUST be changed only by a
 direct user configuration interface and MUST be rejected for model-authored
-`config_change` actions.
+`config_change` actions. The runtime MUST derive this request from canonical
+`AgentTurnLedger` entries in the `Running` state rather than pane-local shell
+state, retain it while detached work remains Running, and release it when no
+such turn remains or the runtime enters stopping, killed, or failed state.
+Platform support and individual host-request failures MUST remain nonfatal and
+MUST NOT interrupt agent execution; unsupported display behavior MAY degrade to
+system-only inhibition.
 `agents.action_failure_retry_limit` MUST be a positive integer and MUST default
 to `5`. It bounds model self-correction attempts per identical
 model-correctable failed-action signature rather than per action batch, so one
