@@ -1,8 +1,9 @@
 //! Regression tests for terminal client output frames behavior.
 
 use crate::attached_client::output::{
-    encode_attached_terminal_output_frame_with_keypad_transition,
+    AttachedTerminalModeTransitions, encode_attached_terminal_output_frame_with_keypad_transition,
     encode_attached_terminal_output_frame_with_styles,
+    encode_attached_terminal_output_frame_with_styles_and_transitions,
 };
 use crate::presentation::AttachedTerminalOutputModes;
 use crate::presentation::TerminalCursorStyle;
@@ -38,6 +39,45 @@ fn attached_terminal_output_frame_controls_cursor_presentation() {
     ));
     assert!(rendered.contains("pane"));
     assert!(rendered.ends_with("\x1b[?25l\x1b[0m\x1b[4 q\x1b[3;4H\x1b[?25h"));
+}
+
+/// Verifies typed Kitty keyboard stack transitions precede all screen bytes
+/// and use the exact flags-5 push and one-level pop protocol records.
+#[test]
+fn attached_terminal_output_frame_prefixes_typed_keyboard_transitions() {
+    let lines = vec!["prompt".to_string()];
+    let modes = AttachedTerminalOutputModes {
+        enhanced_keyboard_reporting: true,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let push = encode_attached_terminal_output_frame_with_styles_and_transitions(
+        &lines,
+        &[],
+        None,
+        modes,
+        AttachedTerminalModeTransitions {
+            enhanced_keyboard_reporting: Some(true),
+        },
+    );
+    let pop = encode_attached_terminal_output_frame_with_styles_and_transitions(
+        &lines,
+        &[],
+        None,
+        AttachedTerminalOutputModes::default(),
+        AttachedTerminalModeTransitions {
+            enhanced_keyboard_reporting: Some(false),
+        },
+    );
+
+    assert!(push.starts_with(b"\x1b[>5u"), "{push:?}");
+    assert!(pop.starts_with(b"\x1b[<u"), "{pop:?}");
+    assert_eq!(
+        AttachedTerminalModeTransitions {
+            enhanced_keyboard_reporting: Some(true),
+        }
+        .encoded_len(),
+        b"\x1b[>5u".len()
+    );
 }
 
 /// Verifies attached-terminal frames honor the configured host mouse policy.

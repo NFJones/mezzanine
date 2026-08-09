@@ -2165,6 +2165,18 @@ theme-relative while avoiding abrupt reuse of unrelated pill accents.
 
 ### 7.5 Readline Semantics
 
+When `terminal.enhanced_keyboard_reporting` is `true`, Mezzanine MUST push
+Kitty keyboard flags 1 and 4 with `CSI > 5 u` only while a Mez-owned
+readline prompt semantically owns input on the primary attached client. It MUST
+pop exactly one Mezzanine-owned keyboard-stack level with `CSI < u` before
+that prompt relinquishes input, the setting is disabled, presentation is
+restored, or the client detaches. Push and pop transitions MUST precede their
+associated screen update and MUST remain balanced across partial writes,
+deferred frames, redraw invalidation, failures, and cleanup. Mezzanine MUST NOT
+negotiate enhanced keyboard reporting for ordinary process panes, observer
+clients, or modal overlays, and MUST NOT infer support from the operating
+system, terminal emulator, `$TERM`, or prompt geometry.
+
 The agent shell MUST obey readline-style input semantics for line editing,
 history navigation, cursor movement, deletion, and submission.
 

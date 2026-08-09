@@ -15,10 +15,13 @@ pub use mouse::{
     mouse_border_cells_for_geometries, sgr_mouse_sequence_len, sgr_mouse_sequence_start,
 };
 pub use output::{
-    AttachedTerminalOutputFrameState, attached_terminal_enter_presentation_frame,
-    attached_terminal_restore_presentation_frame,
+    AttachedTerminalModeTransitions, AttachedTerminalOutputFrameState,
+    attached_terminal_enhanced_keyboard_reporting_frame,
+    attached_terminal_enter_presentation_frame, attached_terminal_restore_presentation_frame,
     encode_attached_terminal_output_frame_with_styles,
+    encode_attached_terminal_output_frame_with_styles_and_transitions,
     encode_attached_terminal_output_update_frame_with_styles,
+    encode_attached_terminal_output_update_frame_with_styles_and_transitions,
 };
 
 #[cfg(test)]

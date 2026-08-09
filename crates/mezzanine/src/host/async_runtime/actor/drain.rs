@@ -483,6 +483,8 @@ impl AsyncRuntimeSessionActor {
             line_style_spans,
             modes: AttachedTerminalOutputModes {
                 application_keypad,
+                enhanced_keyboard_reporting: view
+                    .enhanced_keyboard_reporting_active(config.enhanced_keyboard_reporting),
                 bracketed_paste,
                 focus_events: view.focus_events,
                 alternate_screen: view.alternate_screen,

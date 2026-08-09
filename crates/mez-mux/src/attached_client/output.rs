@@ -22,6 +22,35 @@ use crate::presentation::{ClientViewRole, TerminalCursorStyle};
 #[cfg(test)]
 use crate::theme::UiTheme;
 
+/// Host-mode transitions serialized before one attached-terminal frame.
+///
+/// Kitty keyboard pushes and pops are stack operations rather than idempotent
+/// mode assignments. The product I/O owner therefore selects transitions from
+/// its committed state and commits them only after these prefix bytes have
+/// been fully accepted by the terminal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AttachedTerminalModeTransitions {
+    /// Push enhanced keyboard flags when true, or pop one level when false.
+    pub enhanced_keyboard_reporting: Option<bool>,
+}
+
+impl AttachedTerminalModeTransitions {
+    /// Returns the exact number of transition bytes preceding frame content.
+    pub const fn encoded_len(self) -> usize {
+        match self.enhanced_keyboard_reporting {
+            Some(enabled) => attached_terminal_enhanced_keyboard_reporting_frame(enabled).len(),
+            None => 0,
+        }
+    }
+
+    /// Appends the selected transitions in host-terminal application order.
+    fn encode_into(self, frame: &mut Vec<u8>) {
+        if let Some(enabled) = self.enhanced_keyboard_reporting {
+            frame.extend_from_slice(attached_terminal_enhanced_keyboard_reporting_frame(enabled));
+        }
+    }
+}
+
 /// Measures one terminal grapheme under the active process compatibility mode.
 fn terminal_grapheme_width(grapheme: &str) -> usize {
     mez_terminal::terminal_grapheme_width(grapheme, terminal_emoji_width())
@@ -116,7 +145,25 @@ pub fn encode_attached_terminal_output_frame_with_styles(
     keypad_transition: Option<bool>,
     modes: AttachedTerminalOutputModes,
 ) -> Vec<u8> {
+    encode_attached_terminal_output_frame_with_styles_and_transitions(
+        lines,
+        line_style_spans,
+        keypad_transition,
+        modes,
+        AttachedTerminalModeTransitions::default(),
+    )
+}
+
+/// Encodes a full frame after the supplied stack-balanced host transitions.
+pub fn encode_attached_terminal_output_frame_with_styles_and_transitions(
+    lines: &[String],
+    line_style_spans: &[Vec<TerminalStyleSpan>],
+    keypad_transition: Option<bool>,
+    modes: AttachedTerminalOutputModes,
+    transitions: AttachedTerminalModeTransitions,
+) -> Vec<u8> {
     let mut frame = Vec::new();
+    transitions.encode_into(&mut frame);
     match keypad_transition {
         Some(true) => frame.extend_from_slice(b"\x1b="),
         Some(false) => frame.extend_from_slice(b"\x1b>"),
@@ -162,25 +209,47 @@ pub fn encode_attached_terminal_output_update_frame_with_styles(
     modes: AttachedTerminalOutputModes,
     previous: Option<&AttachedTerminalOutputFrameState>,
 ) -> Vec<u8> {
+    encode_attached_terminal_output_update_frame_with_styles_and_transitions(
+        lines,
+        line_style_spans,
+        keypad_transition,
+        modes,
+        previous,
+        AttachedTerminalModeTransitions::default(),
+    )
+}
+
+/// Encodes a full or differential frame after typed host-mode transitions.
+pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
+    lines: &[String],
+    line_style_spans: &[Vec<TerminalStyleSpan>],
+    keypad_transition: Option<bool>,
+    modes: AttachedTerminalOutputModes,
+    previous: Option<&AttachedTerminalOutputFrameState>,
+    transitions: AttachedTerminalModeTransitions,
+) -> Vec<u8> {
     let Some(previous) = previous else {
-        return encode_attached_terminal_output_frame_with_styles(
+        return encode_attached_terminal_output_frame_with_styles_and_transitions(
             lines,
             line_style_spans,
             keypad_transition,
             modes,
+            transitions,
         );
     };
     if output_row_count_changed(previous, lines)
         || previous.alternate_screen != modes.alternate_screen
     {
-        return encode_attached_terminal_output_frame_with_styles(
+        return encode_attached_terminal_output_frame_with_styles_and_transitions(
             lines,
             line_style_spans,
             keypad_transition,
             modes,
+            transitions,
         );
     }
     let mut frame = Vec::new();
+    transitions.encode_into(&mut frame);
     match keypad_transition {
         Some(true) => frame.extend_from_slice(b"\x1b="),
         Some(false) => frame.extend_from_slice(b"\x1b>"),
@@ -764,6 +833,14 @@ const fn attached_terminal_focus_events_frame(enabled: bool) -> &'static [u8] {
 const fn attached_terminal_alternate_screen_frame(enabled: bool) -> &'static [u8] {
     let _ = enabled;
     b"\x1b[?1049l"
+}
+
+/// Returns the exact Kitty keyboard stack transition for an attached client.
+///
+/// Enabling pushes flags 1 and 4 (disambiguated escape codes and alternate
+/// key reporting). Disabling pops exactly one level previously owned by Mez.
+pub const fn attached_terminal_enhanced_keyboard_reporting_frame(enabled: bool) -> &'static [u8] {
+    if enabled { b"\x1b[>5u" } else { b"\x1b[<u" }
 }
 
 /// Defines the fn const used by this subsystem.

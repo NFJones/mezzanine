@@ -335,6 +335,111 @@ async fn async_fd_attached_terminal_io_completes_started_frame_before_newer_fram
     assert!(first_tail < newer_frame, "{output:?}");
 }
 
+/// Verifies Kitty keyboard negotiation is stack-balanced across repeated
+/// frames, differential invalidation, and prompt closure.
+#[tokio::test]
+async fn async_fd_attached_terminal_io_balances_keyboard_transitions_once() {
+    let (driver, mut peer) = StdUnixStream::pair().unwrap();
+    let driver_output = driver.try_clone().unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+    let enabled = AttachedTerminalOutputModes {
+        enhanced_keyboard_reporting: true,
+        ..AttachedTerminalOutputModes::default()
+    };
+
+    io.write_styled_output_with_modes(&["prompt".to_string()], &[], enabled)
+        .await
+        .unwrap();
+    io.write_styled_output_with_modes(&["prompt".to_string()], &[], enabled)
+        .await
+        .unwrap();
+    io.invalidate_output_frame().await.unwrap();
+    io.write_styled_output_with_modes(
+        &["process".to_string()],
+        &[],
+        AttachedTerminalOutputModes::default(),
+    )
+    .await
+    .unwrap();
+
+    drop(io);
+    drop(driver_output);
+    drop(driver);
+    let mut output = Vec::new();
+    peer.read_to_end(&mut output).unwrap();
+    assert_eq!(
+        output
+            .windows(b"\x1b[>5u".len())
+            .filter(|item| *item == b"\x1b[>5u")
+            .count(),
+        1,
+        "{output:?}"
+    );
+    assert_eq!(
+        output
+            .windows(b"\x1b[<u".len())
+            .filter(|item| *item == b"\x1b[<u")
+            .count(),
+        1,
+        "{output:?}"
+    );
+}
+
+/// Verifies a partial Kitty push is not treated as committed until its exact
+/// prefix completes, after which explicit restoration emits one fresh pop.
+#[tokio::test]
+async fn async_fd_attached_terminal_io_commits_keyboard_push_after_full_prefix() {
+    let (driver, mut peer) = StdUnixStream::pair().unwrap();
+    let driver_output = driver.try_clone().unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let mut io =
+        AsyncAttachedTerminalFdLoopIo::new(driver.as_raw_fd(), driver_output.as_raw_fd(), None)
+            .unwrap();
+    io.enter_presentation().await.unwrap();
+    let enabled = AttachedTerminalOutputModes {
+        enhanced_keyboard_reporting: true,
+        ..AttachedTerminalOutputModes::default()
+    };
+
+    let first = io
+        .write_styled_output_with_modes_bounded(&["prompt".to_string()], &[], enabled, 1)
+        .await
+        .unwrap();
+    assert!(first.is_partial());
+    io.flush_pending_output(b"\x1b[>5u".len() - 1)
+        .await
+        .unwrap();
+    io.restore_presentation().await.unwrap();
+
+    drop(io);
+    drop(driver_output);
+    drop(driver);
+    let mut output = Vec::new();
+    peer.read_to_end(&mut output).unwrap();
+    let push = output
+        .windows(b"\x1b[>5u".len())
+        .position(|item| item == b"\x1b[>5u")
+        .expect("completed push should reach the terminal");
+    let pop = output
+        .windows(b"\x1b[<u".len())
+        .position(|item| item == b"\x1b[<u")
+        .expect("restore should pop a committed push");
+    assert!(push < pop, "{output:?}");
+    assert_eq!(
+        output
+            .windows(b"\x1b[<u".len())
+            .filter(|item| *item == b"\x1b[<u")
+            .count(),
+        1,
+        "{output:?}"
+    );
+}
+
 /// Verifies that presentation restoration abandons a permanently blocked
 /// display reset within a fixed deadline.
 ///

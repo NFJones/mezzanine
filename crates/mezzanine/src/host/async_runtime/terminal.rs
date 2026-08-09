@@ -169,6 +169,8 @@ where
     let (lines, spans) = compose_client_presentation_with_styles(view, None);
     let output_modes = AttachedTerminalOutputModes {
         application_keypad: refreshed.config.mouse_policy.pane_application_keypad_mode,
+        enhanced_keyboard_reporting: view
+            .enhanced_keyboard_reporting_active(refreshed.config.enhanced_keyboard_reporting),
         bracketed_paste: refreshed.config.pane_bracketed_paste_mode,
         focus_events: view.focus_events,
         alternate_screen: view.alternate_screen,
@@ -438,6 +440,11 @@ where
         if !step.output_lines.is_empty() && !agent_prompt_input_action {
             let output_modes = AttachedTerminalOutputModes {
                 application_keypad: frame.config.mouse_policy.pane_application_keypad_mode,
+                enhanced_keyboard_reporting: frame.view.as_ref().is_some_and(|view| {
+                    view.enhanced_keyboard_reporting_active(
+                        frame.config.enhanced_keyboard_reporting,
+                    )
+                }),
                 bracketed_paste: frame.config.pane_bracketed_paste_mode,
                 focus_events: frame.view.as_ref().is_some_and(|view| view.focus_events),
                 alternate_screen: frame
@@ -541,6 +548,9 @@ where
                             .config
                             .mouse_policy
                             .pane_application_keypad_mode,
+                        enhanced_keyboard_reporting: view.enhanced_keyboard_reporting_active(
+                            refreshed.config.enhanced_keyboard_reporting,
+                        ),
                         bracketed_paste: refreshed.config.pane_bracketed_paste_mode,
                         focus_events: view.focus_events,
                         alternate_screen: view.alternate_screen,

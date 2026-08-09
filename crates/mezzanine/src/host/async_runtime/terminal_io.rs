@@ -18,9 +18,10 @@ use crate::host::terminal::{
     read_attached_terminal_size,
 };
 use mez_mux::attached_client::{
-    AttachedTerminalOutputFrameState, attached_terminal_enter_presentation_frame,
-    attached_terminal_restore_presentation_frame,
-    encode_attached_terminal_output_update_frame_with_styles,
+    AttachedTerminalModeTransitions, AttachedTerminalOutputFrameState,
+    attached_terminal_enhanced_keyboard_reporting_frame,
+    attached_terminal_enter_presentation_frame, attached_terminal_restore_presentation_frame,
+    encode_attached_terminal_output_update_frame_with_styles_and_transitions,
 };
 use mez_terminal::TerminalStyleSpan;
 #[cfg(test)]
@@ -302,6 +303,11 @@ pub struct AsyncAttachedTerminalFdLoopIo {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     application_keypad_mode: bool,
+    /// Whether Mez has fully committed one Kitty keyboard-stack push.
+    ///
+    /// This state changes when the complete transition prefix is accepted,
+    /// independently of the larger screen frame that follows it.
+    enhanced_keyboard_reporting_committed: bool,
     /// Stores the previous output frame value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -345,6 +351,7 @@ impl AsyncAttachedTerminalFdLoopIo {
                 .transpose()?,
             original_flags,
             application_keypad_mode: false,
+            enhanced_keyboard_reporting_committed: false,
             previous_output_frame: None,
             pending_output_frame: None,
             deferred_output_frame: None,
@@ -394,18 +401,28 @@ impl AsyncAttachedTerminalFdLoopIo {
         } else {
             None
         };
-        let bytes = encode_attached_terminal_output_update_frame_with_styles(
+        let enhanced_keyboard_transition = (modes.enhanced_keyboard_reporting
+            != self.enhanced_keyboard_reporting_committed)
+            .then_some(modes.enhanced_keyboard_reporting);
+        let transitions = AttachedTerminalModeTransitions {
+            enhanced_keyboard_reporting: enhanced_keyboard_transition,
+        };
+        let transition_end = transitions.encoded_len();
+        let bytes = encode_attached_terminal_output_update_frame_with_styles_and_transitions(
             lines,
             line_style_spans,
             keypad_transition,
             modes,
             self.previous_output_frame.as_ref(),
+            transitions,
         );
         let next_state =
             AttachedTerminalOutputFrameState::new_with_modes(lines, line_style_spans, modes);
         self.pending_output_frame = Some(PendingAttachedTerminalOutputFrame {
             bytes,
             written: 0,
+            transition_end,
+            pending_enhanced_keyboard_transition: enhanced_keyboard_transition,
             next_state,
             next_application_keypad_mode: modes.application_keypad,
         });
@@ -479,13 +496,28 @@ impl AsyncAttachedTerminalFdLoopIo {
             if count < attempted_bytes {
                 short_write_observed = true;
             }
-            let Some(pending) = self.pending_output_frame.as_mut() else {
+            let committed_enhanced_keyboard_transition = {
+                let Some(pending) = self.pending_output_frame.as_mut() else {
+                    return Err(MezError::invalid_state(
+                        "pending attached terminal output disappeared during write",
+                    ));
+                };
+                pending.written = pending.written.saturating_add(count);
+                if pending.written >= pending.transition_end {
+                    pending.pending_enhanced_keyboard_transition.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(enabled) = committed_enhanced_keyboard_transition {
+                self.enhanced_keyboard_reporting_committed = enabled;
+            }
+            bytes_written = bytes_written.saturating_add(count);
+            let Some(pending) = self.pending_output_frame.as_ref() else {
                 return Err(MezError::invalid_state(
-                    "pending attached terminal output disappeared during write",
+                    "pending attached terminal output disappeared after write",
                 ));
             };
-            pending.written = pending.written.saturating_add(count);
-            bytes_written = bytes_written.saturating_add(count);
             if pending.remaining_bytes() == 0 {
                 self.commit_completed_pending_output_frame();
                 if self.pending_output_frame.is_none() {
@@ -617,6 +649,10 @@ struct PendingAttachedTerminalOutputFrame {
     bytes: Vec<u8>,
     /// Number of bytes already written to the attached terminal.
     written: usize,
+    /// Byte offset immediately after the typed mode-transition prefix.
+    transition_end: usize,
+    /// Enhanced-keyboard state to commit once `transition_end` is reached.
+    pending_enhanced_keyboard_transition: Option<bool>,
     /// Differential frame state to commit only after all bytes are written.
     next_state: AttachedTerminalOutputFrameState,
     /// Application-keypad state to commit only after all bytes are written.
@@ -699,8 +735,15 @@ impl Drop for AsyncAttachedTerminalFdLoopIo {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn drop(&mut self) {
+        let output_fd = self.output.get_ref().fd;
+        if self.enhanced_keyboard_reporting_committed {
+            let _ = write_all_raw_fd_best_effort(
+                output_fd,
+                attached_terminal_enhanced_keyboard_reporting_frame(false),
+            );
+            self.enhanced_keyboard_reporting_committed = false;
+        }
         if self.presentation_active {
-            let output_fd = self.output.get_ref().fd;
             let _ = write_all_raw_fd_best_effort(
                 output_fd,
                 attached_terminal_restore_presentation_frame(),
@@ -939,15 +982,28 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
     /// on duplicated control-flow logic.
     fn restore_presentation<'a>(&'a mut self) -> AsyncTerminalIoFuture<'a, ()> {
         Box::pin(async move {
-            if !self.presentation_active {
+            self.pending_output_frame = None;
+            self.deferred_output_frame = None;
+            self.pending_output_invalidates_next_frame = false;
+            self.previous_output_frame = None;
+            if !self.presentation_active && !self.enhanced_keyboard_reporting_committed {
                 return Ok(());
+            }
+            let mut restore_bytes = Vec::new();
+            if self.enhanced_keyboard_reporting_committed {
+                restore_bytes
+                    .extend_from_slice(attached_terminal_enhanced_keyboard_reporting_frame(false));
+            }
+            if self.presentation_active {
+                restore_bytes.extend_from_slice(attached_terminal_restore_presentation_frame());
             }
             let restore = tokio::time::timeout(
                 ATTACHED_TERMINAL_PRESENTATION_RESTORE_TIMEOUT,
-                write_all_async_fd(&self.output, attached_terminal_restore_presentation_frame()),
+                write_all_async_fd(&self.output, &restore_bytes),
             )
             .await;
             self.presentation_active = false;
+            self.enhanced_keyboard_reporting_committed = false;
             match restore {
                 Ok(Ok(())) | Err(_) => Ok(()),
                 Ok(Err(error)) if attached_terminal_output_disconnected(&error) => Ok(()),

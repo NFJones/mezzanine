@@ -348,6 +348,8 @@ fn push_client_selection_style_spans(
 pub struct AttachedTerminalOutputModes {
     /// Whether application-keypad mode should be enabled.
     pub application_keypad: bool,
+    /// Whether Kitty enhanced keyboard reporting should be active.
+    pub enhanced_keyboard_reporting: bool,
     /// Whether bracketed-paste mode should be enabled.
     pub bracketed_paste: bool,
     /// Whether focus-event reporting should be enabled.
@@ -378,6 +380,7 @@ impl Default for AttachedTerminalOutputModes {
     fn default() -> Self {
         Self {
             application_keypad: false,
+            enhanced_keyboard_reporting: false,
             bracketed_paste: false,
             focus_events: false,
             alternate_screen: false,

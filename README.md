@@ -94,6 +94,18 @@ without normally stopping the session.
 For a complete first-session guide, including API-key and noninteractive
 authentication, see [Getting started](docs/getting-started/README.md).
 
+On macOS with iTerm2, modifier-aware Backspace in Mez command and agent prompts
+can be enabled explicitly:
+
+```toml
+[terminal]
+enhanced_keyboard_reporting = true
+```
+
+Support is best-effort and does not probe terminal capabilities. Mezzanine
+negotiates enhanced keyboard reporting only while a primary Mez-owned readline
+prompt owns input; ordinary process panes and observer clients are unaffected.
+
 ## Everyday use
 
 Use `mez new` to create a new session, `mez list` to discover resumable sessions,
