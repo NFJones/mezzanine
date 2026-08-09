@@ -128,7 +128,7 @@ mod tests {
     use std::process::{Command, Output, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     static NEXT_SHELL_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -224,6 +224,51 @@ mod tests {
         child
             .wait_with_output()
             .expect("the shell test process should finish")
+    }
+
+    /// Parses a complete generated wrapper with a real Fish process under a
+    /// finite deadline, or returns `None` when Fish is not installed.
+    fn parse_fish_wrapper(wrapper: &str) -> Option<Output> {
+        let mut command = Command::new("fish");
+        command.args(["--no-config", "--no-execute"]);
+        let mut child = match command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => panic!("the Fish parser process should spawn: {error}"),
+        };
+        child
+            .stdin
+            .as_mut()
+            .expect("the Fish parser stdin should be piped")
+            .write_all(wrapper.as_bytes())
+            .expect("the Fish wrapper should be written");
+        drop(child.stdin.take());
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if child
+                .try_wait()
+                .expect("the Fish parser process should remain observable")
+                .is_some()
+            {
+                return Some(
+                    child
+                        .wait_with_output()
+                        .expect("the Fish parser output should be collected"),
+                );
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the Fish parser exceeded its five-second deadline");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Decodes the generated POSIX wrapper source from its bounded interactive

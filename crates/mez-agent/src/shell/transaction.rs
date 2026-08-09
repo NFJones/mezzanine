@@ -1494,6 +1494,7 @@ fn fish_command_file_materialization(
         "else".to_string(),
         "set MEZ_WRITE_STATUS 1".to_string(),
         "end".to_string(),
+        "end".to_string(),
     ]);
     CommandMaterialization {
         setup: lines.join("\n") + "\n",

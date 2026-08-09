@@ -237,6 +237,41 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
 }
 
 #[test]
+/// Verifies every non-stateful Fish payload-receiver variant is a complete,
+/// balanced Fish program rather than merely containing plausible fragments.
+///
+/// Both ordinary and record-acknowledging wrappers share command-file
+/// materialization, so parsing the complete generated source catches missing
+/// `end` statements at boundaries hidden from fragment assertions.
+fn non_stateful_fish_wrappers_parse_as_complete_programs() {
+    for acknowledge_payload_records in [false, true] {
+        let wrapper = ShellTransaction::new(
+            marker(),
+            "t1",
+            "a1",
+            "p1",
+            Path::new("/bin/fish"),
+            "printf '%s\\n' parsed",
+        )
+        .unwrap()
+        .with_payload_receiver_acknowledgements(acknowledge_payload_records)
+        .render_fish();
+        let Some(output) = parse_fish_wrapper(&wrapper) else {
+            eprintln!("skipping real-Fish parser assertion because fish is unavailable");
+            return;
+        };
+
+        assert!(
+            output.status.success(),
+            "acknowledge_payload_records={acknowledge_payload_records} status={:?} stdout={:?} stderr={:?}\n{wrapper}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 /// Verifies marker token requires 128 bits of hex.
 ///
 /// This regression scenario documents the behavior being protected so a
