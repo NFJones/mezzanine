@@ -51,7 +51,7 @@ pub use spawn::{
 };
 pub use types::{
     ExitedPaneProcess, PaneCommandPlan, PaneExitStatus, PaneProcessEnvironment, PaneProcessLaunch,
-    PaneProcessOutput,
+    PaneProcessOutput, ShellInputDelivery, ShellInputPacing,
 };
 
 /// Exposes the tests module boundary.

@@ -474,7 +474,13 @@ impl RuntimeSessionService {
                     timeout_ms,
                 )),
                 pending_input_payload: transaction_input.and_then(|input| {
-                    (!input.payload.is_empty()).then(|| input.payload.into_bytes())
+                    (!input.payload.is_empty()).then(|| {
+                        mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                            input.payload.into_bytes(),
+                            marker_id.clone(),
+                            input.payload_receiver_acknowledgements,
+                        )
+                    })
                 }),
                 observed_output_bytes: 0,
                 observed_output_preview: String::new(),

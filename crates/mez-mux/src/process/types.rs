@@ -6,6 +6,62 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+/// Pacing policy for one runtime-generated shell delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellInputPacing {
+    /// Generated shell source whose complete records use wrapper progress.
+    GeneratedSource,
+    /// Deferred payload records acknowledged by the shell receiver.
+    ReceiverAcknowledged,
+}
+
+/// Typed shell input retained across runtime and PTY ownership boundaries.
+///
+/// Shell deliveries remain distinct from ordinary user input so adapters can
+/// preserve complete-record pacing, strict priority, and transaction identity
+/// without inspecting or logging payload bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellInputDelivery {
+    /// Bytes delivered to the pane shell.
+    pub bytes: Vec<u8>,
+    /// Whether this delivery precedes later input for the same pane.
+    pub priority: bool,
+    /// Complete-record pacing contract selected by the renderer.
+    pub pacing: ShellInputPacing,
+    /// Optional transaction or delivery identity used for scoped handling.
+    pub delivery_id: Option<String>,
+    /// Whether the rendered receiver negotiated per-record acknowledgements.
+    pub receiver_acknowledgements: bool,
+}
+
+impl ShellInputDelivery {
+    /// Builds non-priority generated wrapper source.
+    pub fn generated_source(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            priority: false,
+            pacing: ShellInputPacing::GeneratedSource,
+            delivery_id: None,
+            receiver_acknowledgements: false,
+        }
+    }
+
+    /// Builds a priority deferred payload bound to one transaction marker.
+    pub fn receiver_acknowledged(
+        bytes: Vec<u8>,
+        delivery_id: impl Into<String>,
+        receiver_acknowledgements: bool,
+    ) -> Self {
+        Self {
+            bytes,
+            priority: true,
+            pacing: ShellInputPacing::ReceiverAcknowledged,
+            delivery_id: Some(delivery_id.into()),
+            receiver_acknowledgements,
+        }
+    }
+}
+
 /// Dependency-neutral executable selected for a pane process launch.
 ///
 /// Product adapters remain responsible for discovering and classifying the

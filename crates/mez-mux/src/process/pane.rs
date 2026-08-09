@@ -23,6 +23,7 @@ use super::process_metadata::{current_working_directory_for_pid, process_name_fo
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
 use super::signals::send_signal_to_pane_process_group;
 use super::types::PaneExitStatus;
+use super::types::ShellInputDelivery;
 
 /// Defines the DEFAULT OUTPUT BACKLOG LIMIT BYTES const used by this subsystem.
 ///
@@ -292,6 +293,12 @@ impl PaneProcess {
     /// retaining that output in the ordinary backlog. Other Unix hosts use the
     /// normal streaming writer.
     pub fn write_shell_input(&mut self, input: &[u8]) -> Result<()> {
+        self.write_shell_delivery(&ShellInputDelivery::generated_source(input.to_vec()))
+    }
+
+    /// Writes a typed generated-shell delivery through the current pacing owner.
+    pub fn write_shell_delivery(&mut self, delivery: &ShellInputDelivery) -> Result<()> {
+        let input = delivery.bytes.as_slice();
         #[cfg(not(target_os = "macos"))]
         return self.write_input(input);
 

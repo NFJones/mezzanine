@@ -62,8 +62,13 @@ impl RuntimeSessionService {
                 command: bootstrap_script,
                 started_at_unix_ms: current_unix_millis(),
                 timeout_ms: Some(DEFAULT_BOOTSTRAP_TIMEOUT_MS),
-                pending_input_payload: (!transaction_input.payload.is_empty())
-                    .then(|| transaction_input.payload.into_bytes()),
+                pending_input_payload: (!transaction_input.payload.is_empty()).then(|| {
+                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                        transaction_input.payload.into_bytes(),
+                        marker_id.clone(),
+                        transaction_input.payload_receiver_acknowledgements,
+                    )
+                }),
                 observed_output_bytes: 0,
                 observed_output_preview: String::new(),
                 observed_output_truncated: false,

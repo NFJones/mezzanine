@@ -355,6 +355,12 @@ pub(crate) struct RuntimeProcessComponent {
     shell_transaction_start_boundary_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Incomplete UTF-8 suffixes retained per shell transaction across PTY reads.
     shell_transaction_output_utf8_pending: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Remaining receiver acknowledgements owned by each active transaction.
+    ///
+    /// Counts are installed only when a negotiated deferred payload is
+    /// released. Filtering is therefore marker-scoped and cannot suppress an
+    /// ordinary child process record-separator byte after the payload drains.
+    shell_transaction_receiver_acknowledgements: std::collections::BTreeMap<String, usize>,
     /// Agent-action markers whose child launch uses the Bubblewrap backend.
     sandboxed_shell_transaction_markers: BTreeSet<String>,
     /// Shared managed-home activity locks retained for sandboxed workloads.
@@ -609,6 +615,9 @@ impl RuntimeSessionService {
     ) -> Option<RunningShellTransactionRef> {
         self.process.managed_home_activity_locks.remove(marker);
         self.process
+            .shell_transaction_receiver_acknowledgements
+            .remove(marker);
+        self.process
             .shell_transaction_output_utf8_pending
             .remove(marker);
         self.process
@@ -626,6 +635,9 @@ impl RuntimeSessionService {
             .shell_transaction_start_boundary_pending
             .clear();
         self.process.shell_transaction_output_utf8_pending.clear();
+        self.process
+            .shell_transaction_receiver_acknowledgements
+            .clear();
         self.process.managed_home_activity_locks.clear();
     }
 
@@ -1220,12 +1232,14 @@ impl RuntimeSessionService {
         pane_id: &str,
         transaction: ShellTransaction,
     ) -> ShellTransaction {
-        self.process
+        let transaction = self
+            .process
             .pane_zsh_compatibility
             .get(pane_id)
             .map_or(transaction.clone(), |compatibility| {
                 transaction.with_zsh_history_token(compatibility.token().clone())
-            })
+            });
+        transaction.with_payload_receiver_acknowledgements(cfg!(target_os = "macos"))
     }
 
     /// Returns the managed zsh history token installed for one pane.
@@ -2126,35 +2140,49 @@ impl RuntimeSessionService {
         pane_id: &str,
         input: &[u8],
     ) -> Result<()> {
+        self.write_runtime_pane_shell_delivery(
+            pane_id,
+            mez_mux::process::ShellInputDelivery::generated_source(input.to_vec()),
+        )
+    }
+
+    /// Writes one typed shell delivery without dropping pacing or identity.
+    pub(super) fn write_runtime_pane_shell_delivery(
+        &mut self,
+        pane_id: &str,
+        delivery: mez_mux::process::ShellInputDelivery,
+    ) -> Result<()> {
         #[cfg(not(target_os = "macos"))]
-        return self.write_runtime_pane_input(pane_id, input);
+        if self.process.pane_processes.contains_pane(pane_id) {
+            return Ok(self
+                .process
+                .pane_processes
+                .write_pane_shell_delivery(pane_id, &delivery)?);
+        }
 
         #[cfg(target_os = "macos")]
-        {
-            if input.is_empty() {
-                return Err(MezError::invalid_args("pane input must not be empty"));
-            }
-            if self.process.pane_processes.contains_pane(pane_id) {
-                return Ok(self
-                    .process
-                    .pane_processes
-                    .write_pane_shell_input(pane_id, input)?);
-            }
-            if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
-                self.persistence
-                    .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
-                        instance,
-                        effect: PaneProcessIoEffect::WriteShellInput {
-                            bytes: input.to_vec(),
-                        },
-                    });
-                return Ok(());
-            }
-            Err(MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "pane process not found",
-            ))
+        if self.process.pane_processes.contains_pane(pane_id) {
+            return Ok(self
+                .process
+                .pane_processes
+                .write_pane_shell_delivery(pane_id, &delivery)?);
         }
+
+        if delivery.bytes.is_empty() {
+            return Err(MezError::invalid_args("pane input must not be empty"));
+        }
+        if let Some(instance) = self.adapter_owned_pane_process_instance(pane_id) {
+            self.persistence
+                .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect: PaneProcessIoEffect::WriteShellInput { delivery },
+                });
+            return Ok(());
+        }
+        Err(MezError::new(
+            crate::error::MezErrorKind::NotFound,
+            "pane process not found",
+        ))
     }
 
     /// Writes pane input with optional async queue priority.

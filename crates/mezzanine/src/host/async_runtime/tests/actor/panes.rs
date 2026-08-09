@@ -681,6 +681,104 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
     assert!(exit.service.terminate_all_pane_processes().is_ok());
 }
 
+/// Verifies typed shell deliveries retain pacing, priority, identity, and
+/// receiver capability through exact-generation and pane-id fallback drains.
+///
+/// Priority payload delivery must precede later ordinary input for the same
+/// pane without moving unrelated-pane work, and neither drain path may
+/// downgrade shell input into ordinary pane bytes.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_preserves_typed_shell_delivery_and_priority_order() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let instance = PaneProcessInstance {
+        pane_id: "%1".to_string(),
+        generation: 7,
+    };
+    let delivery = mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+        b"payload\n".to_vec(),
+        "marker-delivery",
+        true,
+    );
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::WritePaneInput {
+                    pane_id: "%2".to_string(),
+                    bytes: b"unrelated".to_vec(),
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteInput {
+                        bytes: b"later-user-input".to_vec(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteShellInput {
+                        delivery: delivery.clone(),
+                    },
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle.drain_pane_io_side_effects("%2", 8).await.unwrap(),
+            vec![RuntimeSideEffect::WritePaneInput {
+                pane_id: "%2".to_string(),
+                bytes: b"unrelated".to_vec(),
+            }]
+        );
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(instance.clone(), 8)
+                .await
+                .unwrap(),
+            vec![
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteShellInput {
+                        delivery: delivery.clone(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteInput {
+                        bytes: b"later-user-input".to_vec(),
+                    },
+                },
+            ]
+        );
+
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PaneProcessIo {
+                instance: instance.clone(),
+                effect: PaneProcessIoEffect::WriteShellInput {
+                    delivery: delivery.clone(),
+                },
+            }])
+            .await
+            .unwrap();
+        assert_eq!(
+            handle
+                .drain_pane_io_side_effects(instance.pane_id.as_str(), 8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::WritePaneShellInput {
+                pane_id: instance.pane_id.clone(),
+                delivery,
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that pane close commands produce async termination side effects
 /// after pane process ownership has moved out of the manager. A foreground
 /// process callback can race with that termination after the pane has left the

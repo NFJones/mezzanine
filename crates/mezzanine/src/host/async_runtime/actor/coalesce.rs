@@ -329,6 +329,7 @@ pub(super) fn pane_io_side_effect_targets_pane(
         RuntimeSideEffect::PaneProcessIo { instance, .. } => instance.pane_id == target_pane_id,
         RuntimeSideEffect::WritePaneInput { pane_id, .. }
         | RuntimeSideEffect::WritePaneInputPriority { pane_id, .. }
+        | RuntimeSideEffect::WritePaneShellInput { pane_id, .. }
         | RuntimeSideEffect::ResizePane { pane_id, .. }
         | RuntimeSideEffect::TerminatePane { pane_id, .. } => pane_id == target_pane_id,
         _ => false,
@@ -387,6 +388,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::PaneProcessIo { .. } => "pane-process-io",
         RuntimeSideEffect::WritePaneInput { .. } => "write-pane-input",
         RuntimeSideEffect::WritePaneInputPriority { .. } => "write-pane-input-priority",
+        RuntimeSideEffect::WritePaneShellInput { .. } => "write-pane-shell-input",
         RuntimeSideEffect::ResizePane { .. } => "resize-pane",
         RuntimeSideEffect::TerminatePane { .. } => "terminate-pane",
         RuntimeSideEffect::RenderClient { .. } => "render-client",

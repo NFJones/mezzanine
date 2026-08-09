@@ -1050,7 +1050,7 @@ impl RuntimeSessionService {
         if wrapper_was_deferred {
             Some(Vec::new())
         } else {
-            payload
+            payload.map(|delivery| delivery.bytes)
         }
     }
 

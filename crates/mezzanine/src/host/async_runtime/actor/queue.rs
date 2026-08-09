@@ -161,8 +161,19 @@ impl AsyncRuntimeSessionActor {
 
     /// Enqueues one runtime side effect, preserving priority pane input order.
     pub(super) fn enqueue_runtime_side_effect(&mut self, effect: RuntimeSideEffect) {
-        match &effect {
-            RuntimeSideEffect::WritePaneInputPriority { pane_id, .. } => {
+        let priority_pane_id = match &effect {
+            RuntimeSideEffect::WritePaneInputPriority { pane_id, .. } => Some(pane_id.as_str()),
+            RuntimeSideEffect::WritePaneShellInput { pane_id, delivery } if delivery.priority => {
+                Some(pane_id.as_str())
+            }
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+            } if delivery.priority => Some(instance.pane_id.as_str()),
+            _ => None,
+        };
+        match priority_pane_id {
+            Some(pane_id) => {
                 let insert_at = self
                     .side_effects
                     .iter()
@@ -170,7 +181,7 @@ impl AsyncRuntimeSessionActor {
                     .unwrap_or(self.side_effects.len());
                 self.side_effects.insert(insert_at, effect);
             }
-            _ => self.side_effects.push_back(effect),
+            None => self.side_effects.push_back(effect),
         }
     }
 

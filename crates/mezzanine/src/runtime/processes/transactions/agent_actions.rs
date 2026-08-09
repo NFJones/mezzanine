@@ -121,8 +121,16 @@ impl RuntimeSessionService {
         let Some(payload) = payload else {
             return Ok(());
         };
-        let payload_len = payload.len();
-        if let Err(error) = self.write_runtime_pane_input_priority(pane_id, &payload) {
+        let payload_len = payload.bytes.len();
+        if payload.receiver_acknowledgements {
+            self.process
+                .shell_transaction_receiver_acknowledgements
+                .insert(
+                    marker.to_string(),
+                    payload.bytes.iter().filter(|byte| **byte == b'\n').count(),
+                );
+        }
+        if let Err(error) = self.write_runtime_pane_shell_delivery(pane_id, payload) {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
             return Ok(());
         }

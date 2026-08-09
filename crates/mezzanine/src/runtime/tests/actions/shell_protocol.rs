@@ -647,7 +647,13 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
             command: "grep -n needle file.txt".to_string(),
             started_at_unix_ms: 1_000,
             timeout_ms: Some(10 * 60 * 1000),
-            pending_input_payload: Some(b"payload\n".to_vec()),
+            pending_input_payload: Some(
+                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    b"payload\n".to_vec(),
+                    "marker-grep",
+                    true,
+                ),
+            ),
             observed_output_bytes: 0,
             observed_output_preview: String::new(),
             observed_output_truncated: false,
@@ -1385,6 +1391,19 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     let deferred_wrapper = service.drain_pane_io_transition().side_effects;
     assert_eq!(deferred_wrapper.len(), 1);
+    let RuntimeSideEffect::PaneProcessIo {
+        effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+        ..
+    } = &deferred_wrapper[0]
+    else {
+        panic!("expected typed generated wrapper delivery: {deferred_wrapper:?}");
+    };
+    assert_eq!(
+        delivery.pacing,
+        mez_mux::process::ShellInputPacing::GeneratedSource
+    );
+    assert!(!delivery.priority);
+    assert_eq!(delivery.delivery_id, None);
     let wrapper_text = String::from_utf8_lossy(deferred_wrapper[0].pane_input_parts().1);
     let wrapper_source = decoded_posix_shell_wrapper_sources(&wrapper_text);
     assert!(wrapper_source.contains("__mez_tx_"), "{wrapper_source}");
@@ -1409,6 +1428,23 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
 
     let deferred_payload = service.drain_pane_io_transition().side_effects;
     assert_eq!(deferred_payload.len(), 1);
+    let RuntimeSideEffect::PaneProcessIo {
+        effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+        ..
+    } = &deferred_payload[0]
+    else {
+        panic!("expected typed deferred payload delivery: {deferred_payload:?}");
+    };
+    assert_eq!(
+        delivery.pacing,
+        mez_mux::process::ShellInputPacing::ReceiverAcknowledged
+    );
+    assert!(delivery.priority);
+    assert_eq!(delivery.delivery_id.as_deref(), Some(marker.as_str()));
+    assert_eq!(
+        delivery.receiver_acknowledgements,
+        cfg!(target_os = "macos")
+    );
     let payload_text = String::from_utf8_lossy(deferred_payload[0].pane_input_parts().1);
     let encoded = payload_text
         .lines()
@@ -1460,7 +1496,13 @@ fn runtime_shell_transaction_pending_payload_uses_short_start_timer() {
             command: "grep -n needle file.txt".to_string(),
             started_at_unix_ms: 1_000,
             timeout_ms: Some(10 * 60 * 1000),
-            pending_input_payload: Some(b"payload\n".to_vec()),
+            pending_input_payload: Some(
+                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    b"payload\n".to_vec(),
+                    "marker-start",
+                    true,
+                ),
+            ),
             observed_output_bytes: 0,
             observed_output_preview: String::new(),
             observed_output_truncated: false,

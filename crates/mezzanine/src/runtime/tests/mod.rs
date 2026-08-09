@@ -226,8 +226,11 @@ impl RuntimeSideEffectTestExt for RuntimeSideEffect {
             } => (&instance.pane_id, bytes, false),
             RuntimeSideEffect::PaneProcessIo {
                 instance,
-                effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { bytes },
-            } => (&instance.pane_id, bytes, false),
+                effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+            } => (&instance.pane_id, &delivery.bytes, delivery.priority),
+            RuntimeSideEffect::WritePaneShellInput { pane_id, delivery } => {
+                (pane_id, &delivery.bytes, delivery.priority)
+            }
             RuntimeSideEffect::PaneProcessIo {
                 instance,
                 effect: crate::runtime::PaneProcessIoEffect::WriteInputPriority { bytes },
@@ -246,6 +249,7 @@ fn pane_input_effects(effects: &[RuntimeSideEffect]) -> Vec<&RuntimeSideEffect> 
                 effect,
                 RuntimeSideEffect::WritePaneInput { .. }
                     | RuntimeSideEffect::WritePaneInputPriority { .. }
+                    | RuntimeSideEffect::WritePaneShellInput { .. }
                     | RuntimeSideEffect::PaneProcessIo {
                         effect: crate::runtime::PaneProcessIoEffect::WriteInput { .. }
                             | crate::runtime::PaneProcessIoEffect::WriteShellInput { .. }

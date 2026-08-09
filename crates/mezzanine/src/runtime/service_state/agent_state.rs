@@ -196,11 +196,12 @@ pub(crate) struct RunningShellTransactionRef {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(crate) timeout_ms: Option<u64>,
-    /// Pane input payload that must be sent after the transaction start marker.
+    /// Typed pane input payload sent after the transaction start marker.
     ///
     /// Large generated command bodies are streamed after the wrapper receiver
-    /// starts so they are consumed as data rather than parsed as shell source.
-    pub(crate) pending_input_payload: Option<Vec<u8>>,
+    /// starts. The retained delivery preserves priority, pacing, negotiated
+    /// acknowledgement support, and transaction identity across PTY owners.
+    pub(crate) pending_input_payload: Option<mez_mux::process::ShellInputDelivery>,
     /// Stores the observed output bytes value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

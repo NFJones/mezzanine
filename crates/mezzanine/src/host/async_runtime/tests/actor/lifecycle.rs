@@ -1106,11 +1106,11 @@ async fn async_actor_preserves_split_prompt_before_bootstrap_dispatch() {
             .unwrap();
         let bootstrap_bytes = match pane_effects.as_slice() {
             [
-                RuntimeSideEffect::WritePaneInput {
+                RuntimeSideEffect::WritePaneShellInput {
                     pane_id: effect_pane,
-                    bytes,
+                    delivery,
                 },
-            ] if effect_pane == &pane_id => bytes,
+            ] if effect_pane == &pane_id => &delivery.bytes,
             effects => panic!("expected one bootstrap pane write, got {effects:?}"),
         };
         let bootstrap_wrapper = std::str::from_utf8(bootstrap_bytes).unwrap();

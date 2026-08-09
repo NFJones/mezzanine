@@ -5,7 +5,43 @@ use super::{RuntimePersistenceComponent, RuntimeSideEffect, TerminalSize};
 impl RuntimePersistenceComponent {
     /// Queues one pane-input effect in dispatch order.
     pub(crate) fn queue_pane_input(&mut self, effect: RuntimeSideEffect) {
-        self.queued_pane_input_effects.push(effect);
+        let priority_pane_id = match &effect {
+            RuntimeSideEffect::PaneProcessIo {
+                instance,
+                effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+            } if delivery.priority => Some(instance.pane_id.as_str()),
+            RuntimeSideEffect::WritePaneShellInput { pane_id, delivery } if delivery.priority => {
+                Some(pane_id.as_str())
+            }
+            _ => None,
+        };
+        if let Some(pane_id) = priority_pane_id {
+            let insert_at = self
+                .queued_pane_input_effects
+                .iter()
+                .position(|queued| match queued {
+                    RuntimeSideEffect::PaneProcessIo { instance, .. } => {
+                        instance.pane_id == pane_id
+                    }
+                    RuntimeSideEffect::WritePaneInput {
+                        pane_id: queued_pane_id,
+                        ..
+                    }
+                    | RuntimeSideEffect::WritePaneInputPriority {
+                        pane_id: queued_pane_id,
+                        ..
+                    }
+                    | RuntimeSideEffect::WritePaneShellInput {
+                        pane_id: queued_pane_id,
+                        ..
+                    } => queued_pane_id == pane_id,
+                    _ => false,
+                })
+                .unwrap_or(self.queued_pane_input_effects.len());
+            self.queued_pane_input_effects.insert(insert_at, effect);
+        } else {
+            self.queued_pane_input_effects.push(effect);
+        }
     }
 
     /// Queues one ordered pane observation after prior PTY output is applied.
@@ -98,6 +134,9 @@ impl RuntimePersistenceComponent {
                     pane_id: target, ..
                 }
                 | RuntimeSideEffect::WritePaneInputPriority {
+                    pane_id: target, ..
+                }
+                | RuntimeSideEffect::WritePaneShellInput {
                     pane_id: target, ..
                 } => target != pane_id,
                 RuntimeSideEffect::PaneProcessIo { instance, .. } => instance.pane_id != pane_id,

@@ -13,7 +13,8 @@ use mez_terminal::TerminalSize;
 use super::pane::PaneProcess;
 use super::spawn::{spawn_pane_process, spawn_pane_process_with_start_directory};
 use super::types::{
-    ExitedPaneProcess, PaneExitStatus, PaneProcessEnvironment, PaneProcessLaunch, PaneProcessOutput,
+    ExitedPaneProcess, PaneExitStatus, PaneProcessEnvironment, PaneProcessLaunch,
+    PaneProcessOutput, ShellInputDelivery,
 };
 
 /// Defines the DEFAULT TERMINATION GRACE const used by this subsystem.
@@ -323,11 +324,23 @@ impl PaneProcessManager {
 
     /// Writes generated shell input using the pane's platform-native pacing.
     pub fn write_pane_shell_input(&mut self, pane_id: &str, input: &[u8]) -> Result<()> {
+        self.write_pane_shell_delivery(
+            pane_id,
+            &ShellInputDelivery::generated_source(input.to_vec()),
+        )
+    }
+
+    /// Writes one typed shell delivery without discarding pacing metadata.
+    pub fn write_pane_shell_delivery(
+        &mut self,
+        pane_id: &str,
+        delivery: &ShellInputDelivery,
+    ) -> Result<()> {
         let process = self
             .processes
             .get_mut(pane_id)
             .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane process not found"))?;
-        process.write_shell_input(input)
+        process.write_shell_delivery(delivery)
     }
 
     /// Runs the read available output operation for this subsystem.

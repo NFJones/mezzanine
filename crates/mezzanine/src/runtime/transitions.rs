@@ -16,6 +16,7 @@ use mez_agent::{AgentTurnExecution, ModelResponse};
 use mez_core::ids::{AgentId, ClientId};
 use mez_mux::layout::Size;
 use mez_mux::presentation::AttachedTerminalOutputModes;
+use mez_mux::process::ShellInputDelivery;
 use mez_terminal::TerminalStyleSpan;
 use std::path::PathBuf;
 
@@ -36,8 +37,8 @@ pub struct PaneProcessInstance {
 pub enum PaneProcessIoEffect {
     /// Write ordinary input bytes.
     WriteInput { bytes: Vec<u8> },
-    /// Write generated shell source with interactive record pacing.
-    WriteShellInput { bytes: Vec<u8> },
+    /// Write typed generated shell input without losing delivery semantics.
+    WriteShellInput { delivery: ShellInputDelivery },
     /// Write input bytes ahead of already queued input for this instance.
     WriteInputPriority { bytes: Vec<u8> },
     /// Resize this process's PTY.
@@ -538,6 +539,13 @@ pub enum RuntimeSideEffect {
         pane_id: String,
         /// Bytes to write to the pane PTY.
         bytes: Vec<u8>,
+    },
+    /// Write typed shell input through a pane-id fallback owner.
+    WritePaneShellInput {
+        /// Pane whose PTY should receive the shell delivery.
+        pane_id: String,
+        /// Shell delivery retaining priority, pacing, and identity.
+        delivery: ShellInputDelivery,
     },
     /// Resize a pane PTY.
     ResizePane {

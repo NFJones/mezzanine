@@ -103,12 +103,30 @@ impl RuntimeSessionService {
                 };
                 let transaction_bytes =
                     agent_shell_transaction_bytes_before_end_marker(&boundary_bytes, marker);
+                let transaction_bytes = if let Some(remaining) = self
+                    .process
+                    .shell_transaction_receiver_acknowledgements
+                    .get_mut(marker)
+                {
+                    let mut filtered = Vec::with_capacity(transaction_bytes.len());
+                    for byte in transaction_bytes {
+                        if *byte == mez_mux::process::SHELL_INPUT_RECORD_ACK_BYTE && *remaining > 0
+                        {
+                            *remaining -= 1;
+                        } else {
+                            filtered.push(*byte);
+                        }
+                    }
+                    filtered
+                } else {
+                    transaction_bytes.to_vec()
+                };
                 let complete_bytes = complete_transaction_utf8_bytes(
                     self.process
                         .shell_transaction_output_utf8_pending
                         .entry(marker.clone())
                         .or_default(),
-                    transaction_bytes,
+                    &transaction_bytes,
                 );
                 let observed_bytes = match transaction.kind {
                     RunningShellTransactionKind::AgentAction { .. } => {

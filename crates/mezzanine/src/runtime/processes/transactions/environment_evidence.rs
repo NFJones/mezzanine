@@ -172,8 +172,13 @@ impl RuntimeSessionService {
                 command,
                 started_at_unix_ms: current_unix_millis(),
                 timeout_ms: Some(ENVIRONMENT_EVIDENCE_TIMEOUT_MS),
-                pending_input_payload: (!input.payload.is_empty())
-                    .then(|| input.payload.into_bytes()),
+                pending_input_payload: (!input.payload.is_empty()).then(|| {
+                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                        input.payload.into_bytes(),
+                        marker_id.clone(),
+                        input.payload_receiver_acknowledgements,
+                    )
+                }),
                 observed_output_bytes: 0,
                 observed_output_preview: String::new(),
                 observed_output_truncated: false,

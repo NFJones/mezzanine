@@ -283,12 +283,17 @@ where
         let event = match effect {
             RuntimeSideEffect::PaneProcessIo {
                 instance,
-                effect: PaneProcessIoEffect::WriteShellInput { bytes },
+                effect: PaneProcessIoEffect::WriteShellInput { delivery },
             } => {
+                let generated_source = matches!(
+                    delivery.pacing,
+                    mez_mux::process::ShellInputPacing::GeneratedSource
+                );
+                let bytes = &delivery.bytes;
                 if bytes.is_empty() {
                     continue;
                 }
-                let chunk_len = pane_input_chunk_len(&bytes);
+                let chunk_len = pane_input_chunk_len(bytes);
                 #[cfg(target_os = "macos")]
                 let supports_acknowledgements = driver.supports_shell_input_acknowledgements();
                 let event = driver.write_input_event(&bytes[..chunk_len]).await;
@@ -296,17 +301,19 @@ where
                     && written > 0
                     && written < bytes.len()
                 {
+                    let mut remaining_delivery = delivery.clone();
+                    remaining_delivery.bytes = bytes[written..].to_vec();
                     let existing_pending = std::mem::take(pending);
                     pending.push_back(RuntimeSideEffect::PaneProcessIo {
                         instance,
                         effect: PaneProcessIoEffect::WriteShellInput {
-                            bytes: bytes[written..].to_vec(),
+                            delivery: remaining_delivery,
                         },
                     });
                     pending.extend(effects);
                     pending.extend(existing_pending);
                     #[cfg(target_os = "macos")]
-                    if supports_acknowledgements {
+                    if supports_acknowledgements && generated_source {
                         *paced_input_requires_output = true;
                         *paced_input_requires_ack =
                             mez_mux::process::shell_input_record_requires_ack(&bytes[..written]);
@@ -383,6 +390,31 @@ where
                     pending.push_back(RuntimeSideEffect::WritePaneInput {
                         pane_id,
                         bytes: bytes[*written..].to_vec(),
+                    });
+                    pending.extend(effects);
+                    pending.extend(existing_pending);
+                    events.push(event);
+                    break;
+                }
+                event
+            }
+            RuntimeSideEffect::WritePaneShellInput { pane_id, delivery } => {
+                let bytes = &delivery.bytes;
+                if bytes.is_empty() {
+                    continue;
+                }
+                let chunk_len = pane_input_chunk_len(bytes);
+                let event = driver.write_input_event(&bytes[..chunk_len]).await;
+                if let RuntimeEvent::Pane(PaneEvent::InputWritten { bytes: written, .. }) = &event
+                    && *written > 0
+                    && *written < bytes.len()
+                {
+                    let mut remaining_delivery = delivery.clone();
+                    remaining_delivery.bytes = bytes[*written..].to_vec();
+                    let existing_pending = std::mem::take(pending);
+                    pending.push_back(RuntimeSideEffect::WritePaneShellInput {
+                        pane_id,
+                        delivery: remaining_delivery,
                     });
                     pending.extend(effects);
                     pending.extend(existing_pending);
