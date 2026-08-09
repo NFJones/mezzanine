@@ -29,7 +29,7 @@ jobs:
       - name: Lint
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
-        run: cargo test --all-targets --all-features
+        run: just test
   macos-release-build:
     name: "Validate: macOS"
     runs-on: macos-latest
@@ -49,4 +49,4 @@ jobs:
       - name: Lint
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
-        run: cargo test --all-targets --all-features
+        run: just test
