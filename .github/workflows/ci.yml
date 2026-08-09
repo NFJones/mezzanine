@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   validate:
-    name: Validate
+    name: Validate: Linux
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -31,14 +31,22 @@ jobs:
       - name: Test
         run: cargo test --all-targets --all-features
   macos-release-build:
-    name: macOS release build
+    name: Validate: macOS
     runs-on: macos-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
-      - name: Build release targets
-        run: cargo build --workspace --all-targets --all-features --release
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Build
+        run: cargo build --all-targets --all-features
+      - name: Lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --all-targets --all-features
