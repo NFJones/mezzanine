@@ -284,13 +284,12 @@ bootstrap\tcomplete\t1714500000\n";
     let _ = process.terminate(Duration::from_millis(10));
 }
 
-/// Verifies Escape does not interrupt active agent work or exit agent mode.
+/// Verifies Escape interrupts active agent work without exiting agent mode.
 ///
-/// The pane-local prompt owns Escape while visible. During active work it only
-/// clears draft input, so an empty draft leaves the shell visible and the
-/// running turn untouched.
+/// Escape is an active-work interrupt equivalent to Ctrl+C, so it must submit
+/// `/stop` while keeping the pane-local agent shell visible.
 #[test]
-fn runtime_agent_prompt_escape_preserves_running_turn() {
+fn runtime_agent_prompt_escape_interrupts_running_turn() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -318,7 +317,7 @@ fn runtime_agent_prompt_escape_preserves_running_turn() {
         )
         .unwrap();
     assert_eq!(report.forwarded_bytes, 0);
-    assert_eq!(report.agent_prompt_inputs_applied, 0);
+    assert_eq!(report.agent_prompt_inputs_applied, 1);
     assert_eq!(
         service
             .agent_shell_store()
@@ -331,9 +330,9 @@ fn runtime_agent_prompt_escape_preserves_running_turn() {
             .agent_shell_store()
             .get("%1")
             .and_then(|session| session.running_turn_id.as_deref()),
-        Some("turn-1")
+        None
     );
-    assert!(service.agent_turn_is_running("turn-1"));
+    assert!(!service.agent_turn_is_running("turn-1"));
 }
 
 /// Verifies Ctrl+C uses the same active-work interruption path as Escape.

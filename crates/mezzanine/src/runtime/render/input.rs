@@ -239,6 +239,9 @@ impl RuntimeSessionService {
         }
         if input == b"\x1b" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
+            if self.agent_shell_pane_has_active_turn(pane_id) {
+                return self.apply_agent_prompt_interrupt_or_exit(primary_client_id, pane_id);
+            }
         }
         if input == b"\x0c" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
