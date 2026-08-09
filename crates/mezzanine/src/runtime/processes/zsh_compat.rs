@@ -5,9 +5,9 @@
 //! that rejects only Mezzanine's authenticated history-control record. The
 //! record can then enter a private `fc -p` history context before any generated
 //! transport lines are submitted. User startup files remain owned by the user:
-//! the shim sources the original `.zshenv` and `.zshrc` exactly once, preserves
-//! an effective custom `ZDOTDIR`, and wraps rather than discards an existing
-//! `zshaddhistory` function.
+//! the shim sources the original `.zshenv`, `.zprofile`, `.zshrc`, and
+//! `.zlogin` exactly once, preserves an effective custom `ZDOTDIR`, and wraps
+//! rather than discards an existing `zshaddhistory` function.
 
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -88,8 +88,26 @@ function zshaddhistory() {
   fi
   return 0
 }
+ZDOTDIR=${MEZ_ZSH_MANAGED_ZDOTDIR}
+"#;
+
+const MANAGED_ZPROFILE: &str = r#"# Mezzanine-managed zsh login startup compatibility.
 ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
-unset MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET
+if [[ -r ${ZDOTDIR}/.zprofile ]]; then
+  builtin source -- ${ZDOTDIR}/.zprofile
+fi
+typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
+ZDOTDIR=${MEZ_ZSH_MANAGED_ZDOTDIR}
+"#;
+
+const MANAGED_ZLOGIN: &str = r#"# Mezzanine-managed zsh login completion compatibility.
+ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
+if [[ -r ${ZDOTDIR}/.zlogin ]]; then
+  builtin source -- ${ZDOTDIR}/.zlogin
+fi
+typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
+ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
+unset MEZ_ZSH_MANAGED_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET
 "#;
 
 /// Pane-scoped zsh compatibility state retained for the shell lifetime.
@@ -143,7 +161,9 @@ impl ManagedZshCompatibility {
             )
         })?;
         if let Err(error) = write_private_file(&directory.join(".zshenv"), MANAGED_ZSHENV)
+            .and_then(|()| write_private_file(&directory.join(".zprofile"), MANAGED_ZPROFILE))
             .and_then(|()| write_private_file(&directory.join(".zshrc"), MANAGED_ZSHRC))
+            .and_then(|()| write_private_file(&directory.join(".zlogin"), MANAGED_ZLOGIN))
         {
             let _ = fs::remove_dir_all(&directory);
             return Err(error);
@@ -158,6 +178,7 @@ impl ManagedZshCompatibility {
     /// Adds the managed startup directory and authentication state to launch.
     pub(super) fn configure_launch(&self, launch: PaneProcessLaunch) -> PaneProcessLaunch {
         let launch = launch
+            .with_interactive_arguments(["-l", "-i"])
             .with_environment_variable("ZDOTDIR", self.directory.as_os_str())
             .with_environment_variable("MEZ_ZSH_HISTORY_TOKEN", self.token.as_str())
             .with_environment_variable(
@@ -232,6 +253,7 @@ fn write_private_file(path: &Path, contents: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mez_mux::process::pane_command_plan;
     use std::process::{Command, Stdio};
     use std::thread;
     use std::time::Duration;
@@ -256,7 +278,12 @@ mod tests {
             fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
             0o700
         );
-        for file in [directory.join(".zshenv"), directory.join(".zshrc")] {
+        for file in [
+            directory.join(".zshenv"),
+            directory.join(".zprofile"),
+            directory.join(".zshrc"),
+            directory.join(".zlogin"),
+        ] {
             assert_eq!(
                 fs::metadata(file).unwrap().permissions().mode() & 0o777,
                 0o600
@@ -298,21 +325,33 @@ mod tests {
             )
             .unwrap();
             fs::write(
-                user_zdotdir.join(".zshrc"),
+                user_zdotdir.join(".zprofile"),
                 format!(
-                    "print -r -- zshrc >> \"$HOME/startup.log\"\n\
+                    "print -r -- zprofile >> \"$HOME/startup.log\"\n\
 HISTFILE={}\n\
 HISTSIZE=200\n\
 SAVEHIST=200\n\
 setopt {history_option}\n\
-PS1=\n\
+PS1=\n",
+                    shell_single_quote_path(&history),
+                ),
+            )
+            .unwrap();
+            fs::write(
+                user_zdotdir.join(".zshrc"),
+                format!(
+                    "print -r -- zshrc >> \"$HOME/startup.log\"\n\
 function zshaddhistory() {{\n\
   print -r -- \"${{1%$'\\n'}}\" >> {}\n\
   return 0\n\
 }}\n",
-                    shell_single_quote_path(&history),
                     shell_single_quote_path(&hook_log),
                 ),
+            )
+            .unwrap();
+            fs::write(
+                user_zdotdir.join(".zlogin"),
+                "print -r -- zlogin >> \"$HOME/startup.log\"\n",
             )
             .unwrap();
 
@@ -337,10 +376,13 @@ function zshaddhistory() {{\n\
             .with_zsh_history_token(token.clone());
             let input =
                 transaction.render_for_classification_input(mez_agent::ShellClassification::Zsh);
+            let command_plan = pane_command_plan(&launch, None).unwrap();
+            assert_eq!(command_plan.args, ["-l", "-i"]);
 
-            let mut command = Command::new(launch.program());
+            let mut command = Command::new(command_plan.program);
             command
-                .args(["-d", "-i"])
+                .arg("-d")
+                .args(command_plan.args)
                 .env("HOME", &home)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -394,9 +436,11 @@ function zshaddhistory() {{\n\
                 );
                 assert!(!observed.contains("fc -p"), "{history_option}: {observed}");
             }
-            let mut restarted_command = Command::new(launch.program());
+            let restarted_command_plan = pane_command_plan(&launch, None).unwrap();
+            let mut restarted_command = Command::new(restarted_command_plan.program);
             restarted_command
-                .args(["-d", "-i"])
+                .arg("-d")
+                .args(restarted_command_plan.args)
                 .env("HOME", &home)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -457,7 +501,7 @@ function zshaddhistory() {{\n\
             );
             assert_eq!(
                 fs::read_to_string(home.join("startup.log")).unwrap(),
-                "zshenv\nzshrc\nzshenv\nzshrc\n"
+                "zshenv\nzprofile\nzshrc\nzlogin\nzshenv\nzprofile\nzshrc\nzlogin\n"
             );
             drop(compatibility);
             fs::remove_dir_all(root).unwrap();

@@ -34,7 +34,11 @@ pub fn pane_command_plan(
             }
             vec!["-c".to_string(), format!("exec {command}")]
         }
-        None => vec!["-i".to_string()],
+        None => launch
+            .interactive_arguments()
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect(),
     };
     Ok(PaneCommandPlan { program, args })
 }

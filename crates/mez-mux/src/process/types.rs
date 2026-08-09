@@ -70,6 +70,7 @@ impl ShellInputDelivery {
 pub struct PaneProcessLaunch {
     program: PathBuf,
     environment: Vec<(OsString, OsString)>,
+    interactive_arguments: Vec<OsString>,
 }
 
 impl PaneProcessLaunch {
@@ -78,12 +79,31 @@ impl PaneProcessLaunch {
         Self {
             program,
             environment: Vec::new(),
+            interactive_arguments: vec![OsString::from("-i")],
         }
     }
 
     /// Returns the executable used to start the pane process.
     pub fn program(&self) -> &Path {
         &self.program
+    }
+
+    /// Replaces the arguments used when starting an ordinary interactive pane.
+    ///
+    /// Explicit pane commands retain their `-c` invocation. Product adapters
+    /// use this for shell-specific startup requirements without making the
+    /// mux infer shell policy from an executable path.
+    pub fn with_interactive_arguments(
+        mut self,
+        arguments: impl IntoIterator<Item = impl Into<OsString>>,
+    ) -> Self {
+        self.interactive_arguments = arguments.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Returns the arguments used to start an ordinary interactive pane.
+    pub fn interactive_arguments(&self) -> &[OsString] {
+        &self.interactive_arguments
     }
 
     /// Adds one explicit environment override for the pane process.
