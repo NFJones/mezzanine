@@ -255,6 +255,14 @@ pub(super) fn execute_runtime_live_terminal_command(
             command: invocation.name.clone(),
             body: runtime_show_options_command(service, invocation)?,
         })),
+        "list-key-presets" => Ok(Some(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: runtime_list_key_presets_command(service)?,
+        })),
+        "set-key-preset" => Ok(Some(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: runtime_set_key_preset_command(service, invocation)?,
+        })),
         "list-themes" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: runtime_list_themes_command(service)?,

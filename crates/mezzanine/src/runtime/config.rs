@@ -22,6 +22,7 @@ mod audit;
 mod effective;
 mod frames;
 mod hooks;
+mod key_preset;
 mod mcp;
 mod model;
 mod permissions;
@@ -45,10 +46,11 @@ pub(super) use agents::{
 pub(super) use audit::{runtime_audit_config_present, runtime_audit_log_from_config};
 pub use effective::runtime_effective_config_value;
 pub(super) use frames::{
-    runtime_command_bindings_from_effective, runtime_key_bindings_from_config,
-    runtime_pane_frame_position_from_config, runtime_pane_frame_style_from_config,
-    runtime_pane_frame_template_from_config, runtime_pane_frame_visible_fields_from_config,
-    runtime_pane_frames_enabled_from_config, runtime_window_frame_position_from_config,
+    runtime_chord_from_binding_config_key, runtime_command_bindings_from_effective,
+    runtime_key_bindings_from_config, runtime_pane_frame_position_from_config,
+    runtime_pane_frame_style_from_config, runtime_pane_frame_template_from_config,
+    runtime_pane_frame_visible_fields_from_config, runtime_pane_frames_enabled_from_config,
+    runtime_window_frame_position_from_config,
     runtime_window_frame_right_status_template_from_config, runtime_window_frame_style_from_config,
     runtime_window_frame_template_from_config, runtime_window_frame_visible_fields_from_config,
     runtime_window_frames_enabled_from_config,
@@ -60,6 +62,7 @@ pub(super) use hooks::{
     runtime_post_mcp_hook_payload, runtime_post_shell_hook_payload, runtime_pre_mcp_hook_payload,
     runtime_pre_shell_hook_payload, runtime_random_marker_token, runtime_user_prompt_hook_payload,
 };
+pub(super) use key_preset::{runtime_active_key_preset, runtime_key_preset_definition_from_value};
 pub(super) use mcp::runtime_mcp_registry_from_config;
 pub(super) use model::{
     RUNTIME_LATENCY_PREFERENCES, runtime_model_command_args, runtime_model_override_scope_for_args,

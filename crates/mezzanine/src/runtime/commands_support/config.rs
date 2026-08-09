@@ -15,13 +15,227 @@ use super::super::{
     runtime_effective_config_value, validate_config_text,
 };
 use super::{
-    TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER, runtime_expand_user_path, runtime_positional_args,
+    TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER, binding_config_key, key_chord_notation,
+    runtime_expand_user_path, runtime_positional_args,
+};
+use mez_mux::input::{KeyBindings, KeyChord};
+use mez_mux::key_preset::{
+    BUILTIN_KEY_PRESET_NAMES, KeyPresetDefinition, builtin_key_preset_definition,
+    key_preset_list_table_header, key_preset_list_table_row,
 };
 use mez_mux::theme::{
     BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES, ui_theme_list_table_header,
     ui_theme_list_table_row,
 };
 use std::collections::BTreeMap;
+
+/// Lists built-in and configured key-assignment presets.
+pub(crate) fn runtime_list_key_presets_command(service: &RuntimeSessionService) -> Result<String> {
+    let structured = runtime_effective_config_value(service.integration.config_layers())?;
+    let (active, _, _) = super::super::runtime_active_key_preset(&structured)?;
+    let mut lines = vec![key_preset_list_table_header()];
+    for name in BUILTIN_KEY_PRESET_NAMES {
+        let definition = builtin_key_preset_definition(name).ok_or_else(|| {
+            MezError::config(format!("built-in key preset `{name}` is unavailable"))
+        })?;
+        lines.push(key_preset_list_table_row(
+            name,
+            "builtin",
+            *name == active,
+            &definition,
+        ));
+    }
+    let mut configured = structured
+        .get("key_presets")
+        .and_then(Value::as_object)
+        .map(|presets| presets.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    configured.sort();
+    configured.dedup();
+    for name in configured {
+        if BUILTIN_KEY_PRESET_NAMES.contains(&name.as_str()) {
+            continue;
+        }
+        let value = &structured["key_presets"][&name];
+        let definition = super::super::runtime_key_preset_definition_from_value(
+            value,
+            &format!("key_presets.{name}"),
+        )?;
+        lines.push(key_preset_list_table_row(
+            &name,
+            "config",
+            name == active,
+            &definition,
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+/// Selects, materializes, applies, and persists one key-assignment preset.
+pub(crate) fn runtime_set_key_preset_command(
+    service: &mut RuntimeSessionService,
+    invocation: &CommandInvocation,
+) -> Result<String> {
+    let args = runtime_positional_args(invocation);
+    let name = args
+        .first()
+        .copied()
+        .ok_or_else(|| MezError::invalid_args("set-key-preset requires a preset name"))?;
+    if args.len() != 1 {
+        return Err(MezError::invalid_args(
+            "set-key-preset accepts exactly one preset name",
+        ));
+    }
+    let structured = runtime_effective_config_value(service.integration.config_layers())?;
+    let definition = runtime_key_preset_definition_for_selection(&structured, name)?;
+    let mutations = runtime_key_preset_config_mutations(&structured, name, &definition)?;
+
+    if let Some(path) = runtime_primary_config_path(service)? {
+        let report = runtime_apply_persisted_config_mutation_batch(
+            service,
+            path,
+            &mutations,
+            "terminal/command:set-key-preset",
+        )?;
+        return Ok(format!(
+            "key_preset={name}:changed={}:reload_required={}:persisted=true:mutations={}",
+            report.changed, report.reload_required, report.mutation_count
+        ));
+    }
+
+    let batch = runtime_apply_theme_live_override(service, &mutations)?;
+    let report = service.apply_runtime_config_layers()?;
+    service.append_lifecycle_event(
+        EventKind::ConfigChanged,
+        runtime_config_apply_event_payload("terminal/command:set-key-preset", &report),
+    )?;
+    Ok(format!(
+        "key_preset={name}:changed={}:reload_required={}:persisted=false:mutations={}",
+        batch.changed,
+        batch.reload_required,
+        mutations.len()
+    ))
+}
+
+fn runtime_key_preset_definition_for_selection(
+    structured: &Value,
+    name: &str,
+) -> Result<KeyPresetDefinition> {
+    if let Some(definition) = builtin_key_preset_definition(name) {
+        return Ok(definition);
+    }
+    let value = structured
+        .get("key_presets")
+        .and_then(Value::as_object)
+        .and_then(|presets| presets.get(name))
+        .ok_or_else(|| {
+            MezError::invalid_args(format!(
+                "set-key-preset unknown preset `{name}`; run list-key-presets to see available presets"
+            ))
+        })?;
+    super::super::runtime_key_preset_definition_from_value(value, &format!("key_presets.{name}"))
+}
+
+fn runtime_key_preset_config_mutations(
+    structured: &Value,
+    name: &str,
+    definition: &KeyPresetDefinition,
+) -> Result<Vec<ConfigMutation>> {
+    let bindings = definition.materialize(KeyBindings::default());
+    let mut mutations = vec![config_set_string_mutation("key_preset.active", name)];
+    mutations.push(config_set_string_mutation(
+        "keys.escape",
+        key_chord_notation(bindings.escape),
+    ));
+    push_optional_key_mutation(&mut mutations, "split_vertical", bindings.split_vertical);
+    push_optional_key_mutation(
+        &mut mutations,
+        "split_horizontal",
+        bindings.split_horizontal,
+    );
+    push_optional_key_mutation(&mut mutations, "new_window", bindings.new_window);
+    push_optional_key_mutation(&mut mutations, "new_group", bindings.new_group);
+    push_optional_key_mutation(&mut mutations, "agent_shell", bindings.agent_shell);
+    push_optional_key_mutation(&mut mutations, "focus_up", bindings.focus_up);
+    push_optional_key_mutation(&mut mutations, "focus_down", bindings.focus_down);
+    push_optional_key_mutation(&mut mutations, "focus_left", bindings.focus_left);
+    push_optional_key_mutation(&mut mutations, "focus_right", bindings.focus_right);
+    push_optional_key_mutation(
+        &mut mutations,
+        "focus_previous_window",
+        bindings.focus_previous_window,
+    );
+    push_optional_key_mutation(
+        &mut mutations,
+        "focus_next_window",
+        bindings.focus_next_window,
+    );
+    push_optional_key_mutation(
+        &mut mutations,
+        "focus_previous_group",
+        bindings.focus_previous_group,
+    );
+    push_optional_key_mutation(
+        &mut mutations,
+        "focus_next_group",
+        bindings.focus_next_group,
+    );
+
+    if let Some(existing) = structured
+        .get("keys")
+        .and_then(Value::as_object)
+        .and_then(|keys| keys.get("command_bindings"))
+        .and_then(Value::as_object)
+    {
+        mutations.extend(existing.keys().map(|key| ConfigMutation {
+            path: format!("keys.command_bindings.{key}"),
+            operation: ConfigMutationOperation::Unset,
+        }));
+    }
+    for (config_key, command) in &definition.command_bindings {
+        let (chord, _) =
+            super::super::runtime_chord_from_binding_config_key(config_key).map_err(|error| {
+                MezError::config(format!(
+                    "key preset `{name}` command binding `{config_key}` is invalid: {error}"
+                ))
+            })?;
+        super::parse_command_sequence(command).map_err(|error| {
+            MezError::config(format!(
+                "key preset `{name}` command binding `{config_key}` is invalid: {error}"
+            ))
+        })?;
+        mutations.push(config_set_string_mutation(
+            format!(
+                "keys.command_bindings.{}",
+                binding_config_key(&key_chord_notation(chord))
+            ),
+            command,
+        ));
+    }
+    Ok(mutations)
+}
+
+fn push_optional_key_mutation(
+    mutations: &mut Vec<ConfigMutation>,
+    field: &str,
+    chord: Option<KeyChord>,
+) {
+    let path = format!("keys.{field}");
+    mutations.push(match chord {
+        Some(chord) => config_set_string_mutation(path, key_chord_notation(chord)),
+        None => ConfigMutation {
+            path,
+            operation: ConfigMutationOperation::Unset,
+        },
+    });
+}
+
+fn config_set_string_mutation(path: impl Into<String>, value: impl Into<String>) -> ConfigMutation {
+    ConfigMutation {
+        path: path.into(),
+        operation: ConfigMutationOperation::Set(ConfigMutationValue::String(value.into())),
+    }
+}
 
 /// Runs the runtime show options command operation for this subsystem.
 ///

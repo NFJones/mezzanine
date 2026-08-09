@@ -22,6 +22,8 @@ pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "runtime",
     "terminal",
     "keys",
+    "key_preset",
+    "key_presets",
     "frames",
     "theme",
     "themes",
@@ -473,6 +475,9 @@ pub(super) const KEY_BINDING_KEYS: &[&str] = &[
     "focus_next_group",
     "command_bindings",
 ];
+
+/// Defines the active key-preset selector keys.
+pub(super) const KEY_PRESET_KEYS: &[&str] = &["active"];
 
 /// Defines the LAYOUT KEYS const used by this subsystem.
 ///

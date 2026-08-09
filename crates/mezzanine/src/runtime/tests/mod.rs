@@ -46,7 +46,7 @@ use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 use mez_agent::{ScheduledWork, ScheduledWorkKind, SubagentSpawnRequest};
 use mez_mux::clipboard::ClipboardPasteSourceKind;
 use mez_mux::copy::CopyPosition;
-use mez_mux::input::{MuxAction, PaneFocusDirection};
+use mez_mux::input::{KeyChord, KeyCode, MuxAction, PaneFocusDirection, classify_direct_binding};
 use mez_mux::presentation::ClientViewRole;
 use mez_mux::session::{Session, SessionState};
 use mez_mux::theme::UI_COLOR_SLOT_NAMES;

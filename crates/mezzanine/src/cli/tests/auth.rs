@@ -112,7 +112,7 @@ fn auth_login_noninteractive_default_requires_browser_interaction() {
 
     let error = run_with_plain(
         vec!["mez".to_string(), "auth".to_string(), "login".to_string()],
-        env,
+        env.clone(),
         false,
         &mut stdout,
         &mut stderr,
@@ -125,6 +125,10 @@ fn auth_login_noninteractive_default_requires_browser_interaction() {
     assert!(error.message().contains("--api-key --api-key-file PATH"));
     assert!(stdout.is_empty());
     assert!(stderr.is_empty());
+    assert!(
+        !env.config_paths().unwrap().default_primary_file().exists(),
+        "failed authentication must not create provider configuration"
+    );
 
     let _ = fs::remove_dir_all(home);
 }
@@ -358,6 +362,11 @@ fn auth_login_api_key_file_persists_metadata_without_printing_secret() {
     assert!(output.contains(r#""authenticated":true"#));
     assert!(output.contains(r#""credential_store":"file""#));
     assert!(!output.contains("sk-test-secret"));
+
+    let config = fs::read_to_string(env.config_paths().unwrap().default_primary_file()).unwrap();
+    assert!(config.contains("[providers.openai]"), "{config}");
+    assert!(!config.contains("[providers.anthropic]"), "{config}");
+    assert!(!config.contains("[providers.deepseek]"), "{config}");
 
     let mut status_stdout = Vec::new();
     run_with(

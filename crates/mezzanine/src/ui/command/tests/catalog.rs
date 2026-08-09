@@ -273,6 +273,27 @@ fn list_themes_reports_builtin_defaults_without_runtime_config() {
     assert!(body.contains("[`set-theme acid_lime`](mez-agent:set-theme%20acid_lime)"));
 }
 
+/// Verifies key presets have a useful offline table with the generated default
+/// marked active and selectable actions for both built-ins.
+#[test]
+fn list_key_presets_reports_builtin_defaults_without_runtime_config() {
+    let (mut session, primary) = test_session();
+
+    let outcome = execute_command(
+        &mut session,
+        &primary,
+        &parse_command_sequence("list-key-presets").unwrap()[0],
+    )
+    .unwrap();
+    let body = display_body(outcome);
+    assert!(body.starts_with(
+        "| active | preset | source | prefix | bindings | action |\n| --- | --- | --- | --- | --- | --- |"
+    ));
+    assert!(body.contains("| ★ active | default | builtin | C-a | 0 direct, 0 command |"));
+    assert!(body.contains("| — | simple | builtin | C-a | 13 direct, 0 command |"));
+    assert!(body.contains("[`set-key-preset simple`](mez-agent:set-key-preset%20simple)"));
+}
+
 /// Verifies that the baseline command registry reports a known support level
 /// for every command instead of using a binary implemented/pending flag that
 /// would hide runtime-, store-, or control-backed fallback behavior.

@@ -91,8 +91,10 @@ fn terminal_help_command_rows() -> Vec<(&'static str, &'static str)> {
 fn terminal_command_category(name: &str) -> &'static str {
     match name {
         "agent-shell" => "agent and integrations",
-        "bind-key" | "list-keys" | "set-option" | "set-theme" | "show-options" | "source-file"
-        | "unbind-key" | "list-themes" => "configuration",
+        "bind-key" | "list-key-presets" | "list-keys" | "set-key-preset" | "set-option"
+        | "set-theme" | "show-options" | "source-file" | "unbind-key" | "list-themes" => {
+            "configuration"
+        }
         "capture-pane" | "choose-buffer" | "clear-history" | "copy-mode" | "copy-selection"
         | "create-buffer" | "delete-buffer" | "export-history" | "list-buffers"
         | "paste-buffer" | "paste-clipboard" | "pipe-pane" | "save-buffer" | "search-history" => {
@@ -141,6 +143,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "list-buffers" => "show paste buffers.",
         "list-clients" => "show attached clients and pending observers.",
         "list-groups" => "show window group identities, names, and active state.",
+        "list-key-presets" => "show built-in and configured key presets.",
         "list-keys" => "show effective key bindings.",
         "list-observers" => "show observer requests and approved observers.",
         "list-panes" => "show pane identities, active state, size, pid, and agent data.",
@@ -177,6 +180,7 @@ fn terminal_command_description(name: &str) -> &'static str {
         "select-layout" => "select a pane layout.",
         "select-pane" => "focus a pane.",
         "select-window" => "focus a window.",
+        "set-key-preset" => "switch active key-assignment preset by name.",
         "set-option" => "set a live-mutable option.",
         "set-theme" => "switch active UI theme by name.",
         "show-messages" => "show diagnostics, pending approvals, and observer requests.",
@@ -223,6 +227,26 @@ pub(super) fn list_default_themes() -> String {
             &definition,
         )
     }));
+    lines.join("\n")
+}
+
+/// Lists the built-in key presets when no live configuration is available.
+pub(super) fn list_default_key_presets() -> String {
+    let mut lines = vec![mez_mux::key_preset::key_preset_list_table_header()];
+    lines.extend(
+        mez_mux::key_preset::BUILTIN_KEY_PRESET_NAMES
+            .iter()
+            .map(|preset| {
+                let definition = mez_mux::key_preset::builtin_key_preset_definition(preset)
+                    .expect("built-in key preset names must resolve for listing");
+                mez_mux::key_preset::key_preset_list_table_row(
+                    preset,
+                    "builtin",
+                    *preset == mez_mux::key_preset::DEFAULT_KEY_PRESET_NAME,
+                    &definition,
+                )
+            }),
+    );
     lines.join("\n")
 }
 
@@ -752,6 +776,21 @@ pub(super) fn set_theme_arg(invocation: &CommandInvocation) -> Result<&str> {
         ));
     }
     Ok(theme)
+}
+
+/// Returns the single key-preset name supplied to `set-key-preset`.
+pub(super) fn set_key_preset_arg(invocation: &CommandInvocation) -> Result<&str> {
+    let args = invocation.positional_args();
+    let preset = args
+        .first()
+        .copied()
+        .ok_or_else(|| MezError::invalid_args("set-key-preset requires a preset name"))?;
+    if args.len() > 1 {
+        return Err(MezError::invalid_args(
+            "set-key-preset accepts exactly one preset name",
+        ));
+    }
+    Ok(preset)
 }
 
 /// Runs the parse config command value operation for this subsystem.

@@ -293,7 +293,7 @@ pub(crate) fn runtime_command_display_overlay_content(
 pub(super) fn terminal_command_display_body_is_markdown(command: Option<&str>, body: &str) -> bool {
     match command {
         Some("help") => body.trim_start().starts_with('#'),
-        Some("list-themes") => body.trim_start().starts_with('|'),
+        Some("list-key-presets" | "list-themes") => body.trim_start().starts_with('|'),
         _ => false,
     }
 }
@@ -506,6 +506,7 @@ pub(crate) fn runtime_transient_terminal_command_name(command: &str) -> bool {
             | "select-layout"
             | "send-prefix"
             | "set-option"
+            | "set-key-preset"
             | "set-theme"
             | "source-file"
             | "synchronize-panes"
@@ -527,6 +528,7 @@ pub(crate) fn runtime_immediate_terminal_command_name(command: &str) -> bool {
             | "bind-key"
             | "unbind-key"
             | "mark-pane-ready"
+            | "set-key-preset"
             | "set-theme"
             | "set-option"
             | "source-file"

@@ -497,7 +497,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         &primary,
     );
     assert!(resumed.contains("conversation_id=saved"), "{resumed}");
-    let saved_token_usage_key = mez_agent::ModelTokenUsageKey::new("openai", "gpt-5.6-sol");
+    let saved_token_usage_key = mez_agent::ModelTokenUsageKey::new("openai", "gpt-5.6-terra");
     let saved_token_usage = mez_agent::ModelTokenUsage {
         input_tokens: 321,
         output_tokens: 45,

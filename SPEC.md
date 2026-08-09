@@ -1576,7 +1576,9 @@ The command language MUST include commands equivalent to:
 - `show-messages`
 - `show-metrics`
 - `list-keys`
+- `list-key-presets`
 - `list-themes`
+- `set-key-preset`
 - `set-theme`
 - `bind-key`
 - `unbind-key`
@@ -1659,7 +1661,9 @@ The baseline commands MUST have the following semantics:
 | `show-messages` | Display Mezzanine message log entries, including diagnostics, pending observer requests, pending approvals, and hook failures visible to the primary client. |
 | `show-metrics` | Display runtime-service and async-runtime counters and histogram summaries for important measurements, including agent turn lifecycle, provider prompt/cache shape, token usage, shell transaction behavior, event batches, pane output sizes, side-effect queue activity, and current queue depth snapshots, in the primary command-output pager. |
 | `list-keys` | Return effective key bindings in column-aligned form, including source configuration layer and command expansion. |
+| `list-key-presets` | Return built-in and configured key-assignment presets in an interactive table with active state, source, prefix, binding summary, and a selectable `set-key-preset` action. |
 | `list-themes` | Return built-in UI themes and configured custom themes in a column-aligned table, with a visually salient active-theme column, theme name, adjacent short unicode block color palette preview, source (`builtin` or `config`), preview colors, and `set-theme` action for easier theme selection. |
+| `set-key-preset` | Set the active built-in or configured key-assignment preset, materialize its fixed and command bindings, apply it immediately, and persist the selection and materialized bindings into the primary config. |
 | `set-theme` | Set the active UI theme to a built-in or configured theme name, validate the name against the effective theme registry, materialize the selected aliases and color slots, apply the change to the running client immediately, and persist the selected theme into the primary config. |
 | `bind-key` | Add or replace a key binding in the live configuration or requested persistence target. It MUST validate that the binding is syntactically representable. |
 | `unbind-key` | Remove a key binding from the live configuration or requested persistence target. |
@@ -2718,6 +2722,19 @@ map. The `escape` setting defines the prefix table entry point. Direct key
 settings in this table are convenience accelerators and MUST NOT replace the
 default prefix table.
 
+The `key_preset` table MUST support an `active` preset name and MUST default to
+`default`. Mezzanine MUST provide built-in `default` and `simple` presets.
+`default` MUST preserve the generated prefix-only key behavior. `simple` MUST
+keep `C-a` as the prefix and provide the documented direct split, window,
+group, agent-shell, pane-focus, window-focus, and group-focus bindings.
+`key_presets` MUST be a map of configured presets accepting the same fixed key
+fields and command-binding map as `keys`; omitted fields MUST inherit from
+`default`, while `null` MUST explicitly disable an optional direct binding.
+Selecting a preset MUST reconcile and materialize its complete binding surface
+into `keys`, apply it immediately, and persist the active name and materialized
+bindings. Subsequent low-level key mutations MAY override that materialized
+surface until another preset is selected.
+
 The `frames` table MUST contain `window` and `pane` subtables. Each frame
 subtable MUST support `enabled`, `position`, `template`, `style`, and
 `visible_fields`. `frames.window` MUST also support `right_status` for the
@@ -3546,17 +3563,17 @@ after unsupported local profile options are omitted. Local
 `provider_options.prompt_cache_retention` values MUST NOT affect the emitted
 OpenAI Responses body or the provider request-shape diagnostics.
 
-The built-in OpenAI provider default model MUST be `gpt-5.5` unless the user
+The built-in OpenAI provider default model MUST be `gpt-5.6-terra` unless the user
 overrides it through provider or model-profile configuration. The built-in
 OpenAI provider model list SHOULD include only coding-agent harness models:
-`gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`,
-`gpt-5.3-codex-spark`, and `gpt-5.2`. When a provider configuration leaves
+`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and
+`gpt-5.4-mini`. When a provider configuration leaves
 `models` empty, Mezzanine MUST load the provider's built-in code-defined model
 list instead of treating the provider as having no selectable models.
-The built-in Anthropic provider default model MUST be `claude-fable-5` unless
+The built-in Anthropic provider default model MUST be `claude-sonnet-5` unless
 the user overrides it through provider or model-profile configuration. The
 built-in Anthropic provider model list SHOULD include `claude-fable-5`,
-`claude-opus-4-8`, `claude-sonnet-4-6`, and
+`claude-opus-5`, `claude-sonnet-5`, and
 `claude-haiku-4-5-20251001`; generated Anthropic profiles SHOULD use built-in
 context metadata for those Claude model families.
 The built-in DeepSeek provider default model MUST be `deepseek-v4-pro` unless

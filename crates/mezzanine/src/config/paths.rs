@@ -5,8 +5,10 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    ConfigDiagnostic, DEFAULT_CONFIG_TOML, MezError, OpenOptions, PRIMARY_CONFIG_FILENAMES, Path,
-    PathBuf, Result, Write, env, fs,
+    ConfigDiagnostic, ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
+    ConfigScope, MezError, OpenOptions, PRIMARY_CONFIG_FILENAMES, Path, PathBuf, Result, Write,
+    env, fs, initial_config_toml, persist_config_text, plan_config_mutations,
+    provider_default_config_toml,
 };
 use std::io::ErrorKind;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -147,6 +149,11 @@ impl ConfigPaths {
     /// on duplicated control-flow logic.
     pub fn ensure_default_config(&self) -> Result<PathBuf> {
         ensure_private_dir(&self.root)?;
+        ensure_private_dir(
+            &self
+                .root
+                .join(crate::integrations::macros::MACROS_DIRECTORY_NAME),
+        )?;
 
         if let Some(path) = self.select_primary_file()? {
             return Ok(path);
@@ -162,7 +169,8 @@ impl ConfigPaths {
             }
             Err(error) => return Err(error.into()),
         };
-        file.write_all(DEFAULT_CONFIG_TOML.as_bytes())?;
+        let default_config = initial_config_toml()?;
+        file.write_all(default_config.as_bytes())?;
         set_private_file_permissions(&path)?;
         Ok(path)
     }
@@ -175,6 +183,12 @@ impl ConfigPaths {
     #[cfg(test)]
     pub async fn ensure_default_config_async(&self) -> Result<PathBuf> {
         ensure_private_dir_async(&self.root).await?;
+        ensure_private_dir_async(
+            &self
+                .root
+                .join(crate::integrations::macros::MACROS_DIRECTORY_NAME),
+        )
+        .await?;
 
         if let Some(path) = self.select_primary_file_async().await? {
             return Ok(path);
@@ -195,9 +209,110 @@ impl ConfigPaths {
             }
             Err(error) => return Err(error.into()),
         };
-        file.write_all(DEFAULT_CONFIG_TOML.as_bytes()).await?;
+        let default_config = initial_config_toml()?;
+        file.write_all(default_config.as_bytes()).await?;
         set_private_file_permissions_async(&path).await?;
         Ok(path)
+    }
+
+    /// Materializes defaults for an authenticated built-in provider.
+    ///
+    /// Existing provider configuration is user-authored and therefore remains
+    /// untouched. Generated defaults are currently TOML-only because primary
+    /// JSON and YAML files are explicit user configurations rather than files
+    /// created by Mez's default-config path.
+    pub fn materialize_authenticated_provider_defaults(&self, provider: &str) -> Result<()> {
+        let Some(defaults) = provider_default_config_toml(provider)? else {
+            return Ok(());
+        };
+        let path = self.ensure_default_config()?;
+        if ConfigFormat::from_path(&path)? != ConfigFormat::Toml {
+            return Ok(());
+        }
+        let text = fs::read_to_string(&path)?;
+        let document = text
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+        let has_configured_providers = document
+            .as_table()
+            .get("providers")
+            .and_then(toml_edit::Item::as_table)
+            .is_some_and(|providers| !providers.is_empty());
+        if document
+            .as_table()
+            .get("providers")
+            .and_then(toml_edit::Item::as_table)
+            .is_some_and(|providers| providers.contains_key(provider))
+        {
+            return Ok(());
+        }
+
+        let (default_profile, auto_sizing_profiles) = match provider {
+            "openai" => (
+                "default",
+                [
+                    "auto-size-router",
+                    "auto-size-small",
+                    "auto-size-medium",
+                    "auto-size-large",
+                ],
+            ),
+            "anthropic" => (
+                "anthropic-fast",
+                [
+                    "anthropic-fast",
+                    "anthropic-fast",
+                    "anthropic-default",
+                    "anthropic-default",
+                ],
+            ),
+            "deepseek" => (
+                "deepseek-fast",
+                [
+                    "deepseek-fast",
+                    "deepseek-fast",
+                    "deepseek-default",
+                    "deepseek-default",
+                ],
+            ),
+            _ => return Ok(()),
+        };
+        let mutations = if !has_configured_providers {
+            vec![
+                config_string_mutation("agents.default_provider", provider),
+                config_string_mutation("agents.default_model_profile", default_profile),
+                config_string_mutation(
+                    "agents.auto_sizing.router_model_profile",
+                    auto_sizing_profiles[0],
+                ),
+                config_string_mutation(
+                    "agents.auto_sizing.small_model_profile",
+                    auto_sizing_profiles[1],
+                ),
+                config_string_mutation(
+                    "agents.auto_sizing.medium_model_profile",
+                    auto_sizing_profiles[2],
+                ),
+                config_string_mutation(
+                    "agents.auto_sizing.large_model_profile",
+                    auto_sizing_profiles[3],
+                ),
+            ]
+        } else {
+            Vec::new()
+        };
+        let plan =
+            plan_config_mutations(ConfigFormat::Toml, &text, ConfigScope::Primary, mutations)?;
+        let materialized = format!("{}\n{}", plan.text.trim_end(), defaults);
+        persist_config_text(&path, ConfigScope::Primary, &materialized)
+    }
+}
+
+/// Builds one provider-default scalar mutation.
+fn config_string_mutation(path: &str, value: &str) -> ConfigMutation {
+    ConfigMutation {
+        path: path.to_string(),
+        operation: ConfigMutationOperation::Set(ConfigMutationValue::String(value.to_string())),
     }
 }
 

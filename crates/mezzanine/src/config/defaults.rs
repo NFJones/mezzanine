@@ -6,12 +6,99 @@
 
 // Generated default configuration.
 
+/// Returns the initial primary configuration without provider-specific entries.
+///
+/// Provider connection, model-profile, and preset defaults are materialized
+/// only after their provider has authenticated successfully. Keeping the
+/// catalog here lets the first-run configuration remain compact while one
+/// source still defines the provider defaults copied after authentication.
+pub(crate) fn initial_config_toml() -> crate::error::Result<String> {
+    let mut document = DEFAULT_CONFIG_TOML
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| {
+            crate::error::MezError::config(format!("invalid built-in TOML config: {error}"))
+        })?;
+    let root = document.as_table_mut();
+    root.remove("providers");
+    root.remove("model_profiles");
+    root.remove("model_presets");
+    Ok(document.to_string())
+}
+
+/// Returns the catalog defaults that belong to one supported provider.
+///
+/// Unknown providers deliberately have no generated configuration because Mez
+/// cannot safely infer their API or model catalog from authentication metadata.
+pub(crate) fn provider_default_config_toml(provider: &str) -> crate::error::Result<Option<String>> {
+    let profiles = match provider {
+        "openai" => &[
+            "default",
+            "auto-size-router",
+            "auto-size-small",
+            "auto-size-medium",
+            "auto-size-large",
+        ][..],
+        "anthropic" => &["anthropic-default", "anthropic-fast"][..],
+        "deepseek" => &["deepseek-default", "deepseek-fast"][..],
+        _ => return Ok(None),
+    };
+    let mut document = DEFAULT_CONFIG_TOML
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| {
+            crate::error::MezError::config(format!("invalid built-in TOML config: {error}"))
+        })?;
+    let root = document.as_table_mut();
+    let section_names = root
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect::<Vec<_>>();
+    for name in section_names {
+        if !matches!(
+            name.as_str(),
+            "providers" | "model_profiles" | "model_presets"
+        ) {
+            root.remove(&name);
+        }
+    }
+    retain_named_tables(root, "providers", &[provider])?;
+    retain_named_tables(root, "model_profiles", profiles)?;
+    retain_named_tables(root, "model_presets", &[provider])?;
+
+    Ok(Some(document.to_string()))
+}
+
+/// Retains only selected named child tables within one catalog section.
+fn retain_named_tables(
+    root: &mut toml_edit::Table,
+    section: &str,
+    selected: &[&str],
+) -> crate::error::Result<()> {
+    let table = root
+        .get_mut(section)
+        .and_then(toml_edit::Item::as_table_mut)
+        .ok_or_else(|| {
+            crate::error::MezError::config(format!(
+                "built-in default config is missing `{section}` table"
+            ))
+        })?;
+    let names = table
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect::<Vec<_>>();
+    for name in names {
+        if !selected.contains(&name.as_str()) {
+            table.remove(&name);
+        }
+    }
+    Ok(())
+}
+
 /// Defines the DEFAULT CONFIG TOML const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 57
+version = 58
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -56,6 +143,9 @@ cursor_blink_interval_ms = 500
 escape = "C-a"
 
 [keys.command_bindings]
+
+[key_preset]
+active = "default"
 
 [frames.window]
 enabled = true
@@ -244,7 +334,7 @@ models = [
     "gpt-5.4",
     "gpt-5.4-mini",
 ]
-default_model = "gpt-5.6-sol"
+default_model = "gpt-5.6-terra"
 
 [providers.openai.options]
 # Optional documented OpenAI routing headers for multi-organization/project API keys.
@@ -261,11 +351,11 @@ base_url = ""
 # Anthropic model IDs supported by the built-in Claude provider defaults.
 models = [
     "claude-fable-5",
-    "claude-opus-4-8",
-    "claude-sonnet-4-6",
+    "claude-opus-5",
+    "claude-sonnet-5",
     "claude-haiku-4-5-20251001",
 ]
-default_model = "claude-fable-5"
+default_model = "claude-sonnet-5"
 
 [providers.anthropic.options]
 # anthropic_version = "2023-06-01"
@@ -321,7 +411,7 @@ default_model = "deepseek-v4-pro"
 
 [model_profiles.anthropic-default]
 provider = "anthropic"
-model = "claude-fable-5"
+model = "claude-sonnet-5"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
@@ -354,8 +444,8 @@ prompt_caching = "enabled"
 
 [model_profiles.default]
 provider = "openai"
-model = "gpt-5.6-sol"
-reasoning_profile = "medium"
+model = "gpt-5.6-terra"
+reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
 context_window_tokens = 1050000

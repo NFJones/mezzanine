@@ -1,6 +1,7 @@
 //! Config defaults tests.
 
 use super::*;
+use crate::config::initial_config_toml;
 
 /// Verifies creates default config file.
 ///
@@ -15,7 +16,11 @@ fn creates_default_config_file() {
     let path = paths.ensure_default_config().unwrap();
 
     assert_eq!(path, root.join("config.toml"));
-    assert_eq!(fs::read_to_string(path).unwrap(), DEFAULT_CONFIG_TOML);
+    let config = fs::read_to_string(path).unwrap();
+    assert_eq!(config, initial_config_toml().unwrap());
+    assert!(!config.contains("[providers."), "{config}");
+    assert!(!config.contains("[model_profiles."), "{config}");
+    assert!(root.join("macros").is_dir());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -69,8 +74,9 @@ async fn creates_default_config_file_async() {
     assert_eq!(selected.as_deref(), Some(path.as_path()));
     assert_eq!(
         tokio::fs::read_to_string(path).await.unwrap(),
-        DEFAULT_CONFIG_TOML
+        initial_config_toml().unwrap()
     );
+    assert!(root.join("macros").is_dir());
 
     let _ = fs::remove_dir_all(root);
 }
@@ -102,7 +108,7 @@ fn concurrent_default_config_creation_is_idempotent() {
     }
     assert_eq!(
         fs::read_to_string(root.join("config.toml")).unwrap(),
-        DEFAULT_CONFIG_TOML
+        initial_config_toml().unwrap()
     );
 
     let _ = fs::remove_dir_all(root);
@@ -137,7 +143,7 @@ fn rejects_ambiguous_primary_config_files() {
 fn default_config_matches_documented_example() {
     let documented = include_str!("../../../../../docs/examples/config.toml");
 
-    assert_eq!(DEFAULT_CONFIG_TOML.trim(), documented.trim());
+    assert_eq!(initial_config_toml().unwrap().trim(), documented.trim());
 }
 
 /// Verifies generated defaults include the built-in Anthropic provider entry
@@ -149,6 +155,12 @@ fn default_config_matches_documented_example() {
 #[test]
 fn default_config_includes_anthropic_provider_defaults() {
     let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let openai = parsed
+        .get("providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get("openai"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
     let anthropic = parsed
         .get("providers")
         .and_then(toml::Value::as_table)
@@ -156,6 +168,10 @@ fn default_config_includes_anthropic_provider_defaults() {
         .and_then(toml::Value::as_table)
         .unwrap();
 
+    assert_eq!(
+        openai.get("default_model").and_then(toml::Value::as_str),
+        Some("gpt-5.6-terra")
+    );
     assert_eq!(
         anthropic.get("kind").and_then(toml::Value::as_str),
         Some("anthropic")
@@ -166,7 +182,7 @@ fn default_config_includes_anthropic_provider_defaults() {
     );
     assert_eq!(
         anthropic.get("default_model").and_then(toml::Value::as_str),
-        Some("claude-fable-5")
+        Some("claude-sonnet-5")
     );
 
     let models = anthropic
@@ -181,10 +197,38 @@ fn default_config_includes_anthropic_provider_defaults() {
         models,
         vec![
             "claude-fable-5",
-            "claude-opus-4-8",
-            "claude-sonnet-4-6",
+            "claude-opus-5",
+            "claude-sonnet-5",
             "claude-haiku-4-5-20251001",
         ]
+    );
+
+    let profiles = parsed
+        .get("model_profiles")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    let default = profiles
+        .get("default")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    let anthropic_default = profiles
+        .get("anthropic-default")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        default.get("model").and_then(toml::Value::as_str),
+        Some("gpt-5.6-terra")
+    );
+    assert_eq!(
+        default
+            .get("reasoning_profile")
+            .and_then(toml::Value::as_str),
+        Some("high")
+    );
+    assert_eq!(
+        anthropic_default.get("model").and_then(toml::Value::as_str),
+        Some("claude-sonnet-5")
     );
 }
 

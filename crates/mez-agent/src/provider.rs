@@ -1209,7 +1209,7 @@ fn openai_known_model_context_window_tokens(model: &str) -> Option<usize> {
 fn anthropic_known_model_context_window_tokens(model: &str) -> Option<usize> {
     let model = model.trim().to_ascii_lowercase();
     match model.as_str() {
-        "claude-fable-5" | "claude-opus-4-8" | "claude-sonnet-4-6" => Some(1_000_000),
+        "claude-fable-5" | "claude-opus-5" | "claude-sonnet-5" => Some(1_000_000),
         "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => Some(200_000),
         _ => None,
     }
@@ -1252,6 +1252,14 @@ mod known_context_window_tests {
         assert_eq!(
             known_model_context_window_tokens("claude-haiku-4-5"),
             Some(200_000)
+        );
+        assert_eq!(
+            known_model_context_window_tokens("claude-opus-5"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            known_model_context_window_tokens("claude-sonnet-5"),
+            Some(1_000_000)
         );
         assert_eq!(
             known_provider_model_context_window_tokens("deepseek", "deepseek-v4-pro"),

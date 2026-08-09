@@ -203,7 +203,9 @@ pub(super) const BASELINE_COMMAND_NAMES: &[&str] = &[
     "show-messages",
     "show-metrics",
     "list-keys",
+    "list-key-presets",
     "list-themes",
+    "set-key-preset",
     "set-theme",
     "bind-key",
     "unbind-key",
@@ -240,8 +242,8 @@ fn baseline_command_status(name: &str) -> BaselineCommandStatus {
         | "clear-history" | "search-history" | "export-history" | "pipe-pane"
         | "refresh-client" | "show-metrics" | "agent-shell" | "approve-observer"
         | "reject-observer" | "revoke-observer" => BaselineCommandStatus::RuntimeRequired,
-        "bind-key" | "unbind-key" | "set-theme" | "set-option" | "source-file"
-        | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
+        "bind-key" | "unbind-key" | "set-key-preset" | "set-theme" | "set-option"
+        | "source-file" | "mark-pane-ready" => BaselineCommandStatus::StoreRequired,
         "attach-session" | "list-sessions" | "save-layout" | "load-layout" => {
             BaselineCommandStatus::ControlRequired
         }

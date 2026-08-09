@@ -28,6 +28,7 @@ pub(super) fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
         "unbind-key" => Some(" [-T table] <key>"),
         "show-options" => Some(" [-g|-w|-p] [option]"),
         "set-option" => Some(" [-g|-w|-p] <option> <value>"),
+        "set-key-preset" => Some(" <preset>"),
         "set-theme" => Some(" <theme>"),
         "source-file" => Some(" <path>"),
         "agent-shell" => Some(" <show|hide|toggle>"),

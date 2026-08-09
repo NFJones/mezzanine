@@ -440,17 +440,17 @@ fn runtime_provider_config_from_config(
 pub(crate) fn runtime_default_models_for_provider(kind: &str) -> Result<&'static [&'static str]> {
     match kind {
         "openai" => Ok(&[
-            "gpt-5.6-sol",
             "gpt-5.6-terra",
+            "gpt-5.6-sol",
             "gpt-5.6-luna",
             "gpt-5.5",
             "gpt-5.4",
             "gpt-5.4-mini",
         ]),
         "anthropic" => Ok(&[
+            "claude-sonnet-5",
+            "claude-opus-5",
             "claude-fable-5",
-            "claude-opus-4-8",
-            "claude-sonnet-4-6",
             "claude-haiku-4-5-20251001",
         ]),
         "deepseek" => Ok(&["deepseek-v4-pro", "deepseek-v4-flash"]),

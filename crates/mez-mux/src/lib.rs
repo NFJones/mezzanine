@@ -12,6 +12,7 @@ pub mod copy;
 mod error;
 pub mod host_input;
 pub mod input;
+pub mod key_preset;
 pub mod layout;
 pub mod overlay;
 pub mod paste;
