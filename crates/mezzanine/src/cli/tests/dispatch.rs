@@ -138,20 +138,21 @@ fn kill_routes_session_index_alias_to_registered_control_socket() {
     let server = thread::spawn(move || {
         let (_probe, _) = listener.accept().unwrap();
         let (mut stream, _) = listener.accept().unwrap();
-        let request = read_control_response_frames(&mut stream, 4096, 2).unwrap();
-        let (initialize, consumed) = decode_control_frame(&request, 4096).unwrap();
-        let (kill, _) = decode_control_frame(&request[consumed..], 4096).unwrap();
+        let request = read_control_response_frames(&mut stream, 4096, 1).unwrap();
+        let (initialize, _) = decode_control_frame(&request, 4096).unwrap();
         assert!(
             initialize.contains(r#""method":"control/initialize""#),
             "{initialize}"
         );
-        assert!(kill.contains(r#""method":"session/kill""#), "{kill}");
-        assert!(kill.contains(r#""force":true"#), "{kill}");
         stream
             .write_all(&encode_control_body(
                 r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary"}}"#,
             ))
             .unwrap();
+        let request = read_control_response_frames(&mut stream, 4096, 1).unwrap();
+        let (kill, _) = decode_control_frame(&request, 4096).unwrap();
+        assert!(kill.contains(r#""method":"session/kill""#), "{kill}");
+        assert!(kill.contains(r#""force":true"#), "{kill}");
         stream
             .write_all(&encode_control_body(
                 r#"{"jsonrpc":"2.0","id":"cli","result":{"killed":true}}"#,

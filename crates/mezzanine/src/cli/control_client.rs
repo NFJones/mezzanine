@@ -32,13 +32,14 @@ pub(super) fn run_control_request<W: Write>(
         json_escape(method),
         params
     );
-    let mut request_frames = encode_control_body(initialize);
-    request_frames.extend_from_slice(&encode_control_body(&request));
-    stream.write_all(&request_frames)?;
+    stream.write_all(&encode_control_body(initialize))?;
     stream.flush()?;
-    let response = read_control_response_frames(&mut stream, 1024 * 1024, 2)?;
-    let (_, consumed) = decode_control_frame(&response, 1024 * 1024)?;
-    let (body, _) = decode_control_frame(&response[consumed..], 1024 * 1024)?;
+    let initialize_response = read_control_response_frames(&mut stream, 1024 * 1024, 1)?;
+    let _ = decode_control_frame(&initialize_response, 1024 * 1024)?;
+    stream.write_all(&encode_control_body(&request))?;
+    stream.flush()?;
+    let response = read_control_response_frames(&mut stream, 1024 * 1024, 1)?;
+    let (body, _) = decode_control_frame(&response, 1024 * 1024)?;
     write_control_response(stdout, output_format, &body)?;
     Ok(())
 }

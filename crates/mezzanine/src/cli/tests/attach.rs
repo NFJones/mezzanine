@@ -247,17 +247,18 @@ fn snapshot_create_uses_selected_control_socket() {
         let mut request = vec![0; 4096];
         let read = stream.read(&mut request).unwrap();
         request.truncate(read);
-        let (initialize, consumed) = decode_control_frame(&request, 4096).unwrap();
-        let (body, _) = decode_control_frame(&request[consumed..], 4096).unwrap();
+        let (initialize, _) = decode_control_frame(&request, 4096).unwrap();
         assert!(initialize.contains(r#""method":"control/initialize""#));
-        assert!(body.contains(r#""method":"snapshot/create""#));
-        assert!(body.contains(r#""target":{"default":true}"#));
-        assert!(body.contains(r#""name":"checkpoint""#));
         stream
             .write_all(&encode_control_body(
                 r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary"}}"#,
             ))
             .unwrap();
+        let read = stream.read(&mut request).unwrap();
+        let (body, _) = decode_control_frame(&request[..read], 4096).unwrap();
+        assert!(body.contains(r#""method":"snapshot/create""#));
+        assert!(body.contains(r#""target":{"default":true}"#));
+        assert!(body.contains(r#""name":"checkpoint""#));
         stream
             .write_all(&encode_control_body(
                 r#"{"jsonrpc":"2.0","id":"cli","result":{"snapshot":{"snapshot_id":"snap1"}}}"#,
