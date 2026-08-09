@@ -25,6 +25,7 @@ use crate::error::MezErrorKind;
 
 const MANAGED_ZSHENV: &str = r#"# Mezzanine-managed zsh startup compatibility.
 typeset -g MEZ_ZSH_MANAGED_ZDOTDIR=${ZDOTDIR}
+typeset -g MEZ_ZSH_USER_ZDOTDIR_WAS_SET=${MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET:-0}
 if [[ ${MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET:-0} == 1 ]]; then
   ZDOTDIR=${MEZ_ZSH_ORIGINAL_ZDOTDIR}
 else
@@ -56,7 +57,11 @@ else
   }
   ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
 fi
-unset MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET
+if [[ ${MEZ_ZSH_PRESERVE_STARTUP_CONTEXT:-0} == 1 ]]; then
+  unset MEZ_ZSH_PRESERVE_STARTUP_CONTEXT
+else
+  unset MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET
+fi
 "#;
 
 const MANAGED_ZSHRC: &str = r#"# Mezzanine-managed zsh interactive startup compatibility.
@@ -84,7 +89,6 @@ function zshaddhistory() {
   return 0
 }
 ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
-unset MEZ_ZSH_MANAGED_ZDOTDIR MEZ_ZSH_USER_ZDOTDIR
 unset MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET
 "#;
 
@@ -390,6 +394,56 @@ function zshaddhistory() {{\n\
                 );
                 assert!(!observed.contains("fc -p"), "{history_option}: {observed}");
             }
+            let mut restarted_command = Command::new(launch.program());
+            restarted_command
+                .args(["-d", "-i"])
+                .env("HOME", &home)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            for (key, value) in launch.environment() {
+                restarted_command.env(key, value);
+            }
+            let mut restarted_child = restarted_command.spawn().unwrap();
+            let restarted_stdin = restarted_child.stdin.as_mut().unwrap();
+            restarted_stdin
+                .write_all(
+                    b"print -r -- USER_RESTART\nprint -r -- __RESTART_HISTORY_BEGIN__\nfc -l -100\nprint -r -- __RESTART_HISTORY_END__\nexit\n",
+                )
+                .unwrap();
+            drop(restarted_child.stdin.take());
+            let restarted_output = restarted_child.wait_with_output().unwrap();
+            let restarted_stdout = String::from_utf8_lossy(&restarted_output.stdout);
+            let restarted_stderr = String::from_utf8_lossy(&restarted_output.stderr);
+            assert!(
+                restarted_output.status.success(),
+                "option={history_option} stdout={restarted_stdout:?} stderr={restarted_stderr:?}"
+            );
+            let restarted_history = restarted_stdout
+                .split_once("__RESTART_HISTORY_BEGIN__\n")
+                .and_then(|(_, tail)| tail.split_once("__RESTART_HISTORY_END__"))
+                .map(|(history, _)| history)
+                .unwrap_or_default();
+            assert!(
+                restarted_history.contains("USER_BEFORE"),
+                "{history_option}: {restarted_history}"
+            );
+            assert!(
+                restarted_history.contains("USER_AFTER"),
+                "{history_option}: {restarted_history}"
+            );
+            assert!(
+                restarted_history.contains("USER_RESTART"),
+                "{history_option}: {restarted_history}"
+            );
+            assert!(
+                !restarted_history.contains("AGENT_SENTINEL"),
+                "{history_option}: {restarted_history}"
+            );
+            assert!(
+                !restarted_history.contains("MEZ_"),
+                "{history_option}: {restarted_history}"
+            );
             let user_hook_lines = fs::read_to_string(&hook_log).unwrap();
             assert!(user_hook_lines.contains("USER_BEFORE"), "{user_hook_lines}");
             assert!(user_hook_lines.contains("USER_AFTER"), "{user_hook_lines}");
@@ -403,7 +457,7 @@ function zshaddhistory() {{\n\
             );
             assert_eq!(
                 fs::read_to_string(home.join("startup.log")).unwrap(),
-                "zshenv\nzshrc\n"
+                "zshenv\nzshrc\nzshenv\nzshrc\n"
             );
             drop(compatibility);
             fs::remove_dir_all(root).unwrap();
@@ -455,6 +509,17 @@ function zshaddhistory() {{\n\
             Some(&token),
         )
         .unwrap();
+        let agent_transaction = mez_agent::ShellTransaction::new(
+            MarkerToken::new("fedcba9876543210fedcba9876543210").unwrap(),
+            "t1",
+            "a1",
+            "p1",
+            zsh,
+            "print -r -- AGENT_CHILD_SENTINEL",
+        )
+        .unwrap()
+        .with_zsh_history_token(token.clone())
+        .render_for_classification_input(ShellClassification::Zsh);
 
         let mut command = Command::new(launch.program());
         command
@@ -469,6 +534,13 @@ function zshaddhistory() {{\n\
         let mut child = command.spawn().unwrap();
         let stdin = child.stdin.as_mut().unwrap();
         stdin.write_all(handoff.as_bytes()).unwrap();
+        stdin
+            .write_all(agent_transaction.wrapper.as_bytes())
+            .unwrap();
+        thread::sleep(Duration::from_millis(50));
+        stdin
+            .write_all(agent_transaction.payload.as_bytes())
+            .unwrap();
         stdin.write_all(b"print -r -- USER_CHILD\n").unwrap();
         stdin.write_all(b"print -r -- __HISTORY_BEGIN__\nfc -l -100\nprint -r -- __HISTORY_END__\nexit\nexit\n").unwrap();
         drop(child.stdin.take());
@@ -488,6 +560,7 @@ function zshaddhistory() {{\n\
             .unwrap_or_default();
         for observed in [&persisted, in_memory] {
             assert!(observed.contains("USER_CHILD"), "{observed}");
+            assert!(!observed.contains("AGENT_CHILD_SENTINEL"), "{observed}");
             assert!(!observed.contains("MEZ_"), "{observed}");
             assert!(!observed.contains(token.as_str()), "{observed}");
             assert!(!observed.contains("fc -p"), "{observed}");

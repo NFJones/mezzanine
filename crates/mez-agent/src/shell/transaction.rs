@@ -1389,6 +1389,13 @@ fn posix_agent_subshell_env_word_list_for_classification(
         .filter(|key| classification != ShellClassification::Zsh || **key != "ZDOTDIR")
         .map(|key| format!("-u {key}"))
         .collect::<Vec<_>>();
+    if classification == ShellClassification::Zsh {
+        words.push("ZDOTDIR=\"$MEZ_ZSH_MANAGED_ZDOTDIR\"".to_string());
+        words.push("MEZ_ZSH_PRESERVE_STARTUP_CONTEXT=1".to_string());
+        words
+            .push("MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET=\"$MEZ_ZSH_USER_ZDOTDIR_WAS_SET\"".to_string());
+        words.push("MEZ_ZSH_ORIGINAL_ZDOTDIR=\"$MEZ_ZSH_USER_ZDOTDIR\"".to_string());
+    }
     words.extend(
         AGENT_SUBSHELL_PROMPT_ENV
             .iter()
