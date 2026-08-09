@@ -1287,8 +1287,10 @@ fn runtime_initial_pane_process_preserves_explicit_launch_directory() {
     );
     poll_until_exit(&mut service);
     assert_eq!(
-        fs::read_to_string(&output).unwrap().trim(),
-        launch_directory.display().to_string()
+        Path::new(fs::read_to_string(&output).unwrap().trim())
+            .canonicalize()
+            .unwrap(),
+        launch_directory.canonicalize().unwrap()
     );
 
     let _ = fs::remove_dir_all(root);

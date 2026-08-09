@@ -78,15 +78,18 @@ pub(super) fn path_is_under_directory(path: &Path, directory: &Path) -> bool {
     {
         return false;
     }
+    let directory = macos_system_var_alias_target(directory);
+    let path = macos_system_var_alias_target(path);
     let directory =
-        canonicalize_existing_or_parent(directory).unwrap_or_else(|| directory.to_path_buf());
-    let path = canonicalize_existing_or_parent(path).unwrap_or_else(|| path.to_path_buf());
+        canonicalize_existing_or_parent(&directory).unwrap_or_else(|| directory.to_path_buf());
+    let path = canonicalize_existing_or_parent(&path).unwrap_or_else(|| path.to_path_buf());
     path.starts_with(directory)
 }
 
 /// Rejects auth-secret paths whose existing components are symlinks.
 pub(super) fn reject_existing_symlink_components(path: &Path) -> Result<()> {
-    for ancestor in path.ancestors() {
+    let validation_path = macos_system_var_alias_target(path);
+    for ancestor in validation_path.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(MezError::forbidden(
@@ -99,6 +102,26 @@ pub(super) fn reject_existing_symlink_components(path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Rewrites macOS's verified system-owned `/var` alias for validation only.
+///
+/// This deliberately does not canonicalize arbitrary caller paths: every
+/// component other than the operating system's `/var -> /private/var` alias
+/// remains subject to the regular symlink rejection below.
+fn macos_system_var_alias_target(path: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let var_root = Path::new("/var");
+        let private_var_root = Path::new("/private/var");
+        if path.is_absolute()
+            && let Ok(relative_path) = path.strip_prefix(var_root)
+            && var_root.canonicalize().ok().as_deref() == Some(private_var_root)
+        {
+            return private_var_root.join(relative_path);
+        }
+    }
+    path.to_path_buf()
 }
 
 /// Canonicalizes a path or reconstructs it under the nearest existing parent.

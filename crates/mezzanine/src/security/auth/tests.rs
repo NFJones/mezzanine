@@ -463,6 +463,43 @@ fn private_file_credential_store_rejects_symlink_secret_paths() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies macOS accepts its verified system-owned `/var` alias while
+/// retaining private auth metadata and secret-file operations.
+///
+/// The operating system provides `/var` as an alias for `/private/var`; this
+/// regression protects that trusted alias without allowing caller-controlled
+/// symlinks, which the neighboring regression continues to reject.
+#[cfg(target_os = "macos")]
+#[test]
+fn auth_store_accepts_verified_macos_var_alias() {
+    if Path::new("/var").canonicalize().ok().as_deref() != Some(Path::new("/private/var")) {
+        return;
+    }
+
+    let root =
+        Path::new("/var/tmp").join(format!("mez-auth-system-var-alias-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let store = AuthStore::new(AuthPaths::under_config_root(&root));
+    let reference = store.write_file_secret("openai", "sk-test-secret").unwrap();
+    let mut metadata = AuthMetadata::new("openai", "default");
+    metadata.credential_store_ref = Some(reference.clone());
+    store.write_metadata(&metadata).unwrap();
+
+    assert_eq!(
+        exposed_optional_secret(store.read_file_secret(&reference).unwrap()),
+        Some("sk-test-secret".to_string())
+    );
+    assert!(
+        store
+            .file_credential_store("openai")
+            .unwrap()
+            .delete_secret(&reference)
+            .unwrap()
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies command backed credential store uses runner without real keychain.
 ///
 /// This regression scenario documents the behavior being protected so a
