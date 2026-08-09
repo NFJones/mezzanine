@@ -4,6 +4,11 @@
 //! and concrete effect execution are isolated from deterministic lower engines.
 
 pub(crate) mod async_runtime;
+#[allow(
+    dead_code,
+    reason = "the sleep-inhibition backend is staged before its dependent agent-turn lifecycle integration"
+)]
+pub(crate) mod power_inhibition;
 pub(crate) mod process;
 pub(crate) mod shell;
 pub(crate) mod terminal;
