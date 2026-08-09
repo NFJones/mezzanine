@@ -334,7 +334,7 @@ models = [
     "gpt-5.4",
     "gpt-5.4-mini",
 ]
-default_model = "gpt-5.6-sol"
+default_model = "gpt-5.6-terra"
 
 [providers.openai.options]
 # Optional documented OpenAI routing headers for multi-organization/project API keys.
@@ -355,7 +355,7 @@ models = [
     "claude-sonnet-5",
     "claude-haiku-4-5-20251001",
 ]
-default_model = "claude-fable-5"
+default_model = "claude-sonnet-5"
 
 [providers.anthropic.options]
 # anthropic_version = "2023-06-01"
@@ -411,7 +411,7 @@ default_model = "deepseek-v4-pro"
 
 [model_profiles.anthropic-default]
 provider = "anthropic"
-model = "claude-fable-5"
+model = "claude-sonnet-5"
 reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
@@ -444,8 +444,8 @@ prompt_caching = "enabled"
 
 [model_profiles.default]
 provider = "openai"
-model = "gpt-5.6-sol"
-reasoning_profile = "medium"
+model = "gpt-5.6-terra"
+reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
 context_window_tokens = 1050000

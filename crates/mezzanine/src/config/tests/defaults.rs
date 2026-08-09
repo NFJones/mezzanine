@@ -155,6 +155,12 @@ fn default_config_matches_documented_example() {
 #[test]
 fn default_config_includes_anthropic_provider_defaults() {
     let parsed: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML).unwrap();
+    let openai = parsed
+        .get("providers")
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get("openai"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
     let anthropic = parsed
         .get("providers")
         .and_then(toml::Value::as_table)
@@ -162,6 +168,10 @@ fn default_config_includes_anthropic_provider_defaults() {
         .and_then(toml::Value::as_table)
         .unwrap();
 
+    assert_eq!(
+        openai.get("default_model").and_then(toml::Value::as_str),
+        Some("gpt-5.6-terra")
+    );
     assert_eq!(
         anthropic.get("kind").and_then(toml::Value::as_str),
         Some("anthropic")
@@ -172,7 +182,7 @@ fn default_config_includes_anthropic_provider_defaults() {
     );
     assert_eq!(
         anthropic.get("default_model").and_then(toml::Value::as_str),
-        Some("claude-fable-5")
+        Some("claude-sonnet-5")
     );
 
     let models = anthropic
@@ -191,6 +201,34 @@ fn default_config_includes_anthropic_provider_defaults() {
             "claude-sonnet-5",
             "claude-haiku-4-5-20251001",
         ]
+    );
+
+    let profiles = parsed
+        .get("model_profiles")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    let default = profiles
+        .get("default")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+    let anthropic_default = profiles
+        .get("anthropic-default")
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    assert_eq!(
+        default.get("model").and_then(toml::Value::as_str),
+        Some("gpt-5.6-terra")
+    );
+    assert_eq!(
+        default
+            .get("reasoning_profile")
+            .and_then(toml::Value::as_str),
+        Some("high")
+    );
+    assert_eq!(
+        anthropic_default.get("model").and_then(toml::Value::as_str),
+        Some("claude-sonnet-5")
     );
 }
 
