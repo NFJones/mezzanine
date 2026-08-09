@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   validate:
-    name: Validate: Linux
+    name: "Validate: Linux"
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -31,7 +31,7 @@ jobs:
       - name: Test
         run: cargo test --all-targets --all-features
   macos-release-build:
-    name: Validate: macOS
+    name: "Validate: macOS"
     runs-on: macos-latest
     steps:
       - name: Check out repository
