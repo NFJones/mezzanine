@@ -693,64 +693,6 @@ fn session_snapshot_payload_preserves_terminal_and_transcript_refs() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies snapshot repository builds rollback plan with limitations.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn snapshot_repository_builds_rollback_plan_with_limitations() {
-    let root = std::env::temp_dir().join(format!("mez-snapshot-rollback-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    let repo = SnapshotRepository::new(root.clone());
-    let mut session = Session::new_default(
-        ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        Size::new(80, 24).unwrap(),
-    );
-    let _primary = session.attach_primary("primary", true).unwrap();
-    let payload = SessionSnapshotPayload::from_session(&session);
-    let mut manifest = manifest();
-    manifest.state.storage_ref = "snap-1.payload".to_string();
-
-    repo.write(&manifest).unwrap();
-    repo.write_payload("snap-1", &payload).unwrap();
-    let rollback = repo.rollback_plan("snap-1").unwrap();
-
-    assert!(rollback.available);
-    assert_eq!(
-        rollback.restore_command.as_deref(),
-        Some("mez snapshot resume snap-1")
-    );
-    assert!(rollback.restart_required_panes.is_empty());
-    assert!(rollback.limitations.is_empty());
-
-    let _ = fs::remove_dir_all(root);
-}
-
-/// Verifies snapshot rollback plan discloses missing payload.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn snapshot_rollback_plan_discloses_missing_payload() {
-    let root = std::env::temp_dir().join(format!(
-        "mez-snapshot-rollback-missing-{}",
-        std::process::id()
-    ));
-    let _ = fs::remove_dir_all(&root);
-    let repo = SnapshotRepository::new(root.clone());
-    repo.write(&manifest()).unwrap();
-
-    let rollback = repo.rollback_plan("snap-1").unwrap();
-
-    assert!(!rollback.available);
-    assert!(rollback.restore_command.is_none());
-    assert!(rollback.limitations[0].contains("payload is unavailable"));
-
-    let _ = fs::remove_dir_all(root);
-}
-
 /// Verifies snapshot repository restores session shape from payload.
 ///
 /// This regression scenario documents the behavior being protected so a

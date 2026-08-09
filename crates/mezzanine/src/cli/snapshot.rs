@@ -9,11 +9,10 @@ use super::{
     Args, CliEnv, CliOutputFormat, ConfigPaths, LayoutLoadPlan, LoadedRuntimeConfig, MezError,
     ParsedServeOptions, RestoredSnapshotDaemonRequest, Result, RuntimeDaemonStartup,
     RuntimeSessionService, Serialize, SnapshotKind, SnapshotRepository, SnapshotRestoreResult,
-    SnapshotRollbackPlan, SnapshotState, SocketSelection, Subcommand, Write,
-    apply_default_serve_auxiliary_sockets, cli_idempotency_key, current_unix_seconds, json_escape,
-    json_optional, json_string_array, load_runtime_config_layers, resolve_shell,
-    run_control_request, run_foreground_control_daemon, selected_socket_path, serialize_json,
-    validate_serve_options, write_json_or_plain,
+    SnapshotState, SocketSelection, Subcommand, Write, apply_default_serve_auxiliary_sockets,
+    cli_idempotency_key, current_unix_seconds, json_escape, json_optional, json_string_array,
+    load_runtime_config_layers, resolve_shell, run_control_request, run_foreground_control_daemon,
+    selected_socket_path, serialize_json, validate_serve_options, write_json_or_plain,
 };
 
 // Snapshot subcommands and restored daemon startup.
@@ -54,16 +53,6 @@ pub(super) async fn run_snapshot<W: Write>(
         SnapshotCliCommand::Delete { snapshot_id } => {
             let deleted = repository.delete(&snapshot_id)?;
             let output = serialize_json(&SnapshotDeleteJson { deleted })?;
-            write_json_or_plain(stdout, output_format, &output)?;
-        }
-        SnapshotCliCommand::ResumePlan { snapshot_id } => {
-            let plan = repository.resume_plan(&snapshot_id)?;
-            let output = resume_plan_json(&plan);
-            write_json_or_plain(stdout, output_format, &output)?;
-        }
-        SnapshotCliCommand::LatestPlan { session_id } => {
-            let plan = repository.latest_resume_plan(session_id.as_deref())?;
-            let output = resume_plan_json(&plan);
             write_json_or_plain(stdout, output_format, &output)?;
         }
         SnapshotCliCommand::Resume(resume) => {
@@ -131,11 +120,6 @@ pub(super) async fn run_snapshot<W: Write>(
                 write_json_or_plain(stdout, output_format, &output)?;
             }
         }
-        SnapshotCliCommand::RollbackPlan { snapshot_id } => {
-            let plan = repository.rollback_plan(&snapshot_id)?;
-            let output = rollback_plan_json(&plan);
-            write_json_or_plain(stdout, output_format, &output)?;
-        }
         SnapshotCliCommand::Create { name } => {
             let name_json = name
                 .as_deref()
@@ -190,23 +174,6 @@ enum SnapshotCliCommand {
     Resume(LayoutLoadCliArgs),
     /// Restores the latest matching snapshot into a model or live daemon.
     ResumeLatest(LayoutLoadLatestCliArgs),
-    /// Shows the restore plan for one snapshot.
-    ResumePlan {
-        /// Snapshot id.
-        snapshot_id: String,
-    },
-    /// Shows the restore plan for the latest matching snapshot.
-    #[command(alias = "resume-latest-plan")]
-    LatestPlan {
-        /// Optional session id filter.
-        #[arg(long)]
-        session_id: Option<String>,
-    },
-    /// Shows whether one snapshot can act as a rollback point.
-    RollbackPlan {
-        /// Snapshot id.
-        snapshot_id: String,
-    },
 }
 
 /// Typed process CLI arguments for `mez snapshot resume`.
@@ -539,28 +506,4 @@ pub(super) fn session_state_name(state: mez_mux::session::SessionState) -> &'sta
         mez_mux::session::SessionState::Stopping => "stopping",
         mez_mux::session::SessionState::Failed => "failed",
     }
-}
-
-/// Runs the rollback plan json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn rollback_plan_json(plan: &SnapshotRollbackPlan) -> String {
-    let restart_required = plan
-        .restart_required_panes
-        .iter()
-        .map(|pane| format!(r#""{}""#, json_escape(pane)))
-        .collect::<Vec<_>>()
-        .join(",");
-    let limitations = json_string_array(&plan.limitations);
-    format!(
-        r#"{{"snapshot_id":"{}","session_id":"{}","available":{},"restore_command":{},"restart_required_panes":[{}],"limitations":{}}}"#,
-        json_escape(&plan.snapshot_id),
-        json_escape(&plan.session_id),
-        plan.available,
-        json_optional(plan.restore_command.as_deref()),
-        restart_required,
-        limitations
-    )
 }

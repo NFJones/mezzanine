@@ -967,44 +967,6 @@ pub struct LayoutLoadPlan {
     pub limitations: Vec<String>,
 }
 
-/// Carries Snapshot Rollback Plan state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SnapshotRollbackPlan {
-    /// Stores the snapshot id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub snapshot_id: String,
-    /// Stores the session id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub session_id: String,
-    /// Stores the available value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub available: bool,
-    /// Stores the restore command value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub restore_command: Option<String>,
-    /// Stores the restart required panes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub restart_required_panes: Vec<String>,
-    /// Stores the limitations value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub limitations: Vec<String>,
-}
-
 /// Carries Snapshot Restore Result state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

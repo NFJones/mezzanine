@@ -1,4 +1,4 @@
-//! Snapshot resume, rollback, and session-restore planning.
+//! Snapshot resume and session-restore planning.
 //!
 //! Restore methods combine manifest metadata with payload inspection and delegate
 //! actual session reconstruction to the session module.
@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use super::types::{
     LayoutLoadPlan, SessionSnapshotPayload, SnapshotManifest, SnapshotRepository,
-    SnapshotRestoreResult, SnapshotRollbackPlan, SnapshotSessionState, SnapshotState,
+    SnapshotRestoreResult, SnapshotSessionState, SnapshotState,
 };
 
 /// Decodes a validated product snapshot into dependency-neutral session data.
@@ -202,21 +202,6 @@ impl SnapshotRepository {
             .max_by(Self::compare_latest_snapshots))
     }
 
-    /// Runs the latest resume plan operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn latest_resume_plan(&self, session_id: Option<&str>) -> Result<LayoutLoadPlan> {
-        let latest = self.latest(session_id)?.ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "no matching snapshot found",
-            )
-        })?;
-        self.resume_plan(&latest.id)
-    }
-
     /// Runs the restore loaded session operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -320,54 +305,5 @@ impl SnapshotRepository {
             )
         })?;
         self.restore_session(&latest.id, shell)
-    }
-
-    /// Runs the rollback plan operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn rollback_plan(&self, snapshot_id: &str) -> Result<SnapshotRollbackPlan> {
-        let manifest = self.inspect(snapshot_id)?;
-        let mut limitations = manifest.state.limitations.clone();
-        if !manifest.state.restorable {
-            limitations.push("snapshot manifest is marked non-restorable".to_string());
-            return Ok(SnapshotRollbackPlan {
-                snapshot_id: manifest.state.id,
-                session_id: manifest.state.session_id,
-                available: false,
-                restore_command: None,
-                restart_required_panes: Vec::new(),
-                limitations,
-            });
-        }
-
-        let payload = match self.inspect_payload(snapshot_id) {
-            Ok(payload) => payload,
-            Err(error) => {
-                limitations.push(format!(
-                    "snapshot payload is unavailable: {}",
-                    error.message()
-                ));
-                return Ok(SnapshotRollbackPlan {
-                    snapshot_id: manifest.state.id,
-                    session_id: manifest.state.session_id,
-                    available: false,
-                    restore_command: None,
-                    restart_required_panes: Vec::new(),
-                    limitations,
-                });
-            }
-        };
-        let resume = payload.resume_plan();
-        limitations.extend(resume.limitations);
-        Ok(SnapshotRollbackPlan {
-            snapshot_id: manifest.state.id,
-            session_id: manifest.state.session_id,
-            available: true,
-            restore_command: Some(format!("mez snapshot resume {snapshot_id}")),
-            restart_required_panes: resume.restart_required_panes,
-            limitations,
-        })
     }
 }

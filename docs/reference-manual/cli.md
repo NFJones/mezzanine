@@ -48,8 +48,7 @@ and target syntax.
 
 Snapshots preserve recoverable session layout state, not running processes,
 terminal history, or agent conversations. Pending approvals and approval grants
-do not become authority in a restored session. Use the planning commands before
-a restore when the result needs review:
+do not become authority in a restored session:
 
 | Command | Behavior |
 | --- | --- |
@@ -57,9 +56,6 @@ a restore when the result needs review:
 | `mez snapshot create [-n NAME]` | Create a snapshot of the live session selected by the control socket. |
 | `mez snapshot inspect <snapshot-id>` | Inspect one saved snapshot. |
 | `mez snapshot delete <snapshot-id>` | Delete one saved snapshot. |
-| `mez snapshot resume-plan <snapshot-id>` | Show the restore plan without loading the snapshot payload. |
-| `mez snapshot latest-plan [--session-id ID]` | Show the restore plan for the newest matching snapshot. Alias: `resume-latest-plan`. |
-| `mez snapshot rollback-plan <snapshot-id>` | Show whether a snapshot can serve as a rollback point. |
 | `mez snapshot resume <snapshot-id>` | Reconstruct the saved layout model without starting a daemon; add `--serve` to launch fresh panes in a foreground daemon. |
 | `mez snapshot resume-latest [--session-id ID]` | Reconstruct the newest matching layout model without starting a daemon; it also accepts `--serve`. |
 

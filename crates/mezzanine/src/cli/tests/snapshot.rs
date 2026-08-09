@@ -2,6 +2,42 @@
 
 use super::*;
 
+/// Verifies the removed snapshot planning commands are rejected by the CLI.
+///
+/// The planning projections remain internal restore metadata, but none of the
+/// former `-plan` command names or aliases may remain available to users.
+#[test]
+fn snapshot_plan_commands_are_rejected() {
+    for command in [
+        "resume-plan",
+        "latest-plan",
+        "resume-latest-plan",
+        "rollback-plan",
+    ] {
+        let (env, home) = test_env(command);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let error = run_with(
+            vec![
+                "mez".to_string(),
+                "snapshot".to_string(),
+                command.to_string(),
+                "snapshot-id".to_string(),
+            ],
+            env,
+            false,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unrecognized subcommand"));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+        let _ = fs::remove_dir_all(home);
+    }
+}
+
 /// Verifies snapshot list reads local snapshot repository.
 ///
 /// This regression scenario documents the behavior being protected so a

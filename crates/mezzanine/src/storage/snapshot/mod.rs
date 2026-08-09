@@ -42,7 +42,7 @@ pub use types::{
     SnapshotCreationContext, SnapshotFrameSettings, SnapshotFrameState, SnapshotKind,
     SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
     SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository, SnapshotRestoreResult,
-    SnapshotRollbackPlan, SnapshotState,
+    SnapshotState,
 };
 #[cfg(test)]
 pub use types::{

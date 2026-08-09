@@ -60,7 +60,7 @@ use crate::storage::registry::{
 };
 use crate::storage::snapshot::{
     LayoutLoadPlan, SessionSnapshotPayload, SnapshotKind, SnapshotRepository,
-    SnapshotRestoreResult, SnapshotRollbackPlan, SnapshotState,
+    SnapshotRestoreResult, SnapshotState,
 };
 use crate::storage::transcript::AgentTranscriptStore;
 use mez_agent::mcp::McpRegistry;
