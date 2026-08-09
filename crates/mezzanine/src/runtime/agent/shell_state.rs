@@ -21,7 +21,9 @@ use mez_agent::PermissionPreset;
 use mez_agent::permissions::{
     PermissionAuthorityChange, PermissionEvaluation, compare_permission_preset_authority,
 };
-use mez_agent::{SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch};
+use mez_agent::{
+    LocalProgramDialect, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch,
+};
 use std::path::{Path, PathBuf};
 
 /// Effective primary filesystem authority and its user-visible provenance.
@@ -104,6 +106,8 @@ fn bubblewrap_action_path_resolution_request(
 pub(super) struct ShellActionDispatch<'a> {
     /// Original command retained for execution, preview, and audit identity.
     pub(super) command: &'a str,
+    /// Interpreter grammar required by the command source.
+    pub(super) program_dialect: LocalProgramDialect,
     /// Whether the command intentionally mutates the persistent pane shell.
     pub(super) stateful: bool,
     /// Whether the command requires interactive terminal behavior.
@@ -142,6 +146,7 @@ impl RuntimeSessionService {
     ) -> Result<ShellActionDispatchOutcome> {
         let ShellActionDispatch {
             command,
+            program_dialect,
             stateful,
             interactive,
             timeout_ms,
@@ -191,17 +196,21 @@ impl RuntimeSessionService {
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
         let marker = runtime_marker_for_action(turn, &action.id)?;
         let marker_id = marker.as_str().to_string();
-        let mut transaction = self.configure_shell_transaction_for_pane(
+        let mut transaction = ShellTransaction::new(
+            marker,
+            &turn.turn_id,
+            &turn.agent_id,
             &turn.pane_id,
-            ShellTransaction::new(
-                marker,
-                &turn.turn_id,
-                &turn.agent_id,
-                &turn.pane_id,
-                self.session.shell.path(),
-                command,
-            )?,
-        );
+            self.session.shell.path(),
+            command,
+        )?;
+        if let Some(interpreter) = program_dialect.interpreter_path() {
+            transaction = transaction.with_child_launch(ShellChildLaunch::new(
+                interpreter,
+                vec![ShellChildArgument::MaterializedCommandFile],
+            )?);
+        }
+        let mut transaction = self.configure_shell_transaction_for_pane(&turn.pane_id, transaction);
         let mut sandbox_audit_summary = None;
         let mut managed_home_activity_lock = None;
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
@@ -271,7 +280,9 @@ impl RuntimeSessionService {
             let probe_plan =
                 crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
                     &config,
-                    &signature.shell_path,
+                    program_dialect
+                        .interpreter_path()
+                        .unwrap_or(&signature.shell_path),
                     &identity,
                     &environment_evidence,
                 )
@@ -321,7 +332,9 @@ impl RuntimeSessionService {
                         action.payload,
                         AgentActionPayload::ApplyPatch { .. }
                     ),
-                    child_shell_path: &signature.shell_path,
+                    child_shell_path: program_dialect
+                        .interpreter_path()
+                        .unwrap_or(&signature.shell_path),
                     command_file_host_path:
                         crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
                     managed_home: managed_home.as_ref(),
@@ -543,6 +556,11 @@ impl RuntimeSessionService {
             action,
             ShellActionDispatch {
                 command,
+                program_dialect: local_action_plan(action)?
+                    .ok_or_else(|| {
+                        MezError::invalid_state("shell dispatch requires a local action plan")
+                    })?
+                    .program_dialect,
                 stateful: false,
                 interactive: false,
                 timeout_ms: None,

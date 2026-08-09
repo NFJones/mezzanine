@@ -305,7 +305,7 @@ pub use http::{
 };
 pub use local_action::{
     LocalActionKind, LocalActionPlan, LocalActionPlanningError, LocalActionPlanningResult,
-    action_is_local_shell_backed, local_action_plan, local_action_summary,
+    LocalProgramDialect, action_is_local_shell_backed, local_action_plan, local_action_summary,
 };
 pub use maap::{
     AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,

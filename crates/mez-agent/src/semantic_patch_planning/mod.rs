@@ -263,6 +263,7 @@ pub fn apply_patch_read_plan_for_paths_with_boundary(
 ) -> LocalActionPlan {
     LocalActionPlan {
         kind: LocalActionKind::ApplyPatch,
+        program_dialect: crate::LocalProgramDialect::PosixSh,
         summary: "I’ll apply a patch.".to_string(),
         command: mez_apply_patch_read_command(paths, boundary),
         policy_command: "apply_patch".to_string(),
@@ -282,6 +283,7 @@ pub fn apply_patch_error_plan(message: &str) -> LocalActionPlan {
     let message = message.strip_prefix("apply_patch: ").unwrap_or(message);
     LocalActionPlan {
         kind: LocalActionKind::ApplyPatch,
+        program_dialect: crate::LocalProgramDialect::PosixSh,
         summary: "I’ll apply a patch.".to_string(),
         command: format!(
             "# {APPLY_PATCH_WRITE_PHASE_MARKER}\nprintf '%s\\n' {} >&2\nexit 1",
@@ -334,6 +336,7 @@ fn mez_apply_patch_write_plan(
     command.push_str("if [ \"${MEZ_APPLY_FAILED:-0}\" = 1 ]; then exit 1; fi\n");
     Ok(LocalActionPlan {
         kind: LocalActionKind::ApplyPatch,
+        program_dialect: crate::LocalProgramDialect::PosixSh,
         summary: "I’ll apply a patch.".to_string(),
         command,
         policy_command: "apply_patch".to_string(),
