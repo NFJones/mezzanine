@@ -23,6 +23,93 @@ fn discovery_script_uses_shell_command_lookup() {
 }
 
 #[test]
+/// Verifies Fish tool discovery records the version producer's status rather
+/// than the status of the `head` process that truncates its output.
+///
+/// The fixture places deterministic `sed` and `grep` executables first on
+/// `PATH`: both print usable first lines, but only `sed` fails. This ensures
+/// output capture and producer success remain independent probe facts.
+fn fish_discovery_preserves_version_producer_status() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::time::Instant;
+
+    let temp = test_temp_dir("fish-tool-version-status");
+    for (tool, version, status) in [
+        ("sed", "failing sed 1.0", 37),
+        ("grep", "successful grep 2.0", 0),
+    ] {
+        let path = temp.join(tool);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\nprintf '%s\\n' '{version}' ignored\nexit {status}\n"),
+        )
+        .expect("the fake version probe should be written");
+        let mut permissions = std::fs::metadata(&path)
+            .expect("the fake version probe metadata should be readable")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions)
+            .expect("the fake version probe should be executable");
+    }
+
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut probe_paths = vec![temp.clone()];
+    probe_paths.extend(std::env::split_paths(&inherited_path));
+    let probe_path =
+        std::env::join_paths(&probe_paths).expect("the Fish probe PATH should be valid");
+    let mut child = match std::process::Command::new("fish")
+        .args(["--no-config", "-c", fish_tool_discovery_script()])
+        .env("PATH", probe_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping real-Fish discovery assertion because fish is unavailable");
+            std::fs::remove_dir_all(temp).unwrap();
+            return;
+        }
+        Err(error) => panic!("the Fish discovery process should spawn: {error}"),
+    };
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if child
+            .try_wait()
+            .expect("the Fish discovery process should remain observable")
+            .is_some()
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the Fish discovery process exceeded its five-second deadline");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let output = child
+        .wait_with_output()
+        .expect("the Fish discovery output should be collected");
+    std::fs::remove_dir_all(temp).unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let inventory = ToolInventory::parse_bootstrap_output(&String::from_utf8_lossy(&output.stdout));
+    let sed = inventory
+        .tools
+        .get("sed")
+        .expect("sed should be discovered");
+    let grep = inventory
+        .tools
+        .get("grep")
+        .expect("grep should be discovered");
+    assert_eq!(sed.version.as_deref(), Some("failing sed 1.0"));
+    assert_eq!(sed.version_exit_status, Some(37));
+    assert_eq!(grep.version.as_deref(), Some("successful grep 2.0"));
+    assert_eq!(grep.version_exit_status, Some(0));
+}
+
+#[test]
 /// Verifies environment signature known fields includes all fields.
 ///
 /// This regression scenario documents the behavior being protected so a

@@ -275,7 +275,7 @@ function mez_probe_tool\n\
   if test \"$mez_lookup_status\" -eq 0\n\
     set mez_version_command \"$mez_path --version\"\n\
     set -l mez_version_output ($mez_path --version 2>/dev/null | head -n 1)\n\
-    set mez_version_status $status\n\
+    set mez_version_status $pipestatus[1]\n\
     set mez_version \"$mez_version_output\"\n\
   end\n\
   set -l mez_available 0\n\
