@@ -2,6 +2,150 @@
 
 use super::super::*;
 
+/// Verifies Escape from a focused issue detail emits only the refreshed parent
+/// record-browser frame during one combined input/output loop iteration. The
+/// first frame is rendered before input is applied, so writing it after Escape
+/// would leave stale detail styling visible until a later interaction.
+#[tokio::test(flavor = "current_thread")]
+async fn async_attached_terminal_loop_skips_stale_record_detail_frame_after_escape() {
+    let mut service = test_service();
+    let size = Size::new(80, 12).unwrap();
+    let primary = service.attach_primary("primary", true, size, 10).unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let parent_browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![
+            mez_mux::record_browser::RecordBrowserRecord {
+                id: "issue-1".to_string(),
+                open_command: Some("/show-issues issue-1".to_string()),
+                title: "First issue".to_string(),
+                metadata: vec![("kind".to_string(), "task".to_string())],
+                markdown: "First body".to_string(),
+            },
+            mez_mux::record_browser::RecordBrowserRecord {
+                id: "issue-2".to_string(),
+                open_command: Some("/show-issues issue-2".to_string()),
+                title: "Second issue".to_string(),
+                metadata: vec![("kind".to_string(), "defect".to_string())],
+                markdown: "Second body".to_string(),
+            },
+        ],
+        Vec::new(),
+    )
+    .unwrap();
+    let mut child_browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issue detail",
+        vec![mez_mux::record_browser::RecordBrowserRecord {
+            id: "issue-1".to_string(),
+            open_command: Some("/show-issues issue-1".to_string()),
+            title: "First issue".to_string(),
+            metadata: vec![("kind".to_string(), "task".to_string())],
+            markdown: "First body".to_string(),
+        }],
+        Vec::new(),
+    )
+    .unwrap();
+    child_browser.show_first_record_detail();
+    let child_page = child_browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", child_browser, None);
+    service.set_pending_record_browser_overlay_stack_for_tests(
+        &pane_id,
+        "show-issues",
+        vec![mez_mux::overlay::RecordBrowserOverlayFrame {
+            command: "show-issues".to_string(),
+            source: None,
+            browser: parent_browser,
+            scroll_offset: 0,
+            active_selection_index: Some(1),
+        }],
+    );
+    let response = serde_json::json!({
+        "pane_id": pane_id,
+        "input": "/show-issues issue-1",
+        "kind": "display",
+        "command": "show-issues",
+        "content_type": "text/markdown; charset=utf-8",
+        "body": child_page.raw_markdown,
+        "turn": null,
+    })
+    .to_string();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let mut io = FakeAttachedTerminalLoopIo {
+        readiness_batches: vec![vec![
+            AttachedTerminalFdReadiness {
+                role: AttachedTerminalFdRole::Input,
+                fd: 0,
+                interest: TerminalFdInterest::read(),
+                readable: true,
+                writable: false,
+                hangup: false,
+                error: false,
+            },
+            AttachedTerminalFdReadiness {
+                role: AttachedTerminalFdRole::Output,
+                fd: 1,
+                interest: TerminalFdInterest::write(),
+                readable: false,
+                writable: true,
+                hangup: false,
+                error: false,
+            },
+        ]],
+        input_batches: vec![b"\x1b".to_vec()],
+        written_batches: Vec::new(),
+        write_error_kinds: Vec::new(),
+    };
+
+    let client = async {
+        let report = run_async_attached_terminal_client_loop(
+            &handle,
+            &mut io,
+            AsyncAttachedTerminalLoopRequest {
+                role: ClientViewRole::Primary,
+                client_id: primary.clone(),
+                primary_client_id: Some(primary.clone()),
+                client_size: size,
+                terminal_config: TerminalClientLoopConfig::default(),
+                loop_config: AttachedTerminalClientLoopConfig {
+                    max_iterations: 1,
+                    max_input_bytes: 64,
+                },
+            },
+            |_| Ok(None),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.output_frames, 1);
+        assert_eq!(io.written_batches.len(), 1);
+        let frame = &io.written_batches[0];
+        assert!(
+            frame.iter().any(|line| line.contains("Issues")),
+            "{frame:?}"
+        );
+        assert!(
+            frame.iter().any(|line| line.contains("Second issue")),
+            "{frame:?}"
+        );
+        assert!(
+            !frame.iter().any(|line| line.contains("First body")),
+            "{frame:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed > 0);
+}
+
 /// Verifies `/compact` submitted through the pane-local prompt queues async
 /// compaction dispatch side effects. This covers the attached-terminal path
 /// used by interactive agent mode, where `/compact` must not leave only a
@@ -468,8 +612,8 @@ async fn async_attached_terminal_loop_renders_and_applies_primary_actions() {
                 mez_mux::input::PaneFocusDirection::Right
             ))]
         );
-        assert_eq!(report.output_frames, 2);
-        assert_eq!(io.written_batches.len(), 2);
+        assert_eq!(report.output_frames, 1);
+        assert_eq!(io.written_batches.len(), 1);
         assert_eq!(
             io.written_batches.last().unwrap()[23].trim_end(),
             "attached"
@@ -703,7 +847,7 @@ async fn async_attached_terminal_loop_runs_actor_owned_command_prompt() {
         .unwrap();
 
         assert_eq!(report.iterations, 2);
-        assert_eq!(report.output_frames, 4);
+        assert_eq!(report.output_frames, 2);
         assert_eq!(
             report.actions,
             vec![
@@ -711,20 +855,20 @@ async fn async_attached_terminal_loop_runs_actor_owned_command_prompt() {
                 TerminalClientLoopAction::ForwardToPane(b"list-buffers\r".to_vec())
             ]
         );
-        assert_eq!(io.written_batches.len(), 4);
-        assert_eq!(io.written_batches[1][23].trim_end(), "▐ :");
+        assert_eq!(io.written_batches.len(), 2);
+        assert_eq!(io.written_batches[0][23].trim_end(), "▐ :");
         assert!(
-            io.written_batches[3]
+            io.written_batches[1]
                 .iter()
                 .any(|line| line.contains("buffers: 0"))
         );
         assert!(
-            io.written_batches[3]
+            io.written_batches[1]
                 .iter()
                 .any(|line| line.contains("source: runtime"))
         );
         assert!(
-            io.written_batches[3]
+            io.written_batches[1]
                 .iter()
                 .any(|line| line.contains("status: empty"))
         );
@@ -869,10 +1013,10 @@ async fn async_attached_terminal_loop_routes_agent_shell_input_non_modally() {
                 TerminalClientLoopAction::ForwardToPane(b"/status\r".to_vec()),
             ]
         );
-        assert_eq!(report.output_frames, 4);
-        assert_eq!(io.written_batches.len(), 4);
+        assert_eq!(report.output_frames, 3);
+        assert_eq!(io.written_batches.len(), 3);
         assert!(
-            io.written_batches[1]
+            io.written_batches[0]
                 .iter()
                 .any(|line| line.trim_end() == "▐ mez>")
         );

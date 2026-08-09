@@ -437,7 +437,14 @@ where
         } else {
             None
         };
-        if !step.output_lines.is_empty() && !agent_prompt_input_action {
+        let pre_action_frame_is_stale =
+            primary_step_application
+                .as_ref()
+                .is_some_and(|application| {
+                    application.view_refresh_required || application.full_redraw_required
+                });
+        if !step.output_lines.is_empty() && !agent_prompt_input_action && !pre_action_frame_is_stale
+        {
             let output_modes = AttachedTerminalOutputModes {
                 application_keypad: frame.config.mouse_policy.pane_application_keypad_mode,
                 enhanced_keyboard_reporting: frame.view.as_ref().is_some_and(|view| {
