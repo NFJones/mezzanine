@@ -22,8 +22,9 @@ use mez_terminal::TerminalSize;
 use super::process_metadata::{current_working_directory_for_pid, process_name_for_pid};
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
 use super::signals::send_signal_to_pane_process_group;
-use super::types::PaneExitStatus;
-use super::types::{ShellInputDelivery, ShellInputPacing};
+#[cfg(target_os = "macos")]
+use super::types::ShellInputPacing;
+use super::types::{PaneExitStatus, ShellInputDelivery};
 
 /// Defines the DEFAULT OUTPUT BACKLOG LIMIT BYTES const used by this subsystem.
 ///
