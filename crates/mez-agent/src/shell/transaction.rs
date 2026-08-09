@@ -243,6 +243,12 @@ pub struct ShellTransaction {
     /// complete output is required for correctness may select a larger bounded
     /// limit before rendering the transaction wrapper.
     pub output_max_raw_bytes: usize,
+    /// Whether the streamed payload receiver acknowledges each consumed record.
+    ///
+    /// Strict PTY pacing uses this opt-in contract to distinguish receiver
+    /// progress from unrelated child output. Ordinary unpaced transactions
+    /// leave it disabled.
+    payload_receiver_acknowledgements: bool,
 }
 
 /// One argument in a typed isolated-child process launch.
@@ -330,6 +336,9 @@ pub struct ShellTransactionInput {
     pub wrapper: String,
     /// Base64 command payload consumed by the receiver after it starts.
     pub payload: String,
+    /// Whether the rendered receiver emits one raw record-separator byte after
+    /// every data record and after the authenticated sentinel.
+    pub payload_receiver_acknowledgements: bool,
 }
 
 impl ShellTransactionInput {
@@ -818,6 +827,7 @@ impl ShellTransaction {
             child_launch: None,
             output_transport: ShellTransactionOutputTransport::Raw,
             output_max_raw_bytes: SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
+            payload_receiver_acknowledgements: false,
         })
     }
 
@@ -859,6 +869,16 @@ impl ShellTransaction {
         self
     }
 
+    /// Selects receiver acknowledgements for strict streamed-payload pacing.
+    ///
+    /// When enabled, the shell receiver emits one raw `0x1e` byte after each
+    /// consumed base64 record and after the sentinel. The rendered input
+    /// advertises this capability so runtime delivery layers do not infer it.
+    pub fn with_payload_receiver_acknowledgements(mut self, enabled: bool) -> Self {
+        self.payload_receiver_acknowledgements = enabled;
+        self
+    }
+
     /// Runs the render posix operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -883,6 +903,7 @@ impl ShellTransaction {
             &self.command,
             self.marker.as_str(),
             "command printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$MEZ_MARKER_TOKEN\" \"$MEZ_TURN\" \"$MEZ_AGENT\" \"$MEZ_PANE\"",
+            self.payload_receiver_acknowledgements,
         );
         let shell_invocation = self.child_launch.as_ref().map_or_else(
             || {
@@ -962,6 +983,7 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
                 self.zsh_history_token.as_ref(),
             ),
             payload: command_materialization.payload,
+            payload_receiver_acknowledgements: self.payload_receiver_acknowledgements,
         }
     }
 
@@ -1086,6 +1108,7 @@ unset -f {function_name} 2>/dev/null || :\n\
             &self.command,
             self.marker.as_str(),
             "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE",
+            self.payload_receiver_acknowledgements,
         );
         let shell_invocation = self.child_launch.as_ref().map_or_else(
             || {
@@ -1143,6 +1166,7 @@ end\n",
         ShellTransactionInput {
             wrapper,
             payload: command_materialization.payload,
+            payload_receiver_acknowledgements: self.payload_receiver_acknowledgements,
         }
     }
 
@@ -1217,8 +1241,14 @@ fn posix_command_file_materialization(
     command: &str,
     marker: &str,
     start_marker_line: &str,
+    acknowledge_payload_records: bool,
 ) -> CommandMaterialization {
     let end_marker = command_payload_end_marker(marker);
+    let acknowledge = if acknowledge_payload_records {
+        "command printf '\\036'"
+    } else {
+        ":"
+    };
     let mut lines = vec![
         "MEZ_COMMAND_FILE=$(mktemp) || MEZ_COMMAND_FILE=".to_string(),
         "MEZ_COMMAND_B64=".to_string(),
@@ -1236,8 +1266,9 @@ fn posix_command_file_materialization(
         "if [ -n \"$MEZ_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi".to_string(),
         start_marker_line.to_string(),
         "while IFS= read -r MEZ_COMMAND_LINE; do".to_string(),
-        "if [ \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\" ]; then MEZ_COMMAND_SEEN_END=1; break; fi".to_string(),
-        "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then printf '%s\\n' \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\" || { MEZ_WRITE_STATUS=$?; break; }; fi".to_string(),
+        format!("if [ \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\" ]; then MEZ_COMMAND_SEEN_END=1; {acknowledge}; break; fi"),
+        "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then printf '%s\\n' \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$?; fi".to_string(),
+        acknowledge.to_string(),
         "done".to_string(),
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ] && [ \"$MEZ_COMMAND_SEEN_END\" != 1 ]; then printf '%s\\n' 'Mezzanine shell transaction command payload ended before sentinel' >&2; MEZ_WRITE_STATUS=1; fi".to_string(),
         "if [ -n \"$MEZ_STTY_STATE\" ]; then stty \"$MEZ_STTY_STATE\" 2>/dev/null || :; MEZ_STTY_STATE=; fi".to_string(),
@@ -1366,8 +1397,14 @@ fn fish_command_file_materialization(
     command: &str,
     marker: &str,
     start_marker_line: &str,
+    acknowledge_payload_records: bool,
 ) -> CommandMaterialization {
     let end_marker = command_payload_end_marker(marker);
+    let acknowledge = if acknowledge_payload_records {
+        "printf '\\036'"
+    } else {
+        "true"
+    };
     let mut lines = vec![
         "set -l MEZ_COMMAND_FILE (mktemp); or set -l MEZ_COMMAND_FILE ''".to_string(),
         "set -l MEZ_COMMAND_B64 ''".to_string(),
@@ -1389,11 +1426,13 @@ fn fish_command_file_materialization(
         "while read -l MEZ_COMMAND_LINE".to_string(),
         "if test \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\"".to_string(),
         "set MEZ_COMMAND_SEEN_END 1".to_string(),
+        acknowledge.to_string(),
         "break".to_string(),
         "end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
-        "printf '%s\\n' \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or begin; set MEZ_WRITE_STATUS $status; break; end".to_string(),
+        "printf '%s\\n' \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status".to_string(),
         "end".to_string(),
+        acknowledge.to_string(),
         "end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test \"$MEZ_COMMAND_SEEN_END\" != 1".to_string(),
         "printf '%s\\n' 'Mezzanine shell transaction command payload ended before sentinel' >&2".to_string(),
@@ -1453,7 +1492,7 @@ fn command_payload_lines(command: &str, end_marker: &str) -> String {
 /// chunk. This avoids overflowing small Darwin PTY and Readline typeahead
 /// buffers while preserving the requirement that every action reaches the pane
 /// as shell input. The final complete command decodes and evaluates the source.
-fn posix_shell_wrapper_transport(
+pub(super) fn posix_shell_wrapper_transport(
     source: &str,
     classification: ShellClassification,
     zsh_history_token: Option<&MarkerToken>,

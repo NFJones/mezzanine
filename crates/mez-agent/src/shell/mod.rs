@@ -132,6 +132,15 @@ mod tests {
 
     static NEXT_SHELL_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
+    /// Re-encodes modified POSIX wrapper source for receiver failure tests.
+    fn posix_shell_wrapper_transport(
+        source: &str,
+        classification: ShellClassification,
+        zsh_history_token: Option<&MarkerToken>,
+    ) -> String {
+        super::transaction::posix_shell_wrapper_transport(source, classification, zsh_history_token)
+    }
+
     /// Builds the stable transaction marker shared by shell contract tests.
     fn marker() -> MarkerToken {
         MarkerToken::new("0123456789abcdef0123456789abcdef")

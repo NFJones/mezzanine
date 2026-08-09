@@ -558,6 +558,155 @@ fn posix_wrapper_streams_large_command_payload_after_receiver_start() {
 }
 
 #[test]
+/// Verifies acknowledged POSIX and zsh receivers emit exactly one raw record
+/// separator for every base64 data record and for the authenticated sentinel.
+///
+/// Strict Darwin pacing depends on this count rather than arbitrary terminal
+/// output, so the rendered transaction must also advertise the capability.
+fn posix_and_zsh_receivers_acknowledge_every_payload_record() {
+    for classification in [ShellClassification::PosixSh, ShellClassification::Zsh] {
+        let transaction = ShellTransaction::new(
+            marker(),
+            "t1",
+            "a1",
+            "p1",
+            Path::new("/bin/sh"),
+            "printf '%s\\n' reconstructed",
+        )
+        .unwrap()
+        .with_payload_receiver_acknowledgements(true);
+        let input = transaction.render_for_classification_input(classification);
+        let expected_acknowledgements = input.payload.lines().count();
+
+        assert!(input.payload_receiver_acknowledgements);
+        assert!(
+            decoded_posix_wrapper_source(&input.wrapper).contains("command printf '\\036'"),
+            "{classification:?}: {}",
+            input.wrapper
+        );
+        let output = run_sh_transaction(&input, "");
+        assert!(output.status.success(), "{classification:?}: {output:?}");
+        let receiver_output = output
+            .stdout
+            .windows(b"\x1b]133;C;".len())
+            .position(|window| window == b"\x1b]133;C;")
+            .and_then(|start| {
+                let tail = &output.stdout[start..];
+                tail.windows(b"\x1b\\".len())
+                    .position(|window| window == b"\x1b\\")
+                    .map(|end| &tail[end + b"\x1b\\".len()..])
+            })
+            .expect("transaction start marker should precede receiver acknowledgements");
+        assert_eq!(
+            receiver_output.iter().filter(|byte| **byte == 0x1e).count(),
+            expected_acknowledgements,
+            "{classification:?}: {:?}",
+            output.stdout
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("reconstructed"),
+            "{classification:?}: {:?}",
+            output.stdout
+        );
+    }
+}
+
+#[test]
+/// Verifies ordinary unpaced transactions neither advertise receiver
+/// acknowledgements nor emit acknowledgement commands in POSIX or Fish source.
+fn unpaced_receivers_do_not_emit_payload_acknowledgements() {
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), "true").unwrap();
+    let posix = transaction.render_for_classification_input(ShellClassification::PosixSh);
+    let fish = transaction.render_for_classification_input(ShellClassification::Fish);
+
+    assert!(!posix.payload_receiver_acknowledgements);
+    assert!(!fish.payload_receiver_acknowledgements);
+    assert!(!decoded_posix_wrapper_source(&posix.wrapper).contains("printf '\\036'"));
+    assert!(!fish.wrapper.contains("printf '\\036'"));
+}
+
+#[test]
+/// Verifies Fish advertises and renders the same per-record acknowledgement
+/// contract as POSIX and zsh without changing its existing start marker.
+fn fish_receiver_renders_acknowledged_payload_contract() {
+    let input = ShellTransaction::new(
+        marker(),
+        "t1",
+        "a1",
+        "p1",
+        Path::new("/opt/homebrew/bin/fish"),
+        "printf '%s\\n' fish",
+    )
+    .unwrap()
+    .with_payload_receiver_acknowledgements(true)
+    .render_for_classification_input(ShellClassification::Fish);
+
+    assert!(input.payload_receiver_acknowledgements);
+    assert_eq!(input.wrapper.matches("printf '\\036'").count(), 2);
+    assert!(input.wrapper.contains("printf '\\033]133;C;"));
+    assert!(input.wrapper.contains("set MEZ_COMMAND_SEEN_END 1"));
+    assert!(
+        !input
+            .wrapper
+            .contains("set MEZ_WRITE_STATUS $status; break")
+    );
+}
+
+#[test]
+/// Verifies a POSIX append failure retains the first error while continuing to
+/// consume and acknowledge every inert payload record through the sentinel.
+///
+/// The test redirects the receiver sidecar to `/dev/full`, then confirms the
+/// parent shell resumes after the failed transaction instead of interpreting a
+/// leftover payload record as interactive shell input.
+fn posix_receiver_failure_drains_and_acknowledges_through_sentinel() {
+    let transaction = ShellTransaction::new(
+        marker(),
+        "t1",
+        "a1",
+        "p1",
+        Path::new("/bin/sh"),
+        format!("printf '%s\\n' '{}'", "payload".repeat(512)),
+    )
+    .unwrap()
+    .with_payload_receiver_acknowledgements(true);
+    let mut input = transaction.render_for_classification_input(ShellClassification::PosixSh);
+    let expected_acknowledgements = input.payload.lines().count();
+    let source = decoded_posix_wrapper_source(&input.wrapper).replace(
+        "MEZ_COMMAND_B64=$(mktemp) || MEZ_WRITE_STATUS=1",
+        "MEZ_COMMAND_B64=/dev/full",
+    );
+    input.wrapper =
+        super::posix_shell_wrapper_transport(&source, ShellClassification::PosixSh, None);
+
+    let output = run_sh_transaction(&input, "printf '%s\\n' PARENT_AFTER_FAILURE\n");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let receiver_output = output
+        .stdout
+        .windows(b"\x1b]133;C;".len())
+        .position(|window| window == b"\x1b]133;C;")
+        .and_then(|start| {
+            let tail = &output.stdout[start..];
+            tail.windows(b"\x1b\\".len())
+                .position(|window| window == b"\x1b\\")
+                .map(|end| &tail[end + b"\x1b\\".len()..])
+        })
+        .expect("transaction start marker should precede receiver acknowledgements");
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        receiver_output.iter().filter(|byte| **byte == 0x1e).count(),
+        expected_acknowledgements,
+        "{:?}",
+        output.stdout
+    );
+    assert!(stdout.contains("\u{1b}]133;D;1;"), "{stdout:?}");
+    assert!(stdout.contains("PARENT_AFTER_FAILURE"), "{stdout:?}");
+    assert!(!stdout.contains("payloadpayload"), "{stdout:?}");
+}
+
+#[test]
 /// Verifies internal protocols can retain output beyond the ordinary shell
 /// result ceiling without removing the transaction's finite bound.
 ///
