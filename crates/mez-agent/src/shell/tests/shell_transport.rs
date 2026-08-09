@@ -111,6 +111,7 @@ fn zsh_wrapper_uses_native_full_transport_history_isolation() {
         first_line.contains(history_token.as_str()) && first_line.contains("fc -p"),
         "{first_line}"
     );
+    assert!(first_line.ends_with("printf '\\036'"), "{first_line}");
     assert!(
         transport.find("fc -p").unwrap() < transport.find("MEZ_WRAPPER_STTY").unwrap(),
         "{transport}"

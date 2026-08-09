@@ -362,6 +362,23 @@ mod tests {
         );
     }
 
+    /// Verifies an acknowledged generated-source record waits for its raw
+    /// receiver byte instead of unrelated pane output before advancing.
+    ///
+    /// The zsh history-control record uses this path before wrapper setup, so
+    /// this protects the bounded Darwin pacing contract from deadlocking on a
+    /// command that otherwise produces no visible output.
+    #[test]
+    fn generated_source_acknowledgement_requires_the_raw_receiver_byte() {
+        let delivery =
+            ShellInputDelivery::generated_source(b"control; printf '\\036'\nnext\n".to_vec());
+
+        assert_eq!(
+            record_wait(&delivery, b"control; printf '\\036'\n", true, false, true),
+            Ok(Some(ShellInputProgressWait::Acknowledgement))
+        );
+    }
+
     /// Verifies acknowledgement filtering preserves visible bytes and reports
     /// every receiver progress byte in a coalesced output read.
     #[test]

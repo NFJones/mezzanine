@@ -1617,7 +1617,7 @@ fn zsh_history_transport_fallback(
 /// then pushes the private history frame used by the remaining transport.
 pub fn zsh_history_control_record(token: &MarkerToken) -> String {
     format!(
-        "fc -p && MEZ_ZSH_HISTORY_ACTIVE={}",
+        "fc -p && MEZ_ZSH_HISTORY_ACTIVE={}; printf '\\036'",
         shell_quote(token.as_str())
     )
 }

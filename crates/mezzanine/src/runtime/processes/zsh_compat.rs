@@ -47,8 +47,8 @@ else
     local mez_line=${1%$'\n'}
     # ZLE passes parsed assignments without quote characters, while pipe input
     # retains the original single-quoted assignment text.
-    local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}"
-    local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'"
+    local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}; printf '\036'"
+    local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'; printf '\036'"
     if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} ) ]]; then
       return 1
     fi
@@ -91,8 +91,8 @@ function zshaddhistory() {
   local mez_line=${1%$'\n'}
   # ZLE passes parsed assignments without quote characters, while pipe input
   # retains the original single-quoted assignment text.
-  local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}"
-  local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'"
+  local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}; printf '\036'"
+  local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'; printf '\036'"
   if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} ) ]]; then
     return 1
   fi
@@ -505,8 +505,10 @@ function zshaddhistory() {{\n\
             let user_hook_lines = fs::read_to_string(&hook_log).unwrap();
             assert!(user_hook_lines.contains("USER_BEFORE"), "{user_hook_lines}");
             assert!(user_hook_lines.contains("USER_AFTER"), "{user_hook_lines}");
-            let authenticated_control_record =
-                format!("fc -p && MEZ_ZSH_HISTORY_ACTIVE='{}'", token.as_str());
+            let authenticated_control_record = format!(
+                "fc -p && MEZ_ZSH_HISTORY_ACTIVE='{}'; printf '\\036'",
+                token.as_str()
+            );
             assert!(
                 !user_hook_lines
                     .lines()
