@@ -213,6 +213,14 @@ pub async fn run_with<W: Write, E: Write>(
         }
         Some(CliCommand::Kill(args)) => {
             let force = args.force;
+            let socket_selection = match args.session_id.as_deref() {
+                Some(session_id) => super::attach::socket_selection_for_registry_session(
+                    &socket_selection,
+                    env.runtime.uid,
+                    session_id,
+                )?,
+                None => socket_selection,
+            };
             let params = format!(
                 r#"{{"idempotency_key":"{}","force":{force}}}"#,
                 cli_idempotency_key("session-kill")

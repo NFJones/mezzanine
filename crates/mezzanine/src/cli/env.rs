@@ -168,6 +168,8 @@ pub(super) struct DetachCliArgs {
 /// Typed process CLI arguments for `mez kill`.
 #[derive(Debug, Clone, Args)]
 pub(super) struct KillSessionCliArgs {
+    /// Optional registered session id or creation-order index alias to terminate.
+    pub(super) session_id: Option<String>,
     /// Confirms intentional termination of the live session.
     #[arg(short, long)]
     pub(super) force: bool,

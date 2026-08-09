@@ -377,7 +377,8 @@ for:
   flags for requesting pending observer access.
 - `mez list`: List resumable sessions.
 - `mez detach`: Detach the current client when invoked from inside a session.
-- `mez kill`: Terminate a session explicitly. Alias: `kill-session`.
+- `mez kill [target]`: Terminate a session explicitly. The optional target
+  accepts a stable session ID or session index alias. Alias: `kill-session`.
 - `mez snapshot`: Create, list, inspect, delete, or resume session snapshots.
 - `mez config`: Inspect, validate, and edit configuration.
 - `mez auth`: Start authentication, show authentication status, and log out.
@@ -507,9 +508,9 @@ for registered sessions. These aliases MUST be assigned from the oldest
 registered creation timestamp to the newest, starting at `$1`, with the stable
 session ID used as the deterministic tie-breaker. Index aliases are display and
 selection aliases only; they MUST NOT replace the stable session ID persisted
-in the registry. `mez attach <target>` MUST accept the full stable session ID,
-the displayed `$N` index alias, and the equivalent bare decimal `N` alias. If a
-target exactly matches a stable session ID, that exact ID MUST take precedence
+in the registry. `mez attach <target>` and `mez kill <target>` MUST accept the
+full stable session ID, the displayed `$N` index alias, and the equivalent bare
+decimal `N` alias. If a target exactly matches a stable session ID, that exact ID MUST take precedence
 over any derived alias.
 
 Mezzanine MUST launch pane shells on pseudoterminals.

@@ -151,6 +151,7 @@ pub(super) use responses::{
     terminal_step_response_line_style_spans, terminal_step_response_output_modes,
     terminal_step_response_refresh_requirement,
 };
+pub(in crate::cli) use selection::socket_selection_for_registry_session;
 pub(super) use selection::{AttachCliArgs, run_attach, run_list};
 #[cfg(test)]
 pub(super) use selection::{attach_request_from_args, default_attach_socket_selection};

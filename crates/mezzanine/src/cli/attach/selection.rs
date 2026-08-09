@@ -194,7 +194,7 @@ pub(in crate::cli) struct AttachCliArgs {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn socket_selection_for_registry_session(
+pub(in crate::cli) fn socket_selection_for_registry_session(
     socket_selection: &SocketSelection,
     owner_uid: u32,
     session_id: &str,

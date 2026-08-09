@@ -86,6 +86,7 @@ fn kill_command_accepts_kill_session_as_an_alias() {
             &[
                 "mez".to_string(),
                 command.to_string(),
+                "$2".to_string(),
                 "--force".to_string(),
             ],
             &env.runtime,
@@ -95,9 +96,92 @@ fn kill_command_accepts_kill_session_as_an_alias() {
 
         assert!(matches!(
             invocation.command,
-            Some(CliCommand::Kill(KillSessionCliArgs { force: true }))
+            Some(CliCommand::Kill(KillSessionCliArgs {
+                session_id: Some(session_id),
+                force: true,
+            })) if session_id == "$2"
         ));
     }
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies `mez kill` resolves a creation-order session alias through the
+/// registry before sending its termination request.
+///
+/// A targeted termination must reach the socket registered for `$1`, rather
+/// than the default control socket, so users can kill a listed session without
+/// copying its stable identifier.
+#[test]
+fn kill_routes_session_index_alias_to_registered_control_socket() {
+    let (env, home) = test_env("kill-session-index-alias");
+    let directory = default_socket_directory(&env.runtime).unwrap();
+    let socket_path = directory.path.join("selected.sock");
+    crate::runtime::ensure_private_socket_directory(&directory.path, env.runtime.uid).unwrap();
+    let listener = bind_control_socket(&socket_path, env.runtime.uid).unwrap();
+    let registry = SessionRegistry::new(directory.path.clone(), env.runtime.uid);
+    registry
+        .upsert(SessionRecord {
+            session_id: "$selected".to_string(),
+            name: "selected".to_string(),
+            state: RegistrySessionState::Running,
+            socket_path,
+            created_at_unix_seconds: 100,
+            last_attach_at_unix_seconds: None,
+            window_count: 1,
+            client_count: 0,
+            primary_available: true,
+            authoritative_columns: 80,
+            authoritative_rows: 24,
+        })
+        .unwrap();
+    let server = thread::spawn(move || {
+        let (_probe, _) = listener.accept().unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_control_response_frames(&mut stream, 4096, 2).unwrap();
+        let (initialize, consumed) = decode_control_frame(&request, 4096).unwrap();
+        let (kill, _) = decode_control_frame(&request[consumed..], 4096).unwrap();
+        assert!(
+            initialize.contains(r#""method":"control/initialize""#),
+            "{initialize}"
+        );
+        assert!(kill.contains(r#""method":"session/kill""#), "{kill}");
+        assert!(kill.contains(r#""force":true"#), "{kill}");
+        stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli-init","result":{"granted_role":"primary"}}"#,
+            ))
+            .unwrap();
+        stream
+            .write_all(&encode_control_body(
+                r#"{"jsonrpc":"2.0","id":"cli","result":{"killed":true}}"#,
+            ))
+            .unwrap();
+    });
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    run_with(
+        vec![
+            "mez".to_string(),
+            "kill".to_string(),
+            "$1".to_string(),
+            "--force".to_string(),
+        ],
+        env,
+        false,
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    server.join().unwrap();
+
+    assert!(
+        String::from_utf8(stdout)
+            .unwrap()
+            .contains(r#""killed":true"#)
+    );
+    assert!(stderr.is_empty());
 
     let _ = fs::remove_dir_all(home);
 }
