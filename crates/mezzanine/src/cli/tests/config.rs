@@ -26,7 +26,7 @@ fn config_init_creates_default_config() {
     assert!(config_path.is_file());
     assert_eq!(
         fs::read_to_string(config_path).unwrap(),
-        DEFAULT_CONFIG_TOML
+        crate::config::initial_config_toml().unwrap()
     );
 
     let _ = fs::remove_dir_all(home);

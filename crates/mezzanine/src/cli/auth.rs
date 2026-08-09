@@ -74,6 +74,7 @@ pub(super) async fn run_auth<W: Write>(
                             }
                         })
                         .await?;
+                        persist_authenticated_provider_defaults(&paths, &metadata)?;
                         write_auth_login(stdout, output_format, &metadata)?;
                         return Ok(());
                     }
@@ -102,6 +103,7 @@ pub(super) async fn run_auth<W: Write>(
                             }
                         })
                         .await?;
+                        persist_authenticated_provider_defaults(&paths, &metadata)?;
                         write_auth_login(stdout, output_format, &metadata)?;
                         return Ok(());
                     }
@@ -140,6 +142,7 @@ pub(super) async fn run_auth<W: Write>(
                         }
                     })
                     .await?;
+                    persist_authenticated_provider_defaults(&paths, &metadata)?;
                     write_auth_login(stdout, output_format, &metadata)?;
                 }
                 AuthMethod::DeviceCode => {
@@ -163,6 +166,7 @@ pub(super) async fn run_auth<W: Write>(
                         }
                     })
                     .await?;
+                    persist_authenticated_provider_defaults(&paths, &metadata)?;
                     write_auth_login(stdout, output_format, &metadata)?;
                 }
             }
@@ -347,6 +351,17 @@ fn login_openai_provider_credential_for_cli(
         credential,
         credential_store,
     )
+}
+
+/// Materializes built-in provider defaults after authentication succeeds.
+///
+/// Credential persistence completes before this configuration write, so a
+/// failed authentication attempt cannot create a provider entry.
+fn persist_authenticated_provider_defaults(
+    paths: &ConfigPaths,
+    metadata: &crate::security::auth::AuthMetadata,
+) -> Result<()> {
+    paths.materialize_authenticated_provider_defaults(&metadata.provider)
 }
 
 /// Runs the write auth login operation for this subsystem.

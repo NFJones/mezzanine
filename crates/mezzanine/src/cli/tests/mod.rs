@@ -20,7 +20,7 @@ use super::{
     AuthPaths, AuthStore, CliEnv, CliInvocation, OpenAiProviderCredential, OsString, PathBuf,
     SocketSelection, UnixStream, read_control_response_frames, selected_socket_path,
 };
-use crate::config::{DEFAULT_CONFIG_TOML, compose_effective_config};
+use crate::config::compose_effective_config;
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::host::async_runtime::AsyncFakeAttachedTerminalIo;
 use crate::host::shell::resolve_shell;

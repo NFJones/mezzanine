@@ -60,6 +60,7 @@ mod types;
 mod validation;
 
 pub use defaults::{DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML};
+pub(crate) use defaults::{initial_config_toml, provider_default_config_toml};
 #[cfg(test)]
 pub use migration::migrate_config_text;
 pub use migration::{CURRENT_CONFIG_SCHEMA_VERSION, migrate_config_file};

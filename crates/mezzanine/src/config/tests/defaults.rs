@@ -1,6 +1,7 @@
 //! Config defaults tests.
 
 use super::*;
+use crate::config::initial_config_toml;
 
 /// Verifies creates default config file.
 ///
@@ -15,7 +16,10 @@ fn creates_default_config_file() {
     let path = paths.ensure_default_config().unwrap();
 
     assert_eq!(path, root.join("config.toml"));
-    assert_eq!(fs::read_to_string(path).unwrap(), DEFAULT_CONFIG_TOML);
+    let config = fs::read_to_string(path).unwrap();
+    assert_eq!(config, initial_config_toml().unwrap());
+    assert!(!config.contains("[providers."), "{config}");
+    assert!(!config.contains("[model_profiles."), "{config}");
     assert!(root.join("macros").is_dir());
 
     let _ = fs::remove_dir_all(root);
@@ -70,7 +74,7 @@ async fn creates_default_config_file_async() {
     assert_eq!(selected.as_deref(), Some(path.as_path()));
     assert_eq!(
         tokio::fs::read_to_string(path).await.unwrap(),
-        DEFAULT_CONFIG_TOML
+        initial_config_toml().unwrap()
     );
     assert!(root.join("macros").is_dir());
 
@@ -104,7 +108,7 @@ fn concurrent_default_config_creation_is_idempotent() {
     }
     assert_eq!(
         fs::read_to_string(root.join("config.toml")).unwrap(),
-        DEFAULT_CONFIG_TOML
+        initial_config_toml().unwrap()
     );
 
     let _ = fs::remove_dir_all(root);
@@ -139,7 +143,7 @@ fn rejects_ambiguous_primary_config_files() {
 fn default_config_matches_documented_example() {
     let documented = include_str!("../../../../../docs/examples/config.toml");
 
-    assert_eq!(DEFAULT_CONFIG_TOML.trim(), documented.trim());
+    assert_eq!(initial_config_toml().unwrap().trim(), documented.trim());
 }
 
 /// Verifies generated defaults include the built-in Anthropic provider entry

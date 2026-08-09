@@ -726,7 +726,7 @@ fn run_sandbox_setup<W: Write>(
     let original_text = if original_exists {
         fs::read_to_string(&config_path)?
     } else {
-        DEFAULT_CONFIG_TOML.to_string()
+        crate::config::initial_config_toml()?
     };
     let batch = plan_config_mutations(
         ConfigFormat::from_path(&config_path)?,
