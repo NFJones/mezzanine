@@ -62,10 +62,42 @@ fn help_mentions_mez_commands() {
     assert!(output.contains("list-sessions"));
     assert!(output.contains("attach-session"));
     assert!(output.contains("detach-client"));
+    assert!(output.contains("kill"));
+    assert!(output.contains("kill-session"));
     assert!(output.contains("sandbox"));
     assert!(output.contains("version"));
     assert!(output.contains("--version"));
     assert!(stderr.is_empty());
+
+    let _ = fs::remove_dir_all(home);
+}
+
+/// Verifies the short session-termination command is canonical while the
+/// established long spelling remains available as a visible alias.
+///
+/// Both spellings must parse into the same command variant so existing scripts
+/// retain their session termination behavior as the primary CLI becomes `kill`.
+#[test]
+fn kill_command_accepts_kill_session_as_an_alias() {
+    let (env, home) = test_env("kill-alias");
+
+    for command in ["kill", "kill-session"] {
+        let invocation = CliInvocation::parse(
+            &[
+                "mez".to_string(),
+                command.to_string(),
+                "--force".to_string(),
+            ],
+            &env.runtime,
+            None,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            invocation.command,
+            Some(CliCommand::Kill(KillSessionCliArgs { force: true }))
+        ));
+    }
 
     let _ = fs::remove_dir_all(home);
 }

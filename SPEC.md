@@ -377,7 +377,7 @@ for:
   flags for requesting pending observer access.
 - `mez list`: List resumable sessions.
 - `mez detach`: Detach the current client when invoked from inside a session.
-- `mez kill-session`: Terminate a session explicitly.
+- `mez kill`: Terminate a session explicitly. Alias: `kill-session`.
 - `mez snapshot`: Create, list, inspect, delete, or resume session snapshots.
 - `mez config`: Inspect, validate, and edit configuration.
 - `mez auth`: Start authentication, show authentication status, and log out.

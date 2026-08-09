@@ -67,7 +67,8 @@ pub(super) enum CliCommand {
     #[command(visible_alias = "detach-client")]
     Detach(DetachCliArgs),
     /// Terminates a live session through the control socket.
-    KillSession(KillSessionCliArgs),
+    #[command(visible_alias = "kill-session")]
+    Kill(KillSessionCliArgs),
     /// Manages persisted snapshots.
     Snapshot(super::snapshot::SnapshotCliArgs),
     /// Manages provider authentication.
@@ -164,7 +165,7 @@ pub(super) struct DetachCliArgs {
     pub(super) client_id: Option<String>,
 }
 
-/// Typed process CLI arguments for `mez kill-session`.
+/// Typed process CLI arguments for `mez kill`.
 #[derive(Debug, Clone, Args)]
 pub(super) struct KillSessionCliArgs {
     /// Confirms intentional termination of the live session.

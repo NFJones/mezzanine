@@ -14,11 +14,12 @@ use super::attach::{
     terminal_step_control_request, terminal_step_response_line_style_spans,
     terminal_step_response_output_modes, terminal_step_response_refresh_requirement,
 };
+use super::env::KillSessionCliArgs;
 use super::mcp::load_runtime_config_layers_for_directory;
 use super::serve::assign_unique_live_session_id;
 use super::{
-    AuthPaths, AuthStore, CliEnv, CliInvocation, OpenAiProviderCredential, OsString, PathBuf,
-    SocketSelection, UnixStream, read_control_response_frames, selected_socket_path,
+    AuthPaths, AuthStore, CliCommand, CliEnv, CliInvocation, OpenAiProviderCredential, OsString,
+    PathBuf, SocketSelection, UnixStream, read_control_response_frames, selected_socket_path,
 };
 use crate::config::compose_effective_config;
 use crate::control::{decode_control_frame, encode_control_body};

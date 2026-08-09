@@ -63,7 +63,7 @@ or approval checks. Use `mez snapshot create` to save a layout and
 `mez snapshot` to list saved snapshots. Use `mez snapshot inspect
 <snapshot-id>` to inspect its metadata. `mez snapshot resume <snapshot-id>`
 reconstructs the saved layout model without starting a daemon; add `--serve`
-to start it as a live foreground daemon. Use `mez kill-session --force` or the
+to start it as a live foreground daemon. Use `mez kill --force` or the
 command-prompt `exit` to end a session and its panes.
 
 ## Related pages

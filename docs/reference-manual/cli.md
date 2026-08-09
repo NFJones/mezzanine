@@ -33,7 +33,7 @@ one.
 | `mez list` | List resumable sessions. Alias: `list-sessions`. |
 | `mez attach [session-id] [--observer]` | Attach a primary client, or request read-only observer access. Alias: `attach-session`. |
 | `mez detach` | Detach the current or selected client. Alias: `detach-client`. |
-| `mez kill-session --force` | Terminate a live session through its control socket; `--force` confirms the destructive operation. |
+| `mez kill --force` | Terminate a live session through its control socket; `--force` confirms the destructive operation. Alias: `kill-session`. |
 | `mez snapshot` | Manage persisted snapshots. With no subcommand it lists snapshots; see the snapshot forms below. |
 
 Creating or attaching a primary client needs an interactive terminal. `mez

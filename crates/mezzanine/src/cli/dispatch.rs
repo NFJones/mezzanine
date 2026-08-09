@@ -211,7 +211,7 @@ pub async fn run_with<W: Write, E: Write>(
                 stdout,
             )?;
         }
-        Some(CliCommand::KillSession(args)) => {
+        Some(CliCommand::Kill(args)) => {
             let force = args.force;
             let params = format!(
                 r#"{{"idempotency_key":"{}","force":{force}}}"#,
