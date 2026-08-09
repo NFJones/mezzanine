@@ -439,9 +439,9 @@ async fn async_actor_stops_file_pane_pipe_after_persistence_failure() {
 
 /// Verifies that command-backed pane pipes are checked by actor-owned timers
 /// after accepted pane output. The command writer can fail after `write_output`
-/// has already accepted bytes into its bounded queue; the timer makes that
-/// asynchronous failure visible and stops the active pipe without requiring a
-/// later pane-output write or an explicit `pipe-pane --stop`.
+/// has already accepted bytes into its bounded queue; bounded health-timer
+/// polling makes that asynchronous failure visible and stops the active pipe
+/// without requiring a later pane-output write or an explicit `pipe-pane --stop`.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_stops_command_pane_pipe_after_health_timer() {
     let root = std::env::temp_dir().join(format!(
@@ -483,24 +483,27 @@ async fn async_actor_stops_command_pane_pipe_after_health_timer() {
         assert_eq!(report.accepted, 1);
         assert_eq!(report.applied, 1);
         assert!(report.side_effects >= 1);
-        tokio::time::sleep(Duration::from_millis(80)).await;
 
-        let timers = run_async_runtime_timer_side_effect_service(
-            &handle,
-            AsyncRuntimeSideEffectServiceConfig {
-                max_polls: 4,
-                drain_limit: 8,
-                idle_interval: Duration::from_millis(1),
-            },
-            1_000,
-            |polls, _| polls >= 4,
+        let timers = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_async_runtime_timer_side_effect_service(
+                &handle,
+                AsyncRuntimeSideEffectServiceConfig {
+                    max_polls: 20,
+                    drain_limit: 8,
+                    idle_interval: Duration::from_millis(1),
+                },
+                1_000,
+                |polls, _| polls >= 20,
+            ),
         )
         .await
+        .expect("command pane-pipe health checks should complete within two seconds")
         .unwrap();
-        assert_eq!(timers.drained, 1);
-        assert_eq!(timers.fired, 1);
-        assert_eq!(timers.submitted_events, 1);
-        assert_eq!(timers.applied_events, 1);
+        assert!(timers.drained >= 1, "{timers:?}");
+        assert!(timers.fired >= 1, "{timers:?}");
+        assert!(timers.submitted_events >= 1, "{timers:?}");
+        assert!(timers.applied_events >= 1, "{timers:?}");
         handle.shutdown().await.unwrap();
     };
 

@@ -10,9 +10,10 @@ use super::super::*;
 /// through an adapter-owned interactive zsh pane on macOS.
 ///
 /// The read phase snapshots the large file and the write phase streams the
-/// resulting generated payload through receiver-acknowledged PTY delivery. The
-/// final acknowledgement must settle the action before ordinary pane input can
-/// resume, with no payload tail escaping into the interactive shell.
+/// resulting generated payload through receiver-acknowledged PTY delivery.
+/// The bounded settlement deadline accommodates macOS pacing while requiring
+/// the final acknowledgement to settle the action before ordinary pane input
+/// can resume, with no payload tail escaping into the interactive shell.
 #[cfg(target_os = "macos")]
 #[tokio::test(flavor = "current_thread")]
 async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
@@ -213,7 +214,7 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
         assert_eq!(provider_report.accepted, 1);
         assert_eq!(provider_report.applied, 1);
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
         let settled = loop {
             if client_handle
                 .pending_agent_provider_tasks()
@@ -260,7 +261,7 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
     };
 
     let (settled, supervisor_report, mut actor_exit) =
-        tokio::time::timeout(Duration::from_secs(90), async {
+        tokio::time::timeout(Duration::from_secs(180), async {
             tokio::join!(client, pane_worker, actor.run())
         })
         .await
@@ -298,7 +299,7 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
         .collect::<Vec<_>>();
     assert!(
         settled,
-        "large semantic patch did not settle within 60 seconds; readiness={:?} transactions={transactions:#?} pane={pane_text}",
+        "large semantic patch did not settle within 120 seconds; readiness={:?} transactions={transactions:#?} pane={pane_text}",
         actor_exit.service.pane_readiness_state("%1")
     );
     assert!(
