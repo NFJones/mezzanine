@@ -112,6 +112,9 @@ pub fn spawn_pane_process_with_start_directory(
     command.env("MEZ_PANE", &environment.pane);
     command.env("TERM", &environment.term);
     command.env("GIT_OPTIONAL_LOCKS", "0");
+    for (key, value) in launch.environment() {
+        command.env(key, value);
+    }
 
     let child = pair
         .slave

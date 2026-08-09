@@ -9,14 +9,15 @@
 use super::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, EventKind, MezError,
     Result, RuntimeSessionService, RuntimeSideEffect, agent_shell_visibility_json_name,
-    agent_subshell_enter_command, execute_agent_shell_command_with_context, json_escape,
-    parse_slash_command, runtime_agent_shell_command_response_json,
-    runtime_agent_shell_prompt_turn_response_json, runtime_agent_shell_stop_response_json,
-    runtime_mezzanine_error_code,
+    execute_agent_shell_command_with_context, json_escape, parse_slash_command,
+    runtime_agent_shell_command_response_json, runtime_agent_shell_prompt_turn_response_json,
+    runtime_agent_shell_stop_response_json, runtime_mezzanine_error_code,
 };
 use crate::integrations::agent::slash::AgentShellPresentation;
 use crate::{error::MezErrorKind, runtime::commands::issues};
-use mez_agent::parse_macro_prompt_invocation;
+use mez_agent::{
+    agent_subshell_enter_command_with_zsh_history_token, parse_macro_prompt_invocation,
+};
 
 /// Authenticated provenance carried with one live agent-shell command.
 ///
@@ -1093,9 +1094,12 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        let shell_command = agent_subshell_enter_command(
+        let classification = self.shell_classification_for_pane(pane_id);
+        let zsh_history_token = self.zsh_history_token_for_pane(pane_id);
+        let shell_command = agent_subshell_enter_command_with_zsh_history_token(
             self.session.shell.path(),
-            self.shell_classification_for_pane(pane_id),
+            classification,
+            zsh_history_token,
         )?;
         self.begin_agent_subshell_shell_handoff(pane_id)?;
         let prepared_bootstrap = match self.prepare_bootstrap_to_pane(pane_id) {

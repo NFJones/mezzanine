@@ -151,14 +151,17 @@ impl RuntimeSessionService {
             cache_key.environment_signature
         ))?;
         let marker_id = marker.as_str().to_string();
-        let transaction = ShellTransaction::new(
-            marker,
-            &turn_id,
-            &agent_id,
+        let transaction = self.configure_shell_transaction_for_pane(
             pane_id,
-            self.session.shell.path(),
-            command.clone(),
-        )?;
+            ShellTransaction::new(
+                marker,
+                &turn_id,
+                &agent_id,
+                pane_id,
+                self.session.shell.path(),
+                command.clone(),
+            )?,
+        );
         let transaction_input = transaction.render_for_classification_input(classification);
         let mut wrapper = transaction_input.wrapper;
         if !wrapper.ends_with('\n') {

@@ -156,7 +156,7 @@ use mez_agent::{
 };
 use mez_agent::{
     EnvironmentSignature, MarkerToken, ShellClassification, ShellTransaction,
-    ShellTransactionOutputTransport, agent_subshell_enter_command,
+    ShellTransactionOutputTransport,
 };
 use mez_core::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
 use mez_mux::clipboard::{

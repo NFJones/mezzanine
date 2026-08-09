@@ -88,6 +88,42 @@ fn agent_subshell_enter_command_keeps_physical_lines_pty_safe() {
 }
 
 #[test]
+/// Verifies zsh transactions isolate the complete physical transport with
+/// zsh-native history controls instead of the Bash history option path.
+///
+/// Immediate and shared zsh history process each submitted record before it
+/// executes, so the authenticated initiating record must precede every
+/// `MEZ_WRAPPER_*` assignment and the private history frame must be restored
+/// before the transaction completion marker is emitted.
+fn zsh_wrapper_uses_native_full_transport_history_isolation() {
+    let history_token = marker();
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/zsh"), "pwd")
+            .unwrap()
+            .with_zsh_history_token(history_token.clone());
+
+    let transport = transaction.render_for_classification(ShellClassification::Zsh);
+    let source = decoded_posix_wrapper_source(&transport);
+    let first_line = transport.lines().next().unwrap_or_default();
+
+    assert!(
+        first_line.contains(history_token.as_str()) && first_line.contains("fc -p"),
+        "{first_line}"
+    );
+    assert!(
+        transport.find("fc -p").unwrap() < transport.find("MEZ_WRAPPER_STTY").unwrap(),
+        "{transport}"
+    );
+    assert!(!source.contains("set +o history"), "{source}");
+    assert!(!source.contains("history -d"), "{source}");
+    assert!(!source.contains("HISTFILE=/dev/null"), "{source}");
+    assert!(
+        source.find("fc -P").unwrap() < source.find("]133;D;").unwrap(),
+        "{source}"
+    );
+}
+
+#[test]
 /// Verifies Bash shell transactions ignore inherited `BASH_ENV` startup hooks.
 ///
 /// `BASH_ENV` is a common non-interactive startup vector. Agent actions should

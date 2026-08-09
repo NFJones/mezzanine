@@ -3973,11 +3973,21 @@ shell history. For `bash`-like POSIX shells, Mezzanine SHOULD temporarily
 disable shell history, set `HISTFILE=/dev/null` for the transaction or child
 shell handoff, remove the current wrapper prologue history entry when supported,
 and restore the previous history and `errexit` state after the transaction end
-marker is emitted or the child shell exits. For `fish`, Mezzanine SHOULD enable
-private-mode style suppression when supported and SHOULD remove known Mezzanine
-wrapper prefixes from Fish history as a fallback. For shells without known
-history controls, Mezzanine SHOULD make a best-effort attempt to avoid persisted
-history while preserving the transaction marker and command-status semantics.
+marker is emitted or the child shell exits. For `zsh`, Mezzanine SHOULD install
+a pane-scoped `zshaddhistory` hook after user startup processing that rejects
+only the authenticated Mezzanine control record which starts history isolation.
+That record SHOULD enter a private history context with `fc -p` before any
+transport framing is submitted, and the complete generated transport SHOULD
+remain private until `fc -P` restores the prior history context. Restoration
+MUST occur before the transaction completion marker is emitted and MUST preserve
+nested history contexts, history files, history limits, history options, shell
+state, and the command status. Assigning `HISTFILE=/dev/null` after a record is
+submitted is not sufficient for zsh when immediate or shared history is active.
+For `fish`, Mezzanine SHOULD enable private-mode style suppression when supported
+and SHOULD remove known Mezzanine wrapper prefixes from Fish history as a
+fallback. For shells without known history controls, Mezzanine SHOULD make a
+best-effort attempt to avoid persisted history while preserving the transaction
+marker and command-status semantics.
 
 For non-stateful POSIX-compatible actions, the default wrapper MUST execute the
 agent command in a child shell whose environment omits Mezzanine transaction

@@ -11,11 +11,10 @@ use super::{
     HookFailure, HookFailureKind, MarkerToken, McpActionExecutor, McpExecutionRequest,
     McpExecutionResponse, McpToolCallPlan, MezError, PaneDescriptor, Path,
     PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction, Read, Result,
-    RuleDecision, RuntimeHookPipelineBlock, RuntimeMcpTransportSet, RuntimeSessionService, Stdio,
-    current_unix_millis, exact_command_sha256, json_escape,
+    RuleDecision, RuntimeHookPipelineBlock, RuntimeMcpTransportSet, RuntimeSessionService,
+    ShellTransaction, Stdio, current_unix_millis, exact_command_sha256, json_escape,
 };
 use crate::host::process::wait_for_child_with_timeout;
-use mez_agent::{posix_shell_history_suppression_finish, posix_shell_history_suppression_start};
 
 // Runtime hook result, hook executor, and MCP executor support.
 
@@ -326,29 +325,32 @@ impl FocusedShellExecutor for RuntimeFocusedShellPaneExecutor<'_> {
                 marker_sequence, descriptor.pane_id, plan.hook_id, shell_command
             ),
         ))?;
-        let input = format!(
-            "{history_start}\
-MEZ_HOOK_PAYLOAD={payload}\n\
-MEZ_MARKER_TOKEN={marker}\n\
-MEZ_TURN={turn}\n\
-MEZ_AGENT='focused-shell-hook'\n\
-MEZ_PANE={pane}\n\
-printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
-\"$MEZ_MARKER_TOKEN\" \"$MEZ_TURN\" \"$MEZ_AGENT\" \"$MEZ_PANE\"\n\
+        let hook_command = format!(
+            "MEZ_HOOK_PAYLOAD={payload}\n\
+{{\n\
 {command}\n\
+}}\n\
 MEZ_STATUS=$?\n\
-printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
-\"$MEZ_STATUS\" \"$MEZ_MARKER_TOKEN\" \"$MEZ_TURN\" \"$MEZ_AGENT\" \"$MEZ_PANE\"\n\
-unset MEZ_HOOK_PAYLOAD MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS\n\
-{history_finish}",
-            history_start = posix_shell_history_suppression_start(),
-            history_finish = posix_shell_history_suppression_finish(),
+unset MEZ_HOOK_PAYLOAD\n\
+(exit \"$MEZ_STATUS\")",
             payload = shell_single_quote(&plan.event_payload_json),
-            marker = shell_single_quote(marker.as_str()),
-            turn = shell_single_quote(&format!("hook:{}", plan.hook_id)),
-            pane = shell_single_quote(descriptor.pane_id.as_str()),
             command = shell_command
         );
+        let classification = self
+            .service
+            .shell_classification_for_pane(descriptor.pane_id.as_str());
+        let transaction = self.service.configure_shell_transaction_for_pane(
+            descriptor.pane_id.as_str(),
+            ShellTransaction::new(
+                marker.clone(),
+                format!("hook:{}", plan.hook_id),
+                "focused-shell-hook",
+                descriptor.pane_id.as_str(),
+                self.service.session.shell.path(),
+                hook_command,
+            )?,
+        );
+        let input = transaction.render_stateful_for_classification(classification);
         match self.service.write_input_to_pane_descriptor(
             &self.primary_client_id,
             &descriptor,

@@ -142,14 +142,17 @@ impl RuntimeSessionService {
             .map_err(|error| crate::MezError::invalid_args(error.message()))?;
         let marker = runtime_marker_for_action(turn, &format!("environment-evidence-{action_id}"))?;
         let marker_id = marker.as_str().to_string();
-        let transaction = ShellTransaction::new(
-            marker,
-            &turn.turn_id,
-            &turn.agent_id,
+        let transaction = self.configure_shell_transaction_for_pane(
             &turn.pane_id,
-            self.session.shell.path(),
-            command.clone(),
-        )?;
+            ShellTransaction::new(
+                marker,
+                &turn.turn_id,
+                &turn.agent_id,
+                &turn.pane_id,
+                self.session.shell.path(),
+                command.clone(),
+            )?,
+        );
         let input = transaction.render_for_classification_input(classification);
         let mut wrapper = input.wrapper;
         if !wrapper.ends_with(char::from(10)) {

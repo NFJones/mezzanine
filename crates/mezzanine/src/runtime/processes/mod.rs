@@ -8,6 +8,7 @@ pub(crate) mod output_filter;
 mod pane_pipes;
 mod startup;
 mod transactions;
+mod zsh_compat;
 
 use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body_size};
 
@@ -314,6 +315,8 @@ pub(crate) struct RuntimeProcessComponent {
     pane_readiness_overrides: mez_agent::PaneReadinessOverrideStore,
     /// Bootstrap-derived environment signatures keyed by pane id.
     pane_environment_signatures: std::collections::BTreeMap<String, EnvironmentSignature>,
+    /// Managed zsh startup and history-authentication state keyed by pane id.
+    pane_zsh_compatibility: std::collections::BTreeMap<String, zsh_compat::ManagedZshCompatibility>,
     /// Canonical path authority keyed by pane environment, config generation,
     /// and the exact bounded resolution request.
     pane_path_scopes: std::collections::BTreeMap<
@@ -1208,6 +1211,34 @@ impl RuntimeSessionService {
             .unwrap_or_else(|| ShellClassification::classify(self.session.shell.path()))
     }
 
+    /// Adds pane-scoped shell compatibility state to one transaction.
+    ///
+    /// Zsh panes receive the token installed by their managed startup shim.
+    /// Other classifications retain their existing renderer behavior.
+    pub(super) fn configure_shell_transaction_for_pane(
+        &self,
+        pane_id: &str,
+        transaction: ShellTransaction,
+    ) -> ShellTransaction {
+        self.process
+            .pane_zsh_compatibility
+            .get(pane_id)
+            .map_or(transaction.clone(), |compatibility| {
+                transaction.with_zsh_history_token(compatibility.token().clone())
+            })
+    }
+
+    /// Returns the managed zsh history token installed for one pane.
+    pub(super) fn zsh_history_token_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<&mez_agent::MarkerToken> {
+        self.process
+            .pane_zsh_compatibility
+            .get(pane_id)
+            .map(zsh_compat::ManagedZshCompatibility::token)
+    }
+
     /// Runs the poll pane processes operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1789,8 +1820,34 @@ impl RuntimeSessionService {
             &descriptor.pane_id,
             &self.process.settings.terminal_term,
         )?;
-        let launch =
+        let mut zsh_compatibility_diagnostic = None;
+        let zsh_compatibility = if explicit_command.is_none()
+            && ShellClassification::classify(self.session.shell.path()) == ShellClassification::Zsh
+        {
+            let token = runtime_random_marker_token(&format!(
+                "zsh-history\0{}\0{}",
+                self.session.id, descriptor.pane_id
+            ))?;
+            match zsh_compat::ManagedZshCompatibility::create(
+                self.session.socket_path(),
+                descriptor.pane_id.as_str(),
+                token,
+                std::env::var_os("ZDOTDIR"),
+            ) {
+                Ok(compatibility) => Some(compatibility),
+                Err(error) => {
+                    zsh_compatibility_diagnostic = Some(error.to_string());
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let mut launch =
             mez_mux::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
+        if let Some(compatibility) = zsh_compatibility.as_ref() {
+            launch = compatibility.configure_launch(launch);
+        }
         let primary_pid = self
             .process
             .pane_processes
@@ -1802,6 +1859,21 @@ impl RuntimeSessionService {
                 descriptor.size,
                 start_directory,
             )?;
+        if let Some(compatibility) = zsh_compatibility {
+            self.process
+                .pane_zsh_compatibility
+                .insert(descriptor.pane_id.to_string(), compatibility);
+        }
+        if let Some(error) = zsh_compatibility_diagnostic {
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","diagnostic":"zsh history isolation unavailable; starting without managed compatibility","error":"{}"}}"#,
+                    json_escape(descriptor.pane_id.as_str()),
+                    json_escape(&error)
+                ),
+            )?;
+        }
         self.process
             .pane_exit_records
             .remove(descriptor.pane_id.as_str());
@@ -2272,6 +2344,7 @@ impl RuntimeSessionService {
         self.process
             .pane_current_working_directories
             .remove(pane_id);
+        self.process.pane_zsh_compatibility.remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
         self.persistence.cleanup_pane_io(pane_id);

@@ -214,14 +214,17 @@ impl RuntimeSessionService {
         let marker_id = marker.as_str().to_string();
         let classification = self.shell_classification_for_pane(&turn.pane_id);
         let probe_command = readiness_probe_command_for_classification(classification);
-        let transaction = ShellTransaction::new(
-            marker,
-            &turn.turn_id,
-            &turn.agent_id,
+        let transaction = self.configure_shell_transaction_for_pane(
             &turn.pane_id,
-            self.session.shell.path(),
-            probe_command,
-        )?;
+            ShellTransaction::new(
+                marker,
+                &turn.turn_id,
+                &turn.agent_id,
+                &turn.pane_id,
+                self.session.shell.path(),
+                probe_command,
+            )?,
+        );
         let transaction_input = transaction.render_for_classification_input(classification);
         let mut wrapper = transaction_input.wrapper;
         if !wrapper.ends_with('\n') {

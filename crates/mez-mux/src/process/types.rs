@@ -3,6 +3,7 @@
 //! These structures describe command plans, process output, and normalized exit
 //! status without owning PTY or runtime resources.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// Dependency-neutral executable selected for a pane process launch.
@@ -12,17 +13,41 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneProcessLaunch {
     program: PathBuf,
+    environment: Vec<(OsString, OsString)>,
 }
 
 impl PaneProcessLaunch {
     /// Creates a launch contract for the selected shell executable.
     pub fn new(program: PathBuf) -> Self {
-        Self { program }
+        Self {
+            program,
+            environment: Vec::new(),
+        }
     }
 
     /// Returns the executable used to start the pane process.
     pub fn program(&self) -> &Path {
         &self.program
+    }
+
+    /// Adds one explicit environment override for the pane process.
+    ///
+    /// Product adapters use this narrow launch boundary for process-specific
+    /// compatibility state while the mux remains unaware of shell policy.
+    pub fn with_environment_variable(
+        mut self,
+        key: impl Into<OsString>,
+        value: impl Into<OsString>,
+    ) -> Self {
+        self.environment.push((key.into(), value.into()));
+        self
+    }
+
+    /// Returns explicit environment overrides applied during process spawn.
+    pub fn environment(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
+        self.environment
+            .iter()
+            .map(|(key, value)| (key.as_os_str(), value.as_os_str()))
     }
 }
 

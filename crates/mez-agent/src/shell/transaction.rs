@@ -222,6 +222,11 @@ pub struct ShellTransaction {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub command: String,
+    /// Pane-scoped token authenticated by the managed zsh history hook.
+    ///
+    /// The token is only used when rendering for zsh. Other shell
+    /// classifications retain their native history-suppression paths.
+    zsh_history_token: Option<MarkerToken>,
     /// Optional typed process launch that receives the materialized command
     /// file as one argv element instead of executing it directly in a child
     /// shell.
@@ -809,6 +814,7 @@ impl ShellTransaction {
             pane_id: pane_id.into(),
             shell_path: shell_path.to_string_lossy().into_owned(),
             command: command.into(),
+            zsh_history_token: None,
             child_launch: None,
             output_transport: ShellTransactionOutputTransport::Raw,
             output_max_raw_bytes: SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
@@ -818,6 +824,16 @@ impl ShellTransaction {
     /// Selects a validated typed child process launch for this transaction.
     pub fn with_child_launch(mut self, child_launch: ShellChildLaunch) -> Self {
         self.child_launch = Some(child_launch);
+        self
+    }
+
+    /// Selects the pane-scoped token used by managed zsh history isolation.
+    ///
+    /// The pane startup compatibility hook recognizes only the exact control
+    /// record carrying this token. That record pushes a private zsh history
+    /// context before any transaction transport records are submitted.
+    pub fn with_zsh_history_token(mut self, token: MarkerToken) -> Self {
+        self.zsh_history_token = Some(token);
         self
     }
 
@@ -892,6 +908,20 @@ impl ShellTransaction {
                 .as_ref()
                 .and_then(|launch| launch.status_fd),
         );
+        let (history_start, history_restore, history_marker_finish) =
+            if classification == ShellClassification::Zsh && self.zsh_history_token.is_some() {
+                (
+                    zsh_shell_history_suppression_start().to_string(),
+                    String::new(),
+                    zsh_shell_history_marker_finish_prefix(self.zsh_history_token.as_ref()),
+                )
+            } else {
+                (
+                    posix_shell_history_suppression_start().to_string(),
+                    posix_shell_history_file_restore().to_string(),
+                    posix_shell_history_marker_finish_prefix().to_string(),
+                )
+            };
         let wrapper = format!(
             "{history_start}\
 {function_name}() {{\n\
@@ -913,9 +943,9 @@ unset -f {function_name} 2>/dev/null || :\n\
 unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}\n\
 }}\n\
 {function_name}\n",
-            history_start = posix_shell_history_suppression_start(),
-            history_restore = posix_shell_history_file_restore(),
-            history_marker_finish = posix_shell_history_marker_finish_prefix(),
+            history_start = history_start,
+            history_restore = history_restore,
+            history_marker_finish = history_marker_finish,
             errexit_restore = posix_shell_errexit_restore_suffix(),
             function_name = function_name,
             marker = shell_quote(self.marker.as_str()),
@@ -926,7 +956,11 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
             child_invocation = child_invocation,
         );
         ShellTransactionInput {
-            wrapper: posix_shell_wrapper_transport(&wrapper),
+            wrapper: posix_shell_wrapper_transport(
+                &wrapper,
+                classification,
+                self.zsh_history_token.as_ref(),
+            ),
             payload: command_materialization.payload,
         }
     }
@@ -962,8 +996,34 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
     /// the pane shell state. This wrapper skips the child-shell isolation so
     /// mutations persist in the interactive shell context.
     pub fn render_stateful(&self) -> String {
+        self.render_posix_stateful_for_classification(ShellClassification::PosixSh)
+    }
+
+    /// Renders one stateful POSIX-compatible transaction for a known shell.
+    ///
+    /// Zsh uses the bounded wrapper transport so its authenticated history
+    /// record can push a private frame before any generated source is read.
+    fn render_posix_stateful_for_classification(
+        &self,
+        classification: ShellClassification,
+    ) -> String {
         let function_name = transaction_function_name(self.marker.as_str());
-        format!(
+        let zsh_history_isolation =
+            classification == ShellClassification::Zsh && self.zsh_history_token.is_some();
+        let (history_start, history_restore, history_marker_finish) = if zsh_history_isolation {
+            (
+                zsh_shell_history_suppression_start().to_string(),
+                String::new(),
+                zsh_shell_history_marker_finish_prefix(self.zsh_history_token.as_ref()),
+            )
+        } else {
+            (
+                posix_shell_history_suppression_start().to_string(),
+                posix_shell_history_file_restore().to_string(),
+                posix_shell_history_marker_finish_prefix().to_string(),
+            )
+        };
+        let source = format!(
             "{history_start}\
 {function_name}() {{\n\
 command printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
@@ -978,9 +1038,9 @@ unset -f {function_name} 2>/dev/null || :\n\
 \"$MEZ_STATUS\" {marker} {turn} {agent} {pane}; unset MEZ_STATUS; {errexit_restore}\n\
 }}\n\
 {function_name}\n",
-            history_start = posix_shell_history_suppression_start(),
-            history_restore = posix_shell_history_file_restore(),
-            history_marker_finish = posix_shell_history_marker_finish_prefix(),
+            history_start = history_start,
+            history_restore = history_restore,
+            history_marker_finish = history_marker_finish,
             errexit_restore = posix_shell_errexit_restore_suffix(),
             function_name = function_name,
             marker = shell_quote(self.marker.as_str()),
@@ -988,7 +1048,12 @@ unset -f {function_name} 2>/dev/null || :\n\
             agent = shell_quote(&self.agent_id),
             pane = shell_quote(&self.pane_id),
             command = self.command,
-        )
+        );
+        if zsh_history_isolation {
+            posix_shell_wrapper_transport(&source, classification, self.zsh_history_token.as_ref())
+        } else {
+            source
+        }
     }
 
     /// Runs the render stateful for classification operation for this subsystem.
@@ -1003,7 +1068,7 @@ unset -f {function_name} 2>/dev/null || :\n\
         if classification == ShellClassification::Fish {
             self.render_fish_stateful()
         } else {
-            self.render_stateful()
+            self.render_posix_stateful_for_classification(classification)
         }
     }
 
@@ -1388,7 +1453,11 @@ fn command_payload_lines(command: &str, end_marker: &str) -> String {
 /// chunk. This avoids overflowing small Darwin PTY and Readline typeahead
 /// buffers while preserving the requirement that every action reaches the pane
 /// as shell input. The final complete command decodes and evaluates the source.
-fn posix_shell_wrapper_transport(source: &str) -> String {
+fn posix_shell_wrapper_transport(
+    source: &str,
+    classification: ShellClassification,
+    zsh_history_token: Option<&MarkerToken>,
+) -> String {
     const ACK: &str = "printf '\\036'";
     let source = format!("unset MEZ_WRAPPER_SOURCE\n{source}");
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
@@ -1397,13 +1466,14 @@ fn posix_shell_wrapper_transport(source: &str) -> String {
         .next()
         .and_then(|chunk| std::str::from_utf8(chunk).ok())
         .unwrap_or_default();
-    let mut transport = format!(
+    let mut transport = zsh_history_transport_start(classification, zsh_history_token);
+    transport.push_str(&format!(
         "MEZ_WRAPPER_STTY=$(stty -g 2>/dev/null) || MEZ_WRAPPER_STTY=; {ACK}\n\
 MEZ_WRAPPER_PS1=${{PS1-}}; PS1=; stty -echo 2>/dev/null || :; {ACK}\n\
 MEZ_WRAPPER_BASE64_FLAG=-d; printf '' | base64 -d >/dev/null 2>&1 || MEZ_WRAPPER_BASE64_FLAG=-D; {ACK}\n\
 MEZ_WRAPPER_B64={first}; {ACK}\n",
         first = shell_quote(first),
-    );
+    ));
     for chunk in chunks {
         let chunk = std::str::from_utf8(chunk)
             .expect("standard base64 output should always be valid UTF-8");
@@ -1418,9 +1488,57 @@ MEZ_WRAPPER_B64={first}; {ACK}\n",
 MEZ_WRAPPER_SOURCE=$(printf '%s' \"$MEZ_WRAPPER_B64\" | base64 \"$MEZ_WRAPPER_BASE64_FLAG\"); {ACK}\n\
 unset MEZ_WRAPPER_B64 MEZ_WRAPPER_STTY MEZ_WRAPPER_BASE64_FLAG; {ACK}\n\
 PS1=$MEZ_WRAPPER_PS1; unset MEZ_WRAPPER_PS1; {ACK}\n\
-eval \"$MEZ_WRAPPER_SOURCE\"\n"
+eval \"$MEZ_WRAPPER_SOURCE\"; {}\n",
+        zsh_history_transport_fallback(classification, zsh_history_token),
     ));
     transport
+}
+
+/// Starts a zsh-private history frame before any generated transport record.
+///
+/// A pane startup hook rejects this exact token-bearing record before zsh adds
+/// it to immediate or shared history. The record itself then pushes the private
+/// frame that owns all subsequent wrapper transport records.
+fn zsh_history_transport_start(
+    classification: ShellClassification,
+    token: Option<&MarkerToken>,
+) -> String {
+    if classification != ShellClassification::Zsh {
+        return String::new();
+    }
+    let Some(token) = token else {
+        return String::new();
+    };
+    format!("{}\n", zsh_history_control_record(token))
+}
+
+/// Pops a zsh history frame when malformed evaluated source skipped cleanup.
+fn zsh_history_transport_fallback(
+    classification: ShellClassification,
+    token: Option<&MarkerToken>,
+) -> String {
+    if classification != ShellClassification::Zsh {
+        return String::new();
+    }
+    let Some(token) = token else {
+        return String::new();
+    };
+    format!(
+        "if [ \"${{MEZ_ZSH_HISTORY_ACTIVE-}}\" = {} ]; then unset MEZ_ZSH_HISTORY_ACTIVE; fc -P; fi; unset MEZ_WRAPPER_SOURCE",
+        shell_quote(token.as_str())
+    )
+}
+
+/// Renders the exact authenticated record accepted by the managed zsh hook.
+///
+/// Zsh calls `zshaddhistory` before executing an interactive record. The
+/// startup compatibility layer rejects only this token-bearing record, which
+/// then pushes the private history frame used by the remaining transport.
+pub fn zsh_history_control_record(token: &MarkerToken) -> String {
+    format!(
+        "fc -p && MEZ_ZSH_HISTORY_ACTIVE={}",
+        shell_quote(token.as_str())
+    )
 }
 
 /// Formats the transaction-local environment command used to launch isolated
@@ -1553,6 +1671,25 @@ unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVE
 if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\n\
 unset MEZ_SHELL_STTY_STATE\n\
 if [ \"$MEZ_RESTORE_HISTORY_NOW\" = 1 ]; then set -o history 2>/dev/null || :; fi; "
+}
+
+/// Returns the zsh-compatible transaction prologue.
+///
+/// History is already private before this decoded source executes, so this
+/// prologue only preserves strict shell options and terminal echo state.
+fn zsh_shell_history_suppression_start() -> &'static str {
+    "MEZ_SHELL_STTY_STATE=$(stty -g 2>/dev/null) || MEZ_SHELL_STTY_STATE=; if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT=0; case $- in *e*) MEZ_RESTORE_ERREXIT=1; set +e;; esac; MEZ_RESTORE_NOUNSET=0; case $- in *u*) MEZ_RESTORE_NOUNSET=1; set +u;; esac\n"
+}
+
+/// Restores zsh's prior history context before the completion marker.
+fn zsh_shell_history_marker_finish_prefix(token: Option<&MarkerToken>) -> String {
+    let token = token.unwrap_or_else(|| {
+        panic!("zsh transaction rendering requires a pane-scoped history token")
+    });
+    format!(
+        "MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\nMEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\nunset MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET\nif [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\nunset MEZ_SHELL_STTY_STATE\nif [ \"${{MEZ_ZSH_HISTORY_ACTIVE-}}\" = {} ]; then unset MEZ_ZSH_HISTORY_ACTIVE; fc -P; fi; ",
+        shell_quote(token.as_str())
+    )
 }
 
 /// Returns POSIX-compatible suffix cleanup for restoring `errexit` after the
@@ -1693,6 +1830,20 @@ pub fn agent_subshell_enter_command(
     shell_path: &Path,
     classification: ShellClassification,
 ) -> AgentShellValidationResult<String> {
+    agent_subshell_enter_command_with_zsh_history_token(shell_path, classification, None)
+}
+
+/// Renders an agent-mode subshell handoff with optional managed zsh history isolation.
+///
+/// The token must match the pane startup hook. When present for zsh, the
+/// complete parent-shell transport enters a private history frame before any
+/// wrapper records are submitted and restores the prior frame after the child
+/// shell exits.
+pub fn agent_subshell_enter_command_with_zsh_history_token(
+    shell_path: &Path,
+    classification: ShellClassification,
+    zsh_history_token: Option<&MarkerToken>,
+) -> AgentShellValidationResult<String> {
     if !shell_path.is_absolute() {
         return Err(AgentShellValidationError::invalid_args(
             "agent subshell requires an absolute resolved shell path",
@@ -1717,6 +1868,27 @@ end
 __mez_agent_subshell_handoff; functions --erase __mez_agent_subshell_handoff
 ",
             history_start = fish_shell_history_suppression_start(),
+            env_words = env_words,
+            shell_invocation = shell_invocation,
+        )
+    } else if classification == ShellClassification::Zsh && zsh_history_token.is_some() {
+        let env_words = posix_agent_subshell_env_word_list().join(" \\\n  ");
+        let shell_invocation = posix_shell_interactive_invocation_words(&shell, classification);
+        format!(
+            "{history_start}__mez_agent_subshell_handoff() {{
+if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi
+unset MEZ_SHELL_STTY_STATE
+command env \\
+  {env_words} \\
+  {shell_invocation}
+:
+}}
+__mez_agent_subshell_handoff; unset -f __mez_agent_subshell_handoff 2>/dev/null || :
+{history_finish}{errexit_restore}
+",
+            history_start = zsh_shell_history_suppression_start(),
+            history_finish = zsh_shell_history_marker_finish_prefix(zsh_history_token),
+            errexit_restore = posix_shell_errexit_restore_suffix(),
             env_words = env_words,
             shell_invocation = shell_invocation,
         )
@@ -1760,6 +1932,10 @@ __mez_agent_subshell_handoff; __mez_agent_subshell_cleanup; unset -f __mez_agent
     if classification == ShellClassification::Fish {
         Ok(source)
     } else {
-        Ok(posix_shell_wrapper_transport(&source))
+        Ok(posix_shell_wrapper_transport(
+            &source,
+            classification,
+            zsh_history_token,
+        ))
     }
 }

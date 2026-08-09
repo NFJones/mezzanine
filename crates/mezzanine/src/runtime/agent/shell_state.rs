@@ -191,14 +191,17 @@ impl RuntimeSessionService {
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
         let marker = runtime_marker_for_action(turn, &action.id)?;
         let marker_id = marker.as_str().to_string();
-        let mut transaction = ShellTransaction::new(
-            marker,
-            &turn.turn_id,
-            &turn.agent_id,
+        let mut transaction = self.configure_shell_transaction_for_pane(
             &turn.pane_id,
-            self.session.shell.path(),
-            command,
-        )?;
+            ShellTransaction::new(
+                marker,
+                &turn.turn_id,
+                &turn.agent_id,
+                &turn.pane_id,
+                self.session.shell.path(),
+                command,
+            )?,
+        );
         let mut sandbox_audit_summary = None;
         let mut managed_home_activity_lock = None;
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
