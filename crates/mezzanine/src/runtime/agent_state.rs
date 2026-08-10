@@ -200,6 +200,9 @@ pub struct RuntimeAgentProviderDispatch {
     /// Whether prompting local actions may attempt Bubblewrap execution before
     /// requesting user approval.
     pub sandbox_first_local_prompts: bool,
+    /// Pane-owned shell classification used for both permission analysis and
+    /// eventual command rendering during this provider dispatch.
+    pub shell_classification: String,
     /// Stores the session approvals value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

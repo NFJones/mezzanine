@@ -15,9 +15,10 @@ mod path_resolution;
 mod transaction;
 
 pub use bootstrap::{
-    bootstrap_script, bootstrap_script_for_classification, fish_bootstrap_script,
-    fish_tool_discovery_script, parse_bootstrap_env_output,
-    readiness_probe_command_for_classification, tool_discovery_script,
+    ShellIdentityProbeResult, bootstrap_script, bootstrap_script_for_classification,
+    fish_bootstrap_script, fish_tool_discovery_script, parse_bootstrap_env_output,
+    parse_shell_identity_probe_output, readiness_probe_command_for_classification,
+    shell_identity_probe_command, tool_discovery_script,
 };
 pub use environment::{
     EnvironmentGroup, EnvironmentSignature, ToolDiscoveryCache, ToolInventory, ToolProbe,
@@ -37,8 +38,9 @@ pub use transaction::{
     SHELL_TRANSACTION_SIDECAR_FRAME_BYTES, ShellChildArgument, ShellChildLaunch,
     ShellClassification, ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport,
     agent_subshell_enter_command, agent_subshell_enter_command_with_zsh_history_token, fish_quote,
-    posix_shell_history_suppression_finish, posix_shell_history_suppression_start,
-    shell_command_contains_unquoted_heredoc, validate_agent_authored_shell_command,
+    fish_wrapper_receiver_init_command, posix_shell_history_suppression_finish,
+    posix_shell_history_suppression_start, shell_command_contains_unquoted_heredoc,
+    validate_agent_authored_shell_command,
 };
 
 /// Categorizes deterministic shell-source validation failures.
@@ -123,12 +125,13 @@ pub fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use base64::Engine as _;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
     use std::thread;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     static NEXT_SHELL_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -226,6 +229,247 @@ mod tests {
             .expect("the shell test process should finish")
     }
 
+    /// Runs one stdin-fed command under a finite deadline, returning `None`
+    /// when the requested executable is not installed.
+    fn run_optional_command_stdin_bounded(
+        command: &mut Command,
+        script: &str,
+        label: &str,
+    ) -> Option<Output> {
+        let mut child = match command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => panic!("the Fish parser process should spawn: {error}"),
+        };
+        child
+            .stdin
+            .as_mut()
+            .unwrap_or_else(|| panic!("the {label} stdin should be piped"))
+            .write_all(script.as_bytes())
+            .unwrap_or_else(|error| panic!("the {label} input should be written: {error}"));
+        drop(child.stdin.take());
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if child
+                .try_wait()
+                .unwrap_or_else(|error| {
+                    panic!("the {label} process should remain observable: {error}")
+                })
+                .is_some()
+            {
+                return Some(child.wait_with_output().unwrap_or_else(|error| {
+                    panic!("the {label} output should be collected: {error}")
+                }));
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the {label} process exceeded its five-second deadline");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Parses a complete generated wrapper with a real Fish process under a
+    /// finite deadline, or returns `None` when Fish is not installed.
+    fn parse_fish_wrapper(wrapper: &str) -> Option<Output> {
+        let mut command = Command::new("fish");
+        command.args(["--no-config", "--no-execute"]);
+        run_optional_command_stdin_bounded(&mut command, wrapper, "Fish parser")
+    }
+
+    /// Resolves a real Fish executable for bounded execution tests.
+    fn fish_path_for_tests() -> Option<PathBuf> {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+            .map(|directory| directory.join("fish"))
+            .chain(
+                [
+                    "/usr/bin/fish",
+                    "/usr/local/bin/fish",
+                    "/opt/homebrew/bin/fish",
+                ]
+                .into_iter()
+                .map(PathBuf::from),
+            )
+            .find(|candidate| candidate.is_file())
+    }
+
+    /// Waits until incremental child output satisfies one protocol predicate.
+    fn wait_for_observed_shell_output(
+        observed: &(Mutex<Vec<u8>>, Condvar),
+        deadline: Instant,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) -> bool {
+        let (bytes, changed) = observed;
+        let mut bytes = bytes
+            .lock()
+            .expect("the shell output observation lock should remain available");
+        loop {
+            if predicate(&bytes) {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let (next, timeout) = changed
+                .wait_timeout(bytes, deadline.saturating_duration_since(now))
+                .expect("the shell output observation wait should remain available");
+            bytes = next;
+            if timeout.timed_out() && !predicate(&bytes) {
+                return false;
+            }
+        }
+    }
+
+    /// Executes a complete Fish transaction in marker-paced protocol order.
+    ///
+    /// The complete wrapper and observation suffix are supplied as the Fish
+    /// `-c` program because pipe-fed Fish defers parsing stdin source until
+    /// end-of-file. Stdin therefore remains exclusively available for inert
+    /// payload records. The runner waits for the transaction start marker and,
+    /// when negotiated, for each record-separator acknowledgement before
+    /// sending the next record. Stdout and stderr are drained concurrently and
+    /// the whole process has one five-second deadline.
+    fn run_fish_transaction_bounded(
+        command: &mut Command,
+        input: &ShellTransactionInput,
+        suffix: &str,
+        label: &str,
+    ) -> Output {
+        let transport_preamble = input
+            .wrapper
+            .split_once("__mez_agent_wrapper_receive ")
+            .map_or("", |(preamble, _)| preamble);
+        let wrapper = decoded_fish_wrapper_source(&input.wrapper);
+        let source = format!("{transport_preamble}{wrapper}\n{suffix}");
+        let mut child = command
+            .args(["-c", &source])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|error| panic!("the {label} process should spawn: {error}"));
+        let stdout = child
+            .stdout
+            .take()
+            .unwrap_or_else(|| panic!("the {label} stdout should be piped"));
+        let stderr = child
+            .stderr
+            .take()
+            .unwrap_or_else(|| panic!("the {label} stderr should be piped"));
+        let observed = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+        let reader_observed = Arc::clone(&observed);
+        let stdout_reader = thread::spawn(move || {
+            let mut stdout = stdout;
+            let mut chunk = [0_u8; 1024];
+            loop {
+                let count = stdout
+                    .read(&mut chunk)
+                    .expect("Fish transaction stdout should remain readable");
+                if count == 0 {
+                    break;
+                }
+                let (bytes, changed) = &*reader_observed;
+                bytes
+                    .lock()
+                    .expect("the Fish stdout lock should remain available")
+                    .extend_from_slice(&chunk[..count]);
+                changed.notify_all();
+            }
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut stderr = stderr;
+            let mut bytes = Vec::new();
+            stderr
+                .read_to_end(&mut bytes)
+                .expect("Fish transaction stderr should remain readable");
+            bytes
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let start_marker = b"\x1b]133;C;";
+        if !wait_for_observed_shell_output(&observed, deadline, |bytes| {
+            bytes
+                .windows(start_marker.len())
+                .any(|window| window == start_marker)
+        }) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let observed = observed
+                .0
+                .lock()
+                .expect("the Fish stdout lock should remain available")
+                .clone();
+            panic!(
+                "the {label} process did not emit its start marker before the deadline: stdout={:?}",
+                String::from_utf8_lossy(&observed)
+            );
+        }
+        for (index, record) in input.payload.split_inclusive('\n').enumerate() {
+            let stdin = child
+                .stdin
+                .as_mut()
+                .unwrap_or_else(|| panic!("the {label} stdin should remain piped"));
+            stdin
+                .write_all(record.as_bytes())
+                .unwrap_or_else(|error| panic!("the {label} payload should be written: {error}"));
+            stdin
+                .flush()
+                .unwrap_or_else(|error| panic!("the {label} payload should be flushed: {error}"));
+            if input.payload_receiver_acknowledgements
+                && !wait_for_observed_shell_output(&observed, deadline, |bytes| {
+                    bytes.iter().filter(|byte| **byte == 0x1e).count() > index
+                })
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "the {label} process did not acknowledge payload record {} before the deadline",
+                    index + 1
+                );
+            }
+        }
+        drop(child.stdin.take());
+
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap_or_else(|error| {
+                panic!("the {label} process should remain observable: {error}")
+            }) {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the {label} process exceeded its five-second deadline");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        stdout_reader
+            .join()
+            .expect("the Fish stdout reader should finish");
+        let stderr = stderr_reader
+            .join()
+            .expect("the Fish stderr reader should finish");
+        let stdout = observed
+            .0
+            .lock()
+            .expect("the Fish stdout lock should remain available")
+            .clone();
+        Output {
+            status,
+            stdout,
+            stderr,
+        }
+    }
+
     /// Decodes the generated POSIX wrapper source from its bounded interactive
     /// assignment transport.
     ///
@@ -254,6 +498,27 @@ mod tests {
             .decode(encoded)
             .expect("wrapper transport should contain valid standard base64");
         String::from_utf8(decoded).expect("generated wrapper source should be valid UTF-8")
+    }
+
+    /// Decodes generated Fish wrapper source from its bounded interactive
+    /// assignment transport.
+    ///
+    /// Structural tests assert Fish semantics against this reconstructed
+    /// source while transport tests independently enforce physical line bounds.
+    fn decoded_fish_wrapper_source(transport: &str) -> String {
+        const RECORD_SUFFIX: &str = "; printf '\\036'";
+        let mut encoded = String::new();
+        for line in transport.lines() {
+            if let Some(chunk) = line.strip_suffix(RECORD_SUFFIX)
+                && !chunk.starts_with("__MEZ_WRAPPER_SOURCE_END_")
+            {
+                encoded.push_str(chunk);
+            }
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("Fish wrapper transport should contain valid standard base64");
+        String::from_utf8(decoded).expect("generated Fish wrapper source should be valid UTF-8")
     }
 
     /// Builds a representative known environment signature for cache tests.

@@ -184,6 +184,7 @@ pub(super) fn runtime_running_shell_transaction_kind_name(
         RunningShellTransactionKind::AgentAction { .. } => "agent_action",
         RunningShellTransactionKind::ReadinessProbe => "readiness_probe",
         RunningShellTransactionKind::Bootstrap => "bootstrap",
+        RunningShellTransactionKind::ShellIdentityProbe { .. } => "shell_identity_probe",
         RunningShellTransactionKind::PathResolution { .. } => "path_resolution",
         RunningShellTransactionKind::EnvironmentEvidence { .. } => "environment_evidence",
         RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {
@@ -315,6 +316,9 @@ fn runtime_shell_transaction_timer_kind(
             RuntimeShellTransactionTimerKind::ReadinessProbe
         }
         RunningShellTransactionKind::Bootstrap => RuntimeShellTransactionTimerKind::Bootstrap,
+        RunningShellTransactionKind::ShellIdentityProbe { .. } => {
+            RuntimeShellTransactionTimerKind::Bootstrap
+        }
         RunningShellTransactionKind::PathResolution { .. } => {
             RuntimeShellTransactionTimerKind::PathResolution
         }

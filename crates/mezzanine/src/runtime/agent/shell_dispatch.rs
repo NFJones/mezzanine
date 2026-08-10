@@ -568,11 +568,14 @@ impl RuntimeSessionService {
                         continue;
                     }
                 }
-                match self.ensure_bubblewrap_capability_for_action_with_environment_profile(
-                    turn,
-                    &action.id,
-                    crate::runtime::BubblewrapEnvironmentProfile::SemanticPatchNoForwarding,
-                ) {
+                match self
+                    .ensure_bubblewrap_capability_for_action_with_environment_profile_and_child_shell(
+                        turn,
+                        &action.id,
+                        crate::runtime::BubblewrapEnvironmentProfile::SemanticPatchNoForwarding,
+                        Some("/bin/sh"),
+                    )
+                {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(error) => {
@@ -1141,6 +1144,7 @@ impl RuntimeSessionService {
                 super::shell_state::ShellActionDispatch {
                     command,
                     input_sidecar: plan.input_sidecar.as_deref(),
+                    program_dialect: plan.program_dialect,
                     stateful: plan.stateful,
                     interactive: plan.interactive,
                     timeout_ms: plan.timeout_ms,

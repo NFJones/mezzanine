@@ -349,6 +349,14 @@ pub(crate) enum RunningShellTransactionKind {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Bootstrap,
+    /// Syntax-neutral probe that discovers the active pane shell before
+    /// dialect-specific bootstrap source is rendered.
+    ShellIdentityProbe {
+        /// Primary pane process fenced when the probe was registered.
+        primary_process_id: u32,
+        /// Shell-interaction generation fenced when the probe was registered.
+        interaction_generation: u64,
+    },
     /// Internal read-only canonical path-resolution transaction.
     PathResolution {
         /// Cache identity captured before the transaction was dispatched.

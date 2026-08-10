@@ -336,9 +336,10 @@ unset MEZ_HOOK_PAYLOAD\n\
             payload = shell_single_quote(&plan.event_payload_json),
             command = shell_command
         );
-        let classification = self
+        let shell_identity = self
             .service
-            .shell_classification_for_pane(descriptor.pane_id.as_str());
+            .shell_execution_identity_for_pane(descriptor.pane_id.as_str())?;
+        let classification = shell_identity.classification();
         let transaction = self.service.configure_shell_transaction_for_pane(
             descriptor.pane_id.as_str(),
             ShellTransaction::new(
@@ -346,7 +347,7 @@ unset MEZ_HOOK_PAYLOAD\n\
                 format!("hook:{}", plan.hook_id),
                 "focused-shell-hook",
                 descriptor.pane_id.as_str(),
-                self.service.session.shell.path(),
+                shell_identity.shell_path(),
                 hook_command,
             )?,
         );

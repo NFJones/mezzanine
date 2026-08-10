@@ -1146,6 +1146,72 @@ fn unsafe_shell_syntax_requires_prompt() {
     );
 }
 
+/// Verifies Fish command substitutions remain unsafe when nested inside
+/// double quotes, even though the same parentheses are literal POSIX text.
+/// This prevents a read-only prefix rule from authorizing a hidden command
+/// that Fish expands before invoking the matched executable.
+#[test]
+fn fish_double_quoted_command_substitution_requires_prompt() {
+    let policy = PermissionPolicy::default();
+    let command = "printf '%s\\n' \"(curl https://example.test)\"";
+
+    assert_eq!(policy.evaluate_shell_command(command), RuleDecision::Allow);
+    assert_eq!(
+        policy.evaluate_shell_command_for_shell_classification(command, "fish"),
+        RuleDecision::Prompt
+    );
+
+    let evaluation =
+        policy.evaluate_shell_command_structured_for_shell_classification(command, "fish");
+    assert_eq!(evaluation.decision, RuleDecision::Prompt);
+    assert!(evaluation.effects.unknown);
+}
+
+/// Verifies Fish analysis accepts only simple commands and understood
+/// separators while failing closed for native expansion and control forms.
+/// The cases cover syntax that must never inherit a benign command prefix's
+/// authorization without an exact user- or managed-policy rule.
+#[test]
+fn fish_unsupported_native_syntax_requires_prompt() {
+    let policy = PermissionPolicy::default();
+    let unsafe_commands = [
+        "begin; cat src/lib.rs; end",
+        "cat $files",
+        "cat *.rs",
+        "cat src/{lib,main}.rs",
+        "printf '%s\\n' %self",
+        "cat src/\\x2e\\x2e/secret.txt",
+        "MEZ_MODE=read cat src/lib.rs",
+        "cat src/lib.rs > copy",
+        "cat src/lib.rs; and cat Cargo.toml",
+    ];
+
+    for command in unsafe_commands {
+        assert_eq!(
+            policy.evaluate_shell_command_for_shell_classification(command, "fish"),
+            RuleDecision::Prompt,
+            "Fish syntax should fail closed: {command}"
+        );
+    }
+}
+
+/// Verifies Fish pipelines and boolean operators are split into independently
+/// authorized simple commands rather than rejected or tokenized as arguments.
+/// Known read effects from each candidate must remain visible to confinement.
+#[test]
+fn fish_simple_command_operators_preserve_candidates_and_effects() {
+    let policy = PermissionPolicy::default();
+    let evaluation = policy.evaluate_shell_command_structured_for_shell_classification(
+        "cat src/lib.rs | wc && pwd",
+        "fish",
+    );
+
+    assert_eq!(evaluation.decision, RuleDecision::Allow);
+    assert_eq!(evaluation.candidates.len(), 3);
+    assert_eq!(evaluation.effects.reads, ["src/lib.rs"]);
+    assert!(!evaluation.effects.unknown);
+}
+
 /// Verifies quoted path arguments are classified.
 ///
 /// This regression scenario documents the behavior being protected so a

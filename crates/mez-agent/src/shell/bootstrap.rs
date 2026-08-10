@@ -4,9 +4,101 @@
 //! agent contracts and discovered instruction metadata without product I/O.
 
 use super::transaction::classify_version_probe;
-use super::{EnvironmentGroup, EnvironmentSignature, ShellClassification, ToolInventory};
+use super::{
+    AgentShellValidationError, AgentShellValidationResult, EnvironmentGroup, EnvironmentSignature,
+    ShellClassification, ToolInventory, shell_quote, validate_shell_marker_token,
+};
 use crate::instructions::{DiscoveredInstructionFile, parse_instruction_discovery_output};
 use std::path::Path;
+
+/// Shell identity observed by a syntax-neutral pane probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellIdentityProbeResult {
+    /// Absolute shell path selected inside the active pane environment.
+    pub shell_path: String,
+    /// Classification derived from the exact path and bounded version output.
+    pub shell_classification: ShellClassification,
+    /// First bounded version line reported by the shell, when available.
+    pub shell_version: Option<String>,
+}
+
+/// Renders one simple command accepted by POSIX-family and Fish shells.
+///
+/// The active shell parses only an explicit `/bin/sh -c` invocation. All
+/// conditionals, substitutions, bounded version capture, and transaction
+/// markers run inside that declared POSIX child, so bootstrap dialect
+/// selection does not depend on the active shell's grammar.
+pub fn shell_identity_probe_command(
+    marker: &str,
+    turn_id: &str,
+    agent_id: &str,
+    pane_id: &str,
+) -> AgentShellValidationResult<String> {
+    validate_shell_marker_token(marker)?;
+    let script = "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$1\" \"$2\" \"$3\" \"$4\"; \
+printf '\\036mez_shell_identity_begin=%s\\n' \"$1\"; \
+printf '\\036mez_shell_path=%s\\n' \"$5\"; \
+mez_version=''; \
+if [ -n \"$5\" ] && [ \"${5#/}\" != \"$5\" ]; then \
+  mez_version=$(\"$5\" --version 2>/dev/null | dd bs=4096 count=1 2>/dev/null | sed -n '1p'); \
+fi; \
+printf '\\036mez_shell_version=%s\\n' \"$mez_version\"; \
+printf '\\036mez_shell_identity_end=%s\\n' \"$1\"; \
+printf '\\033]133;D;0;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$1\" \"$2\" \"$3\" \"$4\"";
+    Ok(format!(
+        "/bin/sh -c {} sh {} {} {} {} \"$SHELL\"",
+        shell_quote(script),
+        shell_quote(marker),
+        shell_quote(turn_id),
+        shell_quote(agent_id),
+        shell_quote(pane_id)
+    ))
+}
+
+/// Parses one complete syntax-neutral shell identity probe frame.
+///
+/// Incomplete, mismatched, relative, or malformed frames return `Ok(None)` so
+/// the runtime can retain bounded pending state or fail the probe closed.
+pub fn parse_shell_identity_probe_output(
+    output: &str,
+    marker: &str,
+) -> AgentShellValidationResult<Option<ShellIdentityProbeResult>> {
+    validate_shell_marker_token(marker)?;
+    let begin = format!("\u{1e}mez_shell_identity_begin={marker}");
+    let end = format!("\u{1e}mez_shell_identity_end={marker}");
+    let Some(frame_start) = output.find(&begin) else {
+        return Ok(None);
+    };
+    let frame = &output[frame_start + begin.len()..];
+    let Some(frame_end) = frame.find(&end) else {
+        return Ok(None);
+    };
+    let mut shell_path = None;
+    let mut shell_version = None;
+    for line in frame[..frame_end].lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(value) = line.strip_prefix("\u{1e}mez_shell_path=") {
+            shell_path = Some(value.to_string());
+        } else if let Some(value) = line.strip_prefix("\u{1e}mez_shell_version=")
+            && !value.is_empty()
+        {
+            shell_version = Some(value.to_string());
+        }
+    }
+    let shell_path = shell_path.unwrap_or_else(|| "/bin/sh".to_string());
+    if !Path::new(&shell_path).is_absolute() {
+        return Err(AgentShellValidationError::invalid_args(
+            "shell identity probe returned a non-absolute shell path",
+        ));
+    }
+    let shell_classification =
+        ShellClassification::classify_with_probe(&shell_path, shell_version.as_deref());
+    Ok(Some(ShellIdentityProbeResult {
+        shell_path,
+        shell_classification,
+        shell_version,
+    }))
+}
 
 /// Runs the tool discovery script operation for this subsystem.
 ///
@@ -275,7 +367,7 @@ function mez_probe_tool\n\
   if test \"$mez_lookup_status\" -eq 0\n\
     set mez_version_command \"$mez_path --version\"\n\
     set -l mez_version_output ($mez_path --version 2>/dev/null | head -n 1)\n\
-    set mez_version_status $status\n\
+    set mez_version_status $pipestatus[1]\n\
     set mez_version \"$mez_version_output\"\n\
   end\n\
   set -l mez_available 0\n\
@@ -424,7 +516,10 @@ pub fn parse_bootstrap_env_output(
 
     let shell_metadata_matches_resolved =
         shell_path.is_empty() || Path::new(&shell_path) == resolved_shell_path;
-    if shell_path.is_empty() {
+    if !shell_metadata_matches_resolved {
+        shell_path = resolved_shell_path.to_string_lossy().into_owned();
+        shell_version = None;
+    } else if shell_path.is_empty() {
         shell_path = resolved_shell_path.to_string_lossy().into_owned();
     }
     let trusted_shell_version = shell_metadata_matches_resolved

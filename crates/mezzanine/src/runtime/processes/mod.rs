@@ -3,6 +3,7 @@
 //! This module owns the runtime processes boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
+mod fish_compat;
 mod layout;
 pub(crate) mod output_filter;
 mod pane_pipes;
@@ -206,6 +207,98 @@ struct RuntimePaneCertifiedShellIdentity {
     source: RuntimeCertifiedShellSource,
 }
 
+/// Syntax-neutral shell evidence collected before dialect-specific bootstrap.
+///
+/// This provisional identity is valid only for the exact primary process and
+/// interaction generation that owned its probe. Successful certified
+/// bootstrap replaces it with a complete environment-backed identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimePaneProbedShellIdentity {
+    /// Primary pane process that received the identity probe.
+    primary_process_id: u32,
+    /// Shell-interaction generation that received the identity probe.
+    interaction_generation: u64,
+    /// Atomically paired shell path, classification, and version evidence.
+    execution_identity: RuntimePaneShellExecutionIdentity,
+}
+
+/// Atomically validated shell identity used to render and execute one pane
+/// transaction.
+///
+/// Path, classification, version evidence, process identity, and interaction
+/// generation are kept together so callers cannot select syntax and an
+/// executable from different pane epochs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimePaneShellExecutionIdentity {
+    /// Absolute shell path valid in the active pane environment.
+    shell_path: PathBuf,
+    /// Shell grammar selected for wrapper rendering and authorization.
+    classification: ShellClassification,
+    /// Bounded version evidence used to classify renamed executables.
+    version_probe: Option<String>,
+    /// Primary pane process fenced by this identity when available.
+    primary_process_id: Option<u32>,
+    /// Shell-interaction generation fenced by a certified child identity.
+    interaction_generation: Option<u64>,
+}
+
+impl RuntimePaneShellExecutionIdentity {
+    /// Returns the absolute executable path paired with this identity.
+    pub(crate) fn shell_path(&self) -> &Path {
+        &self.shell_path
+    }
+
+    /// Returns the shell grammar paired with this executable path.
+    pub(crate) fn classification(&self) -> ShellClassification {
+        self.classification
+    }
+
+    /// Returns bounded runtime version evidence, when available.
+    #[cfg(test)]
+    pub(crate) fn version_probe(&self) -> Option<&str> {
+        self.version_probe.as_deref()
+    }
+
+    /// Returns the pane primary process fenced by this identity.
+    #[cfg(test)]
+    pub(crate) fn primary_process_id(&self) -> Option<u32> {
+        self.primary_process_id
+    }
+
+    /// Returns the certified shell-interaction generation, when applicable.
+    #[cfg(test)]
+    pub(crate) fn interaction_generation(&self) -> Option<u64> {
+        self.interaction_generation
+    }
+}
+
+/// Builds one transaction identity from an atomically published pane
+/// environment signature.
+fn runtime_shell_execution_identity_from_signature(
+    signature: &EnvironmentSignature,
+    primary_process_id: Option<u32>,
+    interaction_generation: Option<u64>,
+) -> Result<RuntimePaneShellExecutionIdentity> {
+    let shell_path = PathBuf::from(&signature.shell_path);
+    mez_agent::validate_resolved_shell_path(&shell_path)
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+    let version_probe = signature.shell_version.clone();
+    let probed_classification =
+        ShellClassification::classify_with_probe(&shell_path, version_probe.as_deref());
+    if version_probe.is_some() && probed_classification != signature.shell_classification {
+        return Err(MezError::invalid_state(
+            "pane shell path, classification, and version evidence are inconsistent",
+        ));
+    }
+    Ok(RuntimePaneShellExecutionIdentity {
+        shell_path,
+        classification: signature.shell_classification,
+        version_probe,
+        primary_process_id,
+        interaction_generation,
+    })
+}
+
 /// Pending runtime-owned handoff from the primary shell to an agent subshell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimePaneShellHandoff {
@@ -318,6 +411,9 @@ pub(crate) struct RuntimeProcessComponent {
     pane_readiness_overrides: mez_agent::PaneReadinessOverrideStore,
     /// Bootstrap-derived environment signatures keyed by pane id.
     pane_environment_signatures: std::collections::BTreeMap<String, EnvironmentSignature>,
+    /// Managed passive Fish integration state keyed by pane process.
+    pane_fish_compatibility:
+        std::collections::BTreeMap<String, fish_compat::ManagedFishCompatibility>,
     /// Managed zsh startup and history-authentication state keyed by pane id.
     pane_zsh_compatibility: std::collections::BTreeMap<String, zsh_compat::ManagedZshCompatibility>,
     /// Canonical path authority keyed by pane environment, config generation,
@@ -388,6 +484,10 @@ pub(crate) struct RuntimeProcessComponent {
     /// Certified non-primary shell identities keyed by pane id.
     pane_certified_shell_identities:
         std::collections::BTreeMap<String, RuntimePaneCertifiedShellIdentity>,
+    /// Pre-bootstrap shell identities keyed by pane id and fenced by the
+    /// current process and shell-interaction generation.
+    pane_probed_shell_identities:
+        std::collections::BTreeMap<String, RuntimePaneProbedShellIdentity>,
     /// Runtime-owned agent-subshell handoffs awaiting bootstrap proof.
     pane_shell_handoffs: std::collections::BTreeMap<String, RuntimePaneShellHandoff>,
     /// Bootstrap-start foreground evidence keyed by exact transaction marker.
@@ -1122,6 +1222,19 @@ impl RuntimeSessionService {
             .insert(pane_id.into(), rejection);
     }
 
+    /// Advances one pane's interaction generation without clearing its
+    /// certified identity so tests can prove stale epoch evidence fails closed.
+    pub(crate) fn advance_pane_shell_interaction_generation_for_tests(&mut self, pane_id: &str) {
+        self.process.next_shell_interaction_generation = self
+            .process
+            .next_shell_interaction_generation
+            .saturating_add(1);
+        self.process.pane_shell_interaction_generations.insert(
+            pane_id.to_string(),
+            self.process.next_shell_interaction_generation,
+        );
+    }
+
     /// Returns live shell transactions for integration-test observation.
     pub(crate) fn running_shell_transactions_for_tests(
         &self,
@@ -1234,17 +1347,111 @@ impl RuntimeSessionService {
 // Pane process lifecycle and PTY synchronization.
 
 impl RuntimeSessionService {
+    /// Returns one validated pane shell identity for transaction construction.
+    ///
+    /// Certified child shells must still match the live primary process,
+    /// interaction generation, and published environment signature. Any stale
+    /// or contradictory proof fails closed instead of falling back to the
+    /// session-global executable with a pane-local dialect.
+    pub(crate) fn shell_execution_identity_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<RuntimePaneShellExecutionIdentity> {
+        let primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
+        if let Some(certified) = self.process.pane_certified_shell_identities.get(pane_id) {
+            let interaction_generation = self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied();
+            let published = self.process.pane_environment_signatures.get(pane_id);
+            if primary_process_id != Some(certified.primary_process_id)
+                || interaction_generation != Some(certified.interaction_generation)
+                || published != Some(&certified.environment_signature)
+            {
+                return Err(MezError::invalid_state(
+                    "certified pane shell identity is stale for the current process or interaction epoch",
+                ));
+            }
+            return runtime_shell_execution_identity_from_signature(
+                &certified.environment_signature,
+                primary_process_id,
+                interaction_generation,
+            );
+        }
+
+        if let Some(probed) = self.process.pane_probed_shell_identities.get(pane_id) {
+            let interaction_generation = self
+                .process
+                .pane_shell_interaction_generations
+                .get(pane_id)
+                .copied();
+            if primary_process_id != Some(probed.primary_process_id)
+                || interaction_generation != Some(probed.interaction_generation)
+            {
+                return Err(MezError::invalid_state(
+                    "probed pane shell identity is stale for the current process or interaction epoch",
+                ));
+            }
+            return Ok(probed.execution_identity.clone());
+        }
+
+        if let Some(signature) = self.process.pane_environment_signatures.get(pane_id) {
+            if self
+                .process
+                .pane_shell_interaction_generations
+                .contains_key(pane_id)
+            {
+                return Err(MezError::invalid_state(
+                    "pane shell environment is not certified for the current interaction epoch",
+                ));
+            }
+            return runtime_shell_execution_identity_from_signature(
+                signature,
+                primary_process_id,
+                None,
+            );
+        }
+
+        if self
+            .process
+            .pane_shell_interaction_generations
+            .contains_key(pane_id)
+        {
+            return Err(MezError::invalid_state(
+                "pane shell identity has not been probed for the current interaction epoch",
+            ));
+        }
+
+        let shell_path = self.session.shell.path().to_path_buf();
+        mez_agent::validate_resolved_shell_path(&shell_path)
+            .map_err(|error| MezError::invalid_state(error.message()))?;
+        let version_probe = self.session.shell.version_probe().map(ToOwned::to_owned);
+        let classification =
+            ShellClassification::classify_with_probe(&shell_path, version_probe.as_deref());
+        Ok(RuntimePaneShellExecutionIdentity {
+            shell_path,
+            classification,
+            version_probe,
+            primary_process_id,
+            interaction_generation: None,
+        })
+    }
+
     /// Runs the shell classification for pane operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn shell_classification_for_pane(&self, pane_id: &str) -> ShellClassification {
-        self.process
-            .pane_environment_signatures
-            .get(pane_id)
-            .map(|signature| signature.shell_classification)
-            .unwrap_or_else(|| ShellClassification::classify(self.session.shell.path()))
+        self.shell_execution_identity_for_pane(pane_id)
+            .map(|identity| identity.classification())
+            .unwrap_or_else(|_| {
+                ShellClassification::classify_with_probe(
+                    self.session.shell.path(),
+                    self.session.shell.version_probe(),
+                )
+            })
     }
 
     /// Adds pane-scoped shell compatibility state to one transaction.
@@ -1611,6 +1818,7 @@ impl RuntimeSessionService {
                 }
                 RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
+                | RunningShellTransactionKind::ShellIdentityProbe { .. }
                 | RunningShellTransactionKind::PathResolution { .. }
                 | RunningShellTransactionKind::EnvironmentEvidence { .. }
                 | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => String::new(),
@@ -1858,31 +2066,47 @@ impl RuntimeSessionService {
             &descriptor.pane_id,
             &self.process.settings.terminal_term,
         )?;
+        let classification = ShellClassification::classify_with_probe(
+            self.session.shell.path(),
+            self.session.shell.version_probe(),
+        );
+        let fish_compatibility =
+            if explicit_command.is_none() && classification == ShellClassification::Fish {
+                let owner = runtime_random_marker_token(&format!(
+                    "fish-integration\0{}\0{}",
+                    self.session.id, descriptor.pane_id
+                ))?;
+                Some(fish_compat::ManagedFishCompatibility::new(owner))
+            } else {
+                None
+            };
         let mut zsh_compatibility_diagnostic = None;
-        let zsh_compatibility = if explicit_command.is_none()
-            && ShellClassification::classify(self.session.shell.path()) == ShellClassification::Zsh
-        {
-            let token = runtime_random_marker_token(&format!(
-                "zsh-history\0{}\0{}",
-                self.session.id, descriptor.pane_id
-            ))?;
-            match zsh_compat::ManagedZshCompatibility::create(
-                self.session.socket_path(),
-                descriptor.pane_id.as_str(),
-                token,
-                std::env::var_os("ZDOTDIR"),
-            ) {
-                Ok(compatibility) => Some(compatibility),
-                Err(error) => {
-                    zsh_compatibility_diagnostic = Some(error.to_string());
-                    None
+        let zsh_compatibility =
+            if explicit_command.is_none() && classification == ShellClassification::Zsh {
+                let token = runtime_random_marker_token(&format!(
+                    "zsh-history\0{}\0{}",
+                    self.session.id, descriptor.pane_id
+                ))?;
+                match zsh_compat::ManagedZshCompatibility::create(
+                    self.session.socket_path(),
+                    descriptor.pane_id.as_str(),
+                    token,
+                    std::env::var_os("ZDOTDIR"),
+                ) {
+                    Ok(compatibility) => Some(compatibility),
+                    Err(error) => {
+                        zsh_compatibility_diagnostic = Some(error.to_string());
+                        None
+                    }
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         let mut launch =
             mez_mux::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
+        if let Some(compatibility) = fish_compatibility.as_ref() {
+            launch = compatibility.configure_launch(launch);
+        }
         if let Some(compatibility) = zsh_compatibility.as_ref() {
             launch = compatibility.configure_launch(launch);
         }
@@ -1897,6 +2121,11 @@ impl RuntimeSessionService {
                 descriptor.size,
                 start_directory,
             )?;
+        if let Some(compatibility) = fish_compatibility {
+            self.process
+                .pane_fish_compatibility
+                .insert(descriptor.pane_id.to_string(), compatibility);
+        }
         if let Some(compatibility) = zsh_compatibility {
             self.process
                 .pane_zsh_compatibility
@@ -2410,6 +2639,7 @@ impl RuntimeSessionService {
         self.process
             .pane_current_working_directories
             .remove(pane_id);
+        self.process.pane_fish_compatibility.remove(pane_id);
         self.process.pane_zsh_compatibility.remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);

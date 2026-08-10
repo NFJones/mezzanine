@@ -279,6 +279,110 @@ fn shell_action_executor_receives_transaction_wrapper_and_succeeds() {
 }
 
 #[test]
+/// Verifies semantic patch programs declare their POSIX interpreter instead of
+/// inheriting the active pane's Fish dialect.
+///
+/// The outer wrapper remains Fish-native, but the materialized patch program
+/// contains POSIX-only syntax and must therefore execute through `/bin/sh`.
+fn semantic_patch_transaction_uses_posix_child_interpreter_in_fish_pane() {
+    let turn = turn();
+    let action = AgentAction {
+        id: "patch-fish".to_string(),
+        rationale: "Create a file".to_string(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch".to_string(),
+            strip: None,
+        },
+    };
+    let plan = local_action_plan(&action).unwrap().unwrap();
+    let mut executor = FakePaneShellExecutor::default();
+
+    execute_shell_action_through_pane(
+        &turn,
+        &action,
+        marker(),
+        Path::new("/bin/fish"),
+        &mut executor,
+    )
+    .unwrap();
+
+    assert_eq!(executor.requests.len(), 1);
+    let transport = executor.requests[0]
+        .transaction
+        .render_for_classification_input(ShellClassification::Fish)
+        .wrapper;
+    let wrapper = decoded_fish_wrapper_source(&transport);
+    assert!(
+        wrapper.contains("'/bin/sh' \\\n\"$MEZ_COMMAND_FILE\""),
+        "{wrapper}"
+    );
+    assert!(
+        !wrapper.contains("'/bin/fish' --no-config \"$MEZ_COMMAND_FILE\""),
+        "{wrapper}"
+    );
+
+    if Command::new("fish").arg("--version").output().is_err() {
+        eprintln!("skipping real-Fish semantic patch assertion because fish is unavailable");
+        return;
+    }
+    let source = format!(
+        "command {} -c {}",
+        mez_agent::fish_quote(plan.program_dialect.interpreter_path().unwrap()),
+        mez_agent::fish_quote(&plan.command)
+    );
+    let output = Command::new("fish")
+        .args(["--no-config", "-c", &source])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "status={:?} stdout={:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("__MEZ_APPLY_PATCH_READ_BEGIN__"),
+        "{stdout}"
+    );
+}
+
+#[test]
+/// Verifies Fish preserves a failing semantic POSIX program's diagnostic and
+/// status when invoking the plan's declared interpreter.
+fn semantic_patch_posix_child_failure_propagates_through_fish() {
+    if Command::new("fish").arg("--version").output().is_err() {
+        eprintln!("skipping real-Fish semantic patch assertion because fish is unavailable");
+        return;
+    }
+    let plan = mez_agent::semantic_patch_planning::apply_patch_error_plan(
+        "declared POSIX interpreter failure",
+    );
+    assert_eq!(
+        plan.program_dialect,
+        mez_agent::LocalProgramDialect::PosixSh
+    );
+    let source = format!(
+        "command {} -c {}",
+        mez_agent::fish_quote(plan.program_dialect.interpreter_path().unwrap()),
+        mez_agent::fish_quote(&plan.command)
+    );
+    let output = Command::new("fish")
+        .args(["--no-config", "-c", &source])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("declared POSIX interpreter failure"),
+        "{stderr}"
+    );
+}
+
+#[test]
 /// Verifies that a normal exit code does not report a signal.
 fn shell_action_executor_reports_null_signal_for_normal_exit() {
     let turn = turn();

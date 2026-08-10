@@ -790,6 +790,10 @@ impl RuntimeSessionService {
             &sandbox_config,
             &permission_policy,
         );
+        let shell_classification = self
+            .shell_classification_for_pane(&turn.pane_id)
+            .as_str()
+            .to_string();
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -809,6 +813,7 @@ impl RuntimeSessionService {
             provider,
             permission_policy,
             sandbox_first_local_prompts,
+            shell_classification,
             session_approvals: self.session_approvals().clone(),
             path_scopes,
             subagent_scope,

@@ -26,6 +26,36 @@ use super::{
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_COMMAND_SHELL_CLASSIFICATION: &str = "unix-like";
 
+/// Selects the shell grammar used for deterministic command analysis.
+///
+/// Permission callers derive this value from the same pane shell
+/// classification used to render and execute the command. Unknown Unix shell
+/// classifications retain the conservative POSIX-compatible baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandShellDialect {
+    /// POSIX-family command syntax used by sh, Bash, Zsh, and unknown Unix
+    /// shells unless stronger identity evidence is available.
+    Posix,
+    /// Fish command syntax, restricted to the safely classifiable
+    /// simple-command subset.
+    Fish,
+}
+
+impl CommandShellDialect {
+    /// Derives a permission grammar from one live shell classification.
+    pub fn from_shell_classification(shell_classification: &str) -> Self {
+        if shell_classification.eq_ignore_ascii_case("fish")
+            || shell_classification
+                .get(..5)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("fish-"))
+        {
+            Self::Fish
+        } else {
+            Self::Posix
+        }
+    }
+}
+
 /// Carries Permission Authority Change state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

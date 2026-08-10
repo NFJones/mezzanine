@@ -630,6 +630,7 @@ mod tests {
     fn local_plan() -> LocalActionPlan {
         LocalActionPlan {
             kind: LocalActionKind::ShellCommand,
+            program_dialect: crate::LocalProgramDialect::PaneNative,
             summary: "Inspect files".to_string(),
             command: "rg --files".to_string(),
             input_sidecar: None,

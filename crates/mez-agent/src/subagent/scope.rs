@@ -5,7 +5,10 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::permissions::{EffectiveCommandEffects, classify_shell_command};
+use crate::permissions::{
+    EffectiveCommandEffects, classify_shell_command,
+    classify_shell_command_for_shell_classification,
+};
 use crate::semantic_patch_planning::apply_patch_touched_paths;
 
 use super::{CooperationMode, SubagentScopeDeclaration, SubagentScopeEnforcement};
@@ -28,6 +31,23 @@ impl SubagentScopeEnforcement for DefaultSubagentScopeEnforcement {
             return Ok(None);
         }
         let effects = classify_shell_command(command, None).map_err(|error| error.to_string())?;
+        Ok(effects
+            .iter()
+            .find_map(|effects| effect_violation(scope, effects)))
+    }
+
+    fn shell_command_violation_for_shell_classification(
+        &self,
+        scope: &SubagentScopeDeclaration,
+        command: &str,
+        shell_classification: &str,
+    ) -> std::result::Result<Option<String>, String> {
+        if scope.cooperation_mode == CooperationMode::Unrestricted {
+            return Ok(None);
+        }
+        let effects =
+            classify_shell_command_for_shell_classification(command, None, shell_classification)
+                .map_err(|error| error.to_string())?;
         Ok(effects
             .iter()
             .find_map(|effects| effect_violation(scope, effects)))

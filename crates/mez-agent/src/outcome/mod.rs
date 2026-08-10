@@ -1386,6 +1386,7 @@ mod tests {
     fn shell_plan() -> LocalActionPlan {
         LocalActionPlan {
             kind: LocalActionKind::ShellCommand,
+            program_dialect: crate::LocalProgramDialect::PaneNative,
             summary: "Inspect repository".to_string(),
             command: "git status --short".to_string(),
             input_sidecar: None,

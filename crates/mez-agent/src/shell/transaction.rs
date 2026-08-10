@@ -802,15 +802,42 @@ fn posix_shell_quoted_argument(value: &str) -> String {
     chunks.join("\\\n")
 }
 
+/// Renders one Fish argument without creating an oversized physical source line.
+///
+/// Adjacent quoted fragments remain one Fish word across escaped newlines, so
+/// chunking preserves the argv element without evaluating any literal content.
+fn fish_shell_quoted_argument(value: &str) -> String {
+    const MAX_QUOTED_ARGUMENT_LINE_BYTES: usize = 512;
+
+    if fish_quote(value).len() <= MAX_QUOTED_ARGUMENT_LINE_BYTES {
+        return fish_quote(value);
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for character in value.chars() {
+        current.push(character);
+        if fish_quote(&current).len() >= MAX_QUOTED_ARGUMENT_LINE_BYTES {
+            let remainder = current.pop().map(|character| character.to_string());
+            chunks.push(fish_quote(&current));
+            current = remainder.unwrap_or_default();
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(fish_quote(&current));
+    }
+    chunks.join("\\\n")
+}
+
 /// Renders one typed child launch as Fish shell words.
-fn fish_typed_child_launch_words(launch: &ShellChildLaunch) -> String {
+pub(super) fn fish_typed_child_launch_words(launch: &ShellChildLaunch) -> String {
     std::iter::once(fish_quote(&launch.executable))
         .chain(launch.arguments.iter().map(|argument| match argument {
-            ShellChildArgument::Literal(value) => fish_quote(value),
+            ShellChildArgument::Literal(value) => fish_shell_quoted_argument(value),
             ShellChildArgument::MaterializedCommandFile => "\"$MEZ_COMMAND_FILE\"".to_string(),
         }))
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" \\\n")
 }
 
 impl ShellTransaction {
@@ -978,9 +1005,7 @@ MEZ_AGENT={agent}\n\
 MEZ_PANE={pane}\n\
 {command_file_lines}\
 {child_invocation}\
-if [ -n \"$MEZ_COMMAND_FILE\" ]; then command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1 || :; fi\n\
-if [ -n \"$MEZ_COMMAND_B64\" ]; then command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1 || :; fi\n\
-if [ -n \"$MEZ_SIDECAR_DATA\" ]; then command rm -f -- \"$MEZ_SIDECAR_DATA\" >/dev/null 2>&1 || :; fi\n\
+command rm -f -- \"$MEZ_COMMAND_FILE\" \"$MEZ_COMMAND_B64\" \"$MEZ_SIDECAR_DATA\" >/dev/null 2>&1 || :\n\
 {sidecar_frame_cleanup}\
 if [ -n \"$MEZ_OUTPUT_FILE\" ]; then command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_STATUS_FILE\" ]; then command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1 || :; fi\n\
@@ -1179,6 +1204,7 @@ set -l MEZ_AGENT {agent}\n\
 set -l MEZ_PANE {pane}\n\
 {command_file_lines}\
 set -l MEZ_STATUS 0\n\
+printf '\\n'\n\
 {child_invocation}\
 if test -n \"$MEZ_COMMAND_FILE\"; command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_COMMAND_B64\"; command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1; or true; end\n\
@@ -1187,10 +1213,9 @@ if test -n \"$MEZ_SIDECAR_DATA\"; command rm -f -- \"$MEZ_SIDECAR_DATA\" >/dev/n
 if test -n \"$MEZ_OUTPUT_FILE\"; command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_STATUS_FILE\"; command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1; or true; end\n\
 set -e MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_SIDECAR_DATA MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
+{history_restore}\
 printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
 $MEZ_STATUS $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE\n\
-{history_restore}\
-set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS\n\
 end\n",
             history_start = fish_shell_history_suppression_start(),
             history_restore = fish_shell_history_restore(),
@@ -1203,7 +1228,7 @@ end\n",
             child_invocation = child_invocation,
         );
         ShellTransactionInput {
-            wrapper,
+            wrapper: fish_shell_wrapper_transport(&wrapper, self.marker.as_str()),
             payload: command_materialization.payload,
             payload_receiver_acknowledgements: self.payload_receiver_acknowledgements,
         }
@@ -1227,10 +1252,9 @@ begin\n\
 eval {command}\n\
 end\n\
 set -l MEZ_STATUS $status\n\
+{history_restore}\
 printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
 $MEZ_STATUS $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE\n\
-{history_restore}\
-set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS\n\
 end\n",
             history_start = fish_shell_history_suppression_start(),
             history_restore = fish_shell_history_restore(),
@@ -1497,6 +1521,8 @@ fn fish_shell_interactive_invocation_words(
     words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
     let mut exec_words = vec!["exec".to_string(), fish_quote(shell_path)];
     exec_words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
+    exec_words.push("--init-command".to_string());
+    exec_words.push(fish_quote(fish_wrapper_receiver_init_command()));
     exec_words.push("-i".to_string());
     let readiness_source = format!(
         "command printf '\\e]133;B\\e\\\\'; {}",
@@ -1632,6 +1658,7 @@ fn fish_command_file_materialization(
         "else".to_string(),
         "set MEZ_WRITE_STATUS 1".to_string(),
         "end".to_string(),
+        "end".to_string(),
     ]);
     lines.extend([
         "if test -n \"$MEZ_STTY_STATE\"".to_string(),
@@ -1710,6 +1737,79 @@ fn command_payload_lines(command: &str, end_marker: &str, input_sidecar: Option<
     payload
 }
 
+/// Fish function installed before interactive transaction delivery begins.
+///
+/// The interactive reader sees only one short function invocation. The
+/// function then owns stdin while it receives bounded base64 records, writes
+/// the decoded wrapper to a temporary file, and sources that file without
+/// command substitution so physical newlines remain intact. Each record emits
+/// the acknowledgement byte used by paced Darwin PTY delivery.
+pub fn fish_wrapper_receiver_init_command() -> &'static str {
+    r#"function __mez_agent_wrapper_receive --argument-names sentinel
+    set -l source_file (mktemp); or return 1
+    set -l encoded_file "$source_file.b64"
+    set -l receiver_stty (stty -g 2>/dev/null); or set receiver_stty ''
+    if test -n "$receiver_stty"
+        stty -echo 2>/dev/null; or true
+    end
+    set -l receive_status 0
+    set -l seen_end 0
+    command printf '' > "$encoded_file"; or set receive_status $status
+    builtin history delete --exact --case-sensitive "__mez_agent_wrapper_receive '$sentinel'" >/dev/null 2>&1
+    printf '\036'
+    while read -l record
+        set -l payload (string split -m 1 ';' -- "$record")[1]
+        if test "$payload" = "$sentinel"
+            set seen_end 1
+            printf '\036'
+            break
+        end
+        if test "$receive_status" -eq 0
+            printf '%s' "$payload" >> "$encoded_file"; or set receive_status $status
+        end
+        printf '\036'
+    end
+    if test "$seen_end" != 1
+        set receive_status 1
+    end
+    set -l decode_status 1
+    if test "$receive_status" -eq 0
+        if base64 -d < "$encoded_file" > "$source_file" 2>/dev/null
+            set decode_status 0
+        else
+            base64 -D < "$encoded_file" > "$source_file"
+            set decode_status $status
+        end
+    end
+    if test -n "$receiver_stty"
+        stty "$receiver_stty" 2>/dev/null; or true
+    end
+    set -l source_status $decode_status
+    if test "$decode_status" -eq 0
+        source "$source_file"
+        set source_status $status
+    end
+    command rm -f -- "$source_file" "$encoded_file" >/dev/null 2>&1; or true
+    return $source_status
+end"#
+}
+
+/// Encodes a generated Fish wrapper as receiver-consumed base64 records.
+fn fish_shell_wrapper_transport(source: &str, marker: &str) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
+    let end_marker = format!("__MEZ_WRAPPER_SOURCE_END_{marker}__");
+    let mut transport = format!("__mez_agent_wrapper_receive {}\n", fish_quote(&end_marker));
+    for chunk in encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES) {
+        let chunk = std::str::from_utf8(chunk)
+            .expect("standard base64 output should always be valid UTF-8");
+        transport.push_str(chunk);
+        transport.push_str("; printf '\\036'\n");
+    }
+    transport.push_str(&end_marker);
+    transport.push_str("; printf '\\036'\n");
+    transport
+}
+
 /// Encodes a generated POSIX wrapper as bounded shell-owned assignments.
 ///
 /// Each physical input line is a complete command that appends one base64
@@ -1730,6 +1830,7 @@ pub(super) fn posix_shell_wrapper_transport(
         .and_then(|chunk| std::str::from_utf8(chunk).ok())
         .unwrap_or_default();
     let mut transport = zsh_history_transport_start(classification, zsh_history_token);
+    transport.push_str(bash_history_transport_start(classification));
     transport.push_str(&format!(
         "MEZ_WRAPPER_STTY=$(stty -g 2>/dev/null) || MEZ_WRAPPER_STTY=; {ACK}\n\
 MEZ_WRAPPER_PS1=${{PS1-}}; PS1=; stty -echo 2>/dev/null || :; {ACK}\n\
@@ -1752,9 +1853,21 @@ MEZ_WRAPPER_SOURCE=$(printf '%s' \"$MEZ_WRAPPER_B64\" | base64 \"$MEZ_WRAPPER_BA
 unset MEZ_WRAPPER_B64 MEZ_WRAPPER_STTY MEZ_WRAPPER_BASE64_FLAG; {ACK}\n\
 PS1=$MEZ_WRAPPER_PS1; unset MEZ_WRAPPER_PS1; {ACK}\n\
 eval \"$MEZ_WRAPPER_SOURCE\"; {}\n",
-        zsh_history_transport_fallback(classification, zsh_history_token),
+        posix_shell_history_transport_fallback(classification, zsh_history_token),
     ));
     transport
+}
+
+/// Disables Bash history before the first physical wrapper framing record.
+///
+/// Interactive Bash records each complete input line before executing it. The
+/// initiating record therefore removes only itself, remembers whether history
+/// was enabled, and leaves restoration to decoded transaction cleanup.
+fn bash_history_transport_start(classification: ShellClassification) -> &'static str {
+    if classification != ShellClassification::Bash {
+        return "";
+    }
+    "MEZ_BASH_HISTORY_OUTER_ACTIVE=1; MEZ_BASH_HISTORY_OUTER_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{print $2; exit}')\" in on) MEZ_BASH_HISTORY_OUTER_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD+1)) 2>/dev/null || :;; esac; printf '\\036'\n"
 }
 
 /// Starts a zsh-private history frame before any generated transport record.
@@ -1775,16 +1888,19 @@ fn zsh_history_transport_start(
     format!("{}\n", zsh_history_control_record(token))
 }
 
-/// Pops a zsh history frame when malformed evaluated source skipped cleanup.
-fn zsh_history_transport_fallback(
+/// Restores outer history isolation when evaluated source skipped cleanup.
+fn posix_shell_history_transport_fallback(
     classification: ShellClassification,
     token: Option<&MarkerToken>,
 ) -> String {
+    if classification == ShellClassification::Bash {
+        return "if [ \"${MEZ_BASH_HISTORY_OUTER_ACTIVE-}\" = 1 ]; then MEZ_BASH_HISTORY_OUTER_RESTORE_NOW=${MEZ_BASH_HISTORY_OUTER_RESTORE:-0}; unset MEZ_BASH_HISTORY_OUTER_ACTIVE MEZ_BASH_HISTORY_OUTER_RESTORE; if [ \"$MEZ_BASH_HISTORY_OUTER_RESTORE_NOW\" = 1 ]; then set -o history 2>/dev/null || :; fi; unset MEZ_BASH_HISTORY_OUTER_RESTORE_NOW; fi; unset MEZ_WRAPPER_SOURCE".to_string();
+    }
     if classification != ShellClassification::Zsh {
-        return String::new();
+        return "unset MEZ_WRAPPER_SOURCE".to_string();
     }
     let Some(token) = token else {
-        return String::new();
+        return "unset MEZ_WRAPPER_SOURCE".to_string();
     };
     format!(
         "if [ \"${{MEZ_ZSH_HISTORY_ACTIVE-}}\" = {} ]; then unset MEZ_ZSH_HISTORY_ACTIVE; fc -P; fi; unset MEZ_WRAPPER_SOURCE",
@@ -1878,6 +1994,7 @@ fn fish_agent_subshell_env_word_list() -> Vec<String> {
 /// that current history entry before later wrapper lines are read.
 pub fn posix_shell_history_suppression_start() -> &'static str {
     "MEZ_SHELL_STTY_STATE=$(stty -g 2>/dev/null) || MEZ_SHELL_STTY_STATE=; if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT=0; case $- in *e*) MEZ_RESTORE_ERREXIT=1; set +e;; esac; MEZ_RESTORE_NOUNSET=0; case $- in *u*) MEZ_RESTORE_NOUNSET=1; set +u;; esac; MEZ_HISTORY_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{print $2; exit}')\" in on) MEZ_HISTORY_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD-1)) 2>/dev/null || :;; esac\n\
+if [ \"${MEZ_BASH_HISTORY_OUTER_ACTIVE-}\" = 1 ]; then MEZ_HISTORY_RESTORE=${MEZ_BASH_HISTORY_OUTER_RESTORE:-0}; fi\n\
 MEZ_HISTORY_HISTFILE_WAS_SET=0\n\
 if [ \"${HISTFILE+x}\" = x ]; then MEZ_HISTORY_HISTFILE_WAS_SET=1; MEZ_HISTORY_HISTFILE_SAVED=$HISTFILE; fi\n\
 HISTFILE=/dev/null\n"
@@ -1895,6 +2012,7 @@ MEZ_RESTORE_HISTORY_NOW=$MEZ_HISTORY_RESTORE\n\
 MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
 MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
 unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET\n\
+unset MEZ_BASH_HISTORY_OUTER_ACTIVE MEZ_BASH_HISTORY_OUTER_RESTORE\n\
 if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\n\
 unset MEZ_SHELL_STTY_STATE\n\
 if [ \"${MEZ_RESTORE_HISTORY_NOW:-0}\" = 1 ]; then set -o history 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT_APPLY=${MEZ_RESTORE_ERREXIT_NOW:-0}; MEZ_RESTORE_NOUNSET_APPLY=${MEZ_RESTORE_NOUNSET_NOW:-0}; unset MEZ_RESTORE_HISTORY_NOW MEZ_RESTORE_ERREXIT_NOW MEZ_RESTORE_NOUNSET_NOW; case \"$MEZ_RESTORE_ERREXIT_APPLY\" in 1) set -e;; esac; case \"$MEZ_RESTORE_NOUNSET_APPLY\" in 1) set -u;; esac; unset MEZ_RESTORE_ERREXIT_APPLY MEZ_RESTORE_NOUNSET_APPLY; :\n"
@@ -1922,6 +2040,7 @@ fn posix_shell_history_marker_finish_prefix() -> &'static str {
 MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
 MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
 unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET\n\
+unset MEZ_BASH_HISTORY_OUTER_ACTIVE MEZ_BASH_HISTORY_OUTER_RESTORE\n\
 if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\n\
 unset MEZ_SHELL_STTY_STATE\n\
 if [ \"$MEZ_RESTORE_HISTORY_NOW\" = 1 ]; then set -o history 2>/dev/null || :; fi; "
@@ -1957,37 +2076,33 @@ fn posix_shell_errexit_restore_suffix() -> &'static str {
     "MEZ_RESTORE_ERREXIT_APPLY=${MEZ_RESTORE_ERREXIT_NOW:-0}; MEZ_RESTORE_NOUNSET_APPLY=${MEZ_RESTORE_NOUNSET_NOW:-0}; unset MEZ_RESTORE_HISTORY_NOW MEZ_RESTORE_ERREXIT_NOW MEZ_RESTORE_NOUNSET_NOW; case \"$MEZ_RESTORE_ERREXIT_APPLY\" in 1) set -e;; esac; case \"$MEZ_RESTORE_NOUNSET_APPLY\" in 1) set -u;; esac; unset MEZ_RESTORE_ERREXIT_APPLY MEZ_RESTORE_NOUNSET_APPLY; :"
 }
 
+/// Complete Fish input record that enters transaction-owned history isolation.
+///
+/// Fish records complete physical input lines. Keeping all setup that precedes
+/// private mode on one stable line lets cleanup delete that exact owned record
+/// without matching similarly prefixed user commands.
+const FISH_HISTORY_ISOLATION_RECORD: &str = "set -l MEZ_SHELL_STTY_STATE (stty -g 2>/dev/null); or set -l MEZ_SHELL_STTY_STATE ''; if test -n \"$MEZ_SHELL_STTY_STATE\"; stty -echo 2>/dev/null; or true; end; set -l MEZ_FISH_PRIVATE_WAS_SET 0; set -l MEZ_FISH_PRIVATE_SAVED; if set -q fish_private_mode; set MEZ_FISH_PRIVATE_WAS_SET 1; set MEZ_FISH_PRIVATE_SAVED $fish_private_mode; end; set -g fish_private_mode 1";
+
 /// Returns a Fish-native prologue that asks Fish to avoid writing Mez-injected
 /// wrapper commands to the user's normal fish history.
-///
-/// Fish history behavior differs by version, so this uses private-mode state
-/// plus later best-effort deletion of wrapper prefixes.
-pub(crate) fn fish_shell_history_suppression_start() -> &'static str {
-    "set -l MEZ_SHELL_STTY_STATE (stty -g 2>/dev/null); or set -l MEZ_SHELL_STTY_STATE ''; if test -n \"$MEZ_SHELL_STTY_STATE\"; stty -echo 2>/dev/null; or true; end\n\
-set -l MEZ_FISH_PRIVATE_WAS_SET 0\n\
-if set -q fish_private_mode\n\
-  set MEZ_FISH_PRIVATE_WAS_SET 1\n\
-  set -l MEZ_FISH_PRIVATE_SAVED $fish_private_mode\n\
-end\n\
-set -g fish_private_mode 1\n"
+pub(crate) fn fish_shell_history_suppression_start() -> String {
+    format!("{FISH_HISTORY_ISOLATION_RECORD}\n")
 }
 
-/// Returns Fish-native cleanup that removes known Mez wrapper prefixes from
+/// Returns Fish-native cleanup that removes exact Mez wrapper records from
 /// Fish history and restores the previous private-mode variable state.
-pub(crate) fn fish_shell_history_restore() -> &'static str {
-    "history delete --prefix --case-sensitive 'set -l MEZ_MARKER_TOKEN' >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive 'set -l MEZ_TURN' >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive 'set -l MEZ_AGENT' >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive 'set -l MEZ_PANE' >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive \"printf '\\\\033]133;\" >/dev/null 2>&1\n\
-history delete --prefix --case-sensitive 'history delete --' >/dev/null 2>&1\n\
+pub(crate) fn fish_shell_history_restore() -> String {
+    format!(
+        "builtin history delete --exact --case-sensitive {isolation_record} >/dev/null 2>&1\n\
 if test -n \"$MEZ_SHELL_STTY_STATE\"; stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null; or true; end\n\
 if test \"$MEZ_FISH_PRIVATE_WAS_SET\" = 1\n\
   set -g fish_private_mode $MEZ_FISH_PRIVATE_SAVED\n\
 else\n\
   set -e fish_private_mode\n\
 end\n\
-set -e MEZ_SHELL_STTY_STATE MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED\n"
+set -e MEZ_SHELL_STTY_STATE MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED\n",
+        isolation_record = fish_quote(FISH_HISTORY_ISOLATION_RECORD),
+    )
 }
 
 /// Validates model-authored shell input before Mezzanine wraps it for pane
@@ -2108,20 +2223,17 @@ pub fn agent_subshell_enter_command_with_zsh_history_token(
         let env_words = fish_agent_subshell_env_word_list().join(" \\\n  ");
         let shell_invocation = fish_shell_interactive_invocation_words(&shell, classification);
         format!(
-            "{history_start}function __mez_agent_subshell_handoff
+            "begin
+{history_start}
 if test -n \"$MEZ_SHELL_STTY_STATE\"; stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null; or true; end
-set -e MEZ_SHELL_STTY_STATE
 command env \\
   {env_words} \\
   {shell_invocation}
-history delete --prefix --case-sensitive 'command env -u BASH_ENV' >/dev/null 2>&1
-history delete --prefix --case-sensitive 'set -l MEZ_FISH_PRIVATE_WAS_SET' >/dev/null 2>&1
-if test \"$MEZ_FISH_PRIVATE_WAS_SET\" = 1; set -g fish_private_mode $MEZ_FISH_PRIVATE_SAVED; else; set -e fish_private_mode; end
-set -e MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED
+{history_restore}
 end
-__mez_agent_subshell_handoff; functions --erase __mez_agent_subshell_handoff
 ",
             history_start = fish_shell_history_suppression_start(),
+            history_restore = fish_shell_history_restore(),
             env_words = env_words,
             shell_invocation = shell_invocation,
         )

@@ -7,9 +7,9 @@
 use std::fmt::Write as _;
 
 use super::{
-    ArgumentPolicy, CommandRule, CommandRuleScope, EffectiveCommandEffects, MezError, PathScopes,
-    Result, RuleDecision, RuleMatch, analyze_shell, classify_tokens, tokenize_shell_words,
-    validate_git_read_only_subcommand,
+    ArgumentPolicy, CommandRule, CommandRuleScope, CommandShellDialect, EffectiveCommandEffects,
+    MezError, PathScopes, Result, RuleDecision, RuleMatch, analyze_shell_for_dialect,
+    classify_tokens, tokenize_shell_words, validate_git_read_only_subcommand,
 };
 
 // Built-in rules, rule-store codec, and exact command hashing.
@@ -277,7 +277,24 @@ pub fn classify_shell_command(
     command: &str,
     scopes: Option<&PathScopes>,
 ) -> Result<Vec<EffectiveCommandEffects>> {
-    let analysis = analyze_shell(command);
+    classify_shell_command_for_shell_classification(
+        command,
+        scopes,
+        super::DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+    )
+}
+
+/// Classifies one shell command with the grammar selected by the live pane.
+///
+/// Unsupported Fish syntax yields an unknown effect rather than being
+/// approximated with POSIX tokenization.
+pub fn classify_shell_command_for_shell_classification(
+    command: &str,
+    scopes: Option<&PathScopes>,
+    shell_classification: &str,
+) -> Result<Vec<EffectiveCommandEffects>> {
+    let dialect = CommandShellDialect::from_shell_classification(shell_classification);
+    let analysis = analyze_shell_for_dialect(command, dialect);
     if analysis.unsafe_syntax {
         return Ok(vec![EffectiveCommandEffects::unknown()]);
     }

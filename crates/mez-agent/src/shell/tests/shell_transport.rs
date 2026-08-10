@@ -3,6 +3,9 @@
 //! This bounded leaf owns the scenarios for this concern while shared
 //! fixtures remain in the parent module.
 
+use super::super::transaction::{
+    fish_shell_history_restore, fish_shell_history_suppression_start, fish_typed_child_launch_words,
+};
 use super::*;
 use crate::{
     SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER, decode_shell_output_transport_with_diagnostics,
@@ -84,8 +87,75 @@ fn agent_subshell_enter_command_keeps_physical_lines_pty_safe() {
         } else {
             decoded_posix_wrapper_source(&handoff)
         };
-        assert!(source.contains("__mez_agent_subshell_handoff"), "{source}");
+        if classification == ShellClassification::Fish {
+            assert!(source.starts_with("begin\n"), "{source}");
+        } else {
+            assert!(source.contains("__mez_agent_subshell_handoff"), "{source}");
+        }
     }
+}
+
+#[cfg(unix)]
+#[test]
+/// Verifies Fish handoffs restore parent-local private-mode state after both a
+/// successful child exit and a failed child launch.
+///
+/// The generated handoff must keep state capture and cleanup in one lexical
+/// scope. A following parent command proves failed cleanup does not strand or
+/// terminate the shell before it resumes ordinary input.
+fn fish_agent_subshell_handoff_restores_parent_state_after_child_exit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(fish_path) = fish_path_for_tests() else {
+        eprintln!("skipping real-Fish handoff assertion because fish is unavailable");
+        return;
+    };
+    let temp = test_temp_dir("fish-agent-handoff-state");
+    let successful_child = temp.join("successful-child");
+    std::fs::write(&successful_child, "#!/bin/sh\nexit 0\n")
+        .expect("the successful child fixture should be written");
+    let mut permissions = std::fs::metadata(&successful_child)
+        .expect("the successful child fixture should have metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&successful_child, permissions)
+        .expect("the successful child fixture should be executable");
+
+    for (setup, expected_state) in [
+        ("set -e fish_private_mode", "__MEZ_HANDOFF_STATE__unset"),
+        (
+            "set -g fish_private_mode original",
+            "__MEZ_HANDOFF_STATE__set:original",
+        ),
+    ] {
+        for child in [&successful_child, &temp.join("missing-child")] {
+            let handoff = agent_subshell_enter_command(child, ShellClassification::Fish).unwrap();
+            let script = format!(
+                "{setup}\n{handoff}if set -q fish_private_mode\n  printf '__MEZ_HANDOFF_STATE__set:%s\\n' \"$fish_private_mode\"\nelse\n  printf '__MEZ_HANDOFF_STATE__unset\\n'\nend\nprintf '__MEZ_HANDOFF_PARENT_ALIVE__\\n'\n"
+            );
+            let mut fish = Command::new(&fish_path);
+            fish.arg("--no-config");
+            let output = run_optional_command_stdin_bounded(
+                &mut fish,
+                &script,
+                "Fish agent handoff state probe",
+            )
+            .expect("the resolved Fish executable should spawn");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            assert!(output.status.success(), "child={child:?} output={output:?}");
+            assert!(
+                stdout.contains(expected_state),
+                "child={child:?} {stdout:?}"
+            );
+            assert!(
+                stdout.contains("__MEZ_HANDOFF_PARENT_ALIVE__"),
+                "child={child:?} {stdout:?}"
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]
@@ -123,6 +193,168 @@ fn zsh_wrapper_uses_native_full_transport_history_isolation() {
         source.find("fc -P").unwrap() < source.find("]133;D;").unwrap(),
         "{source}"
     );
+}
+
+#[test]
+/// Verifies Bash disables history before any physical wrapper transport record
+/// and passes the saved state into decoded transaction cleanup.
+///
+/// Disabling history only inside the decoded source is too late because Bash
+/// accepts each `MEZ_WRAPPER_*` line before `eval` starts that source.
+fn bash_wrapper_isolates_history_before_outer_transport() {
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/bash"), "pwd").unwrap();
+
+    let transport = transaction.render_for_classification(ShellClassification::Bash);
+    let source = decoded_posix_wrapper_source(&transport);
+    let first_line = transport.lines().next().unwrap_or_default();
+
+    assert!(
+        first_line.contains("MEZ_BASH_HISTORY_OUTER_ACTIVE=1"),
+        "{first_line}"
+    );
+    assert!(first_line.contains("set +o history"), "{first_line}");
+    assert!(
+        first_line.contains("history -d $((HISTCMD+1))"),
+        "{first_line}"
+    );
+    assert!(
+        transport.find("MEZ_BASH_HISTORY_OUTER_ACTIVE=1").unwrap()
+            < transport.find("MEZ_WRAPPER_STTY").unwrap(),
+        "{transport}"
+    );
+    assert!(source.contains("MEZ_BASH_HISTORY_OUTER_ACTIVE"), "{source}");
+    assert!(
+        source.contains("MEZ_BASH_HISTORY_OUTER_RESTORE"),
+        "{source}"
+    );
+}
+
+/// Runs one complete transaction through interactive Bash and returns both
+/// captured process output and the history file written by the shell.
+fn run_interactive_bash_history_transaction(
+    input: &ShellTransactionInput,
+    history_enabled: bool,
+    history_file: &Path,
+) -> (Output, String) {
+    std::fs::write(history_file, "USER_HISTORY_SEED\n")
+        .expect("the isolated Bash history seed should be written");
+    let mut child = Command::new("/bin/bash")
+        .args(["--noprofile", "--norc", "-i"])
+        .env("HOME", history_file.parent().unwrap())
+        .env("HISTFILE", history_file)
+        .env("HISTSIZE", "1000")
+        .env("HISTFILESIZE", "1000")
+        .env("PROMPT_COMMAND", "")
+        .env("PS1", "")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("interactive Bash should spawn");
+    let stdin = child.stdin.as_mut().expect("Bash stdin should be piped");
+    let setup = if history_enabled {
+        "history -c; history -r\n"
+    } else {
+        "history -c; history -r; set +o history\n"
+    };
+    stdin
+        .write_all(setup.as_bytes())
+        .expect("Bash history setup should be written");
+    stdin
+        .write_all(input.wrapper.as_bytes())
+        .expect("the transaction wrapper should be written");
+    thread::sleep(Duration::from_millis(50));
+    stdin
+        .write_all(input.payload.as_bytes())
+        .expect("the transaction payload should be written");
+    stdin
+        .write_all(
+            b"printf '__MEZ_HISTORY_BEGIN__\\n'; history; printf '__MEZ_HISTORY_END__\\n'; case \"$(set -o | command awk '$1==\"history\"{print $2; exit}')\" in on) printf '__MEZ_HISTORY_STATE__on\\n';; *) printf '__MEZ_HISTORY_STATE__off\\n';; esac; history -w; exit\n",
+        )
+        .expect("the Bash history observation should be written");
+    drop(child.stdin.take());
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child
+            .try_wait()
+            .expect("interactive Bash should remain observable")
+            .is_some()
+        {
+            let output = child
+                .wait_with_output()
+                .expect("interactive Bash output should be collected");
+            let history = std::fs::read_to_string(history_file)
+                .expect("interactive Bash should write its isolated history file");
+            return (output, history);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("interactive Bash history transaction exceeded its five-second deadline");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+/// Verifies complete wrapper transport leaves no framing or payload records in
+/// Bash history and restores the exact initially enabled or disabled state.
+///
+/// The history file and the in-memory `history` output are both inspected so a
+/// fix cannot hide contamination merely by redirecting persistence.
+fn bash_wrapper_transport_does_not_contaminate_interactive_history() {
+    if !Path::new("/bin/bash").exists() {
+        return;
+    }
+    for history_enabled in [true, false] {
+        let temp = test_temp_dir(if history_enabled {
+            "bash-history-enabled"
+        } else {
+            "bash-history-disabled"
+        });
+        let history_file = temp.join("history");
+        let transaction = ShellTransaction::new(
+            marker(),
+            "t1",
+            "a1",
+            "p1",
+            Path::new("/bin/bash"),
+            "printf '%s\\n' AGENT_PAYLOAD_SENTINEL",
+        )
+        .unwrap();
+        let input = transaction.render_for_classification_input(ShellClassification::Bash);
+        let (output, persisted_history) =
+            run_interactive_bash_history_transaction(&input, history_enabled, &history_file);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let expected_state = if history_enabled { "on" } else { "off" };
+
+        assert!(
+            output.status.success(),
+            "enabled={history_enabled} status={:?} stdout={stdout:?} stderr={:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.contains("AGENT_PAYLOAD_SENTINEL"), "{stdout:?}");
+        assert!(stdout.contains("USER_HISTORY_SEED"), "{stdout:?}");
+        assert!(
+            stdout.contains(&format!("__MEZ_HISTORY_STATE__{expected_state}")),
+            "{stdout:?}"
+        );
+        let in_memory_history = stdout
+            .split_once("__MEZ_HISTORY_BEGIN__\n")
+            .and_then(|(_, history)| history.split_once("__MEZ_HISTORY_END__\n"))
+            .map(|(history, _)| history)
+            .expect("interactive Bash should delimit its in-memory history output");
+        for history in [in_memory_history, persisted_history.as_str()] {
+            assert!(history.contains("USER_HISTORY_SEED"), "{history:?}");
+            assert!(!history.contains("MEZ_WRAPPER_"), "{history:?}");
+            assert!(!history.contains("MEZ_BASH_HISTORY_OUTER"), "{history:?}");
+            assert!(!history.contains("AGENT_PAYLOAD_SENTINEL"), "{history:?}");
+        }
+        std::fs::remove_dir_all(temp).unwrap();
+    }
 }
 
 #[test]
@@ -187,11 +419,15 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
     )
     .unwrap();
 
-    let wrapper = transaction.render_fish();
+    let input = transaction.render_fish_input();
+    let wrapper = decoded_fish_wrapper_source(&input.wrapper);
 
     assert!(wrapper.contains("set -l MEZ_MARKER_TOKEN '"));
     assert!(wrapper.contains("fish_private_mode"));
-    assert!(wrapper.contains("history delete --prefix --case-sensitive"));
+    assert!(
+        wrapper.contains("builtin history delete --exact --case-sensitive"),
+        "{wrapper}"
+    );
     assert!(wrapper.contains("TERM='dumb'"), "{wrapper}");
     assert!(wrapper.contains("PAGER='cat'"), "{wrapper}");
     assert!(wrapper.contains("GIT_PAGER='cat'"), "{wrapper}");
@@ -226,14 +462,309 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
     assert!(!wrapper.contains("echo \\'hello fish\\'"));
     assert!(!wrapper.contains("echo 'hello fish'"));
     assert!(
-        wrapper
-            .lines()
-            .all(|line| line.len() <= SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES + 180),
-        "{wrapper}"
+        input.wrapper.lines().all(|line| {
+            line.len() <= crate::shell::transaction::SHELL_WRAPPER_BASE64_LINE_BYTES + 420
+        }),
+        "{}",
+        input.wrapper
+    );
+    assert!(
+        !input.wrapper.contains("MEZ_COMMAND_FILE"),
+        "{}",
+        input.wrapper
     );
     assert!(!wrapper.contains("fish <<"));
     assert!(!wrapper.contains("command cat > \"$MEZ_COMMAND_FILE\""));
     assert!(!wrapper.contains("env -u MEZ_MARKER_TOKEN"));
+}
+
+#[test]
+/// Verifies every non-stateful Fish payload-receiver variant is a complete,
+/// balanced Fish program rather than merely containing plausible fragments.
+///
+/// Both ordinary and record-acknowledging wrappers share command-file
+/// materialization, so parsing the complete generated source catches missing
+/// `end` statements at boundaries hidden from fragment assertions.
+fn non_stateful_fish_wrappers_parse_as_complete_programs() {
+    for acknowledge_payload_records in [false, true] {
+        let input = ShellTransaction::new(
+            marker(),
+            "t1",
+            "a1",
+            "p1",
+            Path::new("/bin/fish"),
+            "printf '%s\\n' parsed",
+        )
+        .unwrap()
+        .with_payload_receiver_acknowledgements(acknowledge_payload_records)
+        .render_fish_input();
+        let wrapper = decoded_fish_wrapper_source(&input.wrapper);
+        let Some(output) = parse_fish_wrapper(&wrapper) else {
+            eprintln!("skipping real-Fish parser assertion because fish is unavailable");
+            return;
+        };
+
+        assert!(
+            output.status.success(),
+            "acknowledge_payload_records={acknowledge_payload_records} status={:?} stdout={:?} stderr={:?}\n{wrapper}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+/// Executes complete non-stateful Fish wrappers through the streamed command
+/// payload protocol for both success and failure commands.
+///
+/// The command uses Fish-only syntax so this also proves the materialized file
+/// is dispatched through the declared Fish interpreter. Marker pacing verifies
+/// every payload record acknowledgement, status propagation, parent-state
+/// restoration, and temporary-file cleanup under one bounded real process.
+fn non_stateful_fish_wrappers_execute_complete_marker_paced_transactions() {
+    let Some(fish_path) = fish_path_for_tests() else {
+        eprintln!("skipping real-Fish transaction assertion because fish is unavailable");
+        return;
+    };
+    for (command_source, expected_status, expected_output) in [
+        (
+            "set -l dialect fish-native; printf '__MEZ_FISH_COMMAND__%s\\n' $dialect",
+            0,
+            "__MEZ_FISH_COMMAND__fish-native",
+        ),
+        (
+            "printf '__MEZ_FISH_COMMAND__failure\\n'; false",
+            1,
+            "__MEZ_FISH_COMMAND__failure",
+        ),
+    ] {
+        let temp = test_temp_dir(&format!("fish-complete-transaction-{expected_status}"));
+        let mut input =
+            ShellTransaction::new(marker(), "t1", "a1", "p1", &fish_path, command_source)
+                .unwrap()
+                .with_payload_receiver_acknowledgements(true)
+                .render_for_classification_input(ShellClassification::Fish);
+        input.wrapper.insert_str(0, "set -e fish_private_mode\n");
+        let suffix = "if set -q fish_private_mode; printf '__MEZ_PRIVATE_STATE__set\\n'; else; printf '__MEZ_PRIVATE_STATE__unset\\n'; end\n";
+        let mut fish = Command::new(&fish_path);
+        fish.arg("--no-config").env("TMPDIR", &temp);
+        let output =
+            run_fish_transaction_bounded(&mut fish, &input, suffix, "complete Fish transaction");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let start = stdout
+            .find("\u{1b}]133;C;")
+            .expect("the Fish start marker should be emitted");
+        let command = stdout
+            .find(expected_output)
+            .expect("the Fish command output should be emitted");
+        let completion = stdout
+            .find(&format!("\u{1b}]133;D;{expected_status};"))
+            .expect("the Fish completion marker should carry command status");
+
+        assert!(output.status.success(), "{output:?}");
+        assert!(start < command && command < completion, "{stdout:?}");
+        assert!(stdout.contains("__MEZ_PRIVATE_STATE__unset"), "{stdout:?}");
+        assert_eq!(
+            output.stdout.iter().filter(|byte| **byte == 0x1e).count(),
+            input.payload.lines().count(),
+            "{stdout:?}"
+        );
+        assert!(
+            std::fs::read_dir(&temp)
+                .expect("the Fish transaction temp directory should remain readable")
+                .next()
+                .is_none(),
+            "transaction temporary files should be removed: {temp:?}"
+        );
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+/// Verifies a complete Fish transaction invokes the exact resolved executable
+/// even when its basename no longer identifies Fish.
+///
+/// The outer real-Fish runner receives the generated wrapper while the isolated
+/// command file is executed through a renamed symlink, covering the executable
+/// half of renamed-Fish identity and dialect dispatch.
+fn non_stateful_fish_wrapper_executes_through_renamed_fish_path() {
+    use std::os::unix::fs::symlink;
+
+    let Some(fish_path) = fish_path_for_tests() else {
+        eprintln!("skipping renamed-Fish transaction assertion because fish is unavailable");
+        return;
+    };
+    let temp = test_temp_dir("renamed-fish-transaction");
+    let renamed_fish = temp.join("custom-shell");
+    symlink(&fish_path, &renamed_fish).expect("the renamed Fish symlink should be created");
+    let input = ShellTransaction::new(
+        marker(),
+        "t1",
+        "a1",
+        "p1",
+        &renamed_fish,
+        "printf '__MEZ_RENAMED_FISH__ok\\n'",
+    )
+    .unwrap()
+    .with_payload_receiver_acknowledgements(true)
+    .render_for_classification_input(ShellClassification::Fish);
+    let mut fish = Command::new(&fish_path);
+    fish.arg("--no-config");
+    let output = run_fish_transaction_bounded(&mut fish, &input, "", "renamed Fish transaction");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout.contains("__MEZ_RENAMED_FISH__ok"), "{stdout:?}");
+    assert!(stdout.contains("\u{1b}]133;D;0;"), "{stdout:?}");
+    std::fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+/// Verifies Fish wrappers save private-mode state in a surviving scope, use
+/// noninteractive exact history deletion, and restore shell state before OSC D.
+///
+/// Completion is a post-cleanup protocol guarantee. Both stateful and isolated
+/// renderers must therefore finish history, terminal, and private-mode cleanup
+/// before announcing the saved command status.
+fn fish_wrappers_complete_only_after_deterministic_cleanup() {
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/fish"), "true").unwrap();
+    let wrappers = [
+        decoded_fish_wrapper_source(&transaction.render_fish_input().wrapper),
+        transaction.render_fish_stateful(),
+    ];
+
+    for wrapper in wrappers {
+        let saved_declaration = wrapper
+            .find("set -l MEZ_FISH_PRIVATE_SAVED;")
+            .expect("private-mode saved value should be predeclared");
+        let private_probe = wrapper
+            .find("if set -q fish_private_mode")
+            .expect("private-mode presence should be probed");
+        let exact_delete = wrapper
+            .rfind("builtin history delete --exact --case-sensitive")
+            .expect("wrapper-owned history records should be deleted exactly");
+        let private_restore = wrapper
+            .rfind("set -g fish_private_mode $MEZ_FISH_PRIVATE_SAVED")
+            .expect("the original private-mode value should be restored");
+        let completion = wrapper
+            .find("printf '\\033]133;D;")
+            .expect("the completion marker should be rendered");
+
+        assert!(saved_declaration < private_probe, "{wrapper}");
+        assert!(!wrapper.contains("history delete --prefix"), "{wrapper}");
+        assert!(exact_delete < completion, "{wrapper}");
+        assert!(private_restore < completion, "{wrapper}");
+    }
+}
+
+#[test]
+/// Verifies complete stateful Fish transactions restore private mode when it
+/// began unset, set to an empty value, or set to a nonempty value.
+///
+/// Success and failure commands are both exercised because cleanup must use
+/// the saved command status without allowing that status to skip restoration.
+fn fish_stateful_cleanup_restores_private_mode_for_success_and_failure() {
+    for (setup, expected_state) in [
+        ("set -e fish_private_mode", "__MEZ_STATE__unset"),
+        (
+            "set -g fish_private_mode ''",
+            "__MEZ_STATE__set count=1 length=0",
+        ),
+        (
+            "set -g fish_private_mode original",
+            "__MEZ_STATE__set count=1 length=8",
+        ),
+    ] {
+        for (command_source, expected_status) in [("true", 0), ("false", 1)] {
+            let wrapper = ShellTransaction::new(
+                marker(),
+                "t1",
+                "a1",
+                "p1",
+                Path::new("/bin/fish"),
+                command_source,
+            )
+            .unwrap()
+            .render_fish_stateful();
+            let script = format!(
+                "{setup}\n{wrapper}\nif set -q fish_private_mode\n  printf '__MEZ_STATE__set count=%s length=%s\\n' (count $fish_private_mode) (string length -- \"$fish_private_mode\")\nelse\n  printf '__MEZ_STATE__unset\\n'\nend\n"
+            );
+            let mut fish = Command::new("fish");
+            fish.arg("--no-config");
+            let Some(output) =
+                run_optional_command_stdin_bounded(&mut fish, &script, "Fish cleanup probe")
+            else {
+                eprintln!("skipping real-Fish cleanup assertion because fish is unavailable");
+                return;
+            };
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            assert!(
+                output.status.success(),
+                "setup={setup:?} command={command_source:?} output={output:?}"
+            );
+            assert!(stdout.contains(expected_state), "{stdout:?}");
+            assert!(
+                stdout.contains(&format!("\u{1b}]133;D;{expected_status};")),
+                "{stdout:?}"
+            );
+        }
+    }
+}
+
+#[test]
+/// Verifies Fish's noninteractive exact deletion removes only the owned history
+/// record while preserving a user record with the same prefix.
+///
+/// Cleanup must not broaden a wrapper-owned record into a prefix deletion,
+/// because the latter both prompts and can select unrelated user commands.
+fn fish_exact_history_cleanup_preserves_similarly_prefixed_user_record() {
+    let temp = test_temp_dir("fish-exact-history-cleanup");
+    let fish_data = temp.join("fish");
+    std::fs::create_dir_all(&fish_data).expect("the Fish data directory should be created");
+    let history_path = fish_data.join("mez_cleanup_history");
+    let owned_record = fish_shell_history_suppression_start()
+        .trim_end()
+        .to_string();
+    let user_record = format!("{owned_record}; printf user-owned");
+    std::fs::write(
+        &history_path,
+        format!("- cmd: {owned_record}\n  when: 1\n- cmd: {user_record}\n  when: 2\n"),
+    )
+    .expect("the isolated Fish history should be seeded");
+
+    let exact_delete = fish_shell_history_restore()
+        .lines()
+        .next()
+        .expect("Fish cleanup should begin with exact history deletion")
+        .to_string();
+    let cleanup = format!("set -g fish_history mez_cleanup; {exact_delete}; builtin history save");
+    let mut fish = Command::new("fish");
+    fish.args(["--no-config", "-c", &cleanup])
+        .env("XDG_DATA_HOME", &temp);
+    let Some(output) =
+        run_optional_command_stdin_bounded(&mut fish, "", "Fish exact history cleanup probe")
+    else {
+        eprintln!("skipping real-Fish history assertion because fish is unavailable");
+        std::fs::remove_dir_all(temp).unwrap();
+        return;
+    };
+    let history = std::fs::read_to_string(&history_path)
+        .expect("the isolated Fish history should remain readable");
+    std::fs::remove_dir_all(temp).unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !history.contains(&format!("- cmd: {owned_record}\n")),
+        "{history}"
+    );
+    assert!(
+        history.contains(&format!("- cmd: {user_record}\n")),
+        "{history}"
+    );
 }
 
 #[test]
@@ -758,7 +1289,7 @@ fn unpaced_receivers_do_not_emit_payload_acknowledgements() {
     assert!(!posix.payload_receiver_acknowledgements);
     assert!(!fish.payload_receiver_acknowledgements);
     assert!(!decoded_posix_wrapper_source(&posix.wrapper).contains("printf '\\036'"));
-    assert!(!fish.wrapper.contains("printf '\\036'"));
+    assert!(!decoded_fish_wrapper_source(&fish.wrapper).contains("printf '\\036'"));
 }
 
 #[test]
@@ -776,16 +1307,13 @@ fn fish_receiver_renders_acknowledged_payload_contract() {
     .unwrap()
     .with_payload_receiver_acknowledgements(true)
     .render_for_classification_input(ShellClassification::Fish);
+    let wrapper = decoded_fish_wrapper_source(&input.wrapper);
 
     assert!(input.payload_receiver_acknowledgements);
-    assert_eq!(input.wrapper.matches("printf '\\036'").count(), 2);
-    assert!(input.wrapper.contains("printf '\\033]133;C;"));
-    assert!(input.wrapper.contains("set MEZ_COMMAND_SEEN_END 1"));
-    assert!(
-        !input
-            .wrapper
-            .contains("set MEZ_WRITE_STATUS $status; break")
-    );
+    assert_eq!(wrapper.matches("printf '\\036'").count(), 2);
+    assert!(wrapper.contains("printf '\\033]133;C;"));
+    assert!(wrapper.contains("set MEZ_COMMAND_SEEN_END 1"));
+    assert!(!wrapper.contains("set MEZ_WRITE_STATUS $status; break"));
 }
 
 #[test]
@@ -937,17 +1465,21 @@ fn typed_child_launch_quotes_arguments_without_shell_fragments() {
     );
     assert!(!posix.contains("TERM='dumb'"), "{posix}");
 
-    let fish = transaction
+    let fish_transport = transaction
         .render_for_classification_input(ShellClassification::Fish)
         .wrapper;
+    let fish = decoded_fish_wrapper_source(&fish_transport);
     assert!(
-        fish.contains("'/usr/bin/sandbox helper' '--label'"),
+        fish.contains("'/usr/bin/sandbox helper' \\\n'--label'"),
         "{fish}"
     );
     assert!(
-        fish.contains("'space \\' quote $HOME $(false)' \"$MEZ_COMMAND_FILE\" 'tail; false'"),
+        fish.contains(
+            "'space \\' quote $HOME $(false)' \\\n\"$MEZ_COMMAND_FILE\" \\\n'tail; false'"
+        ),
         "{fish}"
     );
+    assert!(fish.lines().all(|line| line.len() <= 700), "{fish}");
     assert!(!fish.contains("TERM='dumb'"), "{fish}");
 }
 
@@ -990,6 +1522,82 @@ fn typed_child_launch_bounds_long_posix_argument_lines() {
         output.status.success(),
         "status={:?} stderr={:?}",
         output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+/// Verifies a large typed Fish child launch stays below the portable PTY line
+/// bound while preserving every literal as exactly one argv element.
+///
+/// The launch covers empty, quoted, whitespace, backslash, Unicode, and
+/// command-substitution-like literals in addition to a long repeated value.
+/// Real Fish execution proves source chunking does not split or evaluate argv.
+fn typed_child_launch_bounds_fish_lines_and_preserves_argv() {
+    if Command::new("fish").arg("--version").output().is_err() {
+        eprintln!("skipping real-Fish argv assertion because fish is unavailable");
+        return;
+    }
+
+    let long_argument = "sandbox-path-segment:".repeat(200);
+    let launch = ShellChildLaunch::new(
+        "/bin/sh",
+        vec![
+            ShellChildArgument::Literal("-c".to_string()),
+            ShellChildArgument::Literal(
+                "test -f \"$1\" && test \"$2\" = '' && test \"$3\" = \"space ' quote\" && test \"$4\" = 'back\\slash' && test \"$5\" = 'snowman-☃' && test \"$6\" = \"$7\" && test \"$8\" = '$(false)'"
+                    .to_string(),
+            ),
+            ShellChildArgument::Literal("sh".to_string()),
+            ShellChildArgument::MaterializedCommandFile,
+            ShellChildArgument::Literal(String::new()),
+            ShellChildArgument::Literal("space ' quote".to_string()),
+            ShellChildArgument::Literal("back\\slash".to_string()),
+            ShellChildArgument::Literal("snowman-☃".to_string()),
+            ShellChildArgument::Literal(long_argument.clone()),
+            ShellChildArgument::Literal(long_argument),
+            ShellChildArgument::Literal("$(false)".to_string()),
+        ],
+    )
+    .unwrap();
+    let launch_words = fish_typed_child_launch_words(&launch);
+    let input = ShellTransaction::new(
+        marker(),
+        "t1",
+        "a1",
+        "p1",
+        Path::new("/bin/fish"),
+        "printf typed-fish-launch",
+    )
+    .unwrap()
+    .with_child_launch(launch)
+    .render_for_classification_input(ShellClassification::Fish);
+
+    assert!(
+        input.wrapper.lines().all(|line| line.len() <= 700),
+        "max={}\n{}",
+        input.wrapper.lines().map(str::len).max().unwrap_or(0),
+        input.wrapper
+    );
+
+    let temp = test_temp_dir("fish-typed-child-launch");
+    let command_file = temp.join("command.fish");
+    std::fs::write(&command_file, "printf typed-fish-launch\n")
+        .expect("the materialized command fixture should be written");
+    let source = format!(
+        "set -l MEZ_COMMAND_FILE {}\n{launch_words}\n",
+        fish_quote(&command_file.to_string_lossy())
+    );
+    let mut fish = Command::new("fish");
+    fish.args(["--no-config", "-c", &source]);
+    let output = run_optional_command_stdin_bounded(&mut fish, "", "Fish typed child launch")
+        .expect("Fish availability was checked before executing the typed launch");
+    std::fs::remove_dir_all(temp).unwrap();
+    assert!(
+        output.status.success(),
+        "status={:?} stdout={:?} stderr={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }

@@ -127,7 +127,8 @@ impl RuntimeSessionService {
         }
         self.require_pane_ready_for_agent_command(pane_id)?;
 
-        let classification = self.shell_classification_for_pane(pane_id);
+        let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
+        let classification = shell_identity.classification();
         let command = mez_agent::shell::pane_path_resolution_command(&request, classification)
             .map_err(|error| MezError::invalid_args(error.message()))?;
         let (turn_id, agent_id, waiters) = continuation.map_or_else(
@@ -158,7 +159,7 @@ impl RuntimeSessionService {
                 &turn_id,
                 &agent_id,
                 pane_id,
-                self.session.shell.path(),
+                shell_identity.shell_path(),
                 command.clone(),
             )?,
         );

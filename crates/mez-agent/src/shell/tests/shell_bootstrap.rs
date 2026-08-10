@@ -273,8 +273,8 @@ tool\tgrep\t1\t/usr/bin/grep\tGNU grep 3.11\tcommand -v grep\t0\t/usr/bin/grep -
 }
 
 #[test]
-/// Verifies bootstrap parsing does not trust mismatched `$SHELL` metadata over
-/// the resolved pane shell when choosing wrapper classification.
+/// Verifies bootstrap parsing does not retain mismatched `$SHELL` metadata over
+/// the resolved pane shell when constructing execution identity.
 ///
 /// Async pane workers can fall back to `/bin/sh` even when the outer test or
 /// launcher environment exports `SHELL=/bin/bash`. The bootstrap metadata still
@@ -298,12 +298,9 @@ bootstrap\tcomplete\t1714500000\n";
         parse_bootstrap_env_output(output, Path::new("/bin/sh"));
 
     let sig = signature.expect("signature should be parsed");
-    assert_eq!(sig.shell_path, "/bin/bash");
+    assert_eq!(sig.shell_path, "/bin/sh");
     assert_eq!(sig.shell_classification, ShellClassification::PosixSh);
-    assert_eq!(
-        sig.shell_version.as_deref(),
-        Some("GNU bash, version 5.2.21")
-    );
+    assert_eq!(sig.shell_version, None);
 }
 
 #[test]
@@ -406,6 +403,30 @@ bootstrap\tcomplete\t0\n";
 }
 
 #[test]
+/// Verifies the pre-bootstrap identity probe keeps Fish/POSIX parsing limited
+/// to one common simple command and derives renamed Fish from version evidence.
+fn shell_identity_probe_is_syntax_neutral_and_parses_renamed_fish() {
+    let marker = marker();
+    let command =
+        shell_identity_probe_command(marker.as_str(), "turn-1", "agent-1", "pane-1").unwrap();
+    assert!(command.starts_with("/bin/sh -c "), "{command}");
+    assert!(command.ends_with(" \"$SHELL\""), "{command}");
+
+    let output = format!(
+        "noise\n\u{1e}mez_shell_identity_begin={}\r\n\u{1e}mez_shell_path=/opt/custom-shell\r\n\u{1e}mez_shell_version=fish, version 3.7.1\r\n\u{1e}mez_shell_identity_end={}\r\n",
+        marker.as_str(),
+        marker.as_str()
+    );
+    let result = parse_shell_identity_probe_output(&output, marker.as_str())
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(result.shell_path, "/opt/custom-shell");
+    assert_eq!(result.shell_classification, ShellClassification::Fish);
+    assert_eq!(result.shell_version.as_deref(), Some("fish, version 3.7.1"));
+}
+
+#[test]
 /// Verifies that runtime wrapper selection and bootstrap helpers choose Fish
 /// native commands for Fish panes and POSIX commands for POSIX-like panes.
 fn shell_classification_selects_matching_wrappers_and_probe_commands() {
@@ -413,9 +434,10 @@ fn shell_classification_selects_matching_wrappers_and_probe_commands() {
         ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/fish"), "true").unwrap();
 
     assert!(
-        transaction
-            .render_for_classification(ShellClassification::Fish)
-            .contains("command env -u BASH_ENV -u ENV -u ZDOTDIR")
+        decoded_fish_wrapper_source(
+            &transaction.render_for_classification(ShellClassification::Fish)
+        )
+        .contains("command env -u BASH_ENV -u ENV -u ZDOTDIR")
     );
     let posix = transaction.render_for_classification(ShellClassification::PosixSh);
     assert!(decoded_posix_wrapper_source(&posix).contains("env -u MEZ_MARKER_TOKEN"));

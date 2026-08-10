@@ -18,6 +18,8 @@ pub struct SessionShell {
     path: PathBuf,
     source: String,
     used_fallback: bool,
+    classification: String,
+    version_probe: Option<String>,
 }
 
 impl SessionShell {
@@ -27,7 +29,21 @@ impl SessionShell {
             path,
             source: source.into(),
             used_fallback,
+            classification: String::new(),
+            version_probe: None,
         }
+    }
+
+    /// Attaches the product-resolved shell classification and bounded version
+    /// probe evidence used to select bootstrap and transaction syntax.
+    pub fn with_execution_identity(
+        mut self,
+        classification: impl Into<String>,
+        version_probe: Option<String>,
+    ) -> Self {
+        self.classification = classification.into();
+        self.version_probe = version_probe;
+        self
     }
 
     /// Returns the resolved executable path used for pane processes.
@@ -43,6 +59,16 @@ impl SessionShell {
     /// Returns whether shell resolution selected the fallback executable.
     pub fn used_fallback(&self) -> bool {
         self.used_fallback
+    }
+
+    /// Returns the product-resolved shell classification, when retained.
+    pub fn classification(&self) -> &str {
+        &self.classification
+    }
+
+    /// Returns bounded runtime version evidence captured during resolution.
+    pub fn version_probe(&self) -> Option<&str> {
+        self.version_probe.as_deref()
     }
 }
 

@@ -5,8 +5,8 @@
 //! approval and path-scope state for the agent turn planner.
 
 use mez_agent::permissions::{
-    ApprovalPolicy, PathScopes, PermissionEvaluation, PermissionPlanning, PermissionPolicy,
-    SessionApprovalStore,
+    ApprovalPolicy, DEFAULT_COMMAND_SHELL_CLASSIFICATION, PathScopes, PermissionEvaluation,
+    PermissionPlanning, PermissionPolicy, SessionApprovalStore,
 };
 
 /// Borrowed planning view over active product permission state.
@@ -14,6 +14,7 @@ pub struct ProductPermissionPlanning<'a> {
     policy: &'a PermissionPolicy,
     approvals: &'a SessionApprovalStore,
     path_scopes: Option<&'a PathScopes>,
+    shell_classification: &'a str,
     sandbox_first_local_prompts: bool,
 }
 
@@ -28,8 +29,16 @@ impl<'a> ProductPermissionPlanning<'a> {
             policy,
             approvals,
             path_scopes,
+            shell_classification: DEFAULT_COMMAND_SHELL_CLASSIFICATION,
             sandbox_first_local_prompts: false,
         }
+    }
+
+    /// Selects the grammar from the same live pane shell identity that will
+    /// render and execute authorized command source.
+    pub fn with_shell_classification(mut self, shell_classification: &'a str) -> Self {
+        self.shell_classification = shell_classification;
+        self
     }
 
     /// Enables sandbox-first dispatch for local actions after applying the
@@ -43,11 +52,16 @@ impl<'a> ProductPermissionPlanning<'a> {
 impl PermissionPlanning for ProductPermissionPlanning<'_> {
     fn evaluate_command_structured(&self, command: &str) -> PermissionEvaluation {
         self.policy
-            .evaluate_shell_command_structured_with_approvals_scoped(
+            .evaluate_shell_command_structured_with_approvals_scoped_for_shell_classification(
                 command,
                 self.approvals,
                 self.path_scopes,
+                self.shell_classification,
             )
+    }
+
+    fn shell_classification(&self) -> &str {
+        self.shell_classification
     }
 
     fn approval_policy(&self) -> ApprovalPolicy {
@@ -89,5 +103,26 @@ mod tests {
             .with_sandbox_first_local_prompts(true);
 
         assert!(planning.sandbox_first_local_prompts());
+    }
+
+    /// Verifies product planning analyzes source with the same Fish identity
+    /// that will render and execute it, rather than the Unix-like default.
+    /// A Fish command substitution hidden in double quotes must require fresh
+    /// approval even though those parentheses are literal POSIX text.
+    #[test]
+    fn fish_planning_uses_pane_shell_classification() {
+        let policy = PermissionPolicy::default();
+        let approvals = SessionApprovalStore::default();
+        let command = "printf '%s\\n' \"(curl https://example.test)\"";
+        let planning = ProductPermissionPlanning::new(&policy, &approvals, None)
+            .with_shell_classification("fish");
+
+        assert_eq!(planning.shell_classification(), "fish");
+        let evaluation = planning.evaluate_command_structured(command);
+        assert_eq!(
+            evaluation.decision,
+            mez_agent::permissions::RuleDecision::Prompt
+        );
+        assert!(evaluation.effects.unknown);
     }
 }

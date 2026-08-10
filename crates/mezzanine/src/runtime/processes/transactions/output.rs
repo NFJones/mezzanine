@@ -137,6 +137,7 @@ impl RuntimeSessionService {
                     }
                     RunningShellTransactionKind::ReadinessProbe
                     | RunningShellTransactionKind::Bootstrap
+                    | RunningShellTransactionKind::ShellIdentityProbe { .. }
                     | RunningShellTransactionKind::PathResolution { .. }
                     | RunningShellTransactionKind::EnvironmentEvidence { .. }
                     | RunningShellTransactionKind::BubblewrapCapabilityProbe { .. } => {

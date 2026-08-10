@@ -15,14 +15,14 @@ use super::super::{
 };
 #[cfg(test)]
 use super::super::{Path, ShellTransaction, ShellTransactionOutputTransport};
-#[cfg(test)]
-use mez_agent::McpActionExecutor;
 use mez_agent::{AsyncMcpActionExecutor, mcp_response_to_action_result};
 #[cfg(test)]
 use mez_agent::{
     LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest, LocalExecutionTransport,
     PaneShellExecutor, ShellExecutionRequest,
 };
+#[cfg(test)]
+use mez_agent::{McpActionExecutor, ShellChildArgument, ShellChildLaunch};
 #[cfg(test)]
 use mez_agent::{
     local_action_plan, local_execution_output_to_action_result, postprocess_local_shell_output,
@@ -65,7 +65,7 @@ where
         &mut self,
         request: &LocalExecutionRequest,
     ) -> Result<LocalExecutionOutput> {
-        let transaction = ShellTransaction::new(
+        let mut transaction = ShellTransaction::new(
             request.marker.clone(),
             &request.turn_id,
             &request.agent_id,
@@ -73,8 +73,15 @@ where
             self.shell_path,
             &request.plan.command,
         )?
-        .with_input_sidecar(request.plan.input_sidecar.clone())
-        .with_output_transport(ShellTransactionOutputTransport::Base64);
+        .with_input_sidecar(request.plan.input_sidecar.clone());
+        if let Some(interpreter) = request.plan.program_dialect.interpreter_path() {
+            transaction = transaction.with_child_launch(ShellChildLaunch::new(
+                interpreter,
+                vec![ShellChildArgument::MaterializedCommandFile],
+            )?);
+        }
+        let transaction =
+            transaction.with_output_transport(ShellTransactionOutputTransport::Base64);
         let shell_request = ShellExecutionRequest {
             action_id: request.action_id.clone(),
             transaction,

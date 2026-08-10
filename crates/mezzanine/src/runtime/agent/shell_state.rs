@@ -21,7 +21,9 @@ use mez_agent::PermissionPreset;
 use mez_agent::permissions::{
     PermissionAuthorityChange, PermissionEvaluation, compare_permission_preset_authority,
 };
-use mez_agent::{SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch};
+use mez_agent::{
+    LocalProgramDialect, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch,
+};
 use std::path::{Path, PathBuf};
 
 /// Effective primary filesystem authority and its user-visible provenance.
@@ -106,6 +108,8 @@ pub(super) struct ShellActionDispatch<'a> {
     pub(super) command: &'a str,
     /// Optional separately streamed data associated with the command plan.
     pub(super) input_sidecar: Option<&'a str>,
+    /// Interpreter grammar required by the command source.
+    pub(super) program_dialect: LocalProgramDialect,
     /// Whether the command intentionally mutates the persistent pane shell.
     pub(super) stateful: bool,
     /// Whether the command requires interactive terminal behavior.
@@ -145,6 +149,7 @@ impl RuntimeSessionService {
         let ShellActionDispatch {
             command,
             input_sidecar,
+            program_dialect,
             stateful,
             interactive,
             timeout_ms,
@@ -160,11 +165,14 @@ impl RuntimeSessionService {
         } else {
             self.path_scopes_for_pane(&turn.pane_id)
         };
+        let shell_identity = self.shell_execution_identity_for_pane(&turn.pane_id)?;
+        let classification = shell_identity.classification();
         let current_permission_evaluation = permission_policy
-            .evaluate_shell_command_structured_with_approvals_scoped(
+            .evaluate_shell_command_structured_with_approvals_scoped_for_shell_classification(
                 &policy_command,
                 self.session_approvals(),
                 path_scopes.as_ref(),
+                classification.as_str(),
             );
         match current_permission_evaluation.decision {
             mez_agent::permissions::RuleDecision::Forbid => {
@@ -194,18 +202,22 @@ impl RuntimeSessionService {
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
         let marker = runtime_marker_for_action(turn, &action.id)?;
         let marker_id = marker.as_str().to_string();
+        let mut transaction = ShellTransaction::new(
+            marker,
+            &turn.turn_id,
+            &turn.agent_id,
+            &turn.pane_id,
+            shell_identity.shell_path(),
+            command,
+        )?;
+        if let Some(interpreter) = program_dialect.interpreter_path() {
+            transaction = transaction.with_child_launch(ShellChildLaunch::new(
+                interpreter,
+                vec![ShellChildArgument::MaterializedCommandFile],
+            )?);
+        }
         let mut transaction = self
-            .configure_shell_transaction_for_pane(
-                &turn.pane_id,
-                ShellTransaction::new(
-                    marker,
-                    &turn.turn_id,
-                    &turn.agent_id,
-                    &turn.pane_id,
-                    self.session.shell.path(),
-                    command,
-                )?,
-            )
+            .configure_shell_transaction_for_pane(&turn.pane_id, transaction)
             .with_input_sidecar(input_sidecar.map(ToString::to_string));
         let mut sandbox_audit_summary = None;
         let mut managed_home_activity_lock = None;
@@ -276,7 +288,9 @@ impl RuntimeSessionService {
             let probe_plan =
                 crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
                     &config,
-                    &signature.shell_path,
+                    program_dialect
+                        .interpreter_path()
+                        .unwrap_or(&signature.shell_path),
                     &identity,
                     &environment_evidence,
                 )
@@ -326,7 +340,9 @@ impl RuntimeSessionService {
                         action.payload,
                         AgentActionPayload::ApplyPatch { .. }
                     ),
-                    child_shell_path: &signature.shell_path,
+                    child_shell_path: program_dialect
+                        .interpreter_path()
+                        .unwrap_or(&signature.shell_path),
                     command_file_host_path:
                         crate::security::sandbox::BUBBLEWRAP_COMMAND_FILE_HOST_PLACEHOLDER,
                     managed_home: managed_home.as_ref(),
@@ -372,7 +388,6 @@ impl RuntimeSessionService {
         });
         let transaction =
             transaction.with_output_max_raw_bytes(shell_transaction_output_max_raw_bytes(command));
-        let classification = self.shell_classification_for_pane(&turn.pane_id);
         let transaction_input = if stateful {
             None
         } else {
@@ -549,6 +564,11 @@ impl RuntimeSessionService {
             ShellActionDispatch {
                 command,
                 input_sidecar: None,
+                program_dialect: local_action_plan(action)?
+                    .ok_or_else(|| {
+                        MezError::invalid_state("shell dispatch requires a local action plan")
+                    })?
+                    .program_dialect,
                 stateful: false,
                 interactive: false,
                 timeout_ms: None,

@@ -1213,6 +1213,13 @@ policy, and save/restore mode behavior. The profile MUST explicitly mark DCS
 string controls and any other unimplemented xterm capabilities as unsupported
 unless Mezzanine implements, documents, and tests them.
 
+The xterm-compatible profile MUST answer standard primary device-attributes
+queries `CSI c` and `CSI 0 c` with the conservative VT100-with-no-options reply
+`CSI ? 1 ; 0 c`. It MUST ignore secondary, private, malformed, and parameterized
+device-attributes query variants unless their distinct capability contracts are
+implemented and tested. Device-attributes queries MUST NOT render visible pane
+content.
+
 OSC 52 clipboard parsing MUST retain at most 4,096 bytes for one control
 payload, consume and discard an oversized sequence through its terminator, and
 emit only typed UTF-8 write or query requests. Malformed base64 writes and
@@ -3808,6 +3815,20 @@ diagnostic. An implementation MAY provide an interactive recovery flow that
 asks the user to export a valid `SHELL`.
 
 The harness MUST classify the shell by executable name and runtime probing.
+Before selecting bootstrap syntax for a newly resolved local pane shell, it
+MUST run a bounded, non-interactive version probe against that exact absolute
+executable path. Probe input MUST be disabled, output MUST be bounded, and a
+timeout MUST kill and reap the probe. This evidence MUST take precedence over
+the executable basename so a renamed or symlinked Fish executable receives
+Fish syntax on its first bootstrap.
+
+For every pane transaction, Mezzanine MUST select the executable path,
+classification, version evidence, primary process identity, and shell
+interaction generation from one atomically validated execution identity.
+Certified non-primary identities MUST match the current primary process,
+published environment signature, and interaction generation. Stale or
+contradictory identities MUST fail closed rather than combining a pane-local
+classification with the session-global shell path.
 
 The baseline shell classifications MUST include `bash`, `zsh`, `fish`,
 `posix-sh`, and `unknown-unix`.
@@ -3929,7 +3950,14 @@ For `zsh`, Mezzanine SHOULD use `preexec` and `precmd` hooks to emit command
 start and command-finished markers.
 
 For `fish`, Mezzanine SHOULD use fish preexec and postexec event hooks when
-available.
+available. Product-managed Fish hooks MUST be process-local to an ordinary pane
+shell launch, MUST replace prior handlers with the same managed names instead
+of stacking duplicates, and MUST be discarded when that pane process
+generation ends. They MUST preserve user configuration and visible prompt text,
+MUST emit prompt start and prompt end around the preserved prompt, and MUST
+suppress passive command boundaries for Mezzanine-owned transaction and
+agent-subshell records so those records are reported only by their explicit
+transaction protocol.
 
 For `posix-sh` and `unknown-unix`, Mezzanine MUST NOT assume shell-level
 preexec or postexec support.
@@ -8334,6 +8362,14 @@ The command rule evaluator MUST NOT perform shell expansion while evaluating a
 command. It MUST NOT expand variables, command substitutions, globs, aliases,
 functions, process substitutions, or arithmetic expressions.
 
+Command analysis MUST use the grammar selected by the same pane shell identity
+that will receive the authorized source. For Fish panes, Mezzanine MUST parse
+only a conservatively supported simple-command subset. Fish command
+substitutions, variable or list expansion, globs, brace expansion, command-local
+variable overrides, redirects, blocks, textual `and`/`or` control forms, and
+other unsupported Fish-native syntax MUST remain unclassified and require
+approval unless an exact user-approved or managed rule permits that form.
+
 If proposed shell input contains command substitution, process substitution,
 redirection that may write, here-documents, here-strings, aliases or functions
 that cannot be resolved safely, unparsed shell syntax, or other constructs that
@@ -9415,7 +9451,7 @@ that verify they are ignored safely. The test suite MUST cover:
 - C0 controls including backspace, carriage return, line feed, tab, bell, and
   escape.
 - CSI cursor movement, erasing, insertion, deletion, scrolling regions, and
-  save/restore behavior.
+  save/restore behavior, including primary device-attributes query replies.
 - SGR colors, text attributes, reset behavior, true color, and palette color.
 - Alternate screen entry, alternate screen exit, and scrollback interaction.
 - Terminal resizing and propagation of new size to pane primary processes.

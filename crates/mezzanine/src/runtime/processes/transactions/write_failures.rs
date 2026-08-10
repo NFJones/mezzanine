@@ -102,9 +102,13 @@ impl RuntimeSessionService {
                     Ok(1)
                 }
             }
-            RunningShellTransactionKind::Bootstrap => {
+            RunningShellTransactionKind::Bootstrap
+            | RunningShellTransactionKind::ShellIdentityProbe { .. } => {
                 self.process
                     .pane_bootstrap_pending
+                    .remove(&transaction.pane_id);
+                self.process
+                    .pane_probed_shell_identities
                     .remove(&transaction.pane_id);
                 self.clear_agent_subshell_shell_identity(&transaction.pane_id);
                 self.append_agent_error_text_to_terminal_buffer(
@@ -166,9 +170,19 @@ impl RuntimeSessionService {
             .filter(|(_, transaction)| transaction.pane_id == pane_id)
             .map(|(marker, transaction)| (marker.clone(), transaction.clone()))
             .collect::<Vec<_>>();
+        let receiver_may_be_blocked = failed_transactions.iter().any(|(marker, _)| {
+            self.process
+                .shell_transaction_started_markers
+                .contains(marker)
+        });
+        for (marker, transaction) in &failed_transactions {
+            self.cancel_runtime_pane_shell_delivery(&transaction.pane_id, marker);
+        }
+        if receiver_may_be_blocked {
+            self.interrupt_shell_transaction_pane_if_live(pane_id)?;
+        }
         let mut failed_count = 0usize;
         for (marker, transaction) in failed_transactions {
-            self.cancel_runtime_pane_shell_delivery(&transaction.pane_id, &marker);
             if self
                 .process
                 .running_shell_transactions
@@ -179,8 +193,13 @@ impl RuntimeSessionService {
             }
             self.clear_shell_transaction_protocol_state(&marker);
             failed_count = failed_count.saturating_add(1);
-            if transaction.kind == RunningShellTransactionKind::Bootstrap {
+            if matches!(
+                transaction.kind,
+                RunningShellTransactionKind::Bootstrap
+                    | RunningShellTransactionKind::ShellIdentityProbe { .. }
+            ) {
                 self.clear_agent_subshell_shell_identity(pane_id);
+                self.process.pane_probed_shell_identities.remove(pane_id);
             }
             match transaction.kind.clone() {
                 RunningShellTransactionKind::AgentAction { action_id } => {
@@ -195,6 +214,9 @@ impl RuntimeSessionService {
                     self.fail_readiness_probe_for_pane_write_failure(&marker, transaction, error)?;
                 }
                 RunningShellTransactionKind::Bootstrap => {
+                    self.fail_bootstrap_for_pane_write_failure(&marker, transaction, error)?;
+                }
+                RunningShellTransactionKind::ShellIdentityProbe { .. } => {
                     self.fail_bootstrap_for_pane_write_failure(&marker, transaction, error)?;
                 }
                 RunningShellTransactionKind::PathResolution { .. } => {

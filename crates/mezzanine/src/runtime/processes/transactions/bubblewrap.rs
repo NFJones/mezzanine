@@ -91,6 +91,23 @@ impl RuntimeSessionService {
         action_id: &str,
         environment_profile: BubblewrapEnvironmentProfile,
     ) -> Result<bool> {
+        self.ensure_bubblewrap_capability_for_action_with_environment_profile_and_child_shell(
+            turn,
+            action_id,
+            environment_profile,
+            None,
+        )
+    }
+
+    /// Ensures the active pane has a capability matching both the selected
+    /// environment profile and an optional declared child interpreter.
+    pub(crate) fn ensure_bubblewrap_capability_for_action_with_environment_profile_and_child_shell(
+        &mut self,
+        turn: &mez_agent::AgentTurnRecord,
+        action_id: &str,
+        environment_profile: BubblewrapEnvironmentProfile,
+        child_shell_path: Option<&str>,
+    ) -> Result<bool> {
         let permission_policy = self.permission_policy_for_turn(turn);
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         if !crate::runtime::config::bubblewrap_applies_to_policy(
@@ -144,7 +161,7 @@ impl RuntimeSessionService {
             })?;
         let probe_plan = crate::security::sandbox::bubblewrap_capability_probe_plan_for_identity(
             &config,
-            &signature.shell_path,
+            child_shell_path.unwrap_or(&signature.shell_path),
             &identity,
             &environment_evidence,
         )
@@ -202,6 +219,7 @@ impl RuntimeSessionService {
                 .map(ShellChildArgument::Literal)
                 .collect(),
         )?;
+        let shell_identity = self.shell_execution_identity_for_pane(&turn.pane_id)?;
         let transaction = self.configure_shell_transaction_for_pane(
             &turn.pane_id,
             ShellTransaction::new(
@@ -209,12 +227,12 @@ impl RuntimeSessionService {
                 &turn.turn_id,
                 &turn.agent_id,
                 &turn.pane_id,
-                self.session.shell.path(),
+                shell_identity.shell_path(),
                 "",
             )?
             .with_child_launch(child_launch),
         );
-        let classification = self.shell_classification_for_pane(&turn.pane_id);
+        let classification = shell_identity.classification();
         let transaction_input = transaction.render_for_classification_input(classification);
         let mut wrapper = transaction_input.wrapper;
         if !wrapper.ends_with('\n') {
