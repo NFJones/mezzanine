@@ -1149,6 +1149,98 @@ fn runtime_shell_transaction_duplicate_start_marker_fails_live_action() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a pane write failure after receiver entry cancels delivery before
+/// interrupting the shell transaction.
+///
+/// Once the start marker has been observed, Fish may be blocked reading a
+/// deferred payload. Recovery must discard the queued tail, send priority
+/// Ctrl-C, and only then settle the transaction so later pane input cannot be
+/// consumed as stale receiver data.
+#[test]
+fn runtime_shell_transaction_write_failure_interrupts_started_receiver() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let (pane_id, marker) =
+        dispatch_protocol_test_shell_action(&mut service, &primary, "shell-started-write-fail");
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+
+    service
+        .observe_agent_shell_transaction_start(&pane_id, &marker, "turn-1", "agent-%1", &pane_id)
+        .unwrap();
+    let _ = service.drain_pane_io_transition();
+    assert!(service.shell_transaction_started_for_tests(&marker));
+
+    service
+        .apply_pane_write_failure_event(&pane_id, "synthetic deferred payload failure")
+        .unwrap();
+
+    let recovery = service.drain_pane_io_transition().side_effects;
+    assert_eq!(recovery.len(), 2, "{recovery:?}");
+    assert!(matches!(
+        &recovery[0],
+        RuntimeSideEffect::PaneProcessIo {
+            instance,
+            effect: crate::runtime::PaneProcessIoEffect::CancelShellInput { delivery_id },
+        } if instance.pane_id == pane_id && delivery_id == &marker
+    ));
+    assert_eq!(recovery[1].pane_input_parts().0, pane_id);
+    assert_eq!(recovery[1].pane_input_parts().1, b"\x03");
+    assert!(
+        !service
+            .running_shell_transactions_for_tests()
+            .contains_key(&marker)
+    );
+
+    process.terminate(Duration::from_millis(10)).unwrap();
+}
+
+/// Verifies a write failure before receiver entry does not interrupt an idle
+/// pane shell.
+///
+/// A transaction that has not emitted its start marker cannot be blocked in
+/// the deferred receiver. Its delivery is still cancelled and settled, but an
+/// unsolicited Ctrl-C would damage unrelated user input and must not be sent.
+#[test]
+fn runtime_shell_transaction_write_failure_does_not_interrupt_before_start() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(90, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let (pane_id, marker) =
+        dispatch_protocol_test_shell_action(&mut service, &primary, "shell-prestart-write-fail");
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    assert!(!service.shell_transaction_started_for_tests(&marker));
+
+    service
+        .apply_pane_write_failure_event(&pane_id, "synthetic wrapper failure")
+        .unwrap();
+
+    let recovery = service.drain_pane_io_transition().side_effects;
+    assert_eq!(recovery.len(), 1, "{recovery:?}");
+    assert!(matches!(
+        &recovery[0],
+        RuntimeSideEffect::PaneProcessIo {
+            instance,
+            effect: crate::runtime::PaneProcessIoEffect::CancelShellInput { delivery_id },
+        } if instance.pane_id == pane_id && delivery_id == &marker
+    ));
+    assert!(
+        !service
+            .running_shell_transactions_for_tests()
+            .contains_key(&marker)
+    );
+
+    process.terminate(Duration::from_millis(10)).unwrap();
+}
+
 /// Verifies an end marker before the start marker fails the live shell action.
 ///
 /// Runtime-dispatched wrappers must emit a start marker before any end marker.

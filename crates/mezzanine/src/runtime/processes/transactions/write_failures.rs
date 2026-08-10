@@ -170,9 +170,19 @@ impl RuntimeSessionService {
             .filter(|(_, transaction)| transaction.pane_id == pane_id)
             .map(|(marker, transaction)| (marker.clone(), transaction.clone()))
             .collect::<Vec<_>>();
+        let receiver_may_be_blocked = failed_transactions.iter().any(|(marker, _)| {
+            self.process
+                .shell_transaction_started_markers
+                .contains(marker)
+        });
+        for (marker, transaction) in &failed_transactions {
+            self.cancel_runtime_pane_shell_delivery(&transaction.pane_id, marker);
+        }
+        if receiver_may_be_blocked {
+            self.interrupt_shell_transaction_pane_if_live(pane_id)?;
+        }
         let mut failed_count = 0usize;
         for (marker, transaction) in failed_transactions {
-            self.cancel_runtime_pane_shell_delivery(&transaction.pane_id, &marker);
             if self
                 .process
                 .running_shell_transactions
