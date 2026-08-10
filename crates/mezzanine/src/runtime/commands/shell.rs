@@ -1094,10 +1094,11 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        let classification = self.shell_classification_for_pane(pane_id);
+        let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
+        let classification = shell_identity.classification();
         let zsh_history_token = self.zsh_history_token_for_pane(pane_id);
         let shell_command = agent_subshell_enter_command_with_zsh_history_token(
-            self.session.shell.path(),
+            shell_identity.shell_path(),
             classification,
             zsh_history_token,
         )?;

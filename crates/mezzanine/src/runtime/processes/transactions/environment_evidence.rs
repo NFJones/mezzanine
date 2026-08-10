@@ -137,7 +137,8 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         self.require_pane_ready_for_agent_command(&turn.pane_id)?;
-        let classification = self.shell_classification_for_pane(&turn.pane_id);
+        let shell_identity = self.shell_execution_identity_for_pane(&turn.pane_id)?;
+        let classification = shell_identity.classification();
         let command = mez_agent::shell::pane_environment_evidence_command(&request, classification)
             .map_err(|error| crate::MezError::invalid_args(error.message()))?;
         let marker = runtime_marker_for_action(turn, &format!("environment-evidence-{action_id}"))?;
@@ -149,7 +150,7 @@ impl RuntimeSessionService {
                 &turn.turn_id,
                 &turn.agent_id,
                 &turn.pane_id,
-                self.session.shell.path(),
+                shell_identity.shell_path(),
                 command.clone(),
             )?,
         );

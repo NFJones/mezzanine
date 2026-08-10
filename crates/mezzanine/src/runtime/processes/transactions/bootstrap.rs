@@ -1,16 +1,104 @@
 //! Pane bootstrap dispatch and completion.
 
-use mez_agent::AgentShellVisibility;
+use mez_agent::{
+    AgentShellVisibility, parse_shell_identity_probe_output, shell_identity_probe_command,
+};
 
-use super::super::{RuntimeAgentSubshellCertificationOutcome, RuntimePendingBootstrapEnvironment};
+use super::super::{
+    RuntimeAgentSubshellCertificationOutcome, RuntimePaneProbedShellIdentity,
+    RuntimePaneShellExecutionIdentity, RuntimePendingBootstrapEnvironment,
+};
 use super::{
     AgentTurnState, DEFAULT_BOOTSTRAP_TIMEOUT_MS, EventKind, MezError, PaneReadinessState, Result,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
     ShellTransaction, bootstrap_script_for_classification, current_unix_millis,
     current_unix_seconds, json_escape, parse_bootstrap_env_output, runtime_random_marker_token,
 };
+use std::path::PathBuf;
 
 impl RuntimeSessionService {
+    /// Registers one syntax-neutral probe for the current pane interaction epoch.
+    ///
+    /// The outer command is accepted by POSIX-family and Fish parsers because
+    /// all shell-specific work executes inside an explicit `/bin/sh` child.
+    fn prepare_shell_identity_probe_to_pane(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<Option<(String, String)>> {
+        if self
+            .process
+            .running_shell_transactions
+            .values()
+            .any(|transaction| transaction.pane_id == pane_id)
+        {
+            return Ok(None);
+        }
+        let Some(interaction_generation) = self
+            .process
+            .pane_shell_interaction_generations
+            .get(pane_id)
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let primary_process_id = self
+            .primary_pid_for_live_pane_process(pane_id)
+            .ok_or_else(|| MezError::invalid_state("pane shell process is unavailable"))?;
+        let agent_id = format!("agent-{pane_id}");
+        let turn_id = format!("shell-identity-{pane_id}-{}", current_unix_seconds());
+        let marker = runtime_random_marker_token(&format!(
+            "shell-identity\0{pane_id}\0{turn_id}\0{interaction_generation}"
+        ))?;
+        let marker_id = marker.as_str().to_string();
+        let command = shell_identity_probe_command(&marker_id, &turn_id, &agent_id, pane_id)?;
+        let mut input = command.clone();
+        if !input.ends_with('\n') {
+            input.push('\n');
+        }
+        self.remember_mez_wrapper_filter_command(pane_id, &command);
+        self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
+        self.register_running_shell_transaction(
+            marker_id.clone(),
+            RunningShellTransactionRef {
+                turn_id,
+                kind: RunningShellTransactionKind::ShellIdentityProbe {
+                    primary_process_id,
+                    interaction_generation,
+                },
+                pane_id: pane_id.to_string(),
+                command,
+                started_at_unix_ms: current_unix_millis(),
+                timeout_ms: Some(DEFAULT_BOOTSTRAP_TIMEOUT_MS),
+                pending_input_payload: None,
+                observed_output_bytes: 0,
+                observed_output_preview: String::new(),
+                observed_output_truncated: false,
+            },
+            true,
+        );
+        Ok(Some((marker_id, input)))
+    }
+
+    /// Sends one registered syntax-neutral identity probe to the pane.
+    fn dispatch_shell_identity_probe_to_pane(&mut self, pane_id: &str) -> Result<()> {
+        let Some((marker, input)) = self.prepare_shell_identity_probe_to_pane(pane_id)? else {
+            return Ok(());
+        };
+        if let Err(error) = self.write_runtime_pane_shell_input(pane_id, input.as_bytes()) {
+            self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;
+            return Err(error);
+        }
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","shell_identity_probe":"sent","marker":"{}"}}"#,
+                json_escape(pane_id),
+                json_escape(&marker)
+            ),
+        )?;
+        Ok(())
+    }
+
     /// Registers one pane bootstrap and returns the exact wrapper that must be
     /// delivered after any preceding shell-handoff input.
     ///
@@ -33,7 +121,8 @@ impl RuntimeSessionService {
         let turn_id = format!("bootstrap-{pane_id}-{}", current_unix_seconds());
         let marker = runtime_random_marker_token(&format!("bootstrap\0{pane_id}\0{turn_id}"))?;
         let marker_id = marker.as_str().to_string();
-        let classification = self.shell_classification_for_pane(pane_id);
+        let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
+        let classification = shell_identity.classification();
         let bootstrap_script = bootstrap_script_for_classification(classification);
         let transaction = self.configure_shell_transaction_for_pane(
             pane_id,
@@ -42,7 +131,7 @@ impl RuntimeSessionService {
                 &turn_id,
                 &agent_id,
                 pane_id,
-                self.session.shell.path(),
+                shell_identity.shell_path(),
                 bootstrap_script.clone(),
             )?,
         );
@@ -97,6 +186,16 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(crate) fn dispatch_bootstrap_to_pane(&mut self, pane_id: &str) -> Result<()> {
+        if self.shell_execution_identity_for_pane(pane_id).is_err()
+            && self
+                .process
+                .pane_shell_interaction_generations
+                .contains_key(pane_id)
+        {
+            self.process.pane_certified_shell_identities.remove(pane_id);
+            self.process.pane_probed_shell_identities.remove(pane_id);
+            return self.dispatch_shell_identity_probe_to_pane(pane_id);
+        }
         let Some((marker_id, wrapper)) = self.prepare_bootstrap_to_pane(pane_id)? else {
             return Ok(());
         };
@@ -107,6 +206,100 @@ impl RuntimeSessionService {
         }
         self.record_bootstrap_sent(pane_id, &marker_id)?;
         Ok(())
+    }
+
+    /// Settles a syntax-neutral identity probe and starts dialect-specific bootstrap.
+    pub(crate) fn observe_shell_identity_probe_transaction_end(
+        &mut self,
+        marker: &str,
+        exit_code: i32,
+        transaction: &RunningShellTransactionRef,
+    ) -> Result<usize> {
+        let (primary_process_id, interaction_generation) = match &transaction.kind {
+            RunningShellTransactionKind::ShellIdentityProbe {
+                primary_process_id,
+                interaction_generation,
+            } => (*primary_process_id, *interaction_generation),
+            _ => {
+                return Err(MezError::invalid_state(
+                    "shell identity probe completion received another transaction kind",
+                ));
+            }
+        };
+        let pane_id = transaction.pane_id.as_str();
+        let observed_output_preview = transaction.observed_output_preview.as_str();
+        let observed_output_truncated = transaction.observed_output_truncated;
+        let current_process_id = self.primary_pid_for_live_pane_process(pane_id);
+        let current_generation = self
+            .process
+            .pane_shell_interaction_generations
+            .get(pane_id)
+            .copied();
+        if current_process_id != Some(primary_process_id)
+            || current_generation != Some(interaction_generation)
+        {
+            self.process.pane_certified_shell_identities.remove(pane_id);
+            self.process.pane_probed_shell_identities.remove(pane_id);
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","shell_identity_probe":"stale","marker":"{}"}}"#,
+                    json_escape(pane_id),
+                    json_escape(marker)
+                ),
+            )?;
+            self.dispatch_bootstrap_to_pane(pane_id)?;
+            return Ok(1);
+        }
+
+        let probe = if exit_code == 0 && !observed_output_truncated {
+            parse_shell_identity_probe_output(observed_output_preview, marker)?
+        } else {
+            None
+        };
+        let Some(probe) = probe else {
+            self.process.pane_probed_shell_identities.remove(pane_id);
+            self.process.pane_bootstrap_pending.remove(pane_id);
+            self.clear_agent_subshell_shell_identity(pane_id);
+            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","shell_identity_probe":"failed","marker":"{}","exit_code":{},"output_truncated":{}}}"#,
+                    json_escape(pane_id),
+                    json_escape(marker),
+                    exit_code,
+                    observed_output_truncated
+                ),
+            )?;
+            return Ok(1);
+        };
+
+        let execution_identity = RuntimePaneShellExecutionIdentity {
+            shell_path: PathBuf::from(probe.shell_path),
+            classification: probe.shell_classification,
+            version_probe: probe.shell_version,
+            primary_process_id: Some(primary_process_id),
+            interaction_generation: Some(interaction_generation),
+        };
+        self.process.pane_probed_shell_identities.insert(
+            pane_id.to_string(),
+            RuntimePaneProbedShellIdentity {
+                primary_process_id,
+                interaction_generation,
+                execution_identity,
+            },
+        );
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","shell_identity_probe":"completed","marker":"{}"}}"#,
+                json_escape(pane_id),
+                json_escape(marker)
+            ),
+        )?;
+        self.dispatch_bootstrap_to_pane(pane_id)?;
+        Ok(1)
     }
 
     /// Runs the observe bootstrap transaction end operation for this subsystem.
@@ -141,8 +334,12 @@ impl RuntimeSessionService {
                 observed_output_preview.to_string()
             };
 
+            let resolved_shell_path = self
+                .shell_execution_identity_for_pane(pane_id)?
+                .shell_path()
+                .to_path_buf();
             let (signature, inventory, instruction_files) =
-                parse_bootstrap_env_output(&all_output, self.session.shell.path());
+                parse_bootstrap_env_output(&all_output, &resolved_shell_path);
 
             if let Some(sig) = signature {
                 bootstrap_parsed = true;

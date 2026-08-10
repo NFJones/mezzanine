@@ -4,7 +4,7 @@ use super::super::{
     PaneForegroundProcessObservation, PaneProcessInstance, PaneProcessIoEffect,
     RuntimeAgentSubshellCertificationOutcome, RuntimeAgentSubshellCertificationRejection,
     RuntimeBootstrapShellCertificationEvidence, RuntimeCertifiedShellSource,
-    RuntimePaneCertifiedShellIdentity, RuntimePaneShellHandoff,
+    RuntimePaneCertifiedShellIdentity, RuntimePaneProbedShellIdentity, RuntimePaneShellHandoff,
     RuntimePendingAgentSubshellCertification, RuntimePendingAgentSubshellStartObservation,
     RuntimePendingBootstrapEnvironment, RuntimePendingShellDispatchRecoveryObservation,
     RuntimeSideEffect, RuntimeTransition,
@@ -177,6 +177,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     crate::error::MezError::invalid_state("pane shell process is unavailable")
                 })?;
+        let mut execution_identity = self.shell_execution_identity_for_pane(pane_id)?;
         self.process.next_shell_interaction_generation = self
             .process
             .next_shell_interaction_generation
@@ -189,6 +190,17 @@ impl RuntimeSessionService {
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);
         self.process.pane_certified_shell_identities.remove(pane_id);
+        self.process.pane_probed_shell_identities.remove(pane_id);
+        execution_identity.primary_process_id = Some(primary_process_id);
+        execution_identity.interaction_generation = Some(interaction_generation);
+        self.process.pane_probed_shell_identities.insert(
+            pane_id.to_string(),
+            RuntimePaneProbedShellIdentity {
+                primary_process_id,
+                interaction_generation,
+                execution_identity,
+            },
+        );
         self.process
             .pending_agent_subshell_certifications
             .remove(pane_id);
@@ -970,6 +982,7 @@ impl RuntimeSessionService {
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);
         self.process.pane_certified_shell_identities.remove(pane_id);
+        self.process.pane_probed_shell_identities.remove(pane_id);
         self.process.pane_shell_handoffs.remove(pane_id);
         self.process
             .pending_agent_subshell_start_observations

@@ -3808,6 +3808,20 @@ diagnostic. An implementation MAY provide an interactive recovery flow that
 asks the user to export a valid `SHELL`.
 
 The harness MUST classify the shell by executable name and runtime probing.
+Before selecting bootstrap syntax for a newly resolved local pane shell, it
+MUST run a bounded, non-interactive version probe against that exact absolute
+executable path. Probe input MUST be disabled, output MUST be bounded, and a
+timeout MUST kill and reap the probe. This evidence MUST take precedence over
+the executable basename so a renamed or symlinked Fish executable receives
+Fish syntax on its first bootstrap.
+
+For every pane transaction, Mezzanine MUST select the executable path,
+classification, version evidence, primary process identity, and shell
+interaction generation from one atomically validated execution identity.
+Certified non-primary identities MUST match the current primary process,
+published environment signature, and interaction generation. Stale or
+contradictory identities MUST fail closed rather than combining a pane-local
+classification with the session-global shell path.
 
 The baseline shell classifications MUST include `bash`, `zsh`, `fish`,
 `posix-sh`, and `unknown-unix`.

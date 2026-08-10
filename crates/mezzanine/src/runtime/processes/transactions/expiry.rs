@@ -39,8 +39,15 @@ impl RuntimeSessionService {
             }
             self.clear_shell_transaction_protocol_state(&marker);
             expired_count = expired_count.saturating_add(1);
-            if transaction.kind == RunningShellTransactionKind::Bootstrap {
+            if matches!(
+                transaction.kind,
+                RunningShellTransactionKind::Bootstrap
+                    | RunningShellTransactionKind::ShellIdentityProbe { .. }
+            ) {
                 self.clear_agent_subshell_shell_identity(&transaction.pane_id);
+                self.process
+                    .pane_probed_shell_identities
+                    .remove(&transaction.pane_id);
             }
             match transaction.kind.clone() {
                 RunningShellTransactionKind::AgentAction { action_id } => {
@@ -61,6 +68,14 @@ impl RuntimeSessionService {
                     )?;
                 }
                 RunningShellTransactionKind::Bootstrap => {
+                    self.expire_bootstrap_shell_transaction(
+                        &marker,
+                        transaction,
+                        timeout_ms,
+                        elapsed_ms,
+                    )?;
+                }
+                RunningShellTransactionKind::ShellIdentityProbe { .. } => {
                     self.expire_bootstrap_shell_transaction(
                         &marker,
                         transaction,

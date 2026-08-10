@@ -15,9 +15,10 @@ mod path_resolution;
 mod transaction;
 
 pub use bootstrap::{
-    bootstrap_script, bootstrap_script_for_classification, fish_bootstrap_script,
-    fish_tool_discovery_script, parse_bootstrap_env_output,
-    readiness_probe_command_for_classification, tool_discovery_script,
+    ShellIdentityProbeResult, bootstrap_script, bootstrap_script_for_classification,
+    fish_bootstrap_script, fish_tool_discovery_script, parse_bootstrap_env_output,
+    parse_shell_identity_probe_output, readiness_probe_command_for_classification,
+    shell_identity_probe_command, tool_discovery_script,
 };
 pub use environment::{
     EnvironmentGroup, EnvironmentSignature, ToolDiscoveryCache, ToolInventory, ToolProbe,

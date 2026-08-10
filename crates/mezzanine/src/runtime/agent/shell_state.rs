@@ -162,13 +162,14 @@ impl RuntimeSessionService {
         } else {
             self.path_scopes_for_pane(&turn.pane_id)
         };
-        let permission_shell_classification = self.shell_classification_for_pane(&turn.pane_id);
+        let shell_identity = self.shell_execution_identity_for_pane(&turn.pane_id)?;
+        let classification = shell_identity.classification();
         let current_permission_evaluation = permission_policy
             .evaluate_shell_command_structured_with_approvals_scoped_for_shell_classification(
                 &policy_command,
                 self.session_approvals(),
                 path_scopes.as_ref(),
-                permission_shell_classification.as_str(),
+                classification.as_str(),
             );
         match current_permission_evaluation.decision {
             mez_agent::permissions::RuleDecision::Forbid => {
@@ -203,7 +204,7 @@ impl RuntimeSessionService {
             &turn.turn_id,
             &turn.agent_id,
             &turn.pane_id,
-            self.session.shell.path(),
+            shell_identity.shell_path(),
             command,
         )?;
         if let Some(interpreter) = program_dialect.interpreter_path() {
@@ -382,7 +383,6 @@ impl RuntimeSessionService {
         });
         let transaction =
             transaction.with_output_max_raw_bytes(shell_transaction_output_max_raw_bytes(command));
-        let classification = self.shell_classification_for_pane(&turn.pane_id);
         let transaction_input = if stateful {
             None
         } else {

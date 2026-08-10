@@ -557,6 +557,36 @@ fn runtime_agent_subshell_bootstrap_accepts_transient_isolated_child_group() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies one certified shell identity keeps executable path, dialect,
+/// version evidence, primary process, and interaction epoch together. A later
+/// interaction generation must invalidate the entire identity rather than
+/// allowing callers to combine its dialect with the primary session shell.
+#[test]
+fn runtime_shell_execution_identity_is_atomic_and_epoch_scoped() {
+    let mut service = test_runtime_service();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    let subshell_group = primary_pid.saturating_add(1);
+
+    certify_agent_subshell_foreground_group(&mut service, subshell_group);
+
+    let identity = service.shell_execution_identity_for_pane("%1").unwrap();
+    assert_eq!(identity.shell_path(), std::path::Path::new("/bin/sh"));
+    assert_eq!(
+        identity.classification(),
+        mez_agent::ShellClassification::PosixSh
+    );
+    assert_eq!(identity.version_probe(), None);
+    assert_eq!(identity.primary_process_id(), Some(primary_pid));
+    assert!(identity.interaction_generation().is_some());
+
+    service.advance_pane_shell_interaction_generation_for_tests("%1");
+    let error = service.shell_execution_identity_for_pane("%1").unwrap_err();
+    assert!(error.message().contains("stale"), "{error}");
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Adapter-owned bootstrap fixture stopped at pending completion certification.
 struct PendingAgentSubshellCertificationFixture {
     /// Runtime service retaining the unpublished bootstrap environment.

@@ -212,7 +212,8 @@ impl RuntimeSessionService {
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
         let marker = runtime_marker_for_action(turn, "readiness-probe")?;
         let marker_id = marker.as_str().to_string();
-        let classification = self.shell_classification_for_pane(&turn.pane_id);
+        let shell_identity = self.shell_execution_identity_for_pane(&turn.pane_id)?;
+        let classification = shell_identity.classification();
         let probe_command = readiness_probe_command_for_classification(classification);
         let transaction = self.configure_shell_transaction_for_pane(
             &turn.pane_id,
@@ -221,7 +222,7 @@ impl RuntimeSessionService {
                 &turn.turn_id,
                 &turn.agent_id,
                 &turn.pane_id,
-                self.session.shell.path(),
+                shell_identity.shell_path(),
                 probe_command,
             )?,
         );

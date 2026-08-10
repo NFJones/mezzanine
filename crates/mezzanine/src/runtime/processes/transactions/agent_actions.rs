@@ -223,6 +223,16 @@ impl RuntimeSessionService {
                 transaction_ref.observed_output_truncated,
             );
         }
+        if matches!(
+            transaction_ref.kind,
+            RunningShellTransactionKind::ShellIdentityProbe { .. }
+        ) {
+            return self.observe_shell_identity_probe_transaction_end(
+                marker,
+                exit_code,
+                &transaction_ref,
+            );
+        }
         if let RunningShellTransactionKind::PathResolution { cache_key, waiters } =
             transaction_ref.kind.clone()
         {
