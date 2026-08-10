@@ -13,6 +13,10 @@ use mez_mux::process::{
 
 /// Maximum time one shell-input record may make no transport progress.
 pub(super) const SHELL_INPUT_RECORD_PROGRESS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Accepted receiver bytes accumulated before one actor progress checkpoint.
+pub(super) const SHELL_INPUT_PROGRESS_CHECKPOINT_BYTES: usize = 256 * 1024;
+/// Maximum time accepted receiver bytes remain local before actor publication.
+pub(super) const SHELL_INPUT_PROGRESS_CHECKPOINT_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Output condition required before the next complete record may be written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +53,10 @@ pub(super) struct PendingShellInputDelivery {
     wait: Option<ShellInputProgressWait>,
     /// Deadline for current-record progress or its acknowledgement.
     deadline: Instant,
+    /// Accepted receiver bytes not yet reconciled with the runtime actor.
+    pending_progress_bytes: usize,
+    /// Deadline for publishing locally accumulated receiver progress.
+    progress_checkpoint_deadline: Instant,
 }
 
 impl PendingShellInputDelivery {
@@ -69,6 +77,7 @@ impl PendingShellInputDelivery {
             _ => return None,
         };
         let record_end = next_record_end(&delivery.bytes, 0);
+        let now = Instant::now();
         Some(Self {
             target,
             delivery,
@@ -76,7 +85,9 @@ impl PendingShellInputDelivery {
             record_start: 0,
             record_end,
             wait: None,
-            deadline: Instant::now() + SHELL_INPUT_RECORD_PROGRESS_TIMEOUT,
+            deadline: now + SHELL_INPUT_RECORD_PROGRESS_TIMEOUT,
+            pending_progress_bytes: 0,
+            progress_checkpoint_deadline: now + SHELL_INPUT_PROGRESS_CHECKPOINT_INTERVAL,
         })
     }
 
@@ -92,7 +103,11 @@ impl PendingShellInputDelivery {
         supports_acknowledgements: bool,
     ) -> Result<(), &'static str> {
         let remaining = self.record_end.saturating_sub(self.accepted);
-        self.accepted = self.accepted.saturating_add(written.min(remaining));
+        let accepted = written.min(remaining);
+        self.accepted = self.accepted.saturating_add(accepted);
+        if self.aggregates_progress() {
+            self.pending_progress_bytes = self.pending_progress_bytes.saturating_add(accepted);
+        }
         if self.accepted < self.record_end {
             self.deadline = Instant::now() + SHELL_INPUT_RECORD_PROGRESS_TIMEOUT;
             return Ok(());
@@ -148,6 +163,35 @@ impl PendingShellInputDelivery {
     /// Returns the remaining bounded progress window for worker sleep planning.
     pub(super) fn remaining_progress_time(&self, now: Instant) -> Duration {
         self.deadline.saturating_duration_since(now)
+    }
+
+    /// Reports whether this delivery keeps successful progress worker-local.
+    pub(super) fn aggregates_progress(&self) -> bool {
+        matches!(self.delivery.pacing, ShellInputPacing::ReceiverAcknowledged)
+    }
+
+    /// Returns the remaining time before accumulated progress must publish.
+    pub(super) fn remaining_progress_checkpoint_time(&self, now: Instant) -> Option<Duration> {
+        (self.aggregates_progress() && self.pending_progress_bytes > 0).then(|| {
+            self.progress_checkpoint_deadline
+                .saturating_duration_since(now)
+        })
+    }
+
+    /// Takes one due or forced cumulative progress checkpoint.
+    pub(super) fn take_progress_checkpoint(&mut self, now: Instant, force: bool) -> Option<usize> {
+        if !self.aggregates_progress() || self.pending_progress_bytes == 0 {
+            return None;
+        }
+        if !force
+            && self.pending_progress_bytes < SHELL_INPUT_PROGRESS_CHECKPOINT_BYTES
+            && now < self.progress_checkpoint_deadline
+        {
+            return None;
+        }
+        let bytes = std::mem::take(&mut self.pending_progress_bytes);
+        self.progress_checkpoint_deadline = now + SHELL_INPUT_PROGRESS_CHECKPOINT_INTERVAL;
+        Some(bytes)
     }
 
     /// Returns the non-sensitive delivery identity for diagnostics/cancellation.

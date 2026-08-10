@@ -153,6 +153,10 @@ pub struct AsyncPaneProcessServiceReport {
     pub submitted_events: usize,
     /// Number of submitted events applied to runtime state.
     pub applied_events: usize,
+    /// Number of cumulative receiver-input progress events submitted.
+    pub shell_input_progress_events: usize,
+    /// Exact accepted receiver-input bytes included in progress events.
+    pub shell_input_progress_bytes: usize,
     /// Last observed runtime lifecycle state.
     pub terminal_state: RuntimeLifecycleState,
 }
@@ -168,6 +172,8 @@ impl AsyncPaneProcessServiceReport {
             drained: 0,
             submitted_events: 0,
             applied_events: 0,
+            shell_input_progress_events: 0,
+            shell_input_progress_bytes: 0,
             terminal_state: initial_state,
         }
     }

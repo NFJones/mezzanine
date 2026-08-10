@@ -44,11 +44,19 @@ where
         let state = *lifecycle_watcher.borrow_and_update();
         report.terminal_state = state;
         if is_terminal_runtime_lifecycle_state(state) {
+            if let Some(delivery) = pending_shell_input.as_mut() {
+                submit_shell_input_progress_checkpoint(handle, driver, delivery, true, &mut report)
+                    .await?;
+            }
             terminate_pane_process_for_terminal_state(handle, driver, config, state, &mut report)
                 .await?;
             return Ok(report);
         }
         if should_stop(report.polls, state) {
+            if let Some(delivery) = pending_shell_input.as_mut() {
+                submit_shell_input_progress_checkpoint(handle, driver, delivery, true, &mut report)
+                    .await?;
+            }
             return Ok(report);
         }
 
@@ -75,9 +83,14 @@ where
             observed_output = true;
             if let Some(delivery) = pending_shell_input.as_mut() {
                 delivery.observe_output(true, shell_input_acknowledgements);
-                if delivery.is_complete() {
-                    pending_shell_input = None;
-                }
+            }
+        }
+        if let Some(delivery) = pending_shell_input.as_mut() {
+            let complete = delivery.is_complete();
+            submit_shell_input_progress_checkpoint(handle, driver, delivery, complete, &mut report)
+                .await?;
+            if complete {
+                pending_shell_input = None;
             }
         }
 
@@ -85,6 +98,10 @@ where
             .as_ref()
             .is_some_and(|delivery| delivery.timed_out(Instant::now()))
         {
+            if let Some(delivery) = pending_shell_input.as_mut() {
+                submit_shell_input_progress_checkpoint(handle, driver, delivery, true, &mut report)
+                    .await?;
+            }
             let delivery = pending_shell_input
                 .take()
                 .expect("timed out delivery exists");
@@ -150,6 +167,17 @@ where
                     .as_ref()
                     .is_some_and(|delivery| delivery.matches_delivery_id(delivery_id))
                 {
+                    let delivery = pending_shell_input
+                        .as_mut()
+                        .expect("matching shell delivery exists");
+                    submit_shell_input_progress_checkpoint(
+                        handle,
+                        driver,
+                        delivery,
+                        true,
+                        &mut report,
+                    )
+                    .await?;
                     pending_shell_input = None;
                 }
                 continue;
@@ -167,6 +195,16 @@ where
                 break;
             }
             if terminates_process {
+                if let Some(delivery) = pending_shell_input.as_mut() {
+                    submit_shell_input_progress_checkpoint(
+                        handle,
+                        driver,
+                        delivery,
+                        true,
+                        &mut report,
+                    )
+                    .await?;
+                }
                 pending_shell_input = None;
             }
             if let Some(delivery) = PendingShellInputDelivery::from_effect(&effect) {
@@ -216,24 +254,56 @@ where
                     .await
             };
             let written = pane_input_written_bytes(&event);
-            submit_pane_runtime_event(
-                handle,
-                event,
-                &mut report.submitted_events,
-                &mut report.applied_events,
-            )
-            .await?;
             made_progress = true;
             let Some(written) = written else {
+                if let Some(delivery) = pending_shell_input.as_mut() {
+                    submit_shell_input_progress_checkpoint(
+                        handle,
+                        driver,
+                        delivery,
+                        true,
+                        &mut report,
+                    )
+                    .await?;
+                }
+                submit_pane_runtime_event(
+                    handle,
+                    event,
+                    &mut report.submitted_events,
+                    &mut report.applied_events,
+                )
+                .await?;
                 pending_shell_input = None;
                 break;
             };
+            let aggregates_progress = pending_shell_input
+                .as_ref()
+                .is_some_and(PendingShellInputDelivery::aggregates_progress);
+            if !aggregates_progress {
+                submit_pane_runtime_event(
+                    handle,
+                    event,
+                    &mut report.submitted_events,
+                    &mut report.applied_events,
+                )
+                .await?;
+            }
             let supports_acknowledgements = driver.supports_shell_input_acknowledgements();
             let progress = pending_shell_input
                 .as_mut()
                 .expect("active delivery exists")
                 .record_write(written, supports_acknowledgements);
             if let Err(error) = progress {
+                if let Some(delivery) = pending_shell_input.as_mut() {
+                    submit_shell_input_progress_checkpoint(
+                        handle,
+                        driver,
+                        delivery,
+                        true,
+                        &mut report,
+                    )
+                    .await?;
+                }
                 let pane_id = pending_shell_input
                     .as_ref()
                     .expect("invalid delivery exists")
@@ -253,16 +323,30 @@ where
                 .await?;
                 break;
             }
-            if pending_shell_input
+            let complete = pending_shell_input
                 .as_ref()
-                .is_some_and(PendingShellInputDelivery::is_complete)
-            {
+                .is_some_and(PendingShellInputDelivery::is_complete);
+            if let Some(delivery) = pending_shell_input.as_mut() {
+                submit_shell_input_progress_checkpoint(
+                    handle,
+                    driver,
+                    delivery,
+                    complete,
+                    &mut report,
+                )
+                .await?;
+            }
+            if complete {
                 pending_shell_input = None;
                 break;
             }
         }
 
         if !observed_output && let Some(event) = driver.poll_exit_event().await? {
+            if let Some(delivery) = pending_shell_input.as_mut() {
+                submit_shell_input_progress_checkpoint(handle, driver, delivery, true, &mut report)
+                    .await?;
+            }
             report.exit_events = report.exit_events.saturating_add(1);
             pane_exited = is_process_exit_event(&event);
             submit_pane_runtime_event(
@@ -284,8 +368,12 @@ where
             let idle_delay = pending_shell_input.as_ref().map_or_else(
                 || pane_process_quiet_delay(last_foreground_metadata_poll, config),
                 |delivery| {
-                    pane_process_quiet_delay(last_foreground_metadata_poll, config)
-                        .min(delivery.remaining_progress_time(Instant::now()))
+                    let now = Instant::now();
+                    let delay = pane_process_quiet_delay(last_foreground_metadata_poll, config)
+                        .min(delivery.remaining_progress_time(now));
+                    delivery
+                        .remaining_progress_checkpoint_time(now)
+                        .map_or(delay, |checkpoint| delay.min(checkpoint))
                 },
             );
             if let Some(output_activity) = driver.output_activity() {
@@ -315,8 +403,48 @@ where
         }
     }
 
+    if let Some(delivery) = pending_shell_input.as_mut() {
+        submit_shell_input_progress_checkpoint(handle, driver, delivery, true, &mut report).await?;
+    }
     report.terminal_state = *lifecycle_watcher.borrow();
     Ok(report)
+}
+
+/// Publishes one cumulative receiver-input checkpoint with process fencing.
+fn submit_shell_input_progress_checkpoint<'a, B>(
+    handle: &'a AsyncRuntimeSessionHandle,
+    driver: &AsyncPaneProcessDriver<B>,
+    delivery: &mut PendingShellInputDelivery,
+    force: bool,
+    report: &'a mut AsyncPaneProcessServiceReport,
+) -> impl std::future::Future<Output = Result<()>> + Send + 'a
+where
+    B: AsyncPaneProcessIo,
+{
+    let checkpoint = delivery
+        .take_progress_checkpoint(Instant::now(), force)
+        .map(|bytes| {
+            let event = driver.scope_event(RuntimeEvent::Pane(PaneEvent::InputWritten {
+                pane_id: delivery.pane_id().to_string(),
+                bytes,
+            }));
+            (bytes, event)
+        });
+    async move {
+        let Some((bytes, event)) = checkpoint else {
+            return Ok(());
+        };
+        submit_pane_runtime_event(
+            handle,
+            event,
+            &mut report.submitted_events,
+            &mut report.applied_events,
+        )
+        .await?;
+        report.shell_input_progress_events = report.shell_input_progress_events.saturating_add(1);
+        report.shell_input_progress_bytes = report.shell_input_progress_bytes.saturating_add(bytes);
+        Ok(())
+    }
 }
 
 /// Drains currently available pane output chunks into one actor submission.

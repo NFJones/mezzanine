@@ -149,6 +149,143 @@ async fn async_pane_process_service_retries_partial_input_remainders() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies receiver-acknowledged delivery publishes bounded cumulative input
+/// progress while reconciling the exact accepted byte total at completion.
+/// Thousands of records must not create one serialized actor request each.
+#[tokio::test(flavor = "current_thread")]
+async fn async_pane_process_service_aggregates_receiver_delivery_progress() {
+    const RECORDS: usize = 300;
+    const RECORD_BYTES: usize = 1024;
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let mut payload = Vec::with_capacity(RECORDS * RECORD_BYTES);
+    for _ in 0..RECORDS {
+        payload.extend(std::iter::repeat_n(b'x', RECORD_BYTES - 1));
+        payload.push(b'\n');
+    }
+    let mut backend = AsyncFakePaneProcessIo::default();
+    backend.set_supports_shell_input_acknowledgements(true);
+    backend.push_no_output();
+    #[cfg(target_os = "macos")]
+    for _ in 0..RECORDS {
+        backend.push_output(vec![mez_mux::process::SHELL_INPUT_RECORD_ACK_BYTE]);
+    }
+    let mut driver =
+        AsyncPaneProcessDriver::new("%1", backend, AsyncPaneProcessDriverConfig::default())
+            .unwrap();
+
+    let service_handle = handle.clone();
+    let service = async move {
+        service_handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::WritePaneShellInput {
+                pane_id: "%1".to_string(),
+                delivery: mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    payload,
+                    "delivery-1",
+                    true,
+                ),
+            }])
+            .await
+            .unwrap();
+        let report = run_async_pane_process_service(
+            &service_handle,
+            &mut driver,
+            AsyncPaneProcessServiceConfig {
+                max_polls: if cfg!(target_os = "macos") {
+                    u64::try_from(RECORDS + 1).unwrap()
+                } else {
+                    1
+                },
+                output_drain_limit: 1,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+                foreground_metadata_interval: Duration::from_secs(60),
+            },
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        let backend = driver.into_backend();
+        let _ = service_handle.shutdown().await.unwrap();
+        (report, backend)
+    };
+
+    let ((report, backend), mut exit) = tokio::join!(service, actor.run());
+
+    assert_eq!(backend.writes.len(), RECORDS);
+    assert_eq!(report.submitted_events, 2, "{report:?}");
+    assert_eq!(report.shell_input_progress_events, 2, "{report:?}");
+    assert_eq!(
+        report.shell_input_progress_bytes,
+        RECORDS * RECORD_BYTES,
+        "{report:?}"
+    );
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a receiver write failure publishes accepted partial bytes before
+/// the immediate failure event. Aggregation must not lose local progress or
+/// report bytes that the PTY rejected when a later suffix write fails.
+#[tokio::test(flavor = "current_thread")]
+async fn async_pane_process_service_reconciles_receiver_progress_before_failure() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let mut backend = AsyncFakePaneProcessIo::default();
+    backend.set_supports_shell_input_acknowledgements(true);
+    backend.push_write_result(Ok(2));
+    backend.push_write_result(Err(MezError::invalid_state(
+        "injected receiver write failure",
+    )));
+    let mut driver =
+        AsyncPaneProcessDriver::new("%1", backend, AsyncPaneProcessDriverConfig::default())
+            .unwrap();
+
+    let service_handle = handle.clone();
+    let service = async move {
+        service_handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::WritePaneShellInput {
+                pane_id: "%1".to_string(),
+                delivery: mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    b"abcdef\n".to_vec(),
+                    "delivery-failure",
+                    true,
+                ),
+            }])
+            .await
+            .unwrap();
+        let report = run_async_pane_process_service(
+            &service_handle,
+            &mut driver,
+            AsyncPaneProcessServiceConfig {
+                max_polls: 1,
+                output_drain_limit: 1,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+                foreground_metadata_interval: Duration::from_secs(60),
+            },
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        let backend = driver.into_backend();
+        let _ = service_handle.shutdown().await.unwrap();
+        (report, backend)
+    };
+
+    let ((report, backend), mut exit) = tokio::join!(service, actor.run());
+
+    assert_eq!(
+        backend.writes,
+        vec![b"abcdef\n".to_vec(), b"cdef\n".to_vec()]
+    );
+    assert_eq!(report.submitted_events, 2, "{report:?}");
+    assert_eq!(report.shell_input_progress_events, 1, "{report:?}");
+    assert_eq!(report.shell_input_progress_bytes, 2, "{report:?}");
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that the combined pane process service serializes PTY output and
 /// pane I/O side effects through one driver. This is the ownership shape needed
 /// before production live pane processes can move out of global manager

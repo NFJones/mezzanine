@@ -29,6 +29,8 @@ pub struct AsyncFakePaneProcessIo {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     write_results: VecDeque<Result<usize>>,
+    /// Whether the fake shell emits receiver record acknowledgements.
+    supports_shell_input_acknowledgements: bool,
     /// Stores the resize results value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -87,6 +89,11 @@ impl AsyncFakePaneProcessIo {
         self.write_results.push_back(result);
     }
 
+    /// Configures receiver acknowledgement support for delivery tests.
+    pub fn set_supports_shell_input_acknowledgements(&mut self, supported: bool) {
+        self.supports_shell_input_acknowledgements = supported;
+    }
+
     /// Queues a resize result.
     pub fn push_resize_result(&mut self, result: Result<()>) {
         self.resize_results.push_back(result);
@@ -100,6 +107,11 @@ impl AsyncFakePaneProcessIo {
 
 #[cfg(test)]
 impl AsyncPaneProcessIo for AsyncFakePaneProcessIo {
+    /// Reports the acknowledgement capability selected by the fixture.
+    fn supports_shell_input_acknowledgements(&self) -> bool {
+        self.supports_shell_input_acknowledgements
+    }
+
     /// Runs the read output operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
