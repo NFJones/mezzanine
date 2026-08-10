@@ -490,6 +490,91 @@ fn runtime_shell_transaction_wrapper_echo_fragments_are_hidden_by_default() {
     assert!(visible_text.contains("file-a"), "{visible_text}");
 }
 
+/// Verifies deferred command payload records are never registered as shell
+/// echo candidates after the transaction receiver has disabled terminal echo.
+/// Real command output that happens to equal payload text must remain visible.
+#[test]
+fn runtime_shell_transaction_deferred_payload_text_remains_visible() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.register_running_shell_transaction(
+        "marker-1".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "a1".to_string(),
+            },
+            pane_id: "%1".to_string(),
+            command: "payload-record-that-is-real-output".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: Some(
+                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    b"encoded-payload\n".to_vec(),
+                    "marker-1",
+                    true,
+                ),
+            ),
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+        true,
+    );
+
+    let visible = service.visible_pane_output_bytes(
+        "%1",
+        b"MEZ_MARKER_TOKEN='abc'\r\npayload-record-that-is-real-output\r\nfile-a\n",
+    );
+    let visible_text = String::from_utf8_lossy(&visible);
+
+    assert!(!visible_text.contains("MEZ_MARKER_TOKEN"), "{visible_text}");
+    assert!(
+        visible_text.contains("payload-record-that-is-real-output"),
+        "{visible_text}"
+    );
+    assert!(visible_text.contains("file-a"), "{visible_text}");
+}
+
+/// Verifies newline-free output that resembles a wrapper prefix cannot grow
+/// retained filter state without bound. Once the conservative prefix ceiling
+/// is exceeded, the runtime must fail open and preserve the original bytes.
+#[test]
+fn runtime_shell_transaction_wrapper_prefix_retention_is_bounded() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.register_running_shell_transaction(
+        "marker-1".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "a1".to_string(),
+            },
+            pane_id: "%1".to_string(),
+            command: "ls".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+        true,
+    );
+    let mut output = b"printf".to_vec();
+    output.extend(std::iter::repeat_n(b'x', 16 * 1024));
+
+    let visible = service.visible_pane_output_bytes("%1", &output);
+
+    assert_eq!(visible, output);
+}
+
 /// Verifies that `/log-level trace` is the high-verbosity escape hatch for raw
 /// shell-wrapper diagnosis. When enabled, the runtime leaves echoed wrapper
 /// traffic untouched so developers can inspect exactly what was written to and

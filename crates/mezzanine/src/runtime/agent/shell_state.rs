@@ -441,7 +441,6 @@ impl RuntimeSessionService {
         {
             self.append_agent_command_preview_to_terminal_buffer(&turn.pane_id, command)?;
         }
-        self.remember_mez_wrapper_filter_command(&turn.pane_id, command);
         let wrapper_bytes = wrapper.len().saturating_add(payload_len);
         self.revoke_pane_readiness_override(
             &turn.pane_id,

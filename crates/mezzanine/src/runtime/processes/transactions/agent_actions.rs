@@ -200,8 +200,7 @@ impl RuntimeSessionService {
                 "shell transaction end marker arrived before the start marker",
             );
         }
-        let Some(mut transaction_ref) = self.process.running_shell_transactions.remove(marker)
-        else {
+        let Some(mut transaction_ref) = self.remove_running_shell_transaction(marker) else {
             return Ok(0);
         };
         let sandboxed = self

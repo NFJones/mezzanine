@@ -294,7 +294,7 @@ impl RuntimeSessionService {
                 terminator + 1
             };
             let line = &pending[line_start..line_end];
-            let filtered_line = mez_wrapper_echo_line_visible_bytes(line, &filter_commands);
+            let filtered_line = mez_wrapper_echo_line_visible_bytes(line, filter_commands.as_ref());
             if filtered_line.len() != line.len() {
                 filtered_wrapper_echo = true;
             }
@@ -305,14 +305,17 @@ impl RuntimeSessionService {
         if line_start < pending.len() {
             let tail = &pending[line_start..];
             if tail.contains(&0x1b) {
-                let filtered_tail = mez_wrapper_echo_line_visible_bytes(tail, &filter_commands);
+                let filtered_tail =
+                    mez_wrapper_echo_line_visible_bytes(tail, filter_commands.as_ref());
                 if filtered_tail.len() != tail.len() {
                     filtered_wrapper_echo = true;
                 }
                 visible.extend_from_slice(&filtered_tail);
-            } else if mez_wrapper_echo_line_is_hidden(tail, &filter_commands) {
+            } else if mez_wrapper_echo_line_is_hidden(tail, filter_commands.as_ref()) {
                 filtered_wrapper_echo = true;
-            } else if !mez_wrapper_echo_line_is_possible_prefix(tail, &filter_commands) {
+            } else if tail.len() > RUNTIME_SHELL_WRAPPER_FILTER_PENDING_LIMIT_BYTES
+                || !mez_wrapper_echo_line_is_possible_prefix(tail, filter_commands.as_ref())
+            {
                 visible.extend_from_slice(tail);
             } else {
                 filtered_wrapper_echo = true;
@@ -755,19 +758,48 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(crate) fn remember_mez_wrapper_filter_command(&mut self, pane_id: &str, command: &str) {
-        let retained = self
-            .process
-            .pane_mez_wrapper_filter_recent_commands
-            .entry(pane_id.to_string())
-            .or_default();
-        for line in command
+    pub(crate) fn remember_mez_wrapper_filter_command(
+        &mut self,
+        pane_id: &str,
+        command: &str,
+    ) -> std::sync::Arc<[String]> {
+        let descriptor: std::sync::Arc<[String]> = command
             .lines()
             .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
+            .filter(|line| {
+                !line.is_empty()
+                    && line.len() <= RUNTIME_SHELL_WRAPPER_FILTER_COMMAND_LINE_LIMIT_BYTES
+            })
+            .fold(Vec::<String>::new(), |mut lines, line| {
+                if let Some(index) = lines.iter().position(|existing| existing == line) {
+                    lines.remove(index);
+                }
+                lines.push(line.to_string());
+                let extra = lines
+                    .len()
+                    .saturating_sub(RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT);
+                if extra > 0 {
+                    lines.drain(0..extra);
+                }
+                lines
+            })
+            .into();
+        self.remember_mez_wrapper_filter_descriptor(pane_id, descriptor.as_ref());
+        descriptor
+    }
+
+    /// Merges one precomputed transaction descriptor into the pane-level
+    /// immutable filter reused for every output batch.
+    fn remember_mez_wrapper_filter_descriptor(&mut self, pane_id: &str, commands: &[String]) {
+        let mut retained = self
+            .process
+            .pane_mez_wrapper_filter_recent_commands
+            .get(pane_id)
+            .map(|commands| commands.to_vec())
+            .unwrap_or_default();
+        for line in commands {
             if !retained.iter().any(|existing| existing == line) {
-                retained.push(line.to_string());
+                retained.push(line.clone());
             }
         }
         let extra = retained
@@ -776,6 +808,9 @@ impl RuntimeSessionService {
         if extra > 0 {
             retained.drain(0..extra);
         }
+        self.process
+            .pane_mez_wrapper_filter_recent_commands
+            .insert(pane_id.to_string(), retained.into());
         self.process.pane_mez_wrapper_filter_recent_polls.insert(
             pane_id.to_string(),
             RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS,
@@ -787,34 +822,53 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn mez_wrapper_filter_commands_for_pane(&self, pane_id: &str) -> Vec<String> {
-        let mut commands = self
-            .process
-            .running_shell_transactions
-            .values()
-            .filter(|transaction| transaction.pane_id == pane_id)
-            .flat_map(|transaction| {
-                transaction
-                    .command
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        if let Some(retained) = self
-            .process
+    fn mez_wrapper_filter_commands_for_pane(&mut self, pane_id: &str) -> std::sync::Arc<[String]> {
+        #[cfg(test)]
+        self.synchronize_direct_test_wrapper_filter_commands(pane_id);
+        self.process
             .pane_mez_wrapper_filter_recent_commands
             .get(pane_id)
-        {
-            for command in retained {
-                if !commands.iter().any(|existing| existing == command) {
-                    commands.push(command.clone());
-                }
-            }
+            .cloned()
+            .unwrap_or_else(|| std::sync::Arc::from(Vec::<String>::new()))
+    }
+
+    /// Synchronizes direct map mutations used by process fixtures.
+    ///
+    /// Production transactions always install their descriptor through
+    /// `register_running_shell_transaction`; this fallback keeps legacy tests
+    /// representative without putting full-command scans back in production.
+    #[cfg(test)]
+    fn synchronize_direct_test_wrapper_filter_commands(&mut self, pane_id: &str) {
+        let missing = self
+            .process
+            .running_shell_transactions
+            .iter()
+            .filter(|(marker, transaction)| {
+                transaction.pane_id == pane_id
+                    && !self
+                        .process
+                        .shell_transaction_wrapper_filter_commands
+                        .contains_key(*marker)
+            })
+            .map(|(marker, transaction)| {
+                let commands = if transaction.pending_input_payload.is_none() {
+                    transaction.command.clone()
+                } else {
+                    String::new()
+                };
+                (marker.clone(), commands)
+            })
+            .collect::<Vec<_>>();
+        for (marker, command) in missing {
+            let descriptor = if command.is_empty() {
+                std::sync::Arc::from(Vec::<String>::new())
+            } else {
+                self.remember_mez_wrapper_filter_command(pane_id, &command)
+            };
+            self.process
+                .shell_transaction_wrapper_filter_commands
+                .insert(marker, descriptor);
         }
-        commands
     }
 
     /// Runs the tick mez wrapper filter retention operation for this subsystem.

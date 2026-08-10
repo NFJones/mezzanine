@@ -66,7 +66,10 @@ pub(crate) use transactions::{
     BubblewrapEnvironmentProfile, RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES,
 };
 use transactions::{
-    RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS, RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT,
+    RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS,
+    RUNTIME_SHELL_WRAPPER_FILTER_COMMAND_LINE_LIMIT_BYTES,
+    RUNTIME_SHELL_WRAPPER_FILTER_PENDING_LIMIT_BYTES,
+    RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT,
     RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS, runtime_running_shell_transaction_kind_name,
 };
 
@@ -347,6 +350,12 @@ pub(crate) struct RuntimeProcessComponent {
     agent_pane_screens: std::collections::BTreeMap<String, AgentPaneScreen>,
     /// Live shell transactions keyed by their OSC marker.
     running_shell_transactions: std::collections::BTreeMap<String, RunningShellTransactionRef>,
+    /// Immutable bounded wrapper-filter commands keyed by transaction marker.
+    ///
+    /// Registration derives this descriptor once so steady-state PTY output
+    /// filtering never scans a potentially multi-megabyte transaction command.
+    shell_transaction_wrapper_filter_commands:
+        std::collections::BTreeMap<String, std::sync::Arc<[String]>>,
     /// Markers whose runtime wrappers must emit start before completion.
     shell_transaction_require_start_markers: BTreeSet<String>,
     /// Markers whose mandatory wrapper start event has been observed.
@@ -410,8 +419,9 @@ pub(crate) struct RuntimeProcessComponent {
     pane_shell_output_render_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Partial wrapper-filter bytes keyed by pane id.
     pane_mez_wrapper_filter_pending: std::collections::BTreeMap<String, Vec<u8>>,
-    /// Recently hidden wrapper commands keyed by pane id.
-    pane_mez_wrapper_filter_recent_commands: std::collections::BTreeMap<String, Vec<String>>,
+    /// Precomputed bounded wrapper-filter commands keyed by pane id.
+    pane_mez_wrapper_filter_recent_commands:
+        std::collections::BTreeMap<String, std::sync::Arc<[String]>>,
     /// Remaining wrapper-filter retention polls keyed by pane id.
     pane_mez_wrapper_filter_recent_polls: std::collections::BTreeMap<String, usize>,
     /// Remaining hidden-shell render retention polls keyed by pane id.
@@ -487,6 +497,14 @@ impl RuntimeSessionService {
         transaction: RunningShellTransactionRef,
         require_start_marker: bool,
     ) {
+        let filter_commands = if transaction.pending_input_payload.is_none() {
+            self.remember_mez_wrapper_filter_command(&transaction.pane_id, &transaction.command)
+        } else {
+            std::sync::Arc::from(Vec::<String>::new())
+        };
+        self.process
+            .shell_transaction_wrapper_filter_commands
+            .insert(marker.clone(), filter_commands);
         self.process
             .running_shell_transactions
             .insert(marker.clone(), transaction);
@@ -615,6 +633,9 @@ impl RuntimeSessionService {
     ) -> Option<RunningShellTransactionRef> {
         self.process.managed_home_activity_locks.remove(marker);
         self.process
+            .shell_transaction_wrapper_filter_commands
+            .remove(marker);
+        self.process
             .shell_transaction_receiver_acknowledgements
             .remove(marker);
         self.process
@@ -629,6 +650,9 @@ impl RuntimeSessionService {
     /// Clears all live shell transactions and marker protocol state.
     pub(crate) fn clear_all_shell_transaction_state(&mut self) {
         self.process.running_shell_transactions.clear();
+        self.process
+            .shell_transaction_wrapper_filter_commands
+            .clear();
         self.process.shell_transaction_require_start_markers.clear();
         self.process.shell_transaction_started_markers.clear();
         self.process

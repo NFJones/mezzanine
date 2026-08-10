@@ -53,6 +53,18 @@ pub(crate) const RUNTIME_APPLY_PATCH_SNAPSHOT_OBSERVATION_LIMIT_BYTES: usize = 1
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub(super) const RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT: usize = 16;
+/// Maximum UTF-8 bytes retained for one command line in a wrapper descriptor.
+///
+/// Large generated payload lines cannot echo after the deferred receiver
+/// disables terminal echo. Excluding oversized lines keeps filter memory and
+/// matching work independent of semantic payload size.
+pub(super) const RUNTIME_SHELL_WRAPPER_FILTER_COMMAND_LINE_LIMIT_BYTES: usize = 4 * 1024;
+/// Maximum incomplete wrapper-prefix bytes retained between pane reads.
+///
+/// Genuine wrapper and retained command lines fit below this ceiling. Larger
+/// newline-free output fails open to visibility rather than growing pane state
+/// without bound or suppressing arbitrary command output indefinitely.
+pub(super) const RUNTIME_SHELL_WRAPPER_FILTER_PENDING_LIMIT_BYTES: usize = 8 * 1024;
 /// Defines the RUNTIME SHELL WRAPPER FILTER RETENTION POLLS const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module
