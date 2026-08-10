@@ -123,12 +123,14 @@ impl RuntimeSessionService {
         };
         let payload_len = payload.bytes.len();
         if payload.receiver_acknowledgements {
+            let acknowledgement_count = payload
+                .bytes
+                .split_inclusive(|byte| *byte == b'\n')
+                .filter(|record| mez_mux::process::receiver_input_record_requires_ack(record))
+                .count();
             self.process
                 .shell_transaction_receiver_acknowledgements
-                .insert(
-                    marker.to_string(),
-                    payload.bytes.iter().filter(|byte| **byte == b'\n').count(),
-                );
+                .insert(marker.to_string(), acknowledgement_count);
         }
         if let Err(error) = self.write_runtime_pane_shell_delivery(pane_id, payload) {
             self.fail_shell_transactions_for_pane_write_failure(pane_id, error.message())?;

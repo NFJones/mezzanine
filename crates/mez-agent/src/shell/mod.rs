@@ -34,9 +34,9 @@ pub use path_resolution::{
 pub use transaction::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, MarkerToken,
     SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES,
-    ShellChildArgument, ShellChildLaunch, ShellClassification, ShellTransaction,
-    ShellTransactionInput, ShellTransactionOutputTransport, agent_subshell_enter_command,
-    agent_subshell_enter_command_with_zsh_history_token, fish_quote,
+    SHELL_TRANSACTION_SIDECAR_FRAME_BYTES, ShellChildArgument, ShellChildLaunch,
+    ShellClassification, ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport,
+    agent_subshell_enter_command, agent_subshell_enter_command_with_zsh_history_token, fish_quote,
     posix_shell_history_suppression_finish, posix_shell_history_suppression_start,
     shell_command_contains_unquoted_heredoc, validate_agent_authored_shell_command,
 };

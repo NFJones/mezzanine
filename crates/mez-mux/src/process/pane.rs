@@ -55,6 +55,18 @@ pub fn shell_input_record_requires_ack(record: &[u8]) -> bool {
     record.ends_with(b"printf '\\036'\n")
 }
 
+/// Reports whether one deferred receiver record completes a logical frame.
+///
+/// Version-one sidecar begin and data records are physical transport chunks
+/// inside a larger logical frame. Their frame-end record is acknowledged only
+/// after the shell receiver validates the accumulated sequence, length, and
+/// digest. Command records, authenticated sentinels, and legacy payloads keep
+/// the historical per-record acknowledgement contract.
+#[doc(hidden)]
+pub fn receiver_input_record_requires_ack(record: &[u8]) -> bool {
+    record.starts_with(b"S1E ") || (!record.starts_with(b"S1B ") && !record.starts_with(b"S1D "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +80,19 @@ mod tests {
     #[test]
     fn sync_pane_input_write_timeout_is_ten_seconds() {
         assert_eq!(PANE_INPUT_WRITE_STALL_TIMEOUT, Duration::from_secs(10));
+    }
+
+    /// Verifies physical sidecar chunks advance without acknowledgements until
+    /// a logical frame-end record requests validated receiver progress.
+    #[test]
+    fn receiver_acknowledges_logical_sidecar_frame_boundaries() {
+        assert!(!receiver_input_record_requires_ack(b"S1B 0 12 digest\n"));
+        assert!(!receiver_input_record_requires_ack(b"S1D 0 cGF5bG9hZA==\n"));
+        assert!(receiver_input_record_requires_ack(b"S1E 0\n"));
+        assert!(receiver_input_record_requires_ack(b"C dHJ1ZQo=\n"));
+        assert!(receiver_input_record_requires_ack(
+            b"__MEZ_COMMAND_PAYLOAD_END_marker__\n"
+        ));
     }
 
     /// Verifies repeated interrupted PTY polls consume the original timeout
@@ -339,7 +364,9 @@ impl PaneProcess {
                     .count();
                 self.write_input(record)?;
                 written = written.saturating_add(record_len);
-                if receiver_acknowledged || written < input.len() {
+                if (receiver_acknowledged && receiver_input_record_requires_ack(record))
+                    || (!receiver_acknowledged && written < input.len())
+                {
                     let acknowledged =
                         if receiver_acknowledged || shell_input_record_requires_ack(record) {
                             self.wait_for_shell_input_ack_after(

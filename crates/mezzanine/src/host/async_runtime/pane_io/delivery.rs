@@ -8,7 +8,7 @@
 use super::{Duration, Instant, PaneProcessInstance, RuntimeSideEffect};
 use mez_mux::process::{
     PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, ShellInputDelivery, ShellInputPacing,
-    shell_input_record_requires_ack,
+    receiver_input_record_requires_ack, shell_input_record_requires_ack,
 };
 
 /// Maximum time one shell-input record may make no transport progress.
@@ -244,7 +244,8 @@ fn record_wait(
             if !delivery.receiver_acknowledgements || !supports_acknowledgements {
                 return Err("receiver-acknowledged shell delivery was not negotiated");
             }
-            Ok(Some(ShellInputProgressWait::Acknowledgement))
+            Ok(receiver_input_record_requires_ack(record)
+                .then_some(ShellInputProgressWait::Acknowledgement))
         }
         ShellInputPacing::GeneratedSource if final_record => Ok(None),
         ShellInputPacing::GeneratedSource if supports_acknowledgements => {
@@ -308,6 +309,29 @@ mod tests {
         assert_eq!(
             record_wait(&delivery, b"final\n", false, true, true),
             Err("receiver-acknowledged shell delivery was not negotiated")
+        );
+    }
+
+    /// Verifies canonical-safe sidecar chunks stream within one logical frame
+    /// and only its validated end record arms the acknowledgement wait.
+    #[test]
+    fn sidecar_physical_records_wait_only_at_logical_frame_end() {
+        let delivery = ShellInputDelivery::receiver_acknowledged(
+            b"S1B 0 12 digest\nS1D 0 cGF5bG9hZA==\nS1E 0\n".to_vec(),
+            "delivery-1",
+            true,
+        );
+        assert_eq!(
+            record_wait(&delivery, b"S1B 0 12 digest\n", true, false, true),
+            Ok(None)
+        );
+        assert_eq!(
+            record_wait(&delivery, b"S1D 0 cGF5bG9hZA==\n", true, false, true),
+            Ok(None)
+        );
+        assert_eq!(
+            record_wait(&delivery, b"S1E 0\n", true, true, true),
+            Ok(Some(ShellInputProgressWait::Acknowledgement))
         );
     }
 

@@ -42,8 +42,8 @@ pub use manager::PaneProcessManager;
 pub use pane::PaneProcess;
 #[doc(hidden)]
 pub use pane::{
-    PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, shell_input_record_requires_ack,
-    write_pty_fd_nonblocking_io,
+    PTY_INPUT_WRITE_CHUNK_BYTES, SHELL_INPUT_RECORD_ACK_BYTE, receiver_input_record_requires_ack,
+    shell_input_record_requires_ack, write_pty_fd_nonblocking_io,
 };
 pub use spawn::{
     pane_command_plan, shell_command_from_argv, spawn_pane_process,

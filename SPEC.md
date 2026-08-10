@@ -4110,9 +4110,15 @@ normal sequencing mechanism; if the receiver start marker is not observed before
 that timeout, Mezzanine MUST treat the transaction as timed out. On macOS,
 deferred generated-shell payloads MUST retain their typed delivery identity and
 priority through the PTY owner. A receiver-acknowledged payload MUST be written
-as complete bounded records, retry an exact unwritten suffix after a partial
-PTY write, and require one fresh receiver acknowledgement for every data record
-and the final authenticated sentinel before later same-pane input may resume.
+as bounded physical writes grouped into bounded logical records, retry an exact
+unwritten suffix after a partial PTY write, and require one fresh receiver
+acknowledgement for every complete logical record and the final authenticated
+sentinel before later same-pane input may resume. Semantic-write sidecar data
+MUST use versioned, sequenced logical frames no larger than 32 KiB, composed of
+canonical-safe physical lines. The receiver MUST validate each frame's sequence,
+declared byte count, and SHA-256 digest before acknowledging it, MUST reject
+duplicate, skipped, oversized, truncated, or digest-mismatched frames, and MUST
+restore the prior terminal mode and remove incomplete frame state on every exit.
 Unrelated pane output MUST NOT satisfy that wait. Missing negotiation, write
 failure, cancellation, process retirement, or a bounded per-record progress
 timeout MUST discard only the matching unsent delivery tail, fail the affected

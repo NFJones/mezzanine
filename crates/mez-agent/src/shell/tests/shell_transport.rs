@@ -491,6 +491,92 @@ fn posix_wrapper_materializes_single_encoded_input_sidecar() {
 }
 
 #[test]
+/// Verifies large sidecars are divided into bounded sequenced logical frames
+/// while every physical receiver line remains safe for constrained PTYs.
+///
+/// The frame count, ordering, and physical-line bound protect the throughput
+/// contract without allowing one logical frame to grow without limit.
+fn posix_wrapper_frames_large_sidecars_with_bounded_physical_records() {
+    let sidecar_record = format!(
+        "0 {}\n",
+        "A".repeat(SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES - 3)
+    );
+    let sidecar = sidecar_record.repeat(
+        SHELL_TRANSACTION_SIDECAR_FRAME_BYTES
+            .saturating_mul(2)
+            .div_ceil(sidecar_record.len()),
+    );
+    let input = ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), "true")
+        .unwrap()
+        .with_input_sidecar(Some(sidecar))
+        .render_for_classification_input(ShellClassification::PosixSh);
+
+    let frame_begins = input
+        .payload
+        .lines()
+        .filter(|line| line.starts_with("S1B "))
+        .collect::<Vec<_>>();
+    assert!(frame_begins.len() >= 2, "{}", input.payload);
+    for (sequence, line) in frame_begins.iter().enumerate() {
+        assert!(line.starts_with(&format!("S1B {sequence} ")), "{line}");
+        let declared_len = line
+            .split_ascii_whitespace()
+            .nth(2)
+            .and_then(|value| value.parse::<usize>().ok())
+            .expect("frame header should contain a byte count");
+        assert!(
+            declared_len <= SHELL_TRANSACTION_SIDECAR_FRAME_BYTES,
+            "frame {sequence} declared {declared_len} bytes"
+        );
+    }
+    assert_eq!(
+        input.payload.matches("\nS1E ").count(),
+        frame_begins.len(),
+        "{}",
+        input.payload
+    );
+    assert!(
+        input
+            .payload
+            .lines()
+            .all(|line| line.len() <= SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES + 80),
+        "{}",
+        input.payload
+    );
+}
+
+#[test]
+/// Verifies a sidecar frame with corrupted content fails closed after the
+/// receiver drains the authenticated sentinel and restores the parent shell.
+///
+/// A frame digest mismatch must not execute the materialized command or leave
+/// later same-pane input trapped behind an incomplete receiver transaction.
+fn posix_receiver_rejects_corrupt_sidecar_frame_and_releases_parent_input() {
+    let encoded = "U0lERUNBUl9PSwo=";
+    let transaction = ShellTransaction::new(
+        marker(),
+        "t1",
+        "a1",
+        "p1",
+        Path::new("/bin/sh"),
+        "printf '%s\n' SHOULD_NOT_RUN",
+    )
+    .unwrap()
+    .with_input_sidecar(Some(format!("0 {encoded}\n")))
+    .with_payload_receiver_acknowledgements(true);
+    let mut input = transaction.render_for_classification_input(ShellClassification::PosixSh);
+    input.payload = input.payload.replacen(encoded, "V0lERUNBUl9PSwo=", 1);
+
+    let output = run_sh_transaction(&input, "printf '%s\n' PARENT_AFTER_CORRUPT_FRAME\n");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout.contains("\u{1b}]133;D;1;"), "{stdout:?}");
+    assert!(stdout.contains("PARENT_AFTER_CORRUPT_FRAME"), "{stdout:?}");
+    assert!(!stdout.contains("SHOULD_NOT_RUN"), "{stdout:?}");
+}
+
+#[test]
 /// Verifies that a POSIX isolated shell transaction captures a failing command
 /// status without allowing strict shell options in the active pane shell to exit
 /// the pane. Users often carry `errexit` or `nounset` from their dotfiles, and

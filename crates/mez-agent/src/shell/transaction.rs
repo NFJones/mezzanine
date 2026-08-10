@@ -10,6 +10,7 @@ use crate::{
     SHELL_STATUS_BASE64_END_MARKER,
 };
 use base64::Engine;
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use super::{validate_resolved_shell_path, validate_shell_marker_token};
@@ -438,6 +439,13 @@ const AGENT_SUBSHELL_PROMPT_ENV: &[(&str, &str)] = &[
 /// remote panes. These payload lines are consumed by the wrapper's `read`
 /// loop, after the interactive shell has relinquished its line editor.
 pub const SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES: usize = 768;
+/// Maximum exact sidecar bytes protected by one logical acknowledgement.
+///
+/// One logical frame is still transported as canonical-safe physical lines.
+/// The receiver validates its sequence, byte count, and SHA-256 digest before
+/// acknowledging the frame, which preserves bounded flow control while
+/// avoiding one stop-and-wait round trip per physical line.
+pub const SHELL_TRANSACTION_SIDECAR_FRAME_BYTES: usize = 32 * 1024;
 /// Maximum base64 bytes appended by one shell wrapper transport command.
 ///
 /// Wrapper source is reconstructed through interactive shell input before the
@@ -955,6 +963,12 @@ impl ShellTransaction {
                     posix_shell_history_marker_finish_prefix().to_string(),
                 )
             };
+        let sidecar_frame_cleanup = if self.input_sidecar.is_some() {
+            "if [ -n \"$MEZ_SIDECAR_FRAME\" ]; then command rm -f -- \"$MEZ_SIDECAR_FRAME\" >/dev/null 2>&1 || :; fi\n\\
+unset MEZ_SIDECAR_FRAME MEZ_SIDECAR_FRAME_SEQUENCE MEZ_SIDECAR_FRAME_LENGTH MEZ_SIDECAR_FRAME_DIGEST MEZ_SIDECAR_FRAME_COUNT MEZ_SIDECAR_FRAME_ACTUAL MEZ_SIDECAR_SHA256\n"
+        } else {
+            ""
+        };
         let wrapper = format!(
             "{history_start}\
 {function_name}() {{\n\
@@ -967,6 +981,7 @@ MEZ_PANE={pane}\n\
 if [ -n \"$MEZ_COMMAND_FILE\" ]; then command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_COMMAND_B64\" ]; then command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_SIDECAR_DATA\" ]; then command rm -f -- \"$MEZ_SIDECAR_DATA\" >/dev/null 2>&1 || :; fi\n\
+{sidecar_frame_cleanup}\
 if [ -n \"$MEZ_OUTPUT_FILE\" ]; then command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_STATUS_FILE\" ]; then command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1 || :; fi\n\
 unset MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_SIDECAR_DATA MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
@@ -980,6 +995,7 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
             history_start = history_start,
             history_restore = history_restore,
             history_marker_finish = history_marker_finish,
+            sidecar_frame_cleanup = sidecar_frame_cleanup,
             errexit_restore = posix_shell_errexit_restore_suffix(),
             function_name = function_name,
             marker = shell_quote(self.marker.as_str()),
@@ -1148,6 +1164,12 @@ unset -f {function_name} 2>/dev/null || :\n\
                 .as_ref()
                 .and_then(|launch| launch.status_fd),
         );
+        let sidecar_frame_cleanup = if self.input_sidecar.is_some() {
+            "if test -n \"$MEZ_SIDECAR_FRAME\"; command rm -f -- \"$MEZ_SIDECAR_FRAME\" >/dev/null 2>&1; or true; end\n\\
+set -e MEZ_SIDECAR_FRAME MEZ_SIDECAR_FRAME_SEQUENCE MEZ_SIDECAR_FRAME_LENGTH MEZ_SIDECAR_FRAME_DIGEST MEZ_SIDECAR_FRAME_COUNT MEZ_SIDECAR_FRAME_ACTUAL MEZ_SIDECAR_SHA256\n"
+        } else {
+            ""
+        };
         let wrapper = format!(
             "{history_start}\
 begin\n\
@@ -1161,6 +1183,7 @@ set -l MEZ_STATUS 0\n\
 if test -n \"$MEZ_COMMAND_FILE\"; command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_COMMAND_B64\"; command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_SIDECAR_DATA\"; command rm -f -- \"$MEZ_SIDECAR_DATA\" >/dev/null 2>&1; or true; end\n\
+{sidecar_frame_cleanup}\
 if test -n \"$MEZ_OUTPUT_FILE\"; command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_STATUS_FILE\"; command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1; or true; end\n\
 set -e MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_SIDECAR_DATA MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
@@ -1171,6 +1194,7 @@ set -e MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS\n\
 end\n",
             history_start = fish_shell_history_suppression_start(),
             history_restore = fish_shell_history_restore(),
+            sidecar_frame_cleanup = sidecar_frame_cleanup,
             marker = fish_quote(self.marker.as_str()),
             turn = fish_quote(&self.turn_id),
             agent = fish_quote(&self.agent_id),
@@ -1265,10 +1289,28 @@ fn posix_command_file_materialization(
     } else {
         ":"
     };
+    let receive_record = if input_sidecar.is_some() {
+        format!(
+            "case \"$MEZ_COMMAND_LINE\" in C\\ *) if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then printf '%s\\n' \"${{MEZ_COMMAND_LINE#C }}\" >> \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$?; fi; {acknowledge} ;; S1B\\ *) if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_SIDECAR_FRAME_HEADER=${{MEZ_COMMAND_LINE#S1B }}; MEZ_SIDECAR_FRAME_HEADER_SEQUENCE=${{MEZ_SIDECAR_FRAME_HEADER%% *}}; MEZ_SIDECAR_FRAME_HEADER=${{MEZ_SIDECAR_FRAME_HEADER#* }}; MEZ_SIDECAR_FRAME_LENGTH=${{MEZ_SIDECAR_FRAME_HEADER%% *}}; MEZ_SIDECAR_FRAME_DIGEST=${{MEZ_SIDECAR_FRAME_HEADER#* }}; case \"$MEZ_SIDECAR_FRAME_LENGTH\" in ''|*[!0-9]*) MEZ_WRITE_STATUS=1;; esac; case \"$MEZ_SIDECAR_FRAME_DIGEST\" in *[!0-9a-f]*|???????????????????????????????????????????????????????????????|?????????????????????????????????????????????????????????????????*) MEZ_WRITE_STATUS=1;; esac; if [ \"$MEZ_SIDECAR_FRAME_OPEN\" != 0 ] || [ \"$MEZ_SIDECAR_FRAME_HEADER_SEQUENCE\" != \"$MEZ_SIDECAR_FRAME_SEQUENCE\" ] || [ \"$MEZ_SIDECAR_FRAME_LENGTH\" -gt {frame_bytes} ] 2>/dev/null || [ \"$MEZ_SIDECAR_FRAME_DIGEST\" != \"${{MEZ_SIDECAR_FRAME_DIGEST%% *}}\" ]; then MEZ_WRITE_STATUS=1; fi; if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_SIDECAR_FRAME_OPEN=1; : > \"$MEZ_SIDECAR_FRAME\" || MEZ_WRITE_STATUS=$?; fi; fi ;; S1D\\ *) if [ \"$MEZ_WRITE_STATUS\" -eq 0 ] && [ \"$MEZ_SIDECAR_FRAME_OPEN\" = 1 ]; then printf '%s\\n' \"${{MEZ_COMMAND_LINE#S1D }}\" >> \"$MEZ_SIDECAR_FRAME\" || MEZ_WRITE_STATUS=$?; else MEZ_WRITE_STATUS=1; fi ;; S1E\\ *) if [ \"$MEZ_WRITE_STATUS\" -eq 0 ] && [ \"$MEZ_SIDECAR_FRAME_OPEN\" = 1 ]; then MEZ_SIDECAR_FRAME_END_SEQUENCE=${{MEZ_COMMAND_LINE#S1E }}; MEZ_SIDECAR_FRAME_COUNT=$(wc -c < \"$MEZ_SIDECAR_FRAME\" | tr -d '[:space:]') || MEZ_WRITE_STATUS=$?; if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then if [ \"$MEZ_SIDECAR_SHA256\" = sha256sum ]; then MEZ_SIDECAR_FRAME_ACTUAL=$(sha256sum -- \"$MEZ_SIDECAR_FRAME\"); else MEZ_SIDECAR_FRAME_ACTUAL=$(shasum -a 256 -- \"$MEZ_SIDECAR_FRAME\"); fi; MEZ_SIDECAR_FRAME_ACTUAL=${{MEZ_SIDECAR_FRAME_ACTUAL%%[[:space:]]*}}; fi; if [ \"$MEZ_SIDECAR_FRAME_END_SEQUENCE\" != \"$MEZ_SIDECAR_FRAME_SEQUENCE\" ] || [ \"$MEZ_SIDECAR_FRAME_END_SEQUENCE\" != \"${{MEZ_SIDECAR_FRAME_END_SEQUENCE%% *}}\" ] || [ \"$MEZ_SIDECAR_FRAME_COUNT\" != \"$MEZ_SIDECAR_FRAME_LENGTH\" ] || [ \"$MEZ_SIDECAR_FRAME_ACTUAL\" != \"$MEZ_SIDECAR_FRAME_DIGEST\" ]; then MEZ_WRITE_STATUS=1; else sed 's/^/# __MEZ_INPUT_SIDECAR_V1__ /' \"$MEZ_SIDECAR_FRAME\" >> \"$MEZ_SIDECAR_DATA\" || MEZ_WRITE_STATUS=$?; MEZ_SIDECAR_FRAME_SEQUENCE=$((MEZ_SIDECAR_FRAME_SEQUENCE + 1)); MEZ_SIDECAR_FRAME_OPEN=0; fi; else MEZ_WRITE_STATUS=1; fi; {acknowledge} ;; *) MEZ_WRITE_STATUS=1; {acknowledge} ;; esac",
+            frame_bytes = SHELL_TRANSACTION_SIDECAR_FRAME_BYTES,
+        )
+    } else {
+        format!(
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then case \"$MEZ_COMMAND_LINE\" in C\\ *) printf '%s\\n' \"${{MEZ_COMMAND_LINE#C }}\" >> \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$? ;; *) MEZ_WRITE_STATUS=1 ;; esac; fi; {acknowledge}"
+        )
+    };
+    let terminal_mode = if input_sidecar.is_some() {
+        "stty -icanon min 1 time 0 -echo 2>/dev/null || :"
+    } else {
+        "stty -echo 2>/dev/null || :"
+    };
     let mut lines = vec![
         "MEZ_COMMAND_FILE=$(mktemp) || MEZ_COMMAND_FILE=".to_string(),
         "MEZ_COMMAND_B64=".to_string(),
         "MEZ_SIDECAR_DATA=".to_string(),
+        "MEZ_SIDECAR_FRAME=".to_string(),
+        "MEZ_SIDECAR_FRAME_SEQUENCE=0".to_string(),
+        "MEZ_SIDECAR_FRAME_OPEN=0".to_string(),
         format!("MEZ_COMMAND_END={}", shell_quote(&end_marker)),
         "MEZ_COMMAND_SEEN_END=0".to_string(),
         "MEZ_STTY_STATE=".to_string(),
@@ -1283,15 +1325,22 @@ fn posix_command_file_materialization(
             "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_SIDECAR_DATA=$(mktemp) || MEZ_WRITE_STATUS=1; fi"
                 .to_string(),
         );
+        lines.push(
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_SIDECAR_FRAME=$(mktemp) || MEZ_WRITE_STATUS=1; fi"
+                .to_string(),
+        );
+        lines.push(
+            "if command -v sha256sum >/dev/null 2>&1; then MEZ_SIDECAR_SHA256=sha256sum; elif command -v shasum >/dev/null 2>&1; then MEZ_SIDECAR_SHA256=shasum; else MEZ_WRITE_STATUS=127; fi"
+                .to_string(),
+        );
     }
     lines.extend([
         "MEZ_STTY_STATE=$(stty -g 2>/dev/null) || MEZ_STTY_STATE=".to_string(),
-        "if [ -n \"$MEZ_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi".to_string(),
+        format!("if [ -n \"$MEZ_STTY_STATE\" ]; then {terminal_mode}; fi"),
         start_marker_line.to_string(),
         "while IFS= read -r MEZ_COMMAND_LINE; do".to_string(),
-        format!("if [ \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\" ]; then MEZ_COMMAND_SEEN_END=1; {acknowledge}; break; fi"),
-        "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then case \"$MEZ_COMMAND_LINE\" in C\\ *) printf '%s\\n' \"${MEZ_COMMAND_LINE#C }\" >> \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$? ;; S\\ *) if [ -n \"$MEZ_SIDECAR_DATA\" ]; then printf '# __MEZ_INPUT_SIDECAR_V1__ %s\\n' \"${MEZ_COMMAND_LINE#S }\" >> \"$MEZ_SIDECAR_DATA\" || MEZ_WRITE_STATUS=$?; else MEZ_WRITE_STATUS=1; fi ;; *) MEZ_WRITE_STATUS=1 ;; esac; fi".to_string(),
-        acknowledge.to_string(),
+        format!("if [ \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\" ]; then if [ \"${{MEZ_SIDECAR_FRAME_OPEN:-0}}\" != 0 ]; then MEZ_WRITE_STATUS=1; fi; MEZ_COMMAND_SEEN_END=1; {acknowledge}; break; fi"),
+        receive_record,
         "done".to_string(),
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ] && [ \"$MEZ_COMMAND_SEEN_END\" != 1 ]; then printf '%s\\n' 'Mezzanine shell transaction command payload ended before sentinel' >&2; MEZ_WRITE_STATUS=1; fi".to_string(),
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then if base64 -d < \"$MEZ_COMMAND_B64\" > \"$MEZ_COMMAND_FILE\" 2>/dev/null; then MEZ_WRITE_STATUS=0; else base64 -D < \"$MEZ_COMMAND_B64\" > \"$MEZ_COMMAND_FILE\"; MEZ_WRITE_STATUS=$?; fi; fi".to_string(),
@@ -1477,6 +1526,9 @@ fn fish_command_file_materialization(
     } else {
         "true"
     };
+    let acknowledge_command_record = format!(
+        "string replace -r '^C ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status; {acknowledge}"
+    );
     let mut lines = vec![
         "set -l MEZ_COMMAND_FILE (mktemp); or set -l MEZ_COMMAND_FILE ''".to_string(),
         "set -l MEZ_COMMAND_B64 ''".to_string(),
@@ -1491,34 +1543,79 @@ fn fish_command_file_materialization(
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; : > \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status; end".to_string(),
     ];
     if input_sidecar.is_some() {
+        lines.push("set -l MEZ_SIDECAR_FRAME ''".to_string());
+        lines.push("set -l MEZ_SIDECAR_FRAME_SEQUENCE 0".to_string());
+        lines.push("set -l MEZ_SIDECAR_FRAME_OPEN 0".to_string());
         lines.push(
             "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_DATA (mktemp); or set MEZ_WRITE_STATUS 1; end"
                 .to_string(),
         );
+        lines.push(
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_FRAME (mktemp); or set MEZ_WRITE_STATUS 1; end"
+                .to_string(),
+        );
+        lines.push(
+            "if command -q sha256sum; set MEZ_SIDECAR_SHA256 sha256sum; else if command -q shasum; set MEZ_SIDECAR_SHA256 shasum; else; set MEZ_WRITE_STATUS 127; end"
+                .to_string(),
+        );
     }
+    let terminal_mode = if input_sidecar.is_some() {
+        "stty -icanon min 1 time 0 -echo 2>/dev/null; or true"
+    } else {
+        "stty -echo 2>/dev/null; or true"
+    };
+    let open_frame_check = input_sidecar
+        .is_some()
+        .then_some("if test \"$MEZ_SIDECAR_FRAME_OPEN\" -ne 0; set MEZ_WRITE_STATUS 1; end");
     lines.extend([
         "set MEZ_STTY_STATE (stty -g 2>/dev/null); or set MEZ_STTY_STATE ''".to_string(),
         "if test -n \"$MEZ_STTY_STATE\"".to_string(),
-        "stty -echo 2>/dev/null; or true".to_string(),
+        terminal_mode.to_string(),
         "end".to_string(),
         start_marker_line.to_string(),
         "while read -l MEZ_COMMAND_LINE".to_string(),
         "if test \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\"".to_string(),
+    ]);
+    if let Some(open_frame_check) = open_frame_check {
+        lines.push(open_frame_check.to_string());
+    }
+    lines.extend([
         "set MEZ_COMMAND_SEEN_END 1".to_string(),
         acknowledge.to_string(),
         "break".to_string(),
         "end".to_string(),
-        "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
-        "switch \"$MEZ_COMMAND_LINE\"".to_string(),
-        "case 'C *'".to_string(),
-        "string replace -r '^C ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status".to_string(),
-        "case 'S *'".to_string(),
-        "if test -n \"$MEZ_SIDECAR_DATA\"; printf '# __MEZ_INPUT_SIDECAR_V1__ %s\\n' (string replace -r '^S ' '' -- \"$MEZ_COMMAND_LINE\") >> \"$MEZ_SIDECAR_DATA\"; or set MEZ_WRITE_STATUS $status; else; set MEZ_WRITE_STATUS 1; end".to_string(),
-        "case '*'".to_string(),
-        "set MEZ_WRITE_STATUS 1".to_string(),
-        "end".to_string(),
-        "end".to_string(),
-        acknowledge.to_string(),
+    ]);
+    if input_sidecar.is_some() {
+        lines.extend([
+            "switch \"$MEZ_COMMAND_LINE\"".to_string(),
+            "case 'C *'".to_string(),
+            format!("if test \"$MEZ_WRITE_STATUS\" -eq 0; {acknowledge_command_record}; else; {acknowledge}; end"),
+            "case 'S1B *'".to_string(),
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_FRAME_FIELDS (string split ' ' -- \"$MEZ_COMMAND_LINE\"); if test (count $MEZ_SIDECAR_FRAME_FIELDS) -ne 4; or test \"$MEZ_SIDECAR_FRAME_OPEN\" -ne 0; or test \"$MEZ_SIDECAR_FRAME_FIELDS[2]\" != \"$MEZ_SIDECAR_FRAME_SEQUENCE\"; or not string match -rq '^[0-9]+$' -- \"$MEZ_SIDECAR_FRAME_FIELDS[3]\"; or test \"$MEZ_SIDECAR_FRAME_FIELDS[3]\" -gt 32768; or not string match -rq '^[0-9a-f]{64}$' -- \"$MEZ_SIDECAR_FRAME_FIELDS[4]\"; set MEZ_WRITE_STATUS 1; else; set MEZ_SIDECAR_FRAME_LENGTH $MEZ_SIDECAR_FRAME_FIELDS[3]; set MEZ_SIDECAR_FRAME_DIGEST $MEZ_SIDECAR_FRAME_FIELDS[4]; set MEZ_SIDECAR_FRAME_OPEN 1; : > \"$MEZ_SIDECAR_FRAME\"; or set MEZ_WRITE_STATUS $status; end; end".to_string(),
+            "case 'S1D *'".to_string(),
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test \"$MEZ_SIDECAR_FRAME_OPEN\" -eq 1; string replace -r '^S1D ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_SIDECAR_FRAME\"; or set MEZ_WRITE_STATUS $status; else; set MEZ_WRITE_STATUS 1; end".to_string(),
+            "case 'S1E *'".to_string(),
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_FRAME_FIELDS (string split ' ' -- \"$MEZ_COMMAND_LINE\"); set MEZ_SIDECAR_FRAME_COUNT (wc -c < \"$MEZ_SIDECAR_FRAME\" | string trim); if test \"$MEZ_SIDECAR_SHA256\" = sha256sum; set MEZ_SIDECAR_FRAME_ACTUAL (sha256sum -- \"$MEZ_SIDECAR_FRAME\" | string split -f 1 ' '); else; set MEZ_SIDECAR_FRAME_ACTUAL (shasum -a 256 -- \"$MEZ_SIDECAR_FRAME\" | string split -f 1 ' '); end; if test (count $MEZ_SIDECAR_FRAME_FIELDS) -ne 2; or test \"$MEZ_SIDECAR_FRAME_OPEN\" -ne 1; or test \"$MEZ_SIDECAR_FRAME_FIELDS[2]\" != \"$MEZ_SIDECAR_FRAME_SEQUENCE\"; or test \"$MEZ_SIDECAR_FRAME_COUNT\" != \"$MEZ_SIDECAR_FRAME_LENGTH\"; or test \"$MEZ_SIDECAR_FRAME_ACTUAL\" != \"$MEZ_SIDECAR_FRAME_DIGEST\"; set MEZ_WRITE_STATUS 1; else; sed 's/^/# __MEZ_INPUT_SIDECAR_V1__ /' \"$MEZ_SIDECAR_FRAME\" >> \"$MEZ_SIDECAR_DATA\"; or set MEZ_WRITE_STATUS $status; set MEZ_SIDECAR_FRAME_SEQUENCE (math $MEZ_SIDECAR_FRAME_SEQUENCE + 1); set MEZ_SIDECAR_FRAME_OPEN 0; end; end".to_string(),
+            acknowledge.to_string(),
+            "case '*'".to_string(),
+            "set MEZ_WRITE_STATUS 1".to_string(),
+            acknowledge.to_string(),
+            "end".to_string(),
+        ]);
+    } else {
+        lines.extend([
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
+            "switch \"$MEZ_COMMAND_LINE\"".to_string(),
+            "case 'C *'".to_string(),
+            "string replace -r '^C ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status".to_string(),
+            "case '*'".to_string(),
+            "set MEZ_WRITE_STATUS 1".to_string(),
+            "end".to_string(),
+            "end".to_string(),
+            acknowledge.to_string(),
+        ]);
+    }
+    lines.extend([
         "end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test \"$MEZ_COMMAND_SEEN_END\" != 1".to_string(),
         "printf '%s\\n' 'Mezzanine shell transaction command payload ended before sentinel' >&2".to_string(),
@@ -1553,6 +1650,40 @@ fn command_payload_end_marker(marker: &str) -> String {
     format!("__MEZ_COMMAND_PAYLOAD_END_{marker}__")
 }
 
+/// Appends version-one logical sidecar frames to a receiver payload.
+fn append_framed_sidecar_payload(payload: &mut String, input_sidecar: &str) {
+    let mut sequence = 0usize;
+    let mut frame = String::new();
+    for record in input_sidecar.split_inclusive('\n') {
+        if !frame.is_empty()
+            && frame.len().saturating_add(record.len()) > SHELL_TRANSACTION_SIDECAR_FRAME_BYTES
+        {
+            append_sidecar_frame(payload, sequence, &frame);
+            sequence = sequence.saturating_add(1);
+            frame.clear();
+        }
+        frame.push_str(record);
+    }
+    if !frame.is_empty() {
+        append_sidecar_frame(payload, sequence, &frame);
+    }
+}
+
+/// Appends one sequenced frame as canonical-safe physical records.
+fn append_sidecar_frame(payload: &mut String, sequence: usize, frame: &str) {
+    let digest = Sha256::digest(frame.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    payload.push_str(&format!("S1B {sequence} {} {digest}\n", frame.len()));
+    for record in frame.lines() {
+        payload.push_str("S1D ");
+        payload.push_str(record);
+        payload.push('\n');
+    }
+    payload.push_str(&format!("S1E {sequence}\n"));
+}
+
 /// Renders the base64 command payload consumed by the transaction receiver.
 fn command_payload_lines(command: &str, end_marker: &str, input_sidecar: Option<&str>) -> String {
     let mut command_source = command.to_string();
@@ -1572,11 +1703,7 @@ fn command_payload_lines(command: &str, end_marker: &str, input_sidecar: Option<
         payload.push('\n');
     }
     if let Some(input_sidecar) = input_sidecar {
-        for record in input_sidecar.lines() {
-            payload.push_str("S ");
-            payload.push_str(record);
-            payload.push('\n');
-        }
+        append_framed_sidecar_payload(&mut payload, input_sidecar);
     }
     payload.push_str(end_marker);
     payload.push('\n');
