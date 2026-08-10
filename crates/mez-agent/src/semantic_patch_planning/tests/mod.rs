@@ -73,6 +73,64 @@ fn local_action_plan(action: &AgentAction) -> Result<Option<LocalActionPlan>> {
     }
 }
 
+/// Executes one local action plan through the materialized-script shape used
+/// by production shell transactions.
+///
+/// Semantic write sidecars are appended as inert comments so generated write
+/// commands can read their single-encoded payload through `$0` without tests
+/// accidentally inspecting the `/bin/sh` executable used by `sh -c`.
+fn run_local_action_plan(cwd: &Path, plan: &LocalActionPlan) -> Output {
+    run_local_action_plan_with_path(cwd, plan, None)
+}
+
+/// Executes one materialized local action plan with an optional PATH override.
+fn run_local_action_plan_with_path(
+    cwd: &Path,
+    plan: &LocalActionPlan,
+    path: Option<&str>,
+) -> Output {
+    run_local_action_plan_with_shell_path(cwd, plan, Path::new("/bin/sh"), path)
+}
+
+/// Executes one materialized local action plan through an explicit shell.
+fn run_local_action_plan_with_shell(cwd: &Path, plan: &LocalActionPlan, shell: &Path) -> Output {
+    run_local_action_plan_with_shell_path(cwd, plan, shell, None)
+}
+
+/// Executes one materialized plan through an explicit shell and PATH.
+fn run_local_action_plan_with_shell_path(
+    cwd: &Path,
+    plan: &LocalActionPlan,
+    shell: &Path,
+    path: Option<&str>,
+) -> Output {
+    let sequence = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let script = cwd.join(format!(
+        ".mez-agent-plan-{}-{sequence}.sh",
+        std::process::id()
+    ));
+    let mut source = plan.command.clone();
+    if !source.ends_with('\n') {
+        source.push('\n');
+    }
+    if let Some(sidecar) = &plan.input_sidecar {
+        for record in sidecar.lines() {
+            source.push_str("# __MEZ_INPUT_SIDECAR_V1__ ");
+            source.push_str(record);
+            source.push('\n');
+        }
+    }
+    std::fs::write(&script, source).unwrap();
+    let mut command = Command::new(shell);
+    command.arg(&script).current_dir(cwd);
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let output = command.output().unwrap();
+    std::fs::remove_file(script).unwrap();
+    output
+}
+
 /// Executes an `apply_patch` action through its read and write phases.
 fn run_apply_patch_action(cwd: &Path, patch: &str) -> Output {
     let action = AgentAction {
@@ -101,12 +159,7 @@ fn run_apply_patch_action(cwd: &Path, patch: &str) -> Output {
         &String::from_utf8_lossy(&read_output.stdout),
     )
     .unwrap();
-    Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&write_plan.command)
-        .current_dir(cwd)
-        .output()
-        .unwrap()
+    run_local_action_plan(cwd, &write_plan)
 }
 
 /// Returns the write-phase error for one semantic-patch action.

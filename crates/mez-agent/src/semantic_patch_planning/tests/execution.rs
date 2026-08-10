@@ -70,20 +70,42 @@ fn semantic_apply_patch_command_encodes_shell_sensitive_content() {
 /// preventing the transaction wrapper from reaching its end marker.
 fn semantic_apply_patch_command_keeps_encoded_lines_short() {
     let temp = test_temp_dir("semantic-patch-short-lines");
-    let patch = add_file_patch("large.txt", &"0123456789abcdef\n".repeat(2048));
+    let content = "0123456789abcdef\n".repeat(2048);
+    let patch = add_file_patch("large.txt", &content);
     let action = AgentAction {
         id: "patch-large".to_string(),
         rationale: String::new(),
         payload: AgentActionPayload::ApplyPatch { patch, strip: None },
     };
-    let plan = local_action_plan(&action).unwrap().unwrap();
-    let longest_line = plan.command.lines().map(str::len).max().unwrap_or(0);
+    let read_plan = local_action_plan(&action).unwrap().unwrap();
+    let read_output = run_local_action_plan(&temp, &read_plan);
+    assert!(read_output.status.success());
+    let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
+        unreachable!("test action is an apply_patch")
+    };
+    let plan = apply_patch_write_plan_from_read_output(
+        patch,
+        &String::from_utf8_lossy(&read_output.stdout),
+    )
+    .unwrap();
+    let sidecar = plan
+        .input_sidecar
+        .as_deref()
+        .expect("large semantic write should have a sidecar");
+    let longest_line = sidecar.lines().map(str::len).max().unwrap_or(0);
 
     assert!(
         longest_line < 1024,
-        "generated shell line should stay PTY-safe; longest={longest_line}"
+        "semantic sidecar record should stay PTY-safe; longest={longest_line}"
     );
     assert!(plan.command.contains("base64"), "{}", plan.command);
+    assert!(
+        plan.command.len() < content.len() / 2,
+        "generated command should contain metadata, not file bytes: command={} content={}",
+        plan.command.len(),
+        content.len()
+    );
+    assert!(!plan.command.contains("0123456789abcdef"));
     std::fs::remove_dir_all(temp).unwrap();
 }
 
@@ -106,6 +128,52 @@ fn semantic_apply_patch_command_writes_zero_byte_content() {
     assert_eq!(std::fs::metadata(target).unwrap().len(), 0);
     assert!(stdout.contains("diff -- apply patch"), "{stdout}");
 
+    std::fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+/// Verifies zsh semantic-write functions retain the materialized script path
+/// while extracting separately streamed sidecar records.
+///
+/// Zsh changes `$0` to the active function name. The write prelude must capture
+/// the script path before entering a per-file function or sidecar extraction
+/// attempts to read a nonexistent file named after that function.
+fn semantic_apply_patch_sidecar_survives_zsh_function_zero() {
+    let zsh = Path::new("/bin/zsh");
+    if !zsh.is_file() {
+        return;
+    }
+    let temp = test_temp_dir("semantic-patch-zsh-sidecar");
+    let patch = add_file_patch("zsh-sidecar.txt", "written through sidecar\n");
+    let action = AgentAction {
+        id: "patch-zsh-sidecar".to_string(),
+        rationale: String::new(),
+        payload: AgentActionPayload::ApplyPatch { patch, strip: None },
+    };
+    let read_plan = local_action_plan(&action).unwrap().unwrap();
+    let read_output = run_local_action_plan(&temp, &read_plan);
+    assert!(read_output.status.success());
+    let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
+        unreachable!("test action is an apply_patch")
+    };
+    let write_plan = apply_patch_write_plan_from_read_output(
+        patch,
+        &String::from_utf8_lossy(&read_output.stdout),
+    )
+    .unwrap();
+
+    let output = run_local_action_plan_with_shell(&temp, &write_plan, zsh);
+
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp.join("zsh-sidecar.txt")).unwrap(),
+        "written through sidecar\n"
+    );
     std::fs::remove_dir_all(temp).unwrap();
 }
 
@@ -137,12 +205,7 @@ fn semantic_apply_patch_command_reports_partial_late_failure_per_file() {
     .unwrap();
     std::fs::write(temp.join("two.txt"), "changed concurrently\n").unwrap();
 
-    let output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&write_plan.command)
-        .current_dir(&temp)
-        .output()
-        .unwrap();
+    let output = run_local_action_plan(&temp, &write_plan);
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
@@ -327,39 +390,42 @@ fn semantic_apply_patch_revalidates_target_immediately_before_write() {
         &String::from_utf8_lossy(&read_output.stdout),
     )
     .unwrap();
-    let cmp_output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg("command -v cmp")
-        .output()
-        .unwrap();
-    assert!(cmp_output.status.success());
-    let cmp = String::from_utf8(cmp_output.stdout)
-        .unwrap()
-        .trim()
-        .to_string();
-    let fake_cmp = fake_bin.join("cmp");
+    let digest_command = ["sha256sum", "shasum"]
+        .into_iter()
+        .find_map(|command| {
+            let output = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("command -v {command}"))
+                .output()
+                .unwrap();
+            output.status.success().then(|| {
+                (
+                    command,
+                    String::from_utf8(output.stdout).unwrap().trim().to_string(),
+                )
+            })
+        })
+        .expect("semantic write tests require sha256sum or shasum");
+    let fake_digest = fake_bin.join(digest_command.0);
+    let digest_seen = root.join("digest-seen");
     std::fs::write(
-        &fake_cmp,
+        &fake_digest,
         format!(
-            "#!/bin/sh\n{cmp} \"$@\"\nstatus=$?\nif [ \"$status\" = 0 ]; then\n  rm -f -- note.txt\n  ln -s ../outside.txt note.txt\n  printf retargeted > {retargeted}\nfi\nexit \"$status\"\n",
+            "#!/bin/sh\ntarget=\nfor argument in \"$@\"; do target=$argument; done\noutput=$({digest} \"$@\")\nstatus=$?\nprintf '%s\\n' \"$output\"\ncase \"$target\" in */note.txt) if [ -e {seen} ]; then rm -f -- note.txt; ln -s ../outside.txt note.txt; printf retargeted > {retargeted}; else : > {seen}; fi;; esac\nexit \"$status\"\n",
+            digest = digest_command.1,
+            seen = digest_seen.display(),
             retargeted = retargeted_path.display(),
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&fake_cmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&fake_digest, std::fs::Permissions::from_mode(0o755)).unwrap();
     let path = format!(
         "{}:{}",
         fake_bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
 
-    let output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&write_plan.command)
-        .current_dir(&cwd)
-        .env("PATH", path)
-        .output()
-        .unwrap();
+    let output = run_local_action_plan_with_path(&cwd, &write_plan, Some(&path));
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(!output.status.success(), "{stderr}");

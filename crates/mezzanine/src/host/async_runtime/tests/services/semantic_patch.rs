@@ -215,14 +215,24 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
         assert_eq!(provider_report.applied, 1);
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        let expected_tail = b"MEZ_LARGE_PATCH_NEW\n";
         let settled = loop {
-            if client_handle
+            let mut tail = vec![0; expected_tail.len()];
+            let mut target_file = std::fs::File::open(&client_target).unwrap();
+            let target_len = target_file.metadata().unwrap().len();
+            std::io::Seek::seek(
+                &mut target_file,
+                std::io::SeekFrom::Start(target_len - expected_tail.len() as u64),
+            )
+            .unwrap();
+            std::io::Read::read_exact(&mut target_file, &mut tail).unwrap();
+            let continuation_queued = client_handle
                 .pending_agent_provider_tasks()
                 .await
                 .unwrap()
                 .into_iter()
-                .any(|pending| pending.turn_id == "turn-1")
-            {
+                .any(|pending| pending.turn_id == "turn-1");
+            if tail == expected_tail && continuation_queued {
                 break true;
             }
             if tokio::time::Instant::now() >= deadline {

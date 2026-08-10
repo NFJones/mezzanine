@@ -1541,6 +1541,10 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
     let encoded = payload_text
         .lines()
         .take_while(|line| !line.starts_with("__MEZ_COMMAND_PAYLOAD_END_"))
+        .map(|line| {
+            line.strip_prefix("C ")
+                .expect("ordinary shell commands should use typed command records")
+        })
         .collect::<String>();
     let decoded = String::from_utf8(
         base64::engine::general_purpose::STANDARD

@@ -104,6 +104,8 @@ fn bubblewrap_action_path_resolution_request(
 pub(super) struct ShellActionDispatch<'a> {
     /// Original command retained for execution, preview, and audit identity.
     pub(super) command: &'a str,
+    /// Optional separately streamed data associated with the command plan.
+    pub(super) input_sidecar: Option<&'a str>,
     /// Whether the command intentionally mutates the persistent pane shell.
     pub(super) stateful: bool,
     /// Whether the command requires interactive terminal behavior.
@@ -142,6 +144,7 @@ impl RuntimeSessionService {
     ) -> Result<ShellActionDispatchOutcome> {
         let ShellActionDispatch {
             command,
+            input_sidecar,
             stateful,
             interactive,
             timeout_ms,
@@ -191,17 +194,19 @@ impl RuntimeSessionService {
         let previous_readiness = self.pane_readiness_state(&turn.pane_id);
         let marker = runtime_marker_for_action(turn, &action.id)?;
         let marker_id = marker.as_str().to_string();
-        let mut transaction = self.configure_shell_transaction_for_pane(
-            &turn.pane_id,
-            ShellTransaction::new(
-                marker,
-                &turn.turn_id,
-                &turn.agent_id,
+        let mut transaction = self
+            .configure_shell_transaction_for_pane(
                 &turn.pane_id,
-                self.session.shell.path(),
-                command,
-            )?,
-        );
+                ShellTransaction::new(
+                    marker,
+                    &turn.turn_id,
+                    &turn.agent_id,
+                    &turn.pane_id,
+                    self.session.shell.path(),
+                    command,
+                )?,
+            )
+            .with_input_sidecar(input_sidecar.map(ToString::to_string));
         let mut sandbox_audit_summary = None;
         let mut managed_home_activity_lock = None;
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
@@ -543,6 +548,7 @@ impl RuntimeSessionService {
             action,
             ShellActionDispatch {
                 command,
+                input_sidecar: None,
                 stateful: false,
                 interactive: false,
                 timeout_ms: None,

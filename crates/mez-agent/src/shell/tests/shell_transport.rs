@@ -444,6 +444,53 @@ fn posix_wrapper_materializes_command_from_base64_without_heredoc() {
 }
 
 #[test]
+/// Verifies optional transaction sidecar records cross the PTY exactly once
+/// and are available as inert data in the materialized command file.
+///
+/// Semantic writes must not embed final file bytes in generated shell source,
+/// because command materialization Base64-encodes that source again. This test
+/// keeps the sidecar record printable and confirms the child can decode it
+/// from its own script without the wrapper recursively encoding the record.
+fn posix_wrapper_materializes_single_encoded_input_sidecar() {
+    let encoded = "U0lERUNBUl9PSwo=";
+    let command = "sed -n 's/^# __MEZ_INPUT_SIDECAR_V1__ 0 //p' \"$0\" | base64 -d";
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/sh"), command)
+            .unwrap()
+            .with_input_sidecar(Some(format!("0 {encoded}\n")));
+    let input = transaction.render_for_classification_input(ShellClassification::PosixSh);
+
+    assert_eq!(
+        input.payload.matches(encoded).count(),
+        1,
+        "{}",
+        input.payload
+    );
+    assert!(!input.wrapper.contains(encoded), "{}", input.wrapper);
+    assert!(
+        input
+            .payload
+            .lines()
+            .all(|line| line.len() <= SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES + 2),
+        "{}",
+        input.payload
+    );
+
+    let output = run_sh_transaction(&input, "");
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("SIDECAR_OK"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 /// Verifies that a POSIX isolated shell transaction captures a failing command
 /// status without allowing strict shell options in the active pane shell to exit
 /// the pane. Users often carry `errexit` or `nounset` from their dotfiles, and

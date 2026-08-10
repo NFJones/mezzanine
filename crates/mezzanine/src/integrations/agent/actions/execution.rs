@@ -73,6 +73,7 @@ where
             self.shell_path,
             &request.plan.command,
         )?
+        .with_input_sidecar(request.plan.input_sidecar.clone())
         .with_output_transport(ShellTransactionOutputTransport::Base64);
         let shell_request = ShellExecutionRequest {
             action_id: request.action_id.clone(),

@@ -1388,6 +1388,7 @@ mod tests {
             kind: LocalActionKind::ShellCommand,
             summary: "Inspect repository".to_string(),
             command: "git status --short".to_string(),
+            input_sidecar: None,
             policy_command: "git status --short".to_string(),
             interactive: false,
             stateful: false,

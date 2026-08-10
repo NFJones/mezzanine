@@ -117,12 +117,7 @@ fn semantic_apply_patch_plan_applies_codex_style_blocks() {
         "apply_patch write phase must not require remote Python:\n{}",
         write_plan.command
     );
-    let output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&write_plan.command)
-        .current_dir(&temp)
-        .output()
-        .unwrap();
+    let output = run_local_action_plan(&temp, &write_plan);
     assert!(
         output.status.success(),
         "command failed: {}\nstdout:\n{}\nstderr:\n{}",
@@ -392,12 +387,7 @@ fn semantic_apply_patch_resolves_symlink_targets_before_writing() {
         &String::from_utf8_lossy(&read_output.stdout),
     )
     .unwrap();
-    let write_output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&write_plan.command)
-        .current_dir(&temp)
-        .output()
-        .unwrap();
+    let write_output = run_local_action_plan(&temp, &write_plan);
     assert!(
         write_output.status.success(),
         "write phase failed:\nstdout:\n{}\nstderr:\n{}",
@@ -458,12 +448,7 @@ fn semantic_apply_patch_write_plan_accepts_accumulated_read_snapshots() {
         String::from_utf8_lossy(&second_output.stdout).to_string(),
     ];
     let write_plan = apply_patch_write_plan_from_read_outputs(patch, &read_outputs).unwrap();
-    let output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&write_plan.command)
-        .current_dir(&temp)
-        .output()
-        .unwrap();
+    let output = run_local_action_plan(&temp, &write_plan);
 
     assert!(
         output.status.success(),
@@ -518,12 +503,7 @@ fn semantic_apply_patch_uses_sandbox_write_scopes_for_absolute_targets() {
         &boundary,
     )
     .unwrap();
-    let write_output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&write_plan.command)
-        .current_dir(&cwd)
-        .output()
-        .unwrap();
+    let write_output = run_local_action_plan(&cwd, &write_plan);
 
     assert!(
         write_output.status.success(),

@@ -29,7 +29,7 @@ use snapshot::{
 };
 pub use transaction::ApplyPatchTransactionPhase;
 use transaction::{
-    apply_patch_write_change_command, apply_patch_write_command_prelude,
+    apply_patch_write_change_command, apply_patch_write_command_prelude, apply_patch_write_sidecar,
     mez_apply_patch_read_command,
 };
 
@@ -265,6 +265,7 @@ pub fn apply_patch_read_plan_for_paths_with_boundary(
         kind: LocalActionKind::ApplyPatch,
         summary: "I’ll apply a patch.".to_string(),
         command: mez_apply_patch_read_command(paths, boundary),
+        input_sidecar: None,
         policy_command: "apply_patch".to_string(),
         interactive: false,
         stateful: false,
@@ -287,6 +288,7 @@ pub fn apply_patch_error_plan(message: &str) -> LocalActionPlan {
             "# {APPLY_PATCH_WRITE_PHASE_MARKER}\nprintf '%s\\n' {} >&2\nexit 1",
             shell_quote(&format!("apply_patch: {message}"))
         ),
+        input_sidecar: None,
         policy_command: "apply_patch".to_string(),
         interactive: false,
         stateful: false,
@@ -332,10 +334,12 @@ fn mez_apply_patch_write_plan(
         command.push_str(&apply_patch_planned_failure_shell_lines(&plan));
     }
     command.push_str("if [ \"${MEZ_APPLY_FAILED:-0}\" = 1 ]; then exit 1; fi\n");
+    let input_sidecar = apply_patch_write_sidecar(&plan.changes);
     Ok(LocalActionPlan {
         kind: LocalActionKind::ApplyPatch,
         summary: "I’ll apply a patch.".to_string(),
         command,
+        input_sidecar,
         policy_command: "apply_patch".to_string(),
         interactive: false,
         stateful: false,

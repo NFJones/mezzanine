@@ -222,6 +222,12 @@ pub struct ShellTransaction {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub command: String,
+    /// Optional Base64 records appended to the materialized command file as
+    /// inert comments after the executable shell source.
+    ///
+    /// Large semantic-write bytes use this channel so they cross the pane PTY
+    /// only once instead of being embedded in source that is encoded again.
+    input_sidecar: Option<String>,
     /// Pane-scoped token authenticated by the managed zsh history hook.
     ///
     /// The token is only used when rendering for zsh. Other shell
@@ -821,6 +827,7 @@ impl ShellTransaction {
             pane_id: pane_id.into(),
             shell_path: shell_path.to_string_lossy().into_owned(),
             command: command.into(),
+            input_sidecar: None,
             zsh_history_token: None,
             child_launch: None,
             output_transport: ShellTransactionOutputTransport::Raw,
@@ -832,6 +839,12 @@ impl ShellTransaction {
     /// Selects a validated typed child process launch for this transaction.
     pub fn with_child_launch(mut self, child_launch: ShellChildLaunch) -> Self {
         self.child_launch = Some(child_launch);
+        self
+    }
+
+    /// Selects separately streamed Base64 records for the materialized script.
+    pub fn with_input_sidecar(mut self, input_sidecar: Option<String>) -> Self {
+        self.input_sidecar = input_sidecar;
         self
     }
 
@@ -899,6 +912,7 @@ impl ShellTransaction {
         let function_name = transaction_function_name(self.marker.as_str());
         let command_materialization = posix_command_file_materialization(
             &self.command,
+            self.input_sidecar.as_deref(),
             self.marker.as_str(),
             "command printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \"$MEZ_MARKER_TOKEN\" \"$MEZ_TURN\" \"$MEZ_AGENT\" \"$MEZ_PANE\"",
             self.payload_receiver_acknowledgements,
@@ -952,9 +966,10 @@ MEZ_PANE={pane}\n\
 {child_invocation}\
 if [ -n \"$MEZ_COMMAND_FILE\" ]; then command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_COMMAND_B64\" ]; then command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1 || :; fi\n\
+if [ -n \"$MEZ_SIDECAR_DATA\" ]; then command rm -f -- \"$MEZ_SIDECAR_DATA\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_OUTPUT_FILE\" ]; then command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1 || :; fi\n\
 if [ -n \"$MEZ_STATUS_FILE\" ]; then command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1 || :; fi\n\
-unset MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
+unset MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_SIDECAR_DATA MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
 unset -f {function_name} 2>/dev/null || :\n\
 {history_restore}\
 {history_marker_finish}command printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
@@ -1104,6 +1119,7 @@ unset -f {function_name} 2>/dev/null || :\n\
     pub fn render_fish_input(&self) -> ShellTransactionInput {
         let command_materialization = fish_command_file_materialization(
             &self.command,
+            self.input_sidecar.as_deref(),
             self.marker.as_str(),
             "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE",
             self.payload_receiver_acknowledgements,
@@ -1144,9 +1160,10 @@ set -l MEZ_STATUS 0\n\
 {child_invocation}\
 if test -n \"$MEZ_COMMAND_FILE\"; command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_COMMAND_B64\"; command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1; or true; end\n\
+if test -n \"$MEZ_SIDECAR_DATA\"; command rm -f -- \"$MEZ_SIDECAR_DATA\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_OUTPUT_FILE\"; command rm -f -- \"$MEZ_OUTPUT_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_STATUS_FILE\"; command rm -f -- \"$MEZ_STATUS_FILE\" >/dev/null 2>&1; or true; end\n\
-set -e MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
+set -e MEZ_COMMAND_FILE MEZ_COMMAND_B64 MEZ_SIDECAR_DATA MEZ_COMMAND_END MEZ_COMMAND_LINE MEZ_COMMAND_SEEN_END MEZ_OUTPUT_FILE MEZ_STATUS_FILE MEZ_STTY_STATE MEZ_WRITE_STATUS\n\
 printf '\\033]133;D;%s;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' \
 $MEZ_STATUS $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE\n\
 {history_restore}\
@@ -1237,6 +1254,7 @@ struct CommandMaterialization {
 /// data instead of waiting for an entire generated wrapper to arrive.
 fn posix_command_file_materialization(
     command: &str,
+    input_sidecar: Option<&str>,
     marker: &str,
     start_marker_line: &str,
     acknowledge_payload_records: bool,
@@ -1250,6 +1268,7 @@ fn posix_command_file_materialization(
     let mut lines = vec![
         "MEZ_COMMAND_FILE=$(mktemp) || MEZ_COMMAND_FILE=".to_string(),
         "MEZ_COMMAND_B64=".to_string(),
+        "MEZ_SIDECAR_DATA=".to_string(),
         format!("MEZ_COMMAND_END={}", shell_quote(&end_marker)),
         "MEZ_COMMAND_SEEN_END=0".to_string(),
         "MEZ_STTY_STATE=".to_string(),
@@ -1259,25 +1278,35 @@ fn posix_command_file_materialization(
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_COMMAND_B64=$(mktemp) || MEZ_WRITE_STATUS=1; fi".to_string(),
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then : > \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$?; fi".to_string(),
     ];
+    if input_sidecar.is_some() {
+        lines.push(
+            "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then MEZ_SIDECAR_DATA=$(mktemp) || MEZ_WRITE_STATUS=1; fi"
+                .to_string(),
+        );
+    }
     lines.extend([
         "MEZ_STTY_STATE=$(stty -g 2>/dev/null) || MEZ_STTY_STATE=".to_string(),
         "if [ -n \"$MEZ_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi".to_string(),
         start_marker_line.to_string(),
         "while IFS= read -r MEZ_COMMAND_LINE; do".to_string(),
         format!("if [ \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\" ]; then MEZ_COMMAND_SEEN_END=1; {acknowledge}; break; fi"),
-        "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then printf '%s\\n' \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$?; fi".to_string(),
+        "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then case \"$MEZ_COMMAND_LINE\" in C\\ *) printf '%s\\n' \"${MEZ_COMMAND_LINE#C }\" >> \"$MEZ_COMMAND_B64\" || MEZ_WRITE_STATUS=$? ;; S\\ *) if [ -n \"$MEZ_SIDECAR_DATA\" ]; then printf '# __MEZ_INPUT_SIDECAR_V1__ %s\\n' \"${MEZ_COMMAND_LINE#S }\" >> \"$MEZ_SIDECAR_DATA\" || MEZ_WRITE_STATUS=$?; else MEZ_WRITE_STATUS=1; fi ;; *) MEZ_WRITE_STATUS=1 ;; esac; fi".to_string(),
         acknowledge.to_string(),
         "done".to_string(),
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ] && [ \"$MEZ_COMMAND_SEEN_END\" != 1 ]; then printf '%s\\n' 'Mezzanine shell transaction command payload ended before sentinel' >&2; MEZ_WRITE_STATUS=1; fi".to_string(),
-        "if [ -n \"$MEZ_STTY_STATE\" ]; then stty \"$MEZ_STTY_STATE\" 2>/dev/null || :; MEZ_STTY_STATE=; fi".to_string(),
         "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ]; then if base64 -d < \"$MEZ_COMMAND_B64\" > \"$MEZ_COMMAND_FILE\" 2>/dev/null; then MEZ_WRITE_STATUS=0; else base64 -D < \"$MEZ_COMMAND_B64\" > \"$MEZ_COMMAND_FILE\"; MEZ_WRITE_STATUS=$?; fi; fi".to_string(),
+        "if [ \"$MEZ_WRITE_STATUS\" -eq 0 ] && [ -n \"$MEZ_SIDECAR_DATA\" ]; then cat \"$MEZ_SIDECAR_DATA\" >> \"$MEZ_COMMAND_FILE\" || MEZ_WRITE_STATUS=$?; fi".to_string(),
         "else".to_string(),
         "MEZ_WRITE_STATUS=1".to_string(),
         "fi".to_string(),
     ]);
+    lines.push(
+        "if [ -n \"$MEZ_STTY_STATE\" ]; then stty \"$MEZ_STTY_STATE\" 2>/dev/null || :; MEZ_STTY_STATE=; fi"
+            .to_string(),
+    );
     CommandMaterialization {
         setup: lines.join("\n") + "\n",
-        payload: command_payload_lines(command, &end_marker),
+        payload: command_payload_lines(command, &end_marker, input_sidecar),
     }
 }
 
@@ -1437,6 +1466,7 @@ fn fish_shell_interactive_invocation_words(
 /// bytes inert until the configured Fish shell reads them from a file.
 fn fish_command_file_materialization(
     command: &str,
+    input_sidecar: Option<&str>,
     marker: &str,
     start_marker_line: &str,
     acknowledge_payload_records: bool,
@@ -1450,6 +1480,7 @@ fn fish_command_file_materialization(
     let mut lines = vec![
         "set -l MEZ_COMMAND_FILE (mktemp); or set -l MEZ_COMMAND_FILE ''".to_string(),
         "set -l MEZ_COMMAND_B64 ''".to_string(),
+        "set -l MEZ_SIDECAR_DATA ''".to_string(),
         format!("set -l MEZ_COMMAND_END {}", fish_quote(&end_marker)),
         "set -l MEZ_COMMAND_SEEN_END 0".to_string(),
         "set -l MEZ_STTY_STATE ''".to_string(),
@@ -1459,6 +1490,12 @@ fn fish_command_file_materialization(
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_COMMAND_B64 (mktemp); or set MEZ_WRITE_STATUS 1; end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; : > \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status; end".to_string(),
     ];
+    if input_sidecar.is_some() {
+        lines.push(
+            "if test \"$MEZ_WRITE_STATUS\" -eq 0; set MEZ_SIDECAR_DATA (mktemp); or set MEZ_WRITE_STATUS 1; end"
+                .to_string(),
+        );
+    }
     lines.extend([
         "set MEZ_STTY_STATE (stty -g 2>/dev/null); or set MEZ_STTY_STATE ''".to_string(),
         "if test -n \"$MEZ_STTY_STATE\"".to_string(),
@@ -1472,17 +1509,20 @@ fn fish_command_file_materialization(
         "break".to_string(),
         "end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
-        "printf '%s\\n' \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status".to_string(),
+        "switch \"$MEZ_COMMAND_LINE\"".to_string(),
+        "case 'C *'".to_string(),
+        "string replace -r '^C ' '' -- \"$MEZ_COMMAND_LINE\" >> \"$MEZ_COMMAND_B64\"; or set MEZ_WRITE_STATUS $status".to_string(),
+        "case 'S *'".to_string(),
+        "if test -n \"$MEZ_SIDECAR_DATA\"; printf '# __MEZ_INPUT_SIDECAR_V1__ %s\\n' (string replace -r '^S ' '' -- \"$MEZ_COMMAND_LINE\") >> \"$MEZ_SIDECAR_DATA\"; or set MEZ_WRITE_STATUS $status; else; set MEZ_WRITE_STATUS 1; end".to_string(),
+        "case '*'".to_string(),
+        "set MEZ_WRITE_STATUS 1".to_string(),
+        "end".to_string(),
         "end".to_string(),
         acknowledge.to_string(),
         "end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test \"$MEZ_COMMAND_SEEN_END\" != 1".to_string(),
         "printf '%s\\n' 'Mezzanine shell transaction command payload ended before sentinel' >&2".to_string(),
         "set MEZ_WRITE_STATUS 1".to_string(),
-        "end".to_string(),
-        "if test -n \"$MEZ_STTY_STATE\"".to_string(),
-        "stty \"$MEZ_STTY_STATE\" 2>/dev/null; or true".to_string(),
-        "set MEZ_STTY_STATE ''".to_string(),
         "end".to_string(),
         "if test \"$MEZ_WRITE_STATUS\" -eq 0".to_string(),
         "if base64 -d < \"$MEZ_COMMAND_B64\" > \"$MEZ_COMMAND_FILE\" 2>/dev/null".to_string(),
@@ -1491,13 +1531,20 @@ fn fish_command_file_materialization(
         "base64 -D < \"$MEZ_COMMAND_B64\" > \"$MEZ_COMMAND_FILE\"".to_string(),
         "set MEZ_WRITE_STATUS $status".to_string(),
         "end".to_string(),
+        "if test \"$MEZ_WRITE_STATUS\" -eq 0; and test -n \"$MEZ_SIDECAR_DATA\"; cat \"$MEZ_SIDECAR_DATA\" >> \"$MEZ_COMMAND_FILE\"; or set MEZ_WRITE_STATUS $status; end".to_string(),
         "else".to_string(),
         "set MEZ_WRITE_STATUS 1".to_string(),
         "end".to_string(),
     ]);
+    lines.extend([
+        "if test -n \"$MEZ_STTY_STATE\"".to_string(),
+        "stty \"$MEZ_STTY_STATE\" 2>/dev/null; or true".to_string(),
+        "set MEZ_STTY_STATE ''".to_string(),
+        "end".to_string(),
+    ]);
     CommandMaterialization {
         setup: lines.join("\n") + "\n",
-        payload: command_payload_lines(command, &end_marker),
+        payload: command_payload_lines(command, &end_marker, input_sidecar),
     }
 }
 
@@ -1507,7 +1554,7 @@ fn command_payload_end_marker(marker: &str) -> String {
 }
 
 /// Renders the base64 command payload consumed by the transaction receiver.
-fn command_payload_lines(command: &str, end_marker: &str) -> String {
+fn command_payload_lines(command: &str, end_marker: &str, input_sidecar: Option<&str>) -> String {
     let mut command_source = command.to_string();
     if !command_source.ends_with('\n') {
         command_source.push('\n');
@@ -1520,8 +1567,16 @@ fn command_payload_lines(command: &str, end_marker: &str) -> String {
     {
         let chunk = std::str::from_utf8(chunk)
             .expect("standard base64 output should always be valid UTF-8");
+        payload.push_str("C ");
         payload.push_str(chunk);
         payload.push('\n');
+    }
+    if let Some(input_sidecar) = input_sidecar {
+        for record in input_sidecar.lines() {
+            payload.push_str("S ");
+            payload.push_str(record);
+            payload.push('\n');
+        }
     }
     payload.push_str(end_marker);
     payload.push('\n');

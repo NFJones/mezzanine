@@ -14,13 +14,14 @@ use super::{
 };
 use crate::shell_quote;
 use base64::Engine;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-/// Maximum base64 payload bytes emitted on one generated shell-source line.
+/// Maximum Base64 payload bytes emitted in one semantic-write sidecar record.
 ///
-/// File mutations cross the pane PTY as shell input. Keeping individual lines
-/// well below common canonical-line limits prevents large content writes from
-/// filling the line discipline before the newline is accepted.
+/// Sidecar records cross the pane PTY as bounded data. Keeping individual
+/// records below common canonical-line limits preserves portable receiver
+/// behavior while avoiding recursive encoding of generated shell source.
 pub(super) const FILE_CONTENT_BASE64_SHELL_LINE_BYTES: usize = 768;
 
 /// One shell-backed phase used to complete an `apply_patch` action.
@@ -55,38 +56,36 @@ pub(super) fn unified_diff_lines(
     ]
 }
 
-/// Builds shell lines that write exact content bytes without embedding the raw
-/// payload in the generated shell source.
-pub(super) fn write_content_lines(content: &str, target: &str, append: bool) -> Vec<String> {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
-    let redirect = if append { ">>" } else { ">" };
-    let mut lines = vec![
-        "command -v base64 >/dev/null || { printf '%s\\n' 'base64 is required for semantic file content actions' >&2; exit 127; }"
-            .to_string(),
-        "MEZ_CONTENT_B64=$(mktemp) || exit 1".to_string(),
-        "{".to_string(),
-    ];
-    if encoded.is_empty() {
-        lines.push("  :".to_string());
-    } else {
+/// Returns a lowercase SHA-256 digest for exact semantic-write preconditions.
+fn content_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Renders the single-encoded final-byte records consumed by write commands.
+pub(super) fn apply_patch_write_sidecar(changes: &[ApplyPatchFileChange]) -> Option<String> {
+    let mut sidecar = String::new();
+    for (index, change) in changes.iter().enumerate() {
+        let Some(final_bytes) = &change.final_bytes else {
+            continue;
+        };
+        let encoded = base64::engine::general_purpose::STANDARD.encode(final_bytes);
+        if encoded.is_empty() {
+            sidecar.push_str(&format!("{index} \n"));
+            continue;
+        }
         for chunk in encoded
             .as_bytes()
             .chunks(FILE_CONTENT_BASE64_SHELL_LINE_BYTES)
         {
             let chunk = std::str::from_utf8(chunk)
                 .expect("standard base64 output should always be valid UTF-8");
-            lines.push(format!("  printf '%s' {}", shell_quote(chunk)));
+            sidecar.push_str(&format!("{index} {chunk}\n"));
         }
     }
-    lines.extend([
-        "} > \"$MEZ_CONTENT_B64\"".to_string(),
-        format!(
-            "if base64 -d < \"$MEZ_CONTENT_B64\" {redirect} {target} 2>/dev/null; then MEZ_CONTENT_STATUS=0; else base64 -D < \"$MEZ_CONTENT_B64\" {redirect} {target}; MEZ_CONTENT_STATUS=$?; fi"
-        ),
-        "rm -f -- \"$MEZ_CONTENT_B64\"".to_string(),
-        "if [ \"$MEZ_CONTENT_STATUS\" != 0 ]; then exit \"$MEZ_CONTENT_STATUS\"; fi".to_string(),
-    ]);
-    lines
+    (!sidecar.is_empty()).then_some(sidecar)
 }
 
 fn apply_patch_boundary_case_lines(
@@ -182,8 +181,11 @@ pub(super) fn mez_apply_patch_read_command(
 pub(super) fn apply_patch_write_command_prelude(boundary: &ApplyPatchPathBoundary) -> String {
     let mut lines = vec![
         "command -v base64 >/dev/null || { printf '%s\\n' 'apply_patch: base64 is required for apply_patch actions' >&2; exit 127; }".to_string(),
-        "command -v cmp >/dev/null || { printf '%s\\n' 'apply_patch: cmp is required for apply_patch actions' >&2; exit 127; }".to_string(),
         "command -v dirname >/dev/null || { printf '%s\\n' 'apply_patch: dirname is required for apply_patch actions' >&2; exit 127; }".to_string(),
+        "command -v sed >/dev/null || { printf '%s\\n' 'apply_patch: sed is required for apply_patch actions' >&2; exit 127; }".to_string(),
+        "command -v tr >/dev/null || { printf '%s\\n' 'apply_patch: tr is required for apply_patch actions' >&2; exit 127; }".to_string(),
+        "if command -v sha256sum >/dev/null 2>&1; then MEZ_APPLY_SHA256=sha256sum; elif command -v shasum >/dev/null 2>&1; then MEZ_APPLY_SHA256=shasum; else printf '%s\\n' 'apply_patch: sha256sum or shasum is required for apply_patch actions' >&2; exit 127; fi".to_string(),
+        "MEZ_APPLY_SIDECAR_FILE=${MEZ_APPLY_SIDECAR_FILE:-$0}".to_string(),
         "MEZ_APPLY_CWD=$(pwd -P) || exit 1".to_string(),
         "MEZ_APPLY_CWD_PREFIX=${MEZ_APPLY_CWD%/}".to_string(),
         "if [ -z \"$MEZ_APPLY_CWD_PREFIX\" ]; then MEZ_APPLY_CWD_PREFIX=/; fi".to_string(),
@@ -211,6 +213,8 @@ pub(super) fn apply_patch_write_command_prelude(boundary: &ApplyPatchPathBoundar
     lines.extend([
         "if [ \"$MEZ_APPLY_RESOLVED\" != \"$MEZ_APPLY_EXPECTED_RESOLVED\" ]; then printf '%s\\n' \"apply_patch: resolved path changed before apply: $MEZ_APPLY_PATH\" >&2; return 1; fi".to_string(),
         "}".to_string(),
+        "mez_apply_patch_sha256() { if [ \"$MEZ_APPLY_SHA256\" = sha256sum ]; then sha256sum -- \"$1\"; else shasum -a 256 -- \"$1\"; fi | sed 's/[[:space:]].*$//'; }".to_string(),
+        "mez_apply_patch_verify_regular() { MEZ_APPLY_VERIFY_PATH=$1; MEZ_APPLY_VERIFY_COUNT=$2; MEZ_APPLY_VERIFY_DIGEST=$3; MEZ_APPLY_VERIFY_LABEL=$4; if [ ! -f \"$MEZ_APPLY_RESOLVED\" ]; then printf '%s\\n' \"apply_patch: refusing to patch non-regular file: $MEZ_APPLY_VERIFY_LABEL\" >&2; return 1; fi; MEZ_APPLY_ACTUAL_COUNT=$(wc -c < \"$MEZ_APPLY_RESOLVED\" | tr -d '[:space:]') || return 1; MEZ_APPLY_ACTUAL_DIGEST=$(mez_apply_patch_sha256 \"$MEZ_APPLY_RESOLVED\") || return 1; if [ \"$MEZ_APPLY_ACTUAL_COUNT\" != \"$MEZ_APPLY_VERIFY_COUNT\" ] || [ \"$MEZ_APPLY_ACTUAL_DIGEST\" != \"$MEZ_APPLY_VERIFY_DIGEST\" ]; then printf '%s\\n' \"apply_patch: file changed before apply: $MEZ_APPLY_VERIFY_LABEL\" >&2; return 1; fi; }".to_string(),
         String::new(),
     ]);
     lines.join("\n")
@@ -220,8 +224,8 @@ pub(super) fn apply_patch_write_change_command(
     index: usize,
     change: &ApplyPatchFileChange,
 ) -> String {
-    let expected_var = format!("MEZ_APPLY_EXPECTED_{index}");
     let new_var = format!("MEZ_APPLY_NEW_{index}");
+    let encoded_var = format!("MEZ_APPLY_ENCODED_{index}");
     let original_is_regular = matches!(&change.original, ApplyPatchOriginalState::Regular(_));
     let function_name = format!("mez_apply_patch_change_{index}");
     let error_var = format!("MEZ_APPLY_ERROR_{index}");
@@ -236,22 +240,12 @@ pub(super) fn apply_patch_write_change_command(
     ];
     match &change.original {
         ApplyPatchOriginalState::Regular(bytes) => {
-            lines.push(format!("{expected_var}=$(mktemp) || return 1"));
-            lines.extend(write_content_lines(
-                &String::from_utf8_lossy(bytes),
-                &format!("\"${expected_var}\""),
-                false,
-            ));
             lines.push(format!(
-                "if [ ! -f \"$MEZ_APPLY_RESOLVED\" ]; then printf '%s\\n' {} >&2; rm -f -- \"${expected_var}\"; return 1; fi",
-                shell_quote(&format!(
-                    "apply_patch: refusing to patch non-regular file: {}",
-                    change.path
-                ))
-            ));
-            lines.push(format!(
-                "if ! cmp -s -- \"${expected_var}\" \"$MEZ_APPLY_RESOLVED\"; then printf '%s\\n' {} >&2; rm -f -- \"${expected_var}\"; return 1; fi",
-                shell_quote(&format!("apply_patch: file changed before apply: {}", change.path))
+                "mez_apply_patch_verify_regular {} {} {} {} || return 1",
+                shell_quote(&change.resolved_path),
+                bytes.len(),
+                shell_quote(&content_sha256(bytes)),
+                shell_quote(&change.path),
             ));
         }
         ApplyPatchOriginalState::Missing => {
@@ -264,11 +258,31 @@ pub(super) fn apply_patch_write_change_command(
         }
     }
     if let Some(bytes) = &change.final_bytes {
-        lines.push(format!("{new_var}=$(mktemp) || return 1"));
-        lines.extend(write_content_lines(
-            &String::from_utf8_lossy(bytes),
-            &format!("\"${new_var}\""),
-            false,
+        lines.push("mkdir -p -- \"$(dirname -- \"$MEZ_APPLY_RESOLVED\")\" || return 1".to_string());
+        lines.push(format!(
+            "{new_var}=$(mktemp \"$(dirname -- \"$MEZ_APPLY_RESOLVED\")/.mez-apply-patch.XXXXXX\") || return 1"
+        ));
+        lines.push(format!(
+            "{encoded_var}=$(mktemp) || {{ rm -f -- \"${new_var}\"; return 1; }}"
+        ));
+        lines.push(format!(
+            "sed -n {} \"${{MEZ_APPLY_SIDECAR_FILE:-$0}}\" > \"${encoded_var}\" || {{ rm -f -- \"${new_var}\" \"${encoded_var}\"; return 1; }}",
+            shell_quote(&format!(
+                "s/^# __MEZ_INPUT_SIDECAR_V1__ {index} //p"
+            ))
+        ));
+        lines.push(format!(
+            "if [ ! -s \"${encoded_var}\" ]; then printf '%s\\n' {} >&2; rm -f -- \"${new_var}\" \"${encoded_var}\"; return 1; fi",
+            shell_quote(&format!("apply_patch: missing final content sidecar: {}", change.path)),
+        ));
+        lines.push(format!(
+            "if base64 -d < \"${encoded_var}\" > \"${new_var}\" 2>/dev/null; then MEZ_CONTENT_STATUS=0; else base64 -D < \"${encoded_var}\" > \"${new_var}\"; MEZ_CONTENT_STATUS=$?; fi; rm -f -- \"${encoded_var}\"; if [ \"$MEZ_CONTENT_STATUS\" != 0 ]; then rm -f -- \"${new_var}\"; return \"$MEZ_CONTENT_STATUS\"; fi"
+        ));
+        lines.push(format!(
+            "MEZ_APPLY_FINAL_COUNT=$(wc -c < \"${new_var}\" | tr -d '[:space:]') || {{ rm -f -- \"${new_var}\"; return 1; }}; MEZ_APPLY_FINAL_DIGEST=$(mez_apply_patch_sha256 \"${new_var}\") || {{ rm -f -- \"${new_var}\"; return 1; }}; if [ \"$MEZ_APPLY_FINAL_COUNT\" != {} ] || [ \"$MEZ_APPLY_FINAL_DIGEST\" != {} ]; then printf '%s\\n' {} >&2; rm -f -- \"${new_var}\"; return 1; fi",
+            bytes.len(),
+            shell_quote(&content_sha256(bytes)),
+            shell_quote(&format!("apply_patch: final content digest mismatch: {}", change.path)),
         ));
         let old_label = if original_is_regular {
             format!("a/{}", change.path)
@@ -276,7 +290,7 @@ pub(super) fn apply_patch_write_change_command(
             "/dev/null".to_string()
         };
         let old_path = if original_is_regular {
-            format!("\"${expected_var}\"")
+            "\"$MEZ_APPLY_RESOLVED\"".to_string()
         } else {
             shell_quote("/dev/null")
         };
@@ -292,16 +306,35 @@ pub(super) fn apply_patch_write_change_command(
             shell_quote(&change.path),
             shell_quote(&change.resolved_path)
         ));
-        lines.push("mkdir -p -- \"$(dirname -- \"$MEZ_APPLY_RESOLVED\")\" || return 1".to_string());
+        match &change.original {
+            ApplyPatchOriginalState::Regular(bytes) => lines.push(format!(
+                "mez_apply_patch_verify_regular {} {} {} {} || {{ rm -f -- \"${new_var}\"; return 1; }}",
+                shell_quote(&change.resolved_path),
+                bytes.len(),
+                shell_quote(&content_sha256(bytes)),
+                shell_quote(&change.path),
+            )),
+            ApplyPatchOriginalState::Missing => lines.push(format!(
+                "if [ -e {} ] || [ -L {} ] || [ -e \"$MEZ_APPLY_RESOLVED\" ] || [ -L \"$MEZ_APPLY_RESOLVED\" ]; then printf '%s\\n' {} >&2; rm -f -- \"${new_var}\"; return 1; fi",
+                shell_quote(&change.path),
+                shell_quote(&change.path),
+                shell_quote(&format!("apply_patch: refusing to add existing path: {}", change.path)),
+            )),
+        }
         lines.push(format!(
-            "mv -f -- \"${new_var}\" \"$MEZ_APPLY_RESOLVED\" || return 1"
+            "mez_apply_patch_resolve_checked {} {} || {{ rm -f -- \"${new_var}\"; return 1; }}",
+            shell_quote(&change.path),
+            shell_quote(&change.resolved_path)
+        ));
+        lines.push(format!(
+            "mv -f -- \"${new_var}\" \"$MEZ_APPLY_RESOLVED\" || {{ rm -f -- \"${new_var}\"; return 1; }}"
         ));
     } else {
         lines.extend(unified_diff_lines(
             "apply patch",
             &format!("a/{}", change.path),
             "/dev/null",
-            &format!("\"${expected_var}\""),
+            "\"$MEZ_APPLY_RESOLVED\"",
             &shell_quote("/dev/null"),
         ));
         lines.push(format!(
@@ -309,10 +342,21 @@ pub(super) fn apply_patch_write_change_command(
             shell_quote(&change.path),
             shell_quote(&change.resolved_path)
         ));
+        if let ApplyPatchOriginalState::Regular(bytes) = &change.original {
+            lines.push(format!(
+                "mez_apply_patch_verify_regular {} {} {} {} || return 1",
+                shell_quote(&change.resolved_path),
+                bytes.len(),
+                shell_quote(&content_sha256(bytes)),
+                shell_quote(&change.path),
+            ));
+        }
+        lines.push(format!(
+            "mez_apply_patch_resolve_checked {} {} || return 1",
+            shell_quote(&change.path),
+            shell_quote(&change.resolved_path)
+        ));
         lines.push("rm -f -- \"$MEZ_APPLY_RESOLVED\" || return 1".to_string());
-    }
-    if original_is_regular {
-        lines.push(format!("rm -f -- \"${expected_var}\""));
     }
     lines.push("}".to_string());
     lines.push(format!("{error_var}=$(mktemp) || exit 1"));

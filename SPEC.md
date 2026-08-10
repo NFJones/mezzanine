@@ -5023,6 +5023,19 @@ for built-in buffering, truncation, diff formatting, or result shaping.
 Mezzanine MUST perform those higher-level transformations natively after the
 bounded pane output returns.
 
+Verified `apply_patch` write phases MUST keep final file bytes out of generated
+shell source. Final bytes MUST cross the pane PTY exactly once as bounded,
+versioned Base64 sidecar records that the transaction receiver appends as inert
+data to its materialized command file. Generated write source MUST retain only
+compact path, byte-count, digest, and per-file outcome metadata. For an existing
+target, the write phase MUST verify the read-phase byte count and SHA-256 digest
+inside the authorized pane environment before mutation. It MUST decode final
+bytes into a same-directory temporary file, verify their declared byte count
+and SHA-256 digest, re-resolve and re-authorize the target after the final
+precondition check, and use an atomic rename for replacement. Missing,
+malformed, truncated, or digest-mismatched sidecar data MUST fail closed and
+temporary files MUST be removed on handled failure paths.
+
 `web_search` and `fetch_url` are runtime-network semantic actions. Mezzanine
 MUST service them directly through its runtime HTTP executor, MUST NOT dispatch
 a pane shell command for them, and MUST still evaluate and audit them as

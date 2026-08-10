@@ -1140,6 +1140,7 @@ impl RuntimeSessionService {
                 action,
                 super::shell_state::ShellActionDispatch {
                     command,
+                    input_sidecar: plan.input_sidecar.as_deref(),
                     stateful: plan.stateful,
                     interactive: plan.interactive,
                     timeout_ms: plan.timeout_ms,

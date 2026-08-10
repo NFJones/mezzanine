@@ -632,6 +632,7 @@ mod tests {
             kind: LocalActionKind::ShellCommand,
             summary: "Inspect files".to_string(),
             command: "rg --files".to_string(),
+            input_sidecar: None,
             policy_command: "rg --files".to_string(),
             interactive: false,
             stateful: false,
