@@ -124,10 +124,11 @@ pub fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use base64::Engine as _;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -280,6 +281,179 @@ mod tests {
         let mut command = Command::new("fish");
         command.args(["--no-config", "--no-execute"]);
         run_optional_command_stdin_bounded(&mut command, wrapper, "Fish parser")
+    }
+
+    /// Resolves a real Fish executable for bounded execution tests.
+    fn fish_path_for_tests() -> Option<PathBuf> {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+            .map(|directory| directory.join("fish"))
+            .chain(
+                [
+                    "/usr/bin/fish",
+                    "/usr/local/bin/fish",
+                    "/opt/homebrew/bin/fish",
+                ]
+                .into_iter()
+                .map(PathBuf::from),
+            )
+            .find(|candidate| candidate.is_file())
+    }
+
+    /// Waits until incremental child output satisfies one protocol predicate.
+    fn wait_for_observed_shell_output(
+        observed: &(Mutex<Vec<u8>>, Condvar),
+        deadline: Instant,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) -> bool {
+        let (bytes, changed) = observed;
+        let mut bytes = bytes
+            .lock()
+            .expect("the shell output observation lock should remain available");
+        loop {
+            if predicate(&bytes) {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let (next, timeout) = changed
+                .wait_timeout(bytes, deadline.saturating_duration_since(now))
+                .expect("the shell output observation wait should remain available");
+            bytes = next;
+            if timeout.timed_out() && !predicate(&bytes) {
+                return false;
+            }
+        }
+    }
+
+    /// Executes a complete Fish transaction in marker-paced protocol order.
+    ///
+    /// The complete wrapper and observation suffix are supplied as the Fish
+    /// `-c` program because pipe-fed Fish defers parsing stdin source until
+    /// end-of-file. Stdin therefore remains exclusively available for inert
+    /// payload records. The runner waits for the transaction start marker and,
+    /// when negotiated, for each record-separator acknowledgement before
+    /// sending the next record. Stdout and stderr are drained concurrently and
+    /// the whole process has one five-second deadline.
+    fn run_fish_transaction_bounded(
+        command: &mut Command,
+        input: &ShellTransactionInput,
+        suffix: &str,
+        label: &str,
+    ) -> Output {
+        let source = format!("{}\n{suffix}", input.wrapper);
+        let mut child = command
+            .args(["-c", &source])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|error| panic!("the {label} process should spawn: {error}"));
+        let stdout = child
+            .stdout
+            .take()
+            .unwrap_or_else(|| panic!("the {label} stdout should be piped"));
+        let stderr = child
+            .stderr
+            .take()
+            .unwrap_or_else(|| panic!("the {label} stderr should be piped"));
+        let observed = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+        let reader_observed = Arc::clone(&observed);
+        let stdout_reader = thread::spawn(move || {
+            let mut stdout = stdout;
+            let mut chunk = [0_u8; 1024];
+            loop {
+                let count = stdout
+                    .read(&mut chunk)
+                    .expect("Fish transaction stdout should remain readable");
+                if count == 0 {
+                    break;
+                }
+                let (bytes, changed) = &*reader_observed;
+                bytes
+                    .lock()
+                    .expect("the Fish stdout lock should remain available")
+                    .extend_from_slice(&chunk[..count]);
+                changed.notify_all();
+            }
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut stderr = stderr;
+            let mut bytes = Vec::new();
+            stderr
+                .read_to_end(&mut bytes)
+                .expect("Fish transaction stderr should remain readable");
+            bytes
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let start_marker = b"\x1b]133;C;";
+        if !wait_for_observed_shell_output(&observed, deadline, |bytes| {
+            bytes
+                .windows(start_marker.len())
+                .any(|window| window == start_marker)
+        }) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the {label} process did not emit its start marker before the deadline");
+        }
+        for (index, record) in input.payload.split_inclusive('\n').enumerate() {
+            let stdin = child
+                .stdin
+                .as_mut()
+                .unwrap_or_else(|| panic!("the {label} stdin should remain piped"));
+            stdin
+                .write_all(record.as_bytes())
+                .unwrap_or_else(|error| panic!("the {label} payload should be written: {error}"));
+            stdin
+                .flush()
+                .unwrap_or_else(|error| panic!("the {label} payload should be flushed: {error}"));
+            if input.payload_receiver_acknowledgements
+                && !wait_for_observed_shell_output(&observed, deadline, |bytes| {
+                    bytes.iter().filter(|byte| **byte == 0x1e).count() > index
+                })
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "the {label} process did not acknowledge payload record {} before the deadline",
+                    index + 1
+                );
+            }
+        }
+        drop(child.stdin.take());
+
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap_or_else(|error| {
+                panic!("the {label} process should remain observable: {error}")
+            }) {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the {label} process exceeded its five-second deadline");
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        stdout_reader
+            .join()
+            .expect("the Fish stdout reader should finish");
+        let stderr = stderr_reader
+            .join()
+            .expect("the Fish stderr reader should finish");
+        let stdout = observed
+            .0
+            .lock()
+            .expect("the Fish stdout lock should remain available")
+            .clone();
+        Output {
+            status,
+            stdout,
+            stderr,
+        }
     }
 
     /// Decodes the generated POSIX wrapper source from its bounded interactive

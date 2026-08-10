@@ -440,6 +440,113 @@ fn non_stateful_fish_wrappers_parse_as_complete_programs() {
 }
 
 #[test]
+/// Executes complete non-stateful Fish wrappers through the streamed command
+/// payload protocol for both success and failure commands.
+///
+/// The command uses Fish-only syntax so this also proves the materialized file
+/// is dispatched through the declared Fish interpreter. Marker pacing verifies
+/// every payload record acknowledgement, status propagation, parent-state
+/// restoration, and temporary-file cleanup under one bounded real process.
+fn non_stateful_fish_wrappers_execute_complete_marker_paced_transactions() {
+    let Some(fish_path) = fish_path_for_tests() else {
+        eprintln!("skipping real-Fish transaction assertion because fish is unavailable");
+        return;
+    };
+    for (command_source, expected_status, expected_output) in [
+        (
+            "set -l dialect fish-native; printf '__MEZ_FISH_COMMAND__%s\\n' $dialect",
+            0,
+            "__MEZ_FISH_COMMAND__fish-native",
+        ),
+        (
+            "printf '__MEZ_FISH_COMMAND__failure\\n'; false",
+            1,
+            "__MEZ_FISH_COMMAND__failure",
+        ),
+    ] {
+        let temp = test_temp_dir(&format!("fish-complete-transaction-{expected_status}"));
+        let mut input =
+            ShellTransaction::new(marker(), "t1", "a1", "p1", &fish_path, command_source)
+                .unwrap()
+                .with_payload_receiver_acknowledgements(true)
+                .render_for_classification_input(ShellClassification::Fish);
+        input.wrapper.insert_str(0, "set -e fish_private_mode\n");
+        let suffix = "if set -q fish_private_mode; printf '__MEZ_PRIVATE_STATE__set\\n'; else; printf '__MEZ_PRIVATE_STATE__unset\\n'; end\n";
+        let mut fish = Command::new(&fish_path);
+        fish.arg("--no-config").env("TMPDIR", &temp);
+        let output =
+            run_fish_transaction_bounded(&mut fish, &input, suffix, "complete Fish transaction");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let start = stdout
+            .find("\u{1b}]133;C;")
+            .expect("the Fish start marker should be emitted");
+        let command = stdout
+            .find(expected_output)
+            .expect("the Fish command output should be emitted");
+        let completion = stdout
+            .find(&format!("\u{1b}]133;D;{expected_status};"))
+            .expect("the Fish completion marker should carry command status");
+
+        assert!(output.status.success(), "{output:?}");
+        assert!(start < command && command < completion, "{stdout:?}");
+        assert!(stdout.contains("__MEZ_PRIVATE_STATE__unset"), "{stdout:?}");
+        assert_eq!(
+            output.stdout.iter().filter(|byte| **byte == 0x1e).count(),
+            input.payload.lines().count(),
+            "{stdout:?}"
+        );
+        assert!(
+            std::fs::read_dir(&temp)
+                .expect("the Fish transaction temp directory should remain readable")
+                .next()
+                .is_none(),
+            "transaction temporary files should be removed: {temp:?}"
+        );
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+/// Verifies a complete Fish transaction invokes the exact resolved executable
+/// even when its basename no longer identifies Fish.
+///
+/// The outer real-Fish runner receives the generated wrapper while the isolated
+/// command file is executed through a renamed symlink, covering the executable
+/// half of renamed-Fish identity and dialect dispatch.
+fn non_stateful_fish_wrapper_executes_through_renamed_fish_path() {
+    use std::os::unix::fs::symlink;
+
+    let Some(fish_path) = fish_path_for_tests() else {
+        eprintln!("skipping renamed-Fish transaction assertion because fish is unavailable");
+        return;
+    };
+    let temp = test_temp_dir("renamed-fish-transaction");
+    let renamed_fish = temp.join("custom-shell");
+    symlink(&fish_path, &renamed_fish).expect("the renamed Fish symlink should be created");
+    let input = ShellTransaction::new(
+        marker(),
+        "t1",
+        "a1",
+        "p1",
+        &renamed_fish,
+        "printf '__MEZ_RENAMED_FISH__ok\\n'",
+    )
+    .unwrap()
+    .with_payload_receiver_acknowledgements(true)
+    .render_for_classification_input(ShellClassification::Fish);
+    let mut fish = Command::new(&fish_path);
+    fish.arg("--no-config");
+    let output = run_fish_transaction_bounded(&mut fish, &input, "", "renamed Fish transaction");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout.contains("__MEZ_RENAMED_FISH__ok"), "{stdout:?}");
+    assert!(stdout.contains("\u{1b}]133;D;0;"), "{stdout:?}");
+    std::fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
 /// Verifies Fish wrappers save private-mode state in a surviving scope, use
 /// noninteractive exact history deletion, and restore shell state before OSC D.
 ///
