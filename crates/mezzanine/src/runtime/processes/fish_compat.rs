@@ -8,7 +8,7 @@
 //! handlers, and the entire integration disappears with the owning pane
 //! process generation.
 
-use mez_agent::MarkerToken;
+use mez_agent::{MarkerToken, shell::fish_wrapper_receiver_init_command};
 use mez_mux::process::PaneProcessLaunch;
 
 /// Pane-process-scoped Fish passive integration state.
@@ -51,7 +51,8 @@ impl ManagedFishCompatibility {
 /// Renders stable Fish handlers for passive OSC 133 prompt and command boundaries.
 fn managed_fish_init_command(owner: &MarkerToken) -> String {
     format!(
-        r#"if not functions --query __mez_fish_user_prompt
+        r#"{}
+if not functions --query __mez_fish_user_prompt
     if functions --query fish_prompt
         functions --copy fish_prompt __mez_fish_user_prompt
     else
@@ -116,6 +117,7 @@ function __mez_fish_passive_postexec --on-event fish_postexec
     builtin printf '\033]133;D;%s\033\\' "$command_status"
 end
 "#,
+        fish_wrapper_receiver_init_command(),
         mez_agent::fish_quote(owner.as_str())
     )
 }
@@ -125,8 +127,7 @@ mod tests {
     use super::*;
     use mez_agent::shell::{
         PanePathResolutionRequest, ShellClassification, ShellTransaction,
-        fish_wrapper_receiver_init_command, pane_path_resolution_command,
-        parse_pane_path_resolution_output,
+        pane_path_resolution_command, parse_pane_path_resolution_output,
     };
     use mez_mux::layout::Size;
     use mez_mux::process::{
@@ -198,17 +199,6 @@ mod tests {
         compatibility: &ManagedFishCompatibility,
         home: &Path,
     ) -> PaneProcess {
-        spawn_managed_fish_with_extra_init(fish, compatibility, home, None)
-    }
-
-    /// Spawns managed Fish with one additional process-local initialization
-    /// fragment used by agent-shell transport integration tests.
-    fn spawn_managed_fish_with_extra_init(
-        fish: &Path,
-        compatibility: &ManagedFishCompatibility,
-        home: &Path,
-        extra_init: Option<&str>,
-    ) -> PaneProcess {
         let config_home = home.join("config");
         let fish_config = config_home.join("fish");
         std::fs::create_dir_all(&fish_config)
@@ -218,12 +208,8 @@ mod tests {
             "function fish_prompt\n    printf '__MEZ_USER_PROMPT__status=%s>' $status\nend\nfunction fish_right_prompt\n    printf '__MEZ_USER_RIGHT_PROMPT__'\nend\n",
         )
         .expect("the isolated Fish prompt configuration should be written");
-        let init_command = extra_init.map_or_else(
-            || compatibility.init_command().to_string(),
-            |extra| format!("{}\n{extra}", compatibility.init_command()),
-        );
         let launch = PaneProcessLaunch::new(fish.to_path_buf())
-            .with_interactive_arguments(["--init-command", init_command.as_str(), "-i"])
+            .with_interactive_arguments(["--init-command", compatibility.init_command(), "-i"])
             .with_environment_variable("HOME", home.as_os_str())
             .with_environment_variable("XDG_CONFIG_HOME", config_home.as_os_str());
         spawn_pane_process(
@@ -250,6 +236,11 @@ mod tests {
         assert_eq!(plan.args[1], compatibility.init_command());
         assert_eq!(plan.args[2], "-i");
         assert!(!plan.args.iter().any(|argument| argument == "--no-config"));
+        assert!(
+            compatibility
+                .init_command()
+                .contains("function __mez_agent_wrapper_receive")
+        );
         assert!(compatibility.init_command().contains("functions --erase"));
         assert!(
             compatibility
@@ -454,12 +445,7 @@ mod tests {
         let compatibility = ManagedFishCompatibility::new(
             MarkerToken::new("33333333333333333333333333333333").unwrap(),
         );
-        let mut process = spawn_managed_fish_with_extra_init(
-            &fish,
-            &compatibility,
-            &root,
-            Some(fish_wrapper_receiver_init_command()),
-        );
+        let mut process = spawn_managed_fish(&fish, &compatibility, &root);
         std::thread::sleep(Duration::from_millis(100));
         let _ = process.read_available_output(64 * 1024);
 
