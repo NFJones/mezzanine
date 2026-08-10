@@ -129,6 +129,168 @@ fn zsh_wrapper_uses_native_full_transport_history_isolation() {
 }
 
 #[test]
+/// Verifies Bash disables history before any physical wrapper transport record
+/// and passes the saved state into decoded transaction cleanup.
+///
+/// Disabling history only inside the decoded source is too late because Bash
+/// accepts each `MEZ_WRAPPER_*` line before `eval` starts that source.
+fn bash_wrapper_isolates_history_before_outer_transport() {
+    let transaction =
+        ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/bash"), "pwd").unwrap();
+
+    let transport = transaction.render_for_classification(ShellClassification::Bash);
+    let source = decoded_posix_wrapper_source(&transport);
+    let first_line = transport.lines().next().unwrap_or_default();
+
+    assert!(
+        first_line.contains("MEZ_BASH_HISTORY_OUTER_ACTIVE=1"),
+        "{first_line}"
+    );
+    assert!(first_line.contains("set +o history"), "{first_line}");
+    assert!(
+        first_line.contains("history -d $((HISTCMD-1))"),
+        "{first_line}"
+    );
+    assert!(
+        transport.find("MEZ_BASH_HISTORY_OUTER_ACTIVE=1").unwrap()
+            < transport.find("MEZ_WRAPPER_STTY").unwrap(),
+        "{transport}"
+    );
+    assert!(source.contains("MEZ_BASH_HISTORY_OUTER_ACTIVE"), "{source}");
+    assert!(
+        source.contains("MEZ_BASH_HISTORY_OUTER_RESTORE"),
+        "{source}"
+    );
+}
+
+/// Runs one complete transaction through interactive Bash and returns both
+/// captured process output and the history file written by the shell.
+fn run_interactive_bash_history_transaction(
+    input: &ShellTransactionInput,
+    history_enabled: bool,
+    history_file: &Path,
+) -> (Output, String) {
+    std::fs::write(history_file, "USER_HISTORY_SEED\n")
+        .expect("the isolated Bash history seed should be written");
+    let mut child = Command::new("/bin/bash")
+        .args(["--noprofile", "--norc", "-i"])
+        .env("HOME", history_file.parent().unwrap())
+        .env("HISTFILE", history_file)
+        .env("HISTSIZE", "1000")
+        .env("HISTFILESIZE", "1000")
+        .env("PROMPT_COMMAND", "")
+        .env("PS1", "")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("interactive Bash should spawn");
+    let stdin = child.stdin.as_mut().expect("Bash stdin should be piped");
+    let setup = if history_enabled {
+        "history -c; history -r\n"
+    } else {
+        "history -c; history -r; set +o history\n"
+    };
+    stdin
+        .write_all(setup.as_bytes())
+        .expect("Bash history setup should be written");
+    stdin
+        .write_all(input.wrapper.as_bytes())
+        .expect("the transaction wrapper should be written");
+    thread::sleep(Duration::from_millis(50));
+    stdin
+        .write_all(input.payload.as_bytes())
+        .expect("the transaction payload should be written");
+    stdin
+        .write_all(
+            b"printf '__MEZ_HISTORY_BEGIN__\\n'; history; printf '__MEZ_HISTORY_END__\\n'; case \"$(set -o | command awk '$1==\"history\"{print $2; exit}')\" in on) printf '__MEZ_HISTORY_STATE__on\\n';; *) printf '__MEZ_HISTORY_STATE__off\\n';; esac; history -w; exit\n",
+        )
+        .expect("the Bash history observation should be written");
+    drop(child.stdin.take());
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child
+            .try_wait()
+            .expect("interactive Bash should remain observable")
+            .is_some()
+        {
+            let output = child
+                .wait_with_output()
+                .expect("interactive Bash output should be collected");
+            let history = std::fs::read_to_string(history_file)
+                .expect("interactive Bash should write its isolated history file");
+            return (output, history);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("interactive Bash history transaction exceeded its five-second deadline");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+/// Verifies complete wrapper transport leaves no framing or payload records in
+/// Bash history and restores the exact initially enabled or disabled state.
+///
+/// The history file and the in-memory `history` output are both inspected so a
+/// fix cannot hide contamination merely by redirecting persistence.
+fn bash_wrapper_transport_does_not_contaminate_interactive_history() {
+    if !Path::new("/bin/bash").exists() {
+        return;
+    }
+    for history_enabled in [true, false] {
+        let temp = test_temp_dir(if history_enabled {
+            "bash-history-enabled"
+        } else {
+            "bash-history-disabled"
+        });
+        let history_file = temp.join("history");
+        let transaction = ShellTransaction::new(
+            marker(),
+            "t1",
+            "a1",
+            "p1",
+            Path::new("/bin/bash"),
+            "printf '%s\\n' AGENT_PAYLOAD_SENTINEL",
+        )
+        .unwrap();
+        let input = transaction.render_for_classification_input(ShellClassification::Bash);
+        let (output, persisted_history) =
+            run_interactive_bash_history_transaction(&input, history_enabled, &history_file);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let expected_state = if history_enabled { "on" } else { "off" };
+
+        assert!(
+            output.status.success(),
+            "enabled={history_enabled} status={:?} stdout={stdout:?} stderr={:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.contains("AGENT_PAYLOAD_SENTINEL"), "{stdout:?}");
+        assert!(stdout.contains("USER_HISTORY_SEED"), "{stdout:?}");
+        assert!(
+            stdout.contains(&format!("__MEZ_HISTORY_STATE__{expected_state}")),
+            "{stdout:?}"
+        );
+        let in_memory_history = stdout
+            .split_once("__MEZ_HISTORY_BEGIN__\n")
+            .and_then(|(_, history)| history.split_once("__MEZ_HISTORY_END__\n"))
+            .map(|(history, _)| history)
+            .expect("interactive Bash should delimit its in-memory history output");
+        for history in [in_memory_history, persisted_history.as_str()] {
+            assert!(history.contains("USER_HISTORY_SEED"), "{history:?}");
+            assert!(!history.contains("MEZ_WRAPPER_"), "{history:?}");
+            assert!(!history.contains("MEZ_BASH_HISTORY_OUTER"), "{history:?}");
+            assert!(!history.contains("AGENT_PAYLOAD_SENTINEL"), "{history:?}");
+        }
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+}
+
+#[test]
 /// Verifies Bash shell transactions ignore inherited `BASH_ENV` startup hooks.
 ///
 /// `BASH_ENV` is a common non-interactive startup vector. Agent actions should

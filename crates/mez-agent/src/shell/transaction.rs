@@ -1574,6 +1574,7 @@ pub(super) fn posix_shell_wrapper_transport(
         .and_then(|chunk| std::str::from_utf8(chunk).ok())
         .unwrap_or_default();
     let mut transport = zsh_history_transport_start(classification, zsh_history_token);
+    transport.push_str(bash_history_transport_start(classification));
     transport.push_str(&format!(
         "MEZ_WRAPPER_STTY=$(stty -g 2>/dev/null) || MEZ_WRAPPER_STTY=; {ACK}\n\
 MEZ_WRAPPER_PS1=${{PS1-}}; PS1=; stty -echo 2>/dev/null || :; {ACK}\n\
@@ -1596,9 +1597,21 @@ MEZ_WRAPPER_SOURCE=$(printf '%s' \"$MEZ_WRAPPER_B64\" | base64 \"$MEZ_WRAPPER_BA
 unset MEZ_WRAPPER_B64 MEZ_WRAPPER_STTY MEZ_WRAPPER_BASE64_FLAG; {ACK}\n\
 PS1=$MEZ_WRAPPER_PS1; unset MEZ_WRAPPER_PS1; {ACK}\n\
 eval \"$MEZ_WRAPPER_SOURCE\"; {}\n",
-        zsh_history_transport_fallback(classification, zsh_history_token),
+        posix_shell_history_transport_fallback(classification, zsh_history_token),
     ));
     transport
+}
+
+/// Disables Bash history before the first physical wrapper framing record.
+///
+/// Interactive Bash records each complete input line before executing it. The
+/// initiating record therefore removes only itself, remembers whether history
+/// was enabled, and leaves restoration to decoded transaction cleanup.
+fn bash_history_transport_start(classification: ShellClassification) -> &'static str {
+    if classification != ShellClassification::Bash {
+        return "";
+    }
+    "MEZ_BASH_HISTORY_OUTER_ACTIVE=1; MEZ_BASH_HISTORY_OUTER_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{print $2; exit}')\" in on) MEZ_BASH_HISTORY_OUTER_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD-1)) 2>/dev/null || :;; esac; printf '\\036'\n"
 }
 
 /// Starts a zsh-private history frame before any generated transport record.
@@ -1619,16 +1632,19 @@ fn zsh_history_transport_start(
     format!("{}\n", zsh_history_control_record(token))
 }
 
-/// Pops a zsh history frame when malformed evaluated source skipped cleanup.
-fn zsh_history_transport_fallback(
+/// Restores outer history isolation when evaluated source skipped cleanup.
+fn posix_shell_history_transport_fallback(
     classification: ShellClassification,
     token: Option<&MarkerToken>,
 ) -> String {
+    if classification == ShellClassification::Bash {
+        return "if [ \"${MEZ_BASH_HISTORY_OUTER_ACTIVE-}\" = 1 ]; then MEZ_BASH_HISTORY_OUTER_RESTORE_NOW=${MEZ_BASH_HISTORY_OUTER_RESTORE:-0}; unset MEZ_BASH_HISTORY_OUTER_ACTIVE MEZ_BASH_HISTORY_OUTER_RESTORE; if [ \"$MEZ_BASH_HISTORY_OUTER_RESTORE_NOW\" = 1 ]; then set -o history 2>/dev/null || :; fi; unset MEZ_BASH_HISTORY_OUTER_RESTORE_NOW; fi; unset MEZ_WRAPPER_SOURCE".to_string();
+    }
     if classification != ShellClassification::Zsh {
-        return String::new();
+        return "unset MEZ_WRAPPER_SOURCE".to_string();
     }
     let Some(token) = token else {
-        return String::new();
+        return "unset MEZ_WRAPPER_SOURCE".to_string();
     };
     format!(
         "if [ \"${{MEZ_ZSH_HISTORY_ACTIVE-}}\" = {} ]; then unset MEZ_ZSH_HISTORY_ACTIVE; fc -P; fi; unset MEZ_WRAPPER_SOURCE",
@@ -1722,6 +1738,7 @@ fn fish_agent_subshell_env_word_list() -> Vec<String> {
 /// that current history entry before later wrapper lines are read.
 pub fn posix_shell_history_suppression_start() -> &'static str {
     "MEZ_SHELL_STTY_STATE=$(stty -g 2>/dev/null) || MEZ_SHELL_STTY_STATE=; if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT=0; case $- in *e*) MEZ_RESTORE_ERREXIT=1; set +e;; esac; MEZ_RESTORE_NOUNSET=0; case $- in *u*) MEZ_RESTORE_NOUNSET=1; set +u;; esac; MEZ_HISTORY_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{print $2; exit}')\" in on) MEZ_HISTORY_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD-1)) 2>/dev/null || :;; esac\n\
+if [ \"${MEZ_BASH_HISTORY_OUTER_ACTIVE-}\" = 1 ]; then MEZ_HISTORY_RESTORE=${MEZ_BASH_HISTORY_OUTER_RESTORE:-0}; fi\n\
 MEZ_HISTORY_HISTFILE_WAS_SET=0\n\
 if [ \"${HISTFILE+x}\" = x ]; then MEZ_HISTORY_HISTFILE_WAS_SET=1; MEZ_HISTORY_HISTFILE_SAVED=$HISTFILE; fi\n\
 HISTFILE=/dev/null\n"
@@ -1739,6 +1756,7 @@ MEZ_RESTORE_HISTORY_NOW=$MEZ_HISTORY_RESTORE\n\
 MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
 MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
 unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET\n\
+unset MEZ_BASH_HISTORY_OUTER_ACTIVE MEZ_BASH_HISTORY_OUTER_RESTORE\n\
 if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\n\
 unset MEZ_SHELL_STTY_STATE\n\
 if [ \"${MEZ_RESTORE_HISTORY_NOW:-0}\" = 1 ]; then set -o history 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT_APPLY=${MEZ_RESTORE_ERREXIT_NOW:-0}; MEZ_RESTORE_NOUNSET_APPLY=${MEZ_RESTORE_NOUNSET_NOW:-0}; unset MEZ_RESTORE_HISTORY_NOW MEZ_RESTORE_ERREXIT_NOW MEZ_RESTORE_NOUNSET_NOW; case \"$MEZ_RESTORE_ERREXIT_APPLY\" in 1) set -e;; esac; case \"$MEZ_RESTORE_NOUNSET_APPLY\" in 1) set -u;; esac; unset MEZ_RESTORE_ERREXIT_APPLY MEZ_RESTORE_NOUNSET_APPLY; :\n"
@@ -1766,6 +1784,7 @@ fn posix_shell_history_marker_finish_prefix() -> &'static str {
 MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
 MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
 unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET\n\
+unset MEZ_BASH_HISTORY_OUTER_ACTIVE MEZ_BASH_HISTORY_OUTER_RESTORE\n\
 if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\n\
 unset MEZ_SHELL_STTY_STATE\n\
 if [ \"$MEZ_RESTORE_HISTORY_NOW\" = 1 ]; then set -o history 2>/dev/null || :; fi; "
