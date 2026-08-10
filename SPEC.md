@@ -3943,7 +3943,14 @@ For `zsh`, Mezzanine SHOULD use `preexec` and `precmd` hooks to emit command
 start and command-finished markers.
 
 For `fish`, Mezzanine SHOULD use fish preexec and postexec event hooks when
-available.
+available. Product-managed Fish hooks MUST be process-local to an ordinary pane
+shell launch, MUST replace prior handlers with the same managed names instead
+of stacking duplicates, and MUST be discarded when that pane process
+generation ends. They MUST preserve user configuration and visible prompt text,
+MUST emit prompt start and prompt end around the preserved prompt, and MUST
+suppress passive command boundaries for Mezzanine-owned transaction and
+agent-subshell records so those records are reported only by their explicit
+transaction protocol.
 
 For `posix-sh` and `unknown-unix`, Mezzanine MUST NOT assume shell-level
 preexec or postexec support.

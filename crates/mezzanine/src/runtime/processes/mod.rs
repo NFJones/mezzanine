@@ -3,6 +3,7 @@
 //! This module owns the runtime processes boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
+mod fish_compat;
 mod layout;
 pub(crate) mod output_filter;
 mod pane_pipes;
@@ -407,6 +408,9 @@ pub(crate) struct RuntimeProcessComponent {
     pane_readiness_overrides: mez_agent::PaneReadinessOverrideStore,
     /// Bootstrap-derived environment signatures keyed by pane id.
     pane_environment_signatures: std::collections::BTreeMap<String, EnvironmentSignature>,
+    /// Managed passive Fish integration state keyed by pane process.
+    pane_fish_compatibility:
+        std::collections::BTreeMap<String, fish_compat::ManagedFishCompatibility>,
     /// Managed zsh startup and history-authentication state keyed by pane id.
     pane_zsh_compatibility: std::collections::BTreeMap<String, zsh_compat::ManagedZshCompatibility>,
     /// Canonical path authority keyed by pane environment, config generation,
@@ -2038,31 +2042,47 @@ impl RuntimeSessionService {
             &descriptor.pane_id,
             &self.process.settings.terminal_term,
         )?;
+        let classification = ShellClassification::classify_with_probe(
+            self.session.shell.path(),
+            self.session.shell.version_probe(),
+        );
+        let fish_compatibility =
+            if explicit_command.is_none() && classification == ShellClassification::Fish {
+                let owner = runtime_random_marker_token(&format!(
+                    "fish-integration\0{}\0{}",
+                    self.session.id, descriptor.pane_id
+                ))?;
+                Some(fish_compat::ManagedFishCompatibility::new(owner))
+            } else {
+                None
+            };
         let mut zsh_compatibility_diagnostic = None;
-        let zsh_compatibility = if explicit_command.is_none()
-            && ShellClassification::classify(self.session.shell.path()) == ShellClassification::Zsh
-        {
-            let token = runtime_random_marker_token(&format!(
-                "zsh-history\0{}\0{}",
-                self.session.id, descriptor.pane_id
-            ))?;
-            match zsh_compat::ManagedZshCompatibility::create(
-                self.session.socket_path(),
-                descriptor.pane_id.as_str(),
-                token,
-                std::env::var_os("ZDOTDIR"),
-            ) {
-                Ok(compatibility) => Some(compatibility),
-                Err(error) => {
-                    zsh_compatibility_diagnostic = Some(error.to_string());
-                    None
+        let zsh_compatibility =
+            if explicit_command.is_none() && classification == ShellClassification::Zsh {
+                let token = runtime_random_marker_token(&format!(
+                    "zsh-history\0{}\0{}",
+                    self.session.id, descriptor.pane_id
+                ))?;
+                match zsh_compat::ManagedZshCompatibility::create(
+                    self.session.socket_path(),
+                    descriptor.pane_id.as_str(),
+                    token,
+                    std::env::var_os("ZDOTDIR"),
+                ) {
+                    Ok(compatibility) => Some(compatibility),
+                    Err(error) => {
+                        zsh_compatibility_diagnostic = Some(error.to_string());
+                        None
+                    }
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         let mut launch =
             mez_mux::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
+        if let Some(compatibility) = fish_compatibility.as_ref() {
+            launch = compatibility.configure_launch(launch);
+        }
         if let Some(compatibility) = zsh_compatibility.as_ref() {
             launch = compatibility.configure_launch(launch);
         }
@@ -2077,6 +2097,11 @@ impl RuntimeSessionService {
                 descriptor.size,
                 start_directory,
             )?;
+        if let Some(compatibility) = fish_compatibility {
+            self.process
+                .pane_fish_compatibility
+                .insert(descriptor.pane_id.to_string(), compatibility);
+        }
         if let Some(compatibility) = zsh_compatibility {
             self.process
                 .pane_zsh_compatibility
@@ -2590,6 +2615,7 @@ impl RuntimeSessionService {
         self.process
             .pane_current_working_directories
             .remove(pane_id);
+        self.process.pane_fish_compatibility.remove(pane_id);
         self.process.pane_zsh_compatibility.remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
