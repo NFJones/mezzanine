@@ -443,6 +443,75 @@ fn runtime_agent_command_preview_persists_raw_source_for_replay() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies oversized command previews persist only their bounded UTF-8 source
+/// projection and retain explicit truncation when replayed after a resize.
+/// Presentation persistence must not turn a bounded renderer into durable
+/// multi-megabyte storage or lose the omission marker at a new geometry.
+#[test]
+fn runtime_agent_command_preview_persists_bounded_truncated_source_for_replay() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("agent-command-preview-bounded"));
+    service
+        .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let command = format!(
+        "printf 'start {} tail-sentinel'",
+        "x".repeat(2 * 1024 * 1024)
+    );
+
+    service
+        .append_agent_command_preview_to_terminal_buffer("%1", &command)
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let source = entries[0].source_text.as_deref().unwrap();
+    assert!(source.len() <= 16 * 1024, "stored {} bytes", source.len());
+    assert!(!source.contains("tail-sentinel"), "{source}");
+    assert!(
+        entries[0]
+            .source_content_type
+            .as_deref()
+            .is_some_and(|content_type| content_type.contains("command-preview-truncated+text")),
+        "{entries:?}"
+    );
+
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(20, 12).unwrap(), 120).unwrap(),
+    );
+    assert!(
+        service
+            .rebuild_agent_presentation_after_resize("%1", Size::new(20, 12).unwrap())
+            .unwrap()
+    );
+    let replayed = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(replayed.contains("preview"), "{replayed}");
+    assert!(replayed.contains("truncated"), "{replayed}");
+    assert!(!replayed.contains("tail-sentinel"), "{replayed}");
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies action execution headers persist their semantic text and rebuild
 /// through the action-header renderer at a narrower destination geometry.
 #[test]

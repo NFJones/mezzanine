@@ -213,40 +213,63 @@ pub(crate) fn markdown_surface_is_light(ui_theme: &UiTheme) -> bool {
         .is_some_and(|luminance| luminance >= 140)
 }
 
-/// Runs the command preview terminal lines operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn command_preview_terminal_lines(
+/// Maximum command-source bytes inspected and retained for one preview.
+pub(crate) const COMMAND_PREVIEW_SOURCE_LIMIT_BYTES: usize = 16 * 1024;
+/// Maximum physical source lines inspected and retained for one preview.
+const COMMAND_PREVIEW_SOURCE_LIMIT_LINES: usize = 256;
+
+/// Bounded command source and whether omitted input must be disclosed.
+pub(crate) struct BoundedCommandPreviewSource {
+    /// UTF-8-safe source prefix used for rendering and replay persistence.
+    pub(crate) text: String,
+    /// Whether bytes or source lines were omitted from the command.
+    pub(crate) truncated: bool,
+}
+
+/// Returns a UTF-8-safe command prefix bounded before presentation work.
+pub(crate) fn bounded_command_preview_source(command: &str) -> BoundedCommandPreviewSource {
+    let mut byte_end = command.len().min(COMMAND_PREVIEW_SOURCE_LIMIT_BYTES);
+    while !command.is_char_boundary(byte_end) {
+        byte_end = byte_end.saturating_sub(1);
+    }
+    let byte_bounded = &command[..byte_end];
+    let mut line_end = byte_bounded.len();
+    let mut line_count = 0usize;
+    for (index, byte) in byte_bounded.bytes().enumerate() {
+        if byte == b'\n' {
+            line_count = line_count.saturating_add(1);
+            if line_count == COMMAND_PREVIEW_SOURCE_LIMIT_LINES {
+                line_end = index.saturating_add(1);
+                break;
+            }
+        }
+    }
+    BoundedCommandPreviewSource {
+        text: byte_bounded[..line_end].to_string(),
+        truncated: byte_end < command.len() || line_end < byte_bounded.len(),
+    }
+}
+
+/// Wraps one already-bounded command source and discloses omitted input.
+fn command_preview_terminal_lines_from_source(
     command: &str,
+    source_truncated: bool,
     columns: usize,
     max_lines: usize,
 ) -> Vec<String> {
     let prefix = "$ ";
     let continuation = " ".repeat(prefix.chars().count());
     let content_width = columns.max(1);
-    let wrapped = wrap_agent_terminal_text(command, content_width);
-    let total_lines = wrapped.len();
-    let capped = if max_lines > 0 && total_lines > max_lines {
-        let mut lines = wrapped
-            .iter()
-            .take(max_lines.saturating_sub(1))
-            .cloned()
-            .collect::<Vec<_>>();
-        let count_prefix = format!("[{total_lines}] ");
-        let count_width = agent_terminal_text_width(count_prefix.as_str());
-        let available = content_width.saturating_sub(count_width).max(1);
-        let tail = wrapped
-            .last()
-            .map(|line| fit_agent_terminal_text_width(line, available))
-            .unwrap_or_default();
-        lines.push(format!("{count_prefix}{tail}"));
-        lines
-    } else {
-        wrapped
-    };
-    capped
+    let (mut wrapped, wrapping_truncated) =
+        wrap_agent_terminal_text_bounded(command, content_width, max_lines);
+    if source_truncated || wrapping_truncated {
+        let marker_lines = command_preview_truncation_marker_lines(content_width, max_lines);
+        if max_lines > 0 {
+            wrapped.truncate(max_lines.saturating_sub(marker_lines.len()));
+        }
+        wrapped.extend(marker_lines);
+    }
+    wrapped
         .into_iter()
         .enumerate()
         .map(|(index, line)| {
@@ -259,9 +282,45 @@ pub(crate) fn command_preview_terminal_lines(
         .collect()
 }
 
+/// Builds explicit truncation rows that fit the available preview width.
+fn command_preview_truncation_marker_lines(columns: usize, max_lines: usize) -> Vec<String> {
+    let marker = "[preview truncated]";
+    if agent_terminal_text_fits_width(marker, columns) {
+        return vec![marker.to_string()];
+    }
+    let marker_line_limit = if max_lines == 0 {
+        usize::MAX
+    } else {
+        max_lines
+    };
+    wrap_agent_terminal_text_bounded(marker, columns, marker_line_limit).0
+}
+
 /// Renders a shell command preview with bounded wrapping and syntax spans.
 pub(crate) fn command_preview_terminal_rendered_lines(
     command: &str,
+    source_was_truncated: bool,
+    columns: usize,
+    max_lines: usize,
+    classification: ShellClassification,
+    ui_theme: &UiTheme,
+) -> Vec<RichTextLine> {
+    let mut source = bounded_command_preview_source(command);
+    source.truncated |= source_was_truncated;
+    render_bounded_command_preview_terminal_lines(
+        &source.text,
+        source.truncated,
+        columns,
+        max_lines,
+        classification,
+        ui_theme,
+    )
+}
+
+/// Renders one already-bounded command source with explicit omission state.
+fn render_bounded_command_preview_terminal_lines(
+    command: &str,
+    source_truncated: bool,
     columns: usize,
     max_lines: usize,
     classification: ShellClassification,
@@ -271,7 +330,7 @@ pub(crate) fn command_preview_terminal_rendered_lines(
     let mut highlighter = agent_shell_command_highlighter(classification, &syntax_theme);
     let command_rendition =
         agent_terminal_label_rendition(AgentTerminalPresentationStyle::Command, ui_theme);
-    command_preview_terminal_lines(command, columns, max_lines)
+    command_preview_terminal_lines_from_source(command, source_truncated, columns, max_lines)
         .into_iter()
         .map(|display| {
             let mut rendered = RichTextLine {
@@ -301,6 +360,64 @@ pub(crate) fn command_preview_terminal_rendered_lines(
             rendered
         })
         .collect()
+}
+
+/// Wraps command text while stopping once the display-row budget is full.
+fn wrap_agent_terminal_text_bounded(
+    text: &str,
+    columns: usize,
+    max_lines: usize,
+) -> (Vec<String>, bool) {
+    let trimmed = text.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() {
+        return (vec![String::new()], false);
+    }
+    let columns = columns.max(1);
+    let mut output = Vec::new();
+    for source_line in trimmed.lines() {
+        if max_lines > 0 && output.len() >= max_lines {
+            return (output, true);
+        }
+        let sanitized = sanitized_agent_terminal_line(source_line);
+        if sanitized.is_empty() {
+            output.push(String::new());
+            continue;
+        }
+        let mut remaining = sanitized.as_str();
+        while !remaining.is_empty() {
+            if max_lines > 0 && output.len() >= max_lines {
+                return (output, true);
+            }
+            if agent_terminal_text_fits_width(remaining, columns) {
+                output.push(remaining.to_string());
+                break;
+            }
+            let Some((segment, consumed)) =
+                take_agent_terminal_word_wrapped_segment(remaining, columns)
+            else {
+                output.push(remaining.to_string());
+                break;
+            };
+            output.push(segment);
+            remaining = remaining[consumed..].trim_start();
+        }
+    }
+    if output.is_empty() {
+        output.push(String::new());
+    }
+    (output, false)
+}
+
+/// Reports whether text fits without scanning beyond the first overflow.
+fn agent_terminal_text_fits_width(text: &str, columns: usize) -> bool {
+    let mut width = 0usize;
+    for grapheme in UnicodeSegmentation::graphemes(text, true) {
+        width = width.saturating_add(agent_terminal_grapheme_width(grapheme));
+        if width > columns {
+            return false;
+        }
+    }
+    true
 }
 
 /// Runs the wrap agent terminal text operation for this subsystem.

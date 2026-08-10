@@ -222,6 +222,10 @@ fn runtime_apply_patch_read_phase_truncation_retries_with_fresh_snapshot() {
         .enter_or_resume("%1")
         .unwrap();
     mark_test_pane_ready(&mut service, "%1");
+    service
+        .agent_shell_store_mut()
+        .set_log_level("%1", AgentLogLevel::Verbose)
+        .unwrap();
     service.permission_policy_mut().set_approval_bypass(true);
 
     let start = service.dispatch_runtime_control_body(
@@ -356,6 +360,15 @@ fn runtime_apply_patch_read_phase_truncation_retries_with_fresh_snapshot() {
         ),
         "{}",
         write_transaction.command
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !pane_text.contains("__MEZ_APPLY_PATCH_WRITE_PHASE__"),
+        "internal apply-patch write phase leaked into verbose presentation: {pane_text}"
     );
     service.terminate_all_pane_processes().unwrap();
 }

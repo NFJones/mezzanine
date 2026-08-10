@@ -435,9 +435,10 @@ impl RuntimeSessionService {
                 )?;
             }
         }
-        if is_model_shell_command
-            || (!is_internal_apply_patch_write_phase && !emitted_action_log)
-            || self.agent_verbose_enabled(&turn.pane_id)
+        if !is_internal_apply_patch_write_phase
+            && (is_model_shell_command
+                || !emitted_action_log
+                || self.agent_verbose_enabled(&turn.pane_id))
         {
             self.append_agent_command_preview_to_terminal_buffer(&turn.pane_id, command)?;
         }

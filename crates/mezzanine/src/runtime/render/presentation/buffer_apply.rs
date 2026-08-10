@@ -16,8 +16,9 @@ use super::style::{
 use super::text::{
     agent_say_text_is_displayed_patch_block, agent_terminal_label_rendition,
     append_styled_agent_terminal_line, append_styled_agent_terminal_rendered_line,
-    bounded_agent_terminal_presentation_columns, command_preview_terminal_rendered_lines,
-    fit_agent_terminal_text_width, render_agent_markdown_body_lines, sanitized_agent_terminal_line,
+    bounded_agent_terminal_presentation_columns, bounded_command_preview_source,
+    command_preview_terminal_rendered_lines, fit_agent_terminal_text_width,
+    render_agent_markdown_body_lines, sanitized_agent_terminal_line,
     wrapped_prefixed_agent_terminal_lines,
 };
 use super::{
@@ -44,6 +45,9 @@ const AGENT_PRESENTATION_USER_PROMPT_CONTENT_TYPE: &str =
 /// Content type for a shell command preview rendered at replay geometry.
 const AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.command-preview+text; charset=utf-8";
+/// Content type for a bounded command preview whose source omitted a tail.
+const AGENT_PRESENTATION_TRUNCATED_COMMAND_PREVIEW_CONTENT_TYPE: &str =
+    "application/vnd.mezzanine.agent-presentation.command-preview-truncated+text; charset=utf-8";
 /// Content type for one action-execution header rendered at replay geometry.
 const AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE: &str =
     "application/vnd.mezzanine.agent-presentation.action-header+text; charset=utf-8";
@@ -424,6 +428,16 @@ impl RuntimeSessionService {
                     }
                     if source_content_type == AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE {
                         self.append_agent_command_preview_to_terminal_buffer(pane_id, source_text)?;
+                        continue;
+                    }
+                    if source_content_type
+                        == AGENT_PRESENTATION_TRUNCATED_COMMAND_PREVIEW_CONTENT_TYPE
+                    {
+                        self.append_agent_command_preview_source_to_terminal_buffer(
+                            pane_id,
+                            source_text,
+                            true,
+                        )?;
                         continue;
                     }
                     if source_content_type == AGENT_PRESENTATION_ACTION_HEADER_CONTENT_TYPE {
@@ -913,6 +927,16 @@ impl RuntimeSessionService {
         pane_id: &str,
         command: &str,
     ) -> Result<()> {
+        self.append_agent_command_preview_source_to_terminal_buffer(pane_id, command, false)
+    }
+
+    /// Appends one bounded command source with replay-supplied omission state.
+    fn append_agent_command_preview_source_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        command: &str,
+        source_was_truncated: bool,
+    ) -> Result<()> {
         /// Defines the MAX AGENT COMMAND PREVIEW LINES const used by this subsystem.
         ///
         /// Keeping this value documented makes the contract explicit at the module
@@ -930,8 +954,11 @@ impl RuntimeSessionService {
         let prefix_width =
             UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX) + UnicodeWidthStr::width("$ ");
         let content_columns = display_columns.saturating_sub(prefix_width).max(1);
+        let mut source = bounded_command_preview_source(command);
+        source.truncated |= source_was_truncated;
         let rendered_lines = command_preview_terminal_rendered_lines(
-            command,
+            &source.text,
+            source.truncated,
             content_columns,
             MAX_AGENT_COMMAND_PREVIEW_LINES,
             self.shell_classification_for_pane(pane_id),
@@ -946,7 +973,14 @@ impl RuntimeSessionService {
             AgentTerminalPresentationStyle::Command,
             &rendered_lines,
             &copy_lines,
-            Some((command, AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE)),
+            Some((
+                &source.text,
+                if source.truncated {
+                    AGENT_PRESENTATION_TRUNCATED_COMMAND_PREVIEW_CONTENT_TYPE
+                } else {
+                    AGENT_PRESENTATION_COMMAND_PREVIEW_CONTENT_TYPE
+                },
+            )),
         )
     }
 

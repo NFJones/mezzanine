@@ -319,6 +319,7 @@ fn command_preview_terminal_rendered_lines_highlight_shell_syntax() {
     let ui_theme = mez_mux::theme::resolve_ui_theme("syntax-test", definition).unwrap();
     let lines = command_preview_terminal_rendered_lines(
         "if true; then echo \"ok\"; fi",
+        false,
         80,
         10,
         mez_agent::ShellClassification::Bash,
@@ -336,6 +337,48 @@ fn command_preview_terminal_rendered_lines_highlight_shell_syntax() {
         span.start >= 2
             && span.rendition.foreground == Some(mez_terminal::TerminalColor::Rgb(1, 2, 3))
     }));
+}
+
+/// Verifies command previews stop scanning before multi-megabyte single-line
+/// and multiline tails while making truncation explicit. The renderer must not
+/// derive its final row from payload text beyond the bounded source prefix.
+#[test]
+fn command_preview_bounds_large_source_before_wrapping() {
+    let ui_theme = mez_mux::theme::resolve_ui_theme(
+        "bounded-preview-test",
+        mez_mux::theme::builtin_ui_theme_definition("deepforest").unwrap(),
+    )
+    .unwrap();
+    let commands = [
+        format!(
+            "printf 'start {} single-tail-sentinel'",
+            "x".repeat(2 * 1024 * 1024)
+        ),
+        format!(
+            "printf 'start'\n{}\nprintf 'multiline-tail-sentinel'",
+            "printf 'payload'\n".repeat(128 * 1024)
+        ),
+    ];
+
+    for command in commands {
+        let lines = command_preview_terminal_rendered_lines(
+            &command,
+            false,
+            40,
+            10,
+            mez_agent::ShellClassification::Bash,
+            &ui_theme,
+        );
+        let preview = lines
+            .iter()
+            .map(|line| line.display.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(lines.len(), 10, "{preview}");
+        assert!(preview.contains("[preview truncated]"), "{preview}");
+        assert!(!preview.contains("tail-sentinel"), "{preview}");
+    }
 }
 
 /// Verifies command previews wrap at a whitespace boundary before the
