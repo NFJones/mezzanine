@@ -38,8 +38,9 @@ pub use transaction::{
     ShellChildArgument, ShellChildLaunch, ShellClassification, ShellTransaction,
     ShellTransactionInput, ShellTransactionOutputTransport, agent_subshell_enter_command,
     agent_subshell_enter_command_with_zsh_history_token, fish_quote,
-    posix_shell_history_suppression_finish, posix_shell_history_suppression_start,
-    shell_command_contains_unquoted_heredoc, validate_agent_authored_shell_command,
+    fish_wrapper_receiver_init_command, posix_shell_history_suppression_finish,
+    posix_shell_history_suppression_start, shell_command_contains_unquoted_heredoc,
+    validate_agent_authored_shell_command,
 };
 
 /// Categorizes deterministic shell-source validation failures.
@@ -344,7 +345,12 @@ mod tests {
         suffix: &str,
         label: &str,
     ) -> Output {
-        let source = format!("{}\n{suffix}", input.wrapper);
+        let transport_preamble = input
+            .wrapper
+            .split_once("__mez_agent_wrapper_receive ")
+            .map_or("", |(preamble, _)| preamble);
+        let wrapper = decoded_fish_wrapper_source(&input.wrapper);
+        let source = format!("{transport_preamble}{wrapper}\n{suffix}");
         let mut child = command
             .args(["-c", &source])
             .stdin(Stdio::piped())
@@ -397,7 +403,15 @@ mod tests {
         }) {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("the {label} process did not emit its start marker before the deadline");
+            let observed = observed
+                .0
+                .lock()
+                .expect("the Fish stdout lock should remain available")
+                .clone();
+            panic!(
+                "the {label} process did not emit its start marker before the deadline: stdout={:?}",
+                String::from_utf8_lossy(&observed)
+            );
         }
         for (index, record) in input.payload.split_inclusive('\n').enumerate() {
             let stdin = child
@@ -484,6 +498,27 @@ mod tests {
             .decode(encoded)
             .expect("wrapper transport should contain valid standard base64");
         String::from_utf8(decoded).expect("generated wrapper source should be valid UTF-8")
+    }
+
+    /// Decodes generated Fish wrapper source from its bounded interactive
+    /// assignment transport.
+    ///
+    /// Structural tests assert Fish semantics against this reconstructed
+    /// source while transport tests independently enforce physical line bounds.
+    fn decoded_fish_wrapper_source(transport: &str) -> String {
+        const RECORD_SUFFIX: &str = "; printf '\\036'";
+        let mut encoded = String::new();
+        for line in transport.lines() {
+            if let Some(chunk) = line.strip_suffix(RECORD_SUFFIX)
+                && !chunk.starts_with("__MEZ_WRAPPER_SOURCE_END_")
+            {
+                encoded.push_str(chunk);
+            }
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("Fish wrapper transport should contain valid standard base64");
+        String::from_utf8(decoded).expect("generated Fish wrapper source should be valid UTF-8")
     }
 
     /// Builds a representative known environment signature for cache tests.

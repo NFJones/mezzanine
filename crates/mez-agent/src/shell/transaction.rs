@@ -1168,6 +1168,7 @@ set -l MEZ_AGENT {agent}\n\
 set -l MEZ_PANE {pane}\n\
 {command_file_lines}\
 set -l MEZ_STATUS 0\n\
+printf '\\n'\n\
 {child_invocation}\
 if test -n \"$MEZ_COMMAND_FILE\"; command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_COMMAND_B64\"; command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1; or true; end\n\
@@ -1188,7 +1189,7 @@ end\n",
             child_invocation = child_invocation,
         );
         ShellTransactionInput {
-            wrapper,
+            wrapper: fish_shell_wrapper_transport(&wrapper, self.marker.as_str()),
             payload: command_materialization.payload,
             payload_receiver_acknowledgements: self.payload_receiver_acknowledgements,
         }
@@ -1444,6 +1445,8 @@ fn fish_shell_interactive_invocation_words(
     words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
     let mut exec_words = vec!["exec".to_string(), fish_quote(shell_path)];
     exec_words.extend(startup_args.iter().map(|arg| (*arg).to_string()));
+    exec_words.push("--init-command".to_string());
+    exec_words.push(fish_quote(fish_wrapper_receiver_init_command()));
     exec_words.push("-i".to_string());
     let readiness_source = format!(
         "command printf '\\e]133;B\\e\\\\'; {}",
@@ -1552,6 +1555,79 @@ fn command_payload_lines(command: &str, end_marker: &str) -> String {
     payload.push_str(end_marker);
     payload.push('\n');
     payload
+}
+
+/// Fish function installed before interactive transaction delivery begins.
+///
+/// The interactive reader sees only one short function invocation. The
+/// function then owns stdin while it receives bounded base64 records, writes
+/// the decoded wrapper to a temporary file, and sources that file without
+/// command substitution so physical newlines remain intact. Each record emits
+/// the acknowledgement byte used by paced Darwin PTY delivery.
+pub fn fish_wrapper_receiver_init_command() -> &'static str {
+    r#"function __mez_agent_wrapper_receive --argument-names sentinel
+    set -l source_file (mktemp); or return 1
+    set -l encoded_file "$source_file.b64"
+    set -l receiver_stty (stty -g 2>/dev/null); or set receiver_stty ''
+    if test -n "$receiver_stty"
+        stty -echo 2>/dev/null; or true
+    end
+    set -l receive_status 0
+    set -l seen_end 0
+    command printf '' > "$encoded_file"; or set receive_status $status
+    builtin history delete --exact --case-sensitive "__mez_agent_wrapper_receive '$sentinel'" >/dev/null 2>&1
+    printf '\036'
+    while read -l record
+        set -l payload (string split -m 1 ';' -- "$record")[1]
+        if test "$payload" = "$sentinel"
+            set seen_end 1
+            printf '\036'
+            break
+        end
+        if test "$receive_status" -eq 0
+            printf '%s' "$payload" >> "$encoded_file"; or set receive_status $status
+        end
+        printf '\036'
+    end
+    if test "$seen_end" != 1
+        set receive_status 1
+    end
+    set -l decode_status 1
+    if test "$receive_status" -eq 0
+        if base64 -d < "$encoded_file" > "$source_file" 2>/dev/null
+            set decode_status 0
+        else
+            base64 -D < "$encoded_file" > "$source_file"
+            set decode_status $status
+        end
+    end
+    if test -n "$receiver_stty"
+        stty "$receiver_stty" 2>/dev/null; or true
+    end
+    set -l source_status $decode_status
+    if test "$decode_status" -eq 0
+        source "$source_file"
+        set source_status $status
+    end
+    command rm -f -- "$source_file" "$encoded_file" >/dev/null 2>&1; or true
+    return $source_status
+end"#
+}
+
+/// Encodes a generated Fish wrapper as receiver-consumed base64 records.
+fn fish_shell_wrapper_transport(source: &str, marker: &str) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
+    let end_marker = format!("__MEZ_WRAPPER_SOURCE_END_{marker}__");
+    let mut transport = format!("__mez_agent_wrapper_receive {}\n", fish_quote(&end_marker));
+    for chunk in encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES) {
+        let chunk = std::str::from_utf8(chunk)
+            .expect("standard base64 output should always be valid UTF-8");
+        transport.push_str(chunk);
+        transport.push_str("; printf '\\036'\n");
+    }
+    transport.push_str(&end_marker);
+    transport.push_str("; printf '\\036'\n");
+    transport
 }
 
 /// Encodes a generated POSIX wrapper as bounded shell-owned assignments.

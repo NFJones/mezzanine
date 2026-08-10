@@ -123,6 +123,11 @@ end
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mez_agent::shell::{
+        PanePathResolutionRequest, ShellClassification, ShellTransaction,
+        fish_wrapper_receiver_init_command, pane_path_resolution_command,
+        parse_pane_path_resolution_output,
+    };
     use mez_mux::layout::Size;
     use mez_mux::process::{
         PaneProcess, PaneProcessEnvironment, pane_command_plan, spawn_pane_process,
@@ -193,6 +198,17 @@ mod tests {
         compatibility: &ManagedFishCompatibility,
         home: &Path,
     ) -> PaneProcess {
+        spawn_managed_fish_with_extra_init(fish, compatibility, home, None)
+    }
+
+    /// Spawns managed Fish with one additional process-local initialization
+    /// fragment used by agent-shell transport integration tests.
+    fn spawn_managed_fish_with_extra_init(
+        fish: &Path,
+        compatibility: &ManagedFishCompatibility,
+        home: &Path,
+        extra_init: Option<&str>,
+    ) -> PaneProcess {
         let config_home = home.join("config");
         let fish_config = config_home.join("fish");
         std::fs::create_dir_all(&fish_config)
@@ -202,8 +218,12 @@ mod tests {
             "function fish_prompt\n    printf '__MEZ_USER_PROMPT__status=%s>' $status\nend\nfunction fish_right_prompt\n    printf '__MEZ_USER_RIGHT_PROMPT__'\nend\n",
         )
         .expect("the isolated Fish prompt configuration should be written");
-        let launch = compatibility
-            .configure_launch(PaneProcessLaunch::new(fish.to_path_buf()))
+        let init_command = extra_init.map_or_else(
+            || compatibility.init_command().to_string(),
+            |extra| format!("{}\n{extra}", compatibility.init_command()),
+        );
+        let launch = PaneProcessLaunch::new(fish.to_path_buf())
+            .with_interactive_arguments(["--init-command", init_command.as_str(), "-i"])
             .with_environment_variable("HOME", home.as_os_str())
             .with_environment_variable("XDG_CONFIG_HOME", config_home.as_os_str());
         spawn_pane_process(
@@ -412,6 +432,106 @@ mod tests {
         second_process
             .terminate(Duration::from_millis(100))
             .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    /// Verifies a managed interactive Fish pane accepts the deferred command
+    /// payload used by runtime path resolution, emits parseable evidence, and
+    /// returns to ordinary input without replaying transaction source.
+    fn managed_fish_compatibility_executes_deferred_path_resolution_transaction() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!("skipping managed Fish resolver assertion because fish is unavailable");
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-fish-resolver-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let compatibility = ManagedFishCompatibility::new(
+            MarkerToken::new("33333333333333333333333333333333").unwrap(),
+        );
+        let mut process = spawn_managed_fish_with_extra_init(
+            &fish,
+            &compatibility,
+            &root,
+            Some(fish_wrapper_receiver_init_command()),
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        let _ = process.read_available_output(64 * 1024);
+
+        let request =
+            PanePathResolutionRequest::new(vec![".".to_string()], Vec::new(), Vec::new()).unwrap();
+        let command = pane_path_resolution_command(&request, ShellClassification::Fish).unwrap();
+        let marker = MarkerToken::new("44444444444444444444444444444444").unwrap();
+        let input = ShellTransaction::new(
+            marker.clone(),
+            "resolver-turn",
+            "resolver-agent",
+            "p1",
+            &fish,
+            command,
+        )
+        .unwrap()
+        .render_for_classification_input(ShellClassification::Fish);
+        process.write_input(input.wrapper.as_bytes()).unwrap();
+        let start_marker = format!("\x1b]133;C;mez_marker={};", marker.as_str());
+        let mut output = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(start_marker.len())
+                .any(|window| window == start_marker.as_bytes())
+        });
+        process.write_input(input.payload.as_bytes()).unwrap();
+        let protocol_marker = b"MEZ_PATH_RESOLUTION_V2\t";
+        let end_marker = format!("\x1b]133;D;0;mez_marker={};", marker.as_str());
+        output.extend(read_fish_output_until(&mut process, |output| {
+            output
+                .windows(protocol_marker.len())
+                .any(|window| window == protocol_marker)
+                && output
+                    .windows(end_marker.len())
+                    .any(|window| window == end_marker.as_bytes())
+        }));
+
+        let start = output
+            .windows(start_marker.len())
+            .position(|window| window == start_marker.as_bytes())
+            .expect("the transaction start marker should be retained");
+        let transaction_start = output[start..]
+            .windows(b"\x1b\\".len())
+            .position(|window| window == b"\x1b\\")
+            .map(|offset| start + offset + b"\x1b\\".len())
+            .expect("the transaction start marker should be terminated");
+        let transaction_end = output[transaction_start..]
+            .windows(end_marker.len())
+            .position(|window| window == end_marker.as_bytes())
+            .map(|offset| transaction_start + offset)
+            .expect("the transaction end marker should be retained");
+        let transaction_text =
+            String::from_utf8_lossy(&output[transaction_start..transaction_end]).replace('\r', "");
+        assert!(
+            !String::from_utf8_lossy(&output[..start]).contains("MEZ_COMMAND_FILE"),
+            "generated Fish wrapper source was exposed before its start marker"
+        );
+        parse_pane_path_resolution_output(&transaction_text, &request).unwrap();
+        process
+            .write_input(b"printf '__MEZ_AFTER_RESOLVER__\\n'\n")
+            .unwrap();
+        let after = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(b"__MEZ_AFTER_RESOLVER__".len())
+                .any(|window| window == b"__MEZ_AFTER_RESOLVER__")
+        });
+        assert!(
+            String::from_utf8_lossy(&after).contains("__MEZ_AFTER_RESOLVER__"),
+            "{:?}",
+            String::from_utf8_lossy(&after)
+        );
+
+        process.terminate(Duration::from_millis(100)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 }

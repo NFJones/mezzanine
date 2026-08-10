@@ -101,6 +101,24 @@ fn decoded_posix_wrapper_source(transport: &str) -> String {
     String::from_utf8(decoded).expect("generated wrapper source should be valid UTF-8")
 }
 
+/// Decodes one receiver-backed Fish wrapper transport for structural product
+/// integration assertions.
+fn decoded_fish_wrapper_source(transport: &str) -> String {
+    const RECORD_SUFFIX: &str = "; printf '\\036'";
+    let mut encoded = String::new();
+    for line in transport.lines() {
+        if let Some(chunk) = line.strip_suffix(RECORD_SUFFIX)
+            && !chunk.starts_with("__MEZ_WRAPPER_SOURCE_END_")
+        {
+            encoded.push_str(chunk);
+        }
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("Fish wrapper transport should contain valid standard base64");
+    String::from_utf8(decoded).expect("generated Fish wrapper source should be valid UTF-8")
+}
+
 /// Builds a representative MCP tool state for agent-shell display tests. The
 /// registry normalizes server id, availability, and approval from the owning
 /// server config, so tests can override only the fields relevant to each

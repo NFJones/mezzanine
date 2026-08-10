@@ -204,3 +204,24 @@ fn fish_path_resolution_uses_only_absolute_python_candidates() {
     assert!(command.contains("/bin/python3"), "{command}");
     assert!(command.contains(" -I -S -c "), "{command}");
 }
+
+/// Verifies the generated Fish resolver executes under real Fish and emits a
+/// protocol record that can be parsed into pane-local path evidence.
+#[test]
+fn fish_path_resolution_executes_and_emits_protocol_output() {
+    if Command::new("fish").arg("--version").output().is_err() {
+        eprintln!("skipping real-Fish path-resolution assertion because fish is unavailable");
+        return;
+    }
+    let request =
+        PanePathResolutionRequest::new(vec![".".to_string()], Vec::new(), Vec::new()).unwrap();
+    let command = pane_path_resolution_command(&request, ShellClassification::Fish).unwrap();
+    let output = Command::new("fish")
+        .args(["--no-config", "-c", &command])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    parse_pane_path_resolution_output(&stdout, &request).unwrap();
+}

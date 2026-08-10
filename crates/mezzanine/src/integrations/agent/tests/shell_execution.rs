@@ -307,10 +307,11 @@ fn semantic_patch_transaction_uses_posix_child_interpreter_in_fish_pane() {
     .unwrap();
 
     assert_eq!(executor.requests.len(), 1);
-    let wrapper = executor.requests[0]
+    let transport = executor.requests[0]
         .transaction
         .render_for_classification_input(ShellClassification::Fish)
         .wrapper;
+    let wrapper = decoded_fish_wrapper_source(&transport);
     assert!(
         wrapper.contains("'/bin/sh' \\\n\"$MEZ_COMMAND_FILE\""),
         "{wrapper}"

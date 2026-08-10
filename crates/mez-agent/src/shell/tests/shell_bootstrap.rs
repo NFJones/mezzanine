@@ -434,9 +434,10 @@ fn shell_classification_selects_matching_wrappers_and_probe_commands() {
         ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/fish"), "true").unwrap();
 
     assert!(
-        transaction
-            .render_for_classification(ShellClassification::Fish)
-            .contains("command env -u BASH_ENV -u ENV -u ZDOTDIR")
+        decoded_fish_wrapper_source(
+            &transaction.render_for_classification(ShellClassification::Fish)
+        )
+        .contains("command env -u BASH_ENV -u ENV -u ZDOTDIR")
     );
     let posix = transaction.render_for_classification(ShellClassification::PosixSh);
     assert!(decoded_posix_wrapper_source(&posix).contains("env -u MEZ_MARKER_TOKEN"));

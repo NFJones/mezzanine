@@ -352,7 +352,8 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
     )
     .unwrap();
 
-    let wrapper = transaction.render_fish();
+    let input = transaction.render_fish_input();
+    let wrapper = decoded_fish_wrapper_source(&input.wrapper);
 
     assert!(wrapper.contains("set -l MEZ_MARKER_TOKEN '"));
     assert!(wrapper.contains("fish_private_mode"));
@@ -394,10 +395,16 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
     assert!(!wrapper.contains("echo \\'hello fish\\'"));
     assert!(!wrapper.contains("echo 'hello fish'"));
     assert!(
-        wrapper
-            .lines()
-            .all(|line| line.len() <= SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES + 180),
-        "{wrapper}"
+        input.wrapper.lines().all(|line| {
+            line.len() <= crate::shell::transaction::SHELL_WRAPPER_BASE64_LINE_BYTES + 420
+        }),
+        "{}",
+        input.wrapper
+    );
+    assert!(
+        !input.wrapper.contains("MEZ_COMMAND_FILE"),
+        "{}",
+        input.wrapper
     );
     assert!(!wrapper.contains("fish <<"));
     assert!(!wrapper.contains("command cat > \"$MEZ_COMMAND_FILE\""));
@@ -413,7 +420,7 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
 /// `end` statements at boundaries hidden from fragment assertions.
 fn non_stateful_fish_wrappers_parse_as_complete_programs() {
     for acknowledge_payload_records in [false, true] {
-        let wrapper = ShellTransaction::new(
+        let input = ShellTransaction::new(
             marker(),
             "t1",
             "a1",
@@ -423,7 +430,8 @@ fn non_stateful_fish_wrappers_parse_as_complete_programs() {
         )
         .unwrap()
         .with_payload_receiver_acknowledgements(acknowledge_payload_records)
-        .render_fish();
+        .render_fish_input();
+        let wrapper = decoded_fish_wrapper_source(&input.wrapper);
         let Some(output) = parse_fish_wrapper(&wrapper) else {
             eprintln!("skipping real-Fish parser assertion because fish is unavailable");
             return;
@@ -557,7 +565,7 @@ fn fish_wrappers_complete_only_after_deterministic_cleanup() {
     let transaction =
         ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/fish"), "true").unwrap();
     let wrappers = [
-        transaction.render_fish_input().wrapper,
+        decoded_fish_wrapper_source(&transaction.render_fish_input().wrapper),
         transaction.render_fish_stateful(),
     ];
 
@@ -1081,7 +1089,7 @@ fn unpaced_receivers_do_not_emit_payload_acknowledgements() {
     assert!(!posix.payload_receiver_acknowledgements);
     assert!(!fish.payload_receiver_acknowledgements);
     assert!(!decoded_posix_wrapper_source(&posix.wrapper).contains("printf '\\036'"));
-    assert!(!fish.wrapper.contains("printf '\\036'"));
+    assert!(!decoded_fish_wrapper_source(&fish.wrapper).contains("printf '\\036'"));
 }
 
 #[test]
@@ -1099,16 +1107,13 @@ fn fish_receiver_renders_acknowledged_payload_contract() {
     .unwrap()
     .with_payload_receiver_acknowledgements(true)
     .render_for_classification_input(ShellClassification::Fish);
+    let wrapper = decoded_fish_wrapper_source(&input.wrapper);
 
     assert!(input.payload_receiver_acknowledgements);
-    assert_eq!(input.wrapper.matches("printf '\\036'").count(), 2);
-    assert!(input.wrapper.contains("printf '\\033]133;C;"));
-    assert!(input.wrapper.contains("set MEZ_COMMAND_SEEN_END 1"));
-    assert!(
-        !input
-            .wrapper
-            .contains("set MEZ_WRITE_STATUS $status; break")
-    );
+    assert_eq!(wrapper.matches("printf '\\036'").count(), 2);
+    assert!(wrapper.contains("printf '\\033]133;C;"));
+    assert!(wrapper.contains("set MEZ_COMMAND_SEEN_END 1"));
+    assert!(!wrapper.contains("set MEZ_WRITE_STATUS $status; break"));
 }
 
 #[test]
@@ -1260,9 +1265,10 @@ fn typed_child_launch_quotes_arguments_without_shell_fragments() {
     );
     assert!(!posix.contains("TERM='dumb'"), "{posix}");
 
-    let fish = transaction
+    let fish_transport = transaction
         .render_for_classification_input(ShellClassification::Fish)
         .wrapper;
+    let fish = decoded_fish_wrapper_source(&fish_transport);
     assert!(
         fish.contains("'/usr/bin/sandbox helper' \\\n'--label'"),
         "{fish}"
