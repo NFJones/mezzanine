@@ -87,8 +87,75 @@ fn agent_subshell_enter_command_keeps_physical_lines_pty_safe() {
         } else {
             decoded_posix_wrapper_source(&handoff)
         };
-        assert!(source.contains("__mez_agent_subshell_handoff"), "{source}");
+        if classification == ShellClassification::Fish {
+            assert!(source.starts_with("begin\n"), "{source}");
+        } else {
+            assert!(source.contains("__mez_agent_subshell_handoff"), "{source}");
+        }
     }
+}
+
+#[cfg(unix)]
+#[test]
+/// Verifies Fish handoffs restore parent-local private-mode state after both a
+/// successful child exit and a failed child launch.
+///
+/// The generated handoff must keep state capture and cleanup in one lexical
+/// scope. A following parent command proves failed cleanup does not strand or
+/// terminate the shell before it resumes ordinary input.
+fn fish_agent_subshell_handoff_restores_parent_state_after_child_exit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(fish_path) = fish_path_for_tests() else {
+        eprintln!("skipping real-Fish handoff assertion because fish is unavailable");
+        return;
+    };
+    let temp = test_temp_dir("fish-agent-handoff-state");
+    let successful_child = temp.join("successful-child");
+    std::fs::write(&successful_child, "#!/bin/sh\nexit 0\n")
+        .expect("the successful child fixture should be written");
+    let mut permissions = std::fs::metadata(&successful_child)
+        .expect("the successful child fixture should have metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&successful_child, permissions)
+        .expect("the successful child fixture should be executable");
+
+    for (setup, expected_state) in [
+        ("set -e fish_private_mode", "__MEZ_HANDOFF_STATE__unset"),
+        (
+            "set -g fish_private_mode original",
+            "__MEZ_HANDOFF_STATE__set:original",
+        ),
+    ] {
+        for child in [&successful_child, &temp.join("missing-child")] {
+            let handoff = agent_subshell_enter_command(child, ShellClassification::Fish).unwrap();
+            let script = format!(
+                "{setup}\n{handoff}if set -q fish_private_mode\n  printf '__MEZ_HANDOFF_STATE__set:%s\\n' \"$fish_private_mode\"\nelse\n  printf '__MEZ_HANDOFF_STATE__unset\\n'\nend\nprintf '__MEZ_HANDOFF_PARENT_ALIVE__\\n'\n"
+            );
+            let mut fish = Command::new(&fish_path);
+            fish.arg("--no-config");
+            let output = run_optional_command_stdin_bounded(
+                &mut fish,
+                &script,
+                "Fish agent handoff state probe",
+            )
+            .expect("the resolved Fish executable should spawn");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+
+            assert!(output.status.success(), "child={child:?} output={output:?}");
+            assert!(
+                stdout.contains(expected_state),
+                "child={child:?} {stdout:?}"
+            );
+            assert!(
+                stdout.contains("__MEZ_HANDOFF_PARENT_ALIVE__"),
+                "child={child:?} {stdout:?}"
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]

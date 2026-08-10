@@ -2043,15 +2043,14 @@ pub fn agent_subshell_enter_command_with_zsh_history_token(
         let env_words = fish_agent_subshell_env_word_list().join(" \\\n  ");
         let shell_invocation = fish_shell_interactive_invocation_words(&shell, classification);
         format!(
-            "{history_start}function __mez_agent_subshell_handoff
+            "begin
+{history_start}
 if test -n \"$MEZ_SHELL_STTY_STATE\"; stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null; or true; end
-set -e MEZ_SHELL_STTY_STATE
 command env \\
   {env_words} \\
   {shell_invocation}
 {history_restore}
 end
-__mez_agent_subshell_handoff; functions --erase __mez_agent_subshell_handoff
 ",
             history_start = fish_shell_history_suppression_start(),
             history_restore = fish_shell_history_restore(),
