@@ -348,6 +348,7 @@ impl TerminalScreen {
             'e' => self.move_cursor_relative(params, 1, 0),
             'J' => self.erase_display(params),
             'K' => self.erase_line(params),
+            'c' => self.report_primary_device_attributes(params),
             'n' => self.report_device_status(params),
             '@' => self.insert_blank_chars(csi_count(params)),
             'P' => self.delete_chars(csi_count(params)),
@@ -360,6 +361,14 @@ impl TerminalScreen {
             's' => self.save_cursor(),
             'u' => self.restore_cursor(),
             _ => {}
+        }
+    }
+
+    /// Queues the conservative xterm-profile reply for standard DA1 queries.
+    pub(super) fn report_primary_device_attributes(&mut self, params: &str) {
+        if matches!(params, "" | "0") {
+            self.terminal_response_bytes
+                .extend_from_slice(b"\x1b[?1;0c");
         }
     }
 

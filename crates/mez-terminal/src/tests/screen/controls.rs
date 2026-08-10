@@ -120,6 +120,50 @@ fn terminal_screen_queues_device_status_report_replies() {
     assert!(screen.drain_terminal_response_bytes().is_empty());
 }
 
+/// Verifies standard primary device-attributes queries receive a conservative
+/// VT100-with-no-options response without entering visible screen content.
+///
+/// Shells may issue either bare `CSI c` or explicit `CSI 0 c` during startup.
+/// The bounded xterm-compatible profile answers both forms without claiming
+/// optional hardware features that the terminal profile does not expose.
+#[test]
+fn terminal_screen_queues_primary_device_attributes_replies() {
+    let mut screen = TerminalScreen::new(Size::new(20, 3).unwrap(), 10).unwrap();
+
+    screen.feed(b"before\x1b[c");
+    screen.feed(b"after\x1b[");
+    screen.feed(b"0c");
+
+    assert_eq!(screen.visible_lines()[0], "beforeafter");
+    assert_eq!(
+        screen.drain_terminal_response_bytes(),
+        b"\x1b[?1;0c\x1b[?1;0c"
+    );
+    assert!(screen.drain_terminal_response_bytes().is_empty());
+}
+
+/// Verifies unsupported or malformed device-attributes variants are ignored
+/// and parser recovery still permits a following standard query.
+///
+/// Secondary, private, and parameterized DA forms have different contracts;
+/// answering them as DA1 would advertise capabilities Mezzanine has not
+/// implemented. Oversized input must likewise be dropped through its final
+/// byte before the next valid sequence is handled.
+#[test]
+fn terminal_screen_ignores_unsupported_device_attributes_queries() {
+    let mut screen = TerminalScreen::new(Size::new(10, 3).unwrap(), 10).unwrap();
+    let mut overlong = Vec::from(b"\x1b[".as_slice());
+    overlong.extend(std::iter::repeat_n(b'1', 2048));
+    overlong.push(b'c');
+
+    screen.feed(b"\x1b[1c\x1b[?0c\x1b[>0c");
+    screen.feed(&overlong);
+    assert!(screen.drain_terminal_response_bytes().is_empty());
+
+    screen.feed(b"\x1b[c");
+    assert_eq!(screen.drain_terminal_response_bytes(), b"\x1b[?1;0c");
+}
+
 /// Verifies CPR replies report the live cursor row after DECOM-relative
 /// addressing inside a scroll region.
 ///

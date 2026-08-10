@@ -1213,6 +1213,13 @@ policy, and save/restore mode behavior. The profile MUST explicitly mark DCS
 string controls and any other unimplemented xterm capabilities as unsupported
 unless Mezzanine implements, documents, and tests them.
 
+The xterm-compatible profile MUST answer standard primary device-attributes
+queries `CSI c` and `CSI 0 c` with the conservative VT100-with-no-options reply
+`CSI ? 1 ; 0 c`. It MUST ignore secondary, private, malformed, and parameterized
+device-attributes query variants unless their distinct capability contracts are
+implemented and tested. Device-attributes queries MUST NOT render visible pane
+content.
+
 OSC 52 clipboard parsing MUST retain at most 4,096 bytes for one control
 payload, consume and discard an oversized sequence through its terminator, and
 emit only typed UTF-8 write or query requests. Malformed base64 writes and
@@ -9425,7 +9432,7 @@ that verify they are ignored safely. The test suite MUST cover:
 - C0 controls including backspace, carriage return, line feed, tab, bell, and
   escape.
 - CSI cursor movement, erasing, insertion, deletion, scrolling regions, and
-  save/restore behavior.
+  save/restore behavior, including primary device-attributes query replies.
 - SGR colors, text attributes, reset behavior, true color, and palette color.
 - Alternate screen entry, alternate screen exit, and scrollback interaction.
 - Terminal resizing and propagation of new size to pane primary processes.
