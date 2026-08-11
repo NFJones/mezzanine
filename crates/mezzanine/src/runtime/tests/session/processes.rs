@@ -1880,6 +1880,45 @@ fn runtime_foreground_process_event_waits_for_initial_prompt_before_bootstrap() 
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a pending bootstrap regains a bounded progress owner when the
+/// certified host shell returns from a foreign foreground process.
+///
+/// Initial shell metadata must not replace concrete prompt evidence, but that
+/// suppression must not strand a bootstrap after a foreground program such as
+/// SSH relinquishes the PTY. The returning certified shell is sufficient to
+/// resume the prompt-candidate and bootstrap-dispatch path.
+#[test]
+fn runtime_foreground_shell_return_recovers_pending_bootstrap_owner() {
+    let mut service = test_runtime_service();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let primary_pid = service.pane_processes().primary_pid("%1").unwrap();
+    service
+        .pane_processes_mut()
+        .set_foreground_process_group_id_for_test("%1", None);
+
+    service
+        .apply_pane_foreground_process_event("%1", "ssh", primary_pid.saturating_add(1), None)
+        .unwrap();
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::Unknown
+    );
+
+    service
+        .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
+        .unwrap();
+
+    assert_eq!(
+        service.pane_readiness_state("%1"),
+        PaneReadinessState::PromptCandidate
+    );
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+    assert!(service.pane_bootstrap_has_bounded_progress_owner("%1"));
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies stale readiness recovery can use async foreground metadata when
 /// synchronous PTY foreground queries are temporarily unavailable.
 ///

@@ -177,6 +177,13 @@ impl RuntimeSessionService {
                 .pane_current_working_directories
                 .insert(pane_id.clone(), PathBuf::from(current_working_directory));
         }
+        let previous_foreground_process_group = self
+            .process
+            .pane_foreground_process_groups
+            .get(&pane_id)
+            .copied();
+        let previous_foreground_certified_shell = previous_foreground_process_group
+            .and_then(|group| self.pane_process_group_is_certified_shell(&pane_id, group));
         self.process
             .pane_foreground_process_groups
             .insert(pane_id.clone(), process_group_id);
@@ -185,7 +192,10 @@ impl RuntimeSessionService {
             .pane_bootstrap_pending
             .contains(pane_id.as_str())
             && self.pane_readiness_state(&pane_id) == PaneReadinessState::Unknown;
-        if !awaiting_initial_prompt
+        let certified_shell_regained_foreground = previous_foreground_process_group.is_some()
+            && previous_foreground_certified_shell == Some(false)
+            && self.pane_foreground_certified_shell_state(&pane_id) == Some(true);
+        if (!awaiting_initial_prompt || certified_shell_regained_foreground)
             && self.pane_foreground_certified_shell_state(&pane_id) == Some(true)
         {
             let _ = self.observe_passive_shell_prompt_candidate(

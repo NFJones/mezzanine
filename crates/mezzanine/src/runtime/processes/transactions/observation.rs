@@ -145,11 +145,14 @@ impl RuntimeSessionService {
             .unwrap_or(primary_pid)
     }
 
-    /// Reports whether the pane foreground group is the primary shell or the
+    /// Reports whether one foreground process group is the primary shell or a
     /// non-primary shell certified for the current process and interaction epoch.
-    pub(crate) fn pane_foreground_certified_shell_state(&self, pane_id: &str) -> Option<bool> {
+    pub(crate) fn pane_process_group_is_certified_shell(
+        &self,
+        pane_id: &str,
+        foreground_group: u32,
+    ) -> Option<bool> {
         let primary_pid = self.primary_pid_for_live_pane_process(pane_id)?;
-        let foreground_group = self.pane_foreground_process_group_observation(pane_id).0?;
         let primary_process_group = self.pane_primary_process_group_id(pane_id, primary_pid);
         if foreground_group == primary_pid || foreground_group == primary_process_group {
             return Some(true);
@@ -167,6 +170,13 @@ impl RuntimeSessionService {
                     == Some(&identity.environment_signature)
                 && identity.process_group_id == foreground_group
         }))
+    }
+
+    /// Reports whether the pane foreground group is the primary shell or the
+    /// non-primary shell certified for the current process and interaction epoch.
+    pub(crate) fn pane_foreground_certified_shell_state(&self, pane_id: &str) -> Option<bool> {
+        let foreground_group = self.pane_foreground_process_group_observation(pane_id).0?;
+        self.pane_process_group_is_certified_shell(pane_id, foreground_group)
     }
 
     /// Starts a new runtime-owned agent-subshell handoff and invalidates state
