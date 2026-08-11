@@ -911,6 +911,14 @@ mod tests {
                 .contains("use `issue_update` to mark it `in-progress`")
         );
         assert!(fix_issues_document.text.contains(
+            "Query in-progress issues in the mez issue tracker for the current project first, then query open issues"
+        ));
+        assert!(
+            fix_issues_document
+                .text
+                .contains("Prioritize dependency-free in-progress issues over open issues")
+        );
+        assert!(fix_issues_document.text.contains(
             "do not repeat either query merely because another capability, inspection, edit, test, or provider call occurred"
         ));
         assert!(
