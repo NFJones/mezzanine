@@ -48,6 +48,20 @@ pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalO
                 Some(TerminalOscEvent::ShellCommandFinished { exit_code })
             }
         }
+        "R" => {
+            let values = parse_semicolon_key_values(fields);
+            let token = required_marker_field(&values, "mez_token")?;
+            let marker = required_marker_field(&values, "mez_marker")?;
+            match values.get("mez_receiver").copied()? {
+                "ready" => Some(TerminalOscEvent::ShellReceiverReady { token, marker }),
+                "complete" => Some(TerminalOscEvent::ShellReceiverComplete {
+                    token,
+                    marker,
+                    exit_code: required_marker_field(&values, "mez_status")?.parse().ok()?,
+                }),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -68,4 +82,47 @@ fn required_marker_field(values: &BTreeMap<&str, &str>, key: &str) -> Option<Str
         .copied()
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies private Bash receiver admission and completion records retain
+    /// their authenticated token, transaction marker, and final eval status.
+    #[test]
+    fn bash_receiver_events_parse_authenticated_protocol_fields() {
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_receiver=ready;mez_token=pane-token;mez_marker=transaction-marker"
+            ),
+            Some(TerminalOscEvent::ShellReceiverReady {
+                token: "pane-token".to_string(),
+                marker: "transaction-marker".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_receiver=complete;mez_token=pane-token;mez_marker=transaction-marker;mez_status=7"
+            ),
+            Some(TerminalOscEvent::ShellReceiverComplete {
+                token: "pane-token".to_string(),
+                marker: "transaction-marker".to_string(),
+                exit_code: 7,
+            })
+        );
+    }
+
+    /// Verifies incomplete, unknown, and non-numeric private receiver records
+    /// are discarded instead of becoming transaction state-machine events.
+    #[test]
+    fn bash_receiver_events_reject_malformed_protocol_fields() {
+        for payload in [
+            "133;R;mez_receiver=ready;mez_marker=transaction-marker",
+            "133;R;mez_receiver=unknown;mez_token=pane-token;mez_marker=transaction-marker",
+            "133;R;mez_receiver=complete;mez_token=pane-token;mez_marker=transaction-marker;mez_status=invalid",
+        ] {
+            assert_eq!(parse_mez_shell_transaction_osc(payload), None, "{payload}");
+        }
+    }
 }

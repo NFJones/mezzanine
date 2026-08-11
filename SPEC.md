@@ -4053,12 +4053,26 @@ be the sole condition for deciding that the shell is ready for more agent input.
 
 Mezzanine-injected shell transactions, agent-mode child shell handoff commands,
 readiness probes, bootstrap commands, tool discovery commands, and focused-shell
-hook wrappers SHOULD avoid polluting the user's shell history file and in-memory
-shell history. For `bash`-like POSIX shells, Mezzanine SHOULD temporarily
-disable shell history, set `HISTFILE=/dev/null` for the transaction or child
-shell handoff, remove the current wrapper prologue history entry when supported,
-and restore the previous history and `errexit` state after the transaction end
-marker is emitted or the child shell exits. For `zsh`, Mezzanine SHOULD install
+hook wrappers MUST NOT place generated Bash source, transport framing, or
+receiver metadata in the user's in-memory or persisted Bash history. Managed
+Bash panes MUST install a pane-private Readline binding after user startup
+processing. The binding MUST admit generated work only while the Readline edit
+buffer is empty, and its non-newline trigger MUST be followed initially by only
+bounded, authenticated admission metadata. Mezzanine MUST NOT send generated
+source until it observes a receiver-ready record authenticated by the
+pane-scoped token and correlated transaction marker. The receiver MUST validate
+the token, marker, sequence, declared byte length, SHA-256 digest, and explicit
+end record before evaluating source, and malformed or unavailable receiver
+support MUST fail closed without ordinary Readline command injection.
+
+The runtime MUST retain the generation-fenced transaction input lease from
+before the admission trigger is delivered until an authenticated
+receiver-complete record is observed or bounded transaction recovery revokes
+the owner. A transaction end marker emitted by evaluated source MUST NOT by
+itself release that lease. Receiver-complete MUST be emitted only after eval
+returns and callback cleanup begins, and must carry the pane token, transaction
+marker, and receiver status. User input and unrelated runtime input MUST remain
+deferred for the full interval. For `zsh`, Mezzanine SHOULD install
 a pane-scoped `zshaddhistory` hook after user startup processing that rejects
 only the authenticated Mezzanine control record which starts history isolation.
 That record SHOULD enter a private history context with `fc -p` before any

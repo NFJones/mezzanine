@@ -472,6 +472,13 @@ pub(crate) struct RuntimeProcessComponent {
     /// released. Filtering is therefore marker-scoped and cannot suppress an
     /// ordinary child process record-separator byte after the payload drains.
     shell_transaction_receiver_acknowledgements: std::collections::BTreeMap<String, usize>,
+    /// Managed Bash source frames retained until authenticated receiver admission.
+    shell_receiver_pending_payloads:
+        std::collections::BTreeMap<String, mez_mux::process::ShellInputDelivery>,
+    /// Transactions whose inner end marker cannot settle before receiver completion.
+    shell_receiver_completion_required: BTreeSet<String>,
+    /// Inner transaction-end metadata retained until the Bash callback completes.
+    shell_receiver_pending_ends: std::collections::BTreeMap<String, (String, String, String, i32)>,
     /// Agent-action markers whose child launch uses the Bubblewrap backend.
     sandboxed_shell_transaction_markers: BTreeSet<String>,
     /// Shared managed-home activity locks retained for sandboxed workloads.
@@ -638,6 +645,20 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Retains managed Bash source frames until the private receiver admits them.
+    pub(crate) fn register_shell_receiver_payload(
+        &mut self,
+        marker: &str,
+        payload: mez_mux::process::ShellInputDelivery,
+    ) {
+        self.process
+            .shell_receiver_pending_payloads
+            .insert(marker.to_string(), payload);
+        self.process
+            .shell_receiver_completion_required
+            .insert(marker.to_string());
+    }
+
     /// Reports whether an agent action has a live shell transaction.
     pub(crate) fn agent_action_has_running_shell_transaction(
         &self,
@@ -794,6 +815,9 @@ impl RuntimeSessionService {
         self.process
             .shell_transaction_receiver_acknowledgements
             .clear();
+        self.process.shell_receiver_pending_payloads.clear();
+        self.process.shell_receiver_completion_required.clear();
+        self.process.shell_receiver_pending_ends.clear();
         self.process.managed_home_activity_locks.clear();
     }
 
@@ -1324,6 +1348,7 @@ impl RuntimeSessionService {
             .shell_transaction_started_markers
             .contains(marker)
     }
+
     /// Installs a manual readiness override for a test epoch.
     pub(crate) fn mark_pane_readiness_override_for_tests(
         &mut self,
@@ -1547,6 +1572,17 @@ impl RuntimeSessionService {
             .pane_bash_compatibility
             .get(pane_id)
             .map(bash_compat::ManagedBashCompatibility::rcfile)
+    }
+
+    /// Returns the pane-scoped token authenticating private Bash receiver events.
+    pub(super) fn bash_receiver_token_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<&mez_agent::MarkerToken> {
+        self.process
+            .pane_bash_compatibility
+            .get(pane_id)
+            .map(bash_compat::ManagedBashCompatibility::token)
     }
 
     /// Runs the poll pane processes operation for this subsystem.

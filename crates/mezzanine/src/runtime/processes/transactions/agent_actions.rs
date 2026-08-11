@@ -112,6 +112,116 @@ impl RuntimeSessionService {
         Ok(1)
     }
 
+    /// Releases authenticated managed-Bash source frames after receiver admission.
+    pub(crate) fn observe_shell_receiver_ready(
+        &mut self,
+        output_pane_id: &str,
+        token: &str,
+        marker: &str,
+    ) -> Result<usize> {
+        let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
+            return Ok(0);
+        };
+        if transaction.pane_id != output_pane_id
+            || self
+                .bash_receiver_token_for_pane(output_pane_id)
+                .is_none_or(|expected| expected.as_str() != token)
+        {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "receiver-ready-metadata-mismatch",
+                "Bash receiver-ready metadata does not match runtime dispatch state",
+            );
+        }
+        let Some(payload) = self.process.shell_receiver_pending_payloads.remove(marker) else {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "unexpected-receiver-ready",
+                "Bash receiver emitted ready without pending private source frames",
+            );
+        };
+        let payload_len = payload.bytes.len();
+        if payload.receiver_acknowledgements {
+            let acknowledgement_count = payload
+                .bytes
+                .split_inclusive(|byte| *byte == b'\n')
+                .filter(|record| mez_mux::process::receiver_input_record_requires_ack(record))
+                .count();
+            self.process
+                .shell_transaction_receiver_acknowledgements
+                .insert(marker.to_string(), acknowledgement_count);
+        }
+        if let Some(transaction) = self.process.running_shell_transactions.get_mut(marker) {
+            transaction.started_at_unix_ms = current_unix_millis();
+        }
+        if let Err(error) = self.write_runtime_pane_shell_delivery(output_pane_id, payload) {
+            self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
+            return Ok(0);
+        }
+        self.append_agent_trace_turn_event(
+            output_pane_id,
+            &transaction.turn_id,
+            &format!("shell_receiver admitted marker={marker} bytes={payload_len}"),
+        )?;
+        Ok(1)
+    }
+
+    /// Settles a managed-Bash transaction only after callback cleanup completes.
+    pub(crate) fn observe_shell_receiver_complete(
+        &mut self,
+        output_pane_id: &str,
+        token: &str,
+        marker: &str,
+        receiver_exit_code: i32,
+    ) -> Result<usize> {
+        let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
+            return Ok(0);
+        };
+        if transaction.pane_id != output_pane_id
+            || self
+                .bash_receiver_token_for_pane(output_pane_id)
+                .is_none_or(|expected| expected.as_str() != token)
+            || !self
+                .process
+                .shell_receiver_completion_required
+                .remove(marker)
+        {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "receiver-complete-metadata-mismatch",
+                "Bash receiver-complete metadata does not match runtime dispatch state",
+            );
+        }
+        let Some((turn_id, agent_id, pane_id, exit_code)) =
+            self.process.shell_receiver_pending_ends.remove(marker)
+        else {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "receiver-complete-before-end",
+                "Bash receiver completed before the evaluated transaction emitted its end marker",
+            );
+        };
+        self.append_agent_trace_turn_event(
+            output_pane_id,
+            &transaction.turn_id,
+            &format!(
+                "shell_receiver completed marker={marker} receiver_exit_code={receiver_exit_code}"
+            ),
+        )?;
+        self.observe_agent_shell_transaction_end(
+            output_pane_id,
+            marker,
+            &turn_id,
+            &agent_id,
+            &pane_id,
+            exit_code,
+        )
+    }
+
     /// Releases a deferred transaction payload after its start proof settles.
     pub(crate) fn release_agent_shell_transaction_payload_after_start(
         &mut self,
@@ -241,6 +351,34 @@ impl RuntimeSessionService {
                 "end-marker-before-start-marker",
                 "shell transaction end marker arrived before the start marker",
             );
+        }
+        if self
+            .process
+            .shell_receiver_completion_required
+            .contains(marker)
+        {
+            if self
+                .process
+                .shell_receiver_pending_ends
+                .contains_key(marker)
+            {
+                return self.fail_shell_transaction_protocol_violation(
+                    marker,
+                    transaction_ref,
+                    "duplicate-end-before-receiver-complete",
+                    "Bash transaction emitted duplicate end markers before receiver completion",
+                );
+            }
+            self.process.shell_receiver_pending_ends.insert(
+                marker.to_string(),
+                (
+                    turn_id.to_string(),
+                    agent_id.to_string(),
+                    pane_id.to_string(),
+                    exit_code,
+                ),
+            );
+            return Ok(1);
         }
         let Some(mut transaction_ref) = self.remove_running_shell_transaction(marker) else {
             return Ok(0);

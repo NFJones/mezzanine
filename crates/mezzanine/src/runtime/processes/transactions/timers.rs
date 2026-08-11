@@ -166,6 +166,11 @@ impl RuntimeSessionService {
         self.process
             .shell_transaction_receiver_acknowledgements
             .remove(marker);
+        self.process.shell_receiver_pending_payloads.remove(marker);
+        self.process
+            .shell_receiver_completion_required
+            .remove(marker);
+        self.process.shell_receiver_pending_ends.remove(marker);
         self.process
             .sandboxed_shell_transaction_markers
             .remove(marker);

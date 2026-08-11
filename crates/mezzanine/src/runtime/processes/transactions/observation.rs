@@ -1209,6 +1209,25 @@ impl RuntimeSessionService {
                             )?);
                     }
                 }
+                TerminalOscEvent::ShellReceiverReady { token, marker } => {
+                    observed = observed.saturating_add(self.observe_shell_receiver_ready(
+                        output_pane_id,
+                        token,
+                        marker,
+                    )?);
+                }
+                TerminalOscEvent::ShellReceiverComplete {
+                    token,
+                    marker,
+                    exit_code,
+                } => {
+                    observed = observed.saturating_add(self.observe_shell_receiver_complete(
+                        output_pane_id,
+                        token,
+                        marker,
+                        *exit_code,
+                    )?);
+                }
                 TerminalOscEvent::ShellTransactionStart {
                     marker,
                     turn_id,

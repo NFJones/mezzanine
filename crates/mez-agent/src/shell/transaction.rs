@@ -340,8 +340,14 @@ impl ShellChildLaunch {
 /// Rendered shell input for one non-stateful shell transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellTransactionInput {
-    /// Shell wrapper source that defines and invokes the transaction receiver.
+    /// Admission trigger submitted to the interactive shell.
     pub wrapper: String,
+    /// Authenticated Bash source frames sent only after receiver admission.
+    ///
+    /// Other shell classifications leave this stage empty because their
+    /// existing private transport performs admission and source delivery in
+    /// one shell-specific operation.
+    pub receiver_payload: String,
     /// Base64 command payload consumed by the receiver after it starts.
     pub payload: String,
     /// Whether the rendered receiver emits one raw record-separator byte after
@@ -352,18 +358,22 @@ pub struct ShellTransactionInput {
 impl ShellTransactionInput {
     /// Returns the total byte length of all pane input for this transaction.
     pub fn len(&self) -> usize {
-        self.wrapper.len().saturating_add(self.payload.len())
+        self.wrapper
+            .len()
+            .saturating_add(self.receiver_payload.len())
+            .saturating_add(self.payload.len())
     }
 
     /// Reports whether this rendered transaction contains no bytes.
     pub fn is_empty(&self) -> bool {
-        self.wrapper.is_empty() && self.payload.is_empty()
+        self.wrapper.is_empty() && self.receiver_payload.is_empty() && self.payload.is_empty()
     }
 
     /// Combines wrapper and payload into one interactive-shell input string.
     pub fn combined(&self) -> String {
         let mut combined = String::with_capacity(self.len());
         combined.push_str(&self.wrapper);
+        combined.push_str(&self.receiver_payload);
         combined.push_str(&self.payload);
         combined
     }
@@ -1038,19 +1048,26 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
             command_file_lines = command_materialization.setup,
             child_invocation = child_invocation,
         );
+        let bash_transport = bash_private_receiver_transport(
+            &wrapper,
+            classification,
+            self.bash_receiver_token.as_ref(),
+            self.marker.as_str(),
+        );
         ShellTransactionInput {
-            wrapper: bash_private_receiver_transport(
-                &wrapper,
-                classification,
-                self.bash_receiver_token.as_ref(),
-            )
-            .unwrap_or_else(|| {
-                posix_shell_wrapper_transport(
-                    &wrapper,
-                    classification,
-                    self.zsh_history_token.as_ref(),
-                )
-            }),
+            wrapper: bash_transport.as_ref().map_or_else(
+                || {
+                    posix_shell_wrapper_transport(
+                        &wrapper,
+                        classification,
+                        self.zsh_history_token.as_ref(),
+                    )
+                },
+                |transport| transport.trigger.clone(),
+            ),
+            receiver_payload: bash_transport
+                .map(|transport| transport.payload)
+                .unwrap_or_default(),
             payload: command_materialization.payload,
             payload_receiver_acknowledgements: self.payload_receiver_acknowledgements,
         }
@@ -1087,7 +1104,8 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
     /// the pane shell state. This wrapper skips the child-shell isolation so
     /// mutations persist in the interactive shell context.
     pub fn render_stateful(&self) -> String {
-        self.render_posix_stateful_for_classification(ShellClassification::PosixSh)
+        self.render_stateful_for_classification_input(ShellClassification::PosixSh)
+            .combined()
     }
 
     /// Renders one stateful POSIX-compatible transaction for a known shell.
@@ -1156,10 +1174,35 @@ unset -f {function_name} 2>/dev/null || :\n\
         &self,
         classification: ShellClassification,
     ) -> String {
-        if classification == ShellClassification::Fish {
+        self.render_stateful_for_classification_input(classification)
+            .combined()
+    }
+
+    /// Renders stateful shell input with a separately gated Bash receiver stage.
+    pub fn render_stateful_for_classification_input(
+        &self,
+        classification: ShellClassification,
+    ) -> ShellTransactionInput {
+        let source = if classification == ShellClassification::Fish {
             self.render_fish_stateful()
         } else {
             self.render_posix_stateful_for_classification(classification)
+        };
+        let bash_transport = bash_private_receiver_transport(
+            &source,
+            classification,
+            self.bash_receiver_token.as_ref(),
+            self.marker.as_str(),
+        );
+        ShellTransactionInput {
+            wrapper: bash_transport
+                .as_ref()
+                .map_or(source, |transport| transport.trigger.clone()),
+            receiver_payload: bash_transport
+                .map(|transport| transport.payload)
+                .unwrap_or_default(),
+            payload: String::new(),
+            payload_receiver_acknowledgements: self.payload_receiver_acknowledgements,
         }
     }
 
@@ -1244,6 +1287,7 @@ end\n",
         );
         ShellTransactionInput {
             wrapper: fish_shell_wrapper_transport(&wrapper, self.marker.as_str()),
+            receiver_payload: String::new(),
             payload: command_materialization.payload,
             payload_receiver_acknowledgements: self.payload_receiver_acknowledgements,
         }
@@ -1898,24 +1942,67 @@ eval \"$MEZ_WRAPPER_SOURCE\"; {}\n",
     transport
 }
 
+/// Admission trigger and authenticated source frames for managed Bash.
+struct BashPrivateReceiverTransport {
+    /// Non-newline Readline trigger followed by source-free admission metadata.
+    trigger: String,
+    /// Bounded, sequenced source records delivered after receiver-ready.
+    payload: String,
+}
+
 /// Renders Bash source for the managed private Readline receiver.
 ///
 /// The trigger is a bound control byte rather than a newline-terminated
 /// command, so Bash never admits generated source into ordinary history. The
-/// receiver validates the pane-scoped token before it decodes and evaluates
-/// the following Base64 frame.
+/// admission record contains no generated source. Runtime must wait for the
+/// receiver-ready event before delivering the bounded source records.
 fn bash_private_receiver_transport(
     source: &str,
     classification: ShellClassification,
     token: Option<&MarkerToken>,
-) -> Option<String> {
+    marker: &str,
+) -> Option<BashPrivateReceiverTransport> {
     if classification != ShellClassification::Bash {
         return None;
     }
     let token = token?;
     let source = format!("unset MEZ_WRAPPER_SOURCE\n{source}");
+    let digest = Sha256::digest(source.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
-    Some(format!("\x07MEZ_BASH_RX {} {}\n", token.as_str(), encoded))
+    let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
+    let chunk_count = chunks.len();
+    let trigger = format!(
+        "\x07MEZ_BASH_RX1_BEGIN {} {} {} {} {}\n",
+        token.as_str(),
+        marker,
+        source.len(),
+        digest,
+        chunk_count
+    );
+    let mut payload = String::new();
+    for (sequence, chunk) in chunks.enumerate() {
+        let chunk = std::str::from_utf8(chunk)
+            .expect("standard base64 output should always be valid UTF-8");
+        payload.push_str(&format!(
+            "MEZ_BASH_RX1_DATA {} {} {} {}\n",
+            token.as_str(),
+            marker,
+            sequence,
+            chunk
+        ));
+    }
+    payload.push_str(&format!(
+        "MEZ_BASH_RX1_END {} {} {} {} {}\n",
+        token.as_str(),
+        marker,
+        chunk_count,
+        source.len(),
+        digest
+    ));
+    Some(BashPrivateReceiverTransport { trigger, payload })
 }
 
 /// Disables Bash history before the first physical wrapper framing record.

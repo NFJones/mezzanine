@@ -119,6 +119,22 @@ pub enum TerminalOscEvent {
         /// Parsed process exit code, when supplied by the terminal program.
         exit_code: Option<i32>,
     },
+    /// A managed Bash receiver admitted one private source transaction.
+    ShellReceiverReady {
+        /// Pane-scoped receiver token installed at Bash startup.
+        token: String,
+        /// Unpredictable transaction marker awaiting source delivery.
+        marker: String,
+    },
+    /// A managed Bash receiver completed eval and callback cleanup.
+    ShellReceiverComplete {
+        /// Pane-scoped receiver token installed at Bash startup.
+        token: String,
+        /// Unpredictable transaction marker that completed.
+        marker: String,
+        /// Eval status returned by the private receiver.
+        exit_code: i32,
+    },
     /// A Mezzanine-owned OSC 133 marker started a shell transaction.
     ShellTransactionStart {
         /// Unpredictable transaction marker used to correlate boundaries.

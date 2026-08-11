@@ -389,26 +389,25 @@ impl RuntimeSessionService {
         let transaction =
             transaction.with_output_max_raw_bytes(shell_transaction_output_max_raw_bytes(command));
         let transaction_input = if stateful {
-            None
+            transaction.render_stateful_for_classification_input(classification)
         } else {
-            Some(transaction.render_for_classification_input(classification))
+            transaction.render_for_classification_input(classification)
         };
-        let mut wrapper = if stateful {
-            transaction.render_stateful_for_classification(classification)
-        } else {
-            transaction_input
-                .as_ref()
-                .expect("non-stateful transactions render streamed input")
-                .wrapper
-                .clone()
-        };
+        let mut wrapper = transaction_input.wrapper.clone();
         if !wrapper.ends_with('\n') {
             wrapper.push('\n');
         }
         let payload_len = transaction_input
-            .as_ref()
-            .map(|input| input.payload.len())
-            .unwrap_or_default();
+            .receiver_payload
+            .len()
+            .saturating_add(transaction_input.payload.len());
+        let receiver_payload = (!transaction_input.receiver_payload.is_empty()).then(|| {
+            mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                transaction_input.receiver_payload.clone().into_bytes(),
+                marker_id.clone(),
+                true,
+            )
+        });
         let is_internal_apply_patch_write_phase =
             matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
                 && apply_patch_transaction_phase(command)
@@ -493,14 +492,12 @@ impl RuntimeSessionService {
                     current_unix_millis(),
                     timeout_ms,
                 )),
-                pending_input_payload: transaction_input.and_then(|input| {
-                    (!input.payload.is_empty()).then(|| {
-                        mez_mux::process::ShellInputDelivery::receiver_acknowledged(
-                            input.payload.into_bytes(),
-                            marker_id.clone(),
-                            input.payload_receiver_acknowledgements,
-                        )
-                    })
+                pending_input_payload: (!transaction_input.payload.is_empty()).then(|| {
+                    mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                        transaction_input.payload.into_bytes(),
+                        marker_id.clone(),
+                        transaction_input.payload_receiver_acknowledgements,
+                    )
                 }),
                 observed_output_bytes: 0,
                 observed_output_preview: String::new(),
@@ -508,6 +505,9 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if let Some(receiver_payload) = receiver_payload {
+            self.register_shell_receiver_payload(&marker_id, receiver_payload);
+        }
         if sandbox_audit_summary.is_some() {
             self.register_sandboxed_shell_transaction_marker(&marker_id);
         }

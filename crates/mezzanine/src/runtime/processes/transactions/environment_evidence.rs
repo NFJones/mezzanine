@@ -155,6 +155,13 @@ impl RuntimeSessionService {
             )?,
         );
         let input = transaction.render_for_classification_input(classification);
+        let receiver_payload = (!input.receiver_payload.is_empty()).then(|| {
+            mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                input.receiver_payload.clone().into_bytes(),
+                marker_id.clone(),
+                true,
+            )
+        });
         let mut wrapper = input.wrapper;
         if !wrapper.ends_with(char::from(10)) {
             wrapper.push(char::from(10));
@@ -186,6 +193,9 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if let Some(receiver_payload) = receiver_payload {
+            self.register_shell_receiver_payload(&marker_id, receiver_payload);
+        }
         if let Err(error) = self.write_runtime_pane_shell_input(&turn.pane_id, wrapper.as_bytes()) {
             self.fail_shell_transactions_for_pane_write_failure(&turn.pane_id, error.message())?;
             return Err(error);
