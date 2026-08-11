@@ -3156,12 +3156,18 @@ or separately proven pre-payload failure MAY create one normal approval for an
 exact unsandboxed retry. Bubblewrap lifecycle status MUST remain separate from command output. A
 validated `exit-code` event proves payload execution; clean closure without that
 event proves only that payload execution was not established. A non-zero payload
-exit MAY enter one bounded structured model assessment. Only a validated
-`sandbox_failure` assessment MAY create an approval, which MUST warn that partial
-effects may already exist. Command-failure, uncertain, malformed, timed-out, or
-failed assessments MUST settle the original command normally. Approval grants
-only the retained turn/action one unsandboxed retry and MUST never execute it
-automatically. For shell actions, Bubblewrap MUST enforce network denial with
+exit MAY enter one bounded structured model assessment. Sandbox-preserving model
+recovery MUST be the default when a corrected sandboxed command, narrower
+diagnostic, or supported alternate action remains reasonable. Only an explicit,
+high-confidence `sandbox_failure` assessment that names an active restriction
+and states that reasonable sandbox-preserving recovery is exhausted MAY create
+an approval, which MUST warn that partial effects may already exist.
+Command-failure, uncertain, malformed, timed-out, failed, or non-escalating
+assessments MUST settle the original command normally and return bounded command,
+Bubblewrap, assessment, and partial-effect facts to the acting model. The failed
+command MUST NOT be replayed automatically. Approval grants only the retained
+turn/action one unsandboxed retry and MUST never execute it automatically. For
+shell actions, Bubblewrap MUST enforce network denial with
 an isolated network namespace when `permissions.network_policy` is `deny`.
 When that policy is `allow`, Bubblewrap MUST use an explicit connected profile
 for every shell action without inferring network access from the command.

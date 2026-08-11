@@ -1594,7 +1594,7 @@ fn runtime_sandbox_failure_assessment_offers_warned_fallback_approval() {
     let response = mez_agent::ModelResponse {
         provider: "runtime-batch".to_string(),
         model: "test".to_string(),
-        raw_text: r#"{"version":1,"class":"sandbox_failure","confidence":0.93,"rationale":"the fixed minimal environment likely removed a required variable","retry_requested":true}"#.to_string(),
+        raw_text: r#"{"version":1,"class":"sandbox_failure","confidence":0.93,"rationale":"the fixed minimal path removed an irreducible required executable","decision":"unsandboxed_approval","restriction_id":"minimal-path","sandboxed_recovery_exhausted":true}"#.to_string(),
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),
@@ -1621,6 +1621,64 @@ fn runtime_sandbox_failure_assessment_offers_warned_fallback_approval() {
             .map(Vec::len),
         Some(1)
     );
+}
+
+/// Verifies a plausible sandbox-preserving correction returns structured
+/// failure facts to the acting model without approval or automatic replay.
+#[test]
+fn runtime_sandbox_failure_assessment_prefers_model_recovery() {
+    let (mut service, turn_id, action_id) = sandbox_fallback_execution_service();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == turn_id)
+        .cloned()
+        .unwrap();
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn_id)
+        .cloned()
+        .unwrap();
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    service
+        .queue_sandbox_failure_assessment(
+            &turn,
+            &action_id,
+            "sandbox-model-recovery-marker",
+            sandbox_failure_transaction(&turn_id, &action_id),
+            1,
+        )
+        .unwrap();
+    let response = mez_agent::ModelResponse {
+        provider: "runtime-batch".to_string(),
+        model: "test".to_string(),
+        raw_text: r#"{"version":1,"class":"sandbox_failure","confidence":0.78,"rationale":"a narrower command can locate the executable within the sandbox","decision":"model_recovery","restriction_id":"minimal-path","sandboxed_recovery_exhausted":false}"#.to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Default::default(),
+        action_batch: None,
+        provider_transcript_events: Vec::new(),
+    };
+
+    service
+        .apply_sandbox_failure_assessment_provider_response(&turn, &response)
+        .unwrap();
+
+    assert!(service.blocked_approvals().pending().is_empty());
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    let execution = service.agent_turn_executions().get(&turn_id).unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Running);
+    let structured = execution.action_results[0]
+        .structured_content_json
+        .as_deref()
+        .unwrap();
+    assert!(structured.contains(r#""decision":"model_recovery""#));
+    assert!(structured.contains(r#""bubblewrap_status":"payload_executed_nonzero""#));
+    assert!(structured.contains(r#""partial_effect_warning":true"#));
+    assert!(structured.contains(r#""automatic_replay":false"#));
+    assert!(structured.contains(r#""exit_code":1"#));
+    assert!(structured.contains("permission denied"));
 }
 
 /// Verifies a delayed Bubblewrap completion for an action superseded by a
@@ -1695,7 +1753,7 @@ fn runtime_command_failure_assessment_does_not_offer_unsandboxed_retry() {
     let response = mez_agent::ModelResponse {
         provider: "runtime-batch".to_string(),
         model: "test".to_string(),
-        raw_text: r#"{"version":1,"class":"command_failure","confidence":0.88,"rationale":"the command reported its own invalid input","retry_requested":false}"#.to_string(),
+        raw_text: r#"{"version":1,"class":"command_failure","confidence":0.88,"rationale":"the command reported its own invalid input","decision":"ordinary_failure","restriction_id":null,"sandboxed_recovery_exhausted":false}"#.to_string(),
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),

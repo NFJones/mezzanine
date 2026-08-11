@@ -604,14 +604,25 @@ pub fn openai_sandbox_failure_assessment_response_format() -> serde_json::Value 
                 },
                 "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
                 "rationale": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                "retry_requested": { "type": "boolean" }
+                "decision": {
+                    "type": "string",
+                    "enum": ["model_recovery", "unsandboxed_approval", "ordinary_failure"]
+                },
+                "restriction_id": {
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "maxLength": 128
+                },
+                "sandboxed_recovery_exhausted": { "type": "boolean" }
             },
             "required": [
                 "version",
                 "class",
                 "confidence",
                 "rationale",
-                "retry_requested"
+                "decision",
+                "restriction_id",
+                "sandboxed_recovery_exhausted"
             ],
             "additionalProperties": false
         }

@@ -73,6 +73,29 @@ impl SandboxFailureAssessmentClass {
     }
 }
 
+/// Recommended next step after one ambiguous Bubblewrap failure assessment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxFailureAssessmentDecision {
+    /// Return the failure evidence to the acting model for a safer correction,
+    /// narrower diagnostic, or supported alternative action.
+    ModelRecovery,
+    /// Offer one warned, approval-gated unsandboxed execution attempt.
+    UnsandboxedApproval,
+    /// Treat the result as an ordinary command failure without sandbox advice.
+    OrdinaryFailure,
+}
+
+impl SandboxFailureAssessmentDecision {
+    /// Returns the stable wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ModelRecovery => "model_recovery",
+            Self::UnsandboxedApproval => "unsandboxed_approval",
+            Self::OrdinaryFailure => "ordinary_failure",
+        }
+    }
+}
+
 /// Strictly validated model assessment of an ambiguous sandbox failure.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SandboxFailureAssessment {
@@ -82,8 +105,13 @@ pub struct SandboxFailureAssessment {
     pub confidence: f64,
     /// Short rationale retained for audit diagnostics.
     pub rationale: String,
-    /// Whether the model recommends offering an unsandboxed retry approval.
-    pub retry_requested: bool,
+    /// Explicit conservative next-step recommendation.
+    pub decision: SandboxFailureAssessmentDecision,
+    /// Active Bubblewrap restriction specifically implicated by the evidence.
+    pub restriction_id: Option<String>,
+    /// Whether reasonable sandboxed corrections, diagnostics, and supported
+    /// alternate actions have been exhausted.
+    pub sandboxed_recovery_exhausted: bool,
 }
 
 /// Error returned by sandbox assessment request or response validation.
@@ -172,7 +200,7 @@ pub fn sandbox_failure_assessment_request(
                 role: ModelMessageRole::System,
                 source: ContextSourceKind::System,
                 placement: ContextPlacement::StablePrefix,
-                content: "Classify one ambiguous Bubblewrap payload failure. Return only the requested JSON. Never infer causality from exit code alone. Choose sandbox_failure only when the bounded evidence makes sandbox policy the likely cause; otherwise choose command_failure or uncertain. retry_requested may be true only for sandbox_failure. The payload may already have produced partial effects, and your response never grants execution authority.".to_string(),
+                content: "Classify one ambiguous Bubblewrap payload failure. Return only the requested JSON. Never infer causality from exit code alone. Choose sandbox_failure only when bounded evidence identifies a specific active restriction as the likely cause; otherwise choose command_failure or uncertain. Prefer model_recovery whenever a corrected sandboxed command, narrower diagnostic, or supported alternate action is reasonable. Choose unsandboxed_approval only for high-confidence sandbox_failure evidence naming the active restriction and only when sandbox-preserving recovery is exhausted. Use ordinary_failure when no sandbox-specific recovery advice is warranted. The payload may already have produced partial effects, and your response never grants execution authority.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Context,
@@ -196,12 +224,14 @@ pub fn sandbox_failure_assessment_from_text(
     let object = value.as_object().ok_or_else(|| {
         SandboxFailureAssessmentError::new("sandbox failure assessment must be a JSON object")
     })?;
-    const REQUIRED_FIELDS: [&str; 5] = [
+    const REQUIRED_FIELDS: [&str; 7] = [
         "version",
         "class",
         "confidence",
         "rationale",
-        "retry_requested",
+        "decision",
+        "restriction_id",
+        "sandboxed_recovery_exhausted",
     ];
     if object.len() != REQUIRED_FIELDS.len()
         || object
@@ -248,24 +278,53 @@ pub fn sandbox_failure_assessment_from_text(
             )
         })?
         .to_string();
-    let retry_requested = object
-        .get("retry_requested")
+    let decision = match object.get("decision").and_then(serde_json::Value::as_str) {
+        Some("model_recovery") => SandboxFailureAssessmentDecision::ModelRecovery,
+        Some("unsandboxed_approval") => SandboxFailureAssessmentDecision::UnsandboxedApproval,
+        Some("ordinary_failure") => SandboxFailureAssessmentDecision::OrdinaryFailure,
+        _ => {
+            return Err(SandboxFailureAssessmentError::new(
+                "sandbox failure assessment decision is invalid",
+            ));
+        }
+    };
+    let restriction_id = match object.get("restriction_id") {
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(value))
+            if !value.trim().is_empty() && value.len() <= 128 =>
+        {
+            Some(value.clone())
+        }
+        _ => {
+            return Err(SandboxFailureAssessmentError::new(
+                "sandbox failure assessment restriction_id is invalid",
+            ));
+        }
+    };
+    let sandboxed_recovery_exhausted = object
+        .get("sandboxed_recovery_exhausted")
         .and_then(serde_json::Value::as_bool)
         .ok_or_else(|| {
             SandboxFailureAssessmentError::new(
-                "sandbox failure assessment retry_requested is missing",
+                "sandbox failure assessment sandboxed_recovery_exhausted is missing",
             )
         })?;
-    if retry_requested && class != SandboxFailureAssessmentClass::SandboxFailure {
+    if decision == SandboxFailureAssessmentDecision::UnsandboxedApproval
+        && (class != SandboxFailureAssessmentClass::SandboxFailure
+            || restriction_id.is_none()
+            || !sandboxed_recovery_exhausted)
+    {
         return Err(SandboxFailureAssessmentError::new(
-            "only sandbox_failure may request an unsandboxed retry",
+            "unsandboxed approval requires a named sandbox failure and exhausted sandboxed recovery",
         ));
     }
     Ok(SandboxFailureAssessment {
         class,
         confidence,
         rationale,
-        retry_requested,
+        decision,
+        restriction_id,
+        sandboxed_recovery_exhausted,
     })
 }
 
@@ -273,28 +332,51 @@ pub fn sandbox_failure_assessment_from_text(
 mod tests {
     use super::*;
 
-    /// Valid assessments retain typed attribution and retry intent.
+    /// Valid assessments retain typed attribution and explicit recovery intent.
     #[test]
     fn parses_typed_sandbox_failure_assessment() {
         let assessment = sandbox_failure_assessment_from_text(
-            r#"{"version":1,"class":"sandbox_failure","confidence":0.9,"rationale":"write was denied by the read-only projection","retry_requested":true}"#,
+            r#"{"version":1,"class":"sandbox_failure","confidence":0.9,"rationale":"write was denied by the authority projection","decision":"unsandboxed_approval","restriction_id":"authority-mounts-only","sandboxed_recovery_exhausted":true}"#,
         )
         .unwrap();
         assert_eq!(
             assessment.class,
             SandboxFailureAssessmentClass::SandboxFailure
         );
-        assert!(assessment.retry_requested);
+        assert_eq!(
+            assessment.decision,
+            SandboxFailureAssessmentDecision::UnsandboxedApproval
+        );
+        assert_eq!(
+            assessment.restriction_id.as_deref(),
+            Some("authority-mounts-only")
+        );
     }
 
-    /// Uncertain or command failures cannot smuggle a retry recommendation.
+    /// Uncertain or command failures cannot smuggle an approval recommendation.
     #[test]
     fn rejects_retry_for_non_sandbox_classification() {
         assert!(
             sandbox_failure_assessment_from_text(
-                r#"{"version":1,"class":"uncertain","confidence":0.4,"rationale":"insufficient evidence","retry_requested":true}"#,
+                r#"{"version":1,"class":"uncertain","confidence":0.4,"rationale":"insufficient evidence","decision":"unsandboxed_approval","restriction_id":"minimal-path","sandboxed_recovery_exhausted":true}"#,
             )
             .is_err()
         );
+    }
+
+    /// Model recovery remains valid without claiming a specific restriction
+    /// or exhausting safer sandbox-preserving options.
+    #[test]
+    fn parses_conservative_model_recovery() {
+        let assessment = sandbox_failure_assessment_from_text(
+            r#"{"version":1,"class":"sandbox_failure","confidence":0.72,"rationale":"a narrower diagnostic can identify the missing executable","decision":"model_recovery","restriction_id":"minimal-path","sandboxed_recovery_exhausted":false}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            assessment.decision,
+            SandboxFailureAssessmentDecision::ModelRecovery
+        );
+        assert!(!assessment.sandboxed_recovery_exhausted);
     }
 }

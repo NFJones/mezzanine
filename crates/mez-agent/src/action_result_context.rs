@@ -332,6 +332,52 @@ fn append_shell_action_result_context(
             "transport_incomplete",
             observation.get("transport_incomplete"),
         );
+        if let Some(assessment) = observation
+            .get("sandbox_assessment")
+            .and_then(serde_json::Value::as_object)
+        {
+            append_json_scalar_line(
+                lines,
+                "bubblewrap_status",
+                assessment.get("bubblewrap_status"),
+            );
+            append_json_scalar_line(lines, "sandbox_assessment_class", assessment.get("class"));
+            append_json_scalar_line(
+                lines,
+                "sandbox_assessment_decision",
+                assessment.get("decision"),
+            );
+            append_json_scalar_line(
+                lines,
+                "sandbox_assessment_confidence",
+                assessment.get("confidence"),
+            );
+            append_json_scalar_line(
+                lines,
+                "sandbox_assessment_rationale",
+                assessment.get("rationale"),
+            );
+            append_json_scalar_line(
+                lines,
+                "sandbox_restriction_id",
+                assessment.get("restriction_id"),
+            );
+            append_true_bool_line(
+                lines,
+                "sandboxed_recovery_exhausted",
+                assessment.get("sandboxed_recovery_exhausted"),
+            );
+            append_true_bool_line(
+                lines,
+                "partial_effect_warning",
+                assessment.get("partial_effect_warning"),
+            );
+            append_json_scalar_line(
+                lines,
+                "automatic_replay",
+                assessment.get("automatic_replay"),
+            );
+        }
     }
     let output = shell_action_result_output_for_context(result, terminal_observation);
     if !output.trim().is_empty() {

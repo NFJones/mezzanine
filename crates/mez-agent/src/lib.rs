@@ -433,8 +433,9 @@ pub use routing::{
 };
 pub use sandbox_assessment::{
     SANDBOX_FAILURE_ASSESSMENT_OUTPUT_MAX_BYTES, SandboxFailureAssessment,
-    SandboxFailureAssessmentClass, SandboxFailureAssessmentError, SandboxFailureAssessmentEvidence,
-    sandbox_failure_assessment_from_text, sandbox_failure_assessment_request,
+    SandboxFailureAssessmentClass, SandboxFailureAssessmentDecision, SandboxFailureAssessmentError,
+    SandboxFailureAssessmentEvidence, sandbox_failure_assessment_from_text,
+    sandbox_failure_assessment_request,
 };
 pub use scheduler::{
     AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ProviderRetryDispatchResult,

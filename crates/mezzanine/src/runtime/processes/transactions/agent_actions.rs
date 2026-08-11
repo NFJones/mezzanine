@@ -15,6 +15,14 @@ use mez_agent::semantic_patch_planning::{
     APPLY_PATCH_RESULT_MARKER, ApplyPatchFileOutcome, parse_apply_patch_file_outcomes,
 };
 
+/// Additional facts used while settling one observed shell transaction.
+struct ShellTransactionSettlement<'a> {
+    /// Exit status reported by the pane transaction.
+    exit_code: i32,
+    /// Optional Bubblewrap assessment retained for model recovery.
+    sandbox_assessment: Option<&'a mez_agent::SandboxFailureAssessment>,
+}
+
 impl RuntimeSessionService {
     /// Re-enters ordinary shell settlement after an internal sandbox-failure
     /// assessment declines or cannot safely request an approval.
@@ -22,6 +30,7 @@ impl RuntimeSessionService {
         &mut self,
         pending: crate::runtime::RuntimeSandboxFailureAssessment,
         reason: &str,
+        assessment: Option<&mez_agent::SandboxFailureAssessment>,
     ) -> Result<()> {
         let turn = self
             .agent_turn_ledger()
@@ -34,20 +43,23 @@ impl RuntimeSessionService {
             &pending.transaction.pane_id,
             &pending.transaction.turn_id,
             &format!(
-                "sandbox_failure_assessment settled action={} reason={} retry_requested=false",
+                "sandbox_failure_assessment settled action={} reason={} automatic_replay=false",
                 pending.action_id, reason
             ),
         )?;
         self.process
             .running_shell_transactions
             .insert(pending.marker.clone(), pending.transaction.clone());
-        let _ = self.observe_agent_shell_transaction_end(
+        let _ = self.observe_agent_shell_transaction_end_with_sandbox_assessment(
             &pending.transaction.pane_id,
             &pending.marker,
             &pending.transaction.turn_id,
             &turn.agent_id,
             &pending.transaction.pane_id,
-            pending.exit_code,
+            ShellTransactionSettlement {
+                exit_code: pending.exit_code,
+                sandbox_assessment: assessment,
+            },
         )?;
         Ok(())
     }
@@ -161,6 +173,34 @@ impl RuntimeSessionService {
         pane_id: &str,
         exit_code: i32,
     ) -> Result<usize> {
+        self.observe_agent_shell_transaction_end_with_sandbox_assessment(
+            output_pane_id,
+            marker,
+            turn_id,
+            agent_id,
+            pane_id,
+            ShellTransactionSettlement {
+                exit_code,
+                sandbox_assessment: None,
+            },
+        )
+    }
+
+    /// Settles one shell transaction while optionally retaining a bounded
+    /// Bubblewrap assessment for the acting model's next recovery decision.
+    fn observe_agent_shell_transaction_end_with_sandbox_assessment(
+        &mut self,
+        output_pane_id: &str,
+        marker: &str,
+        turn_id: &str,
+        agent_id: &str,
+        pane_id: &str,
+        settlement: ShellTransactionSettlement<'_>,
+    ) -> Result<usize> {
+        let ShellTransactionSettlement {
+            exit_code,
+            sandbox_assessment,
+        } = settlement;
         let Some(transaction_ref) = self.process.running_shell_transactions.get(marker).cloned()
         else {
             return Ok(0);
@@ -519,6 +559,19 @@ impl RuntimeSessionService {
             } else {
                 None
             };
+            let sandbox_assessment = sandbox_assessment.map(|assessment| {
+                serde_json::json!({
+                    "class": assessment.class.as_str(),
+                    "decision": assessment.decision.as_str(),
+                    "confidence": assessment.confidence,
+                    "rationale": assessment.rationale,
+                    "restriction_id": assessment.restriction_id,
+                    "sandboxed_recovery_exhausted": assessment.sandboxed_recovery_exhausted,
+                    "bubblewrap_status": "payload_executed_nonzero",
+                    "partial_effect_warning": true,
+                    "automatic_replay": false
+                })
+            });
             let structured_content = mez_agent::shell_action_structured_content_json(
                 &action,
                 &local_plan,
@@ -538,7 +591,8 @@ impl RuntimeSessionService {
                     "boundary_state": "end-marker-observed",
                     "output_truncated": transaction_ref.observed_output_truncated || transport_diagnostics.output_truncated(),
                     "transport_incomplete": transport_diagnostics.transport_incomplete(),
-                    "transport_diagnostics": transport_diagnostics.to_json()
+                    "transport_diagnostics": transport_diagnostics.to_json(),
+                    "sandbox_assessment": sandbox_assessment
                 }),
             );
             let plain_shell_command =

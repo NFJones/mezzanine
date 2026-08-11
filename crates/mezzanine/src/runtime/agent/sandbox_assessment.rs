@@ -158,9 +158,10 @@ impl RuntimeSessionService {
         self.sandbox_failure_assessment_request_for_turn(turn_id)
     }
 
-    /// Applies one structured assessment response. Only an explicit validated
-    /// sandbox-failure attribution may create an approval; every other result
-    /// settles the original command failure normally.
+    /// Applies one structured assessment response. Only an explicit,
+    /// high-confidence attribution to a named active restriction may create
+    /// an approval; every other result settles the original command failure
+    /// with model-readable recovery facts.
     pub(crate) fn apply_sandbox_failure_assessment_provider_response(
         &mut self,
         turn: &AgentTurnRecord,
@@ -180,7 +181,16 @@ impl RuntimeSessionService {
         let assessment = mez_agent::sandbox_failure_assessment_from_text(&response.raw_text);
         if let Ok(assessment) = &assessment
             && assessment.class == mez_agent::SandboxFailureAssessmentClass::SandboxFailure
-            && assessment.retry_requested
+            && assessment.decision
+                == mez_agent::SandboxFailureAssessmentDecision::UnsandboxedApproval
+            && assessment.confidence >= 0.9
+            && assessment.sandboxed_recovery_exhausted
+            && assessment
+                .restriction_id
+                .as_deref()
+                .is_some_and(|restriction| {
+                    crate::security::sandbox::BUBBLEWRAP_RESTRICTION_IDS.contains(&restriction)
+                })
         {
             let proof = format!(
                 "model confidence={:.3}: {}",
@@ -190,8 +200,11 @@ impl RuntimeSessionService {
                 &turn.pane_id,
                 &turn.turn_id,
                 &format!(
-                    "sandbox_failure_assessment applied class={} confidence={:.3} retry_requested=true",
-                    assessment.class.as_str(), assessment.confidence
+                    "sandbox_failure_assessment applied class={} decision={} confidence={:.3} restriction={} sandboxed_recovery_exhausted=true",
+                    assessment.class.as_str(),
+                    assessment.decision.as_str(),
+                    assessment.confidence,
+                    assessment.restriction_id.as_deref().unwrap_or("none")
                 ),
             )?;
             if self.offer_sandbox_fallback_approval(
@@ -207,9 +220,13 @@ impl RuntimeSessionService {
         }
         let reason = assessment
             .as_ref()
-            .map(|assessment| assessment.class.as_str())
+            .map(|assessment| assessment.decision.as_str())
             .unwrap_or("invalid_assessment");
-        self.settle_sandbox_failure_assessment_as_command_failure(pending, reason)
+        self.settle_sandbox_failure_assessment_as_command_failure(
+            pending,
+            reason,
+            assessment.as_ref().ok(),
+        )
     }
 
     /// Settles a pending assessment as the original command failure when the
@@ -224,7 +241,7 @@ impl RuntimeSessionService {
         };
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
-        self.settle_sandbox_failure_assessment_as_command_failure(pending, reason)?;
+        self.settle_sandbox_failure_assessment_as_command_failure(pending, reason, None)?;
         Ok(true)
     }
 }
