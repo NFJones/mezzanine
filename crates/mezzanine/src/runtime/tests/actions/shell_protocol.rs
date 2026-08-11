@@ -827,12 +827,13 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
         eprintln!("skipping bash parent-shell regression because bash is unavailable");
         return;
     };
+    let root = temp_root("bash-parent-shell-survival");
     let mut service = RuntimeSessionService::with_event_log(
         Session::new_default(
             ResolvedShell::new(bash_path, ShellSource::ShellEnv),
             Size::new(80, 24).unwrap(),
         ),
-        PathBuf::from("/tmp/mez-1000/default.sock"),
+        root.join("default.sock"),
         100,
         10,
         1024,
@@ -946,12 +947,13 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         eprintln!("skipping bash strict-option regression because bash is unavailable");
         return;
     };
+    let root = temp_root("bash-strict-parent-shell-survival");
     let mut service = RuntimeSessionService::with_event_log(
         Session::new_default(
             ResolvedShell::new(bash_path, ShellSource::ShellEnv),
             Size::new(80, 24).unwrap(),
         ),
-        PathBuf::from("/tmp/mez-1000/default.sock"),
+        root.join("default.sock"),
         100,
         10,
         1024,

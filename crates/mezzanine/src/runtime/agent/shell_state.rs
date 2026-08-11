@@ -393,6 +393,7 @@ impl RuntimeSessionService {
         } else {
             transaction.render_for_classification_input(classification)
         };
+        self.require_generated_shell_input(&transaction_input)?;
         let mut wrapper = transaction_input.wrapper.clone();
         if !wrapper.ends_with('\n') {
             wrapper.push('\n');

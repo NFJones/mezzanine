@@ -54,6 +54,7 @@ pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalO
             let marker = required_marker_field(&values, "mez_marker")?;
             match values.get("mez_receiver").copied()? {
                 "ready" => Some(TerminalOscEvent::ShellReceiverReady { token, marker }),
+                "installed" => Some(TerminalOscEvent::ShellReceiverInstalled { token, marker }),
                 "complete" => Some(TerminalOscEvent::ShellReceiverComplete {
                     token,
                     marker,
@@ -103,6 +104,15 @@ mod tests {
         );
         assert_eq!(
             parse_mez_shell_transaction_osc(
+                "133;R;mez_receiver=installed;mez_token=pane-token;mez_marker=transaction-marker"
+            ),
+            Some(TerminalOscEvent::ShellReceiverInstalled {
+                token: "pane-token".to_string(),
+                marker: "transaction-marker".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
                 "133;R;mez_receiver=complete;mez_token=pane-token;mez_marker=transaction-marker;mez_status=7"
             ),
             Some(TerminalOscEvent::ShellReceiverComplete {
@@ -119,6 +129,7 @@ mod tests {
     fn bash_receiver_events_reject_malformed_protocol_fields() {
         for payload in [
             "133;R;mez_receiver=ready;mez_marker=transaction-marker",
+            "133;R;mez_receiver=installed;mez_token=pane-token;mez_marker=",
             "133;R;mez_receiver=unknown;mez_token=pane-token;mez_marker=transaction-marker",
             "133;R;mez_receiver=complete;mez_token=pane-token;mez_marker=transaction-marker;mez_status=invalid",
         ] {

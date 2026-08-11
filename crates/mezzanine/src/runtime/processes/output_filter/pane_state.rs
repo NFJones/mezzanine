@@ -355,7 +355,8 @@ impl RuntimeSessionService {
                 RunningShellTransactionKind::AgentAction { .. } => {
                     has_agent_action = true;
                 }
-                RunningShellTransactionKind::ReadinessProbe
+                RunningShellTransactionKind::FocusedShellHook
+                | RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
                 | RunningShellTransactionKind::ShellIdentityProbe { .. }
                 | RunningShellTransactionKind::PathResolution { .. }

@@ -115,6 +115,7 @@ __mez_bash_receiver_reset() {
 }
 __mez_bash_receiver() {
     IFS=' ' builtin read -r MEZ_BASH_RECEIVER_KIND MEZ_BASH_RECEIVER_FRAME_TOKEN MEZ_BASH_RECEIVER_FRAME_MARKER MEZ_BASH_RECEIVER_LENGTH MEZ_BASH_RECEIVER_DIGEST MEZ_BASH_RECEIVER_CHUNKS || return 1
+    MEZ_BASH_RECEIVER_KIND=${MEZ_BASH_RECEIVER_KIND#$'\a'}
     [[ $MEZ_BASH_RECEIVER_KIND == MEZ_BASH_RX1_BEGIN && $MEZ_BASH_RECEIVER_FRAME_TOKEN == "$MEZ_BASH_RECEIVER_TOKEN" ]] || { __mez_bash_receiver_reset; return 1; }
     [[ $MEZ_BASH_RECEIVER_FRAME_MARKER && $MEZ_BASH_RECEIVER_LENGTH =~ ^[0-9]+$ && $MEZ_BASH_RECEIVER_LENGTH -le 16777216 && $MEZ_BASH_RECEIVER_DIGEST =~ ^[0-9a-f]{64}$ && $MEZ_BASH_RECEIVER_CHUNKS =~ ^[0-9]+$ && $MEZ_BASH_RECEIVER_CHUNKS -le 34953 ]] || { __mez_bash_receiver_reset; return 1; }
     [[ -z ${READLINE_LINE-} ]] || { __mez_bash_receiver_reset; return 1; }
@@ -155,6 +156,13 @@ __mez_bash_receiver() {
 bind -m emacs-standard -x '"\C-g":__mez_bash_receiver'
 bind -m vi-insertion -x '"\C-g":__mez_bash_receiver'
 bind -m vi-command -x '"\C-g":__mez_bash_receiver'
+if [[ -n ${MEZ_BASH_RECEIVER_INSTALL_MARKER-} ]]; then
+    MEZ_BASH_RECEIVER_INSTALLED_MARKER=$MEZ_BASH_RECEIVER_INSTALL_MARKER
+    unset MEZ_BASH_RECEIVER_INSTALL_MARKER
+    command printf '\033]133;R;mez_receiver=installed;mez_token=%s;mez_marker=%s\033\\' "$MEZ_BASH_RECEIVER_TOKEN" "$MEZ_BASH_RECEIVER_INSTALLED_MARKER"
+    unset MEZ_BASH_RECEIVER_INSTALLED_MARKER
+    __mez_bash_receiver
+fi
 "#;
     TEMPLATE.replace("__MEZ_BASH_RECEIVER_TOKEN__", token.as_str())
 }

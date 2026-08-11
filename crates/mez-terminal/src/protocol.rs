@@ -126,6 +126,13 @@ pub enum TerminalOscEvent {
         /// Unpredictable transaction marker awaiting source delivery.
         marker: String,
     },
+    /// A managed Bash child installed its receiver and is awaiting admission.
+    ShellReceiverInstalled {
+        /// Pane-scoped receiver token installed at Bash startup.
+        token: String,
+        /// Unpredictable transaction marker awaiting the child trigger.
+        marker: String,
+    },
     /// A managed Bash receiver completed eval and callback cleanup.
     ShellReceiverComplete {
         /// Pane-scoped receiver token installed at Bash startup.

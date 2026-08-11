@@ -16,7 +16,8 @@ use super::{
 use crate::integrations::agent::slash::AgentShellPresentation;
 use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::{
-    agent_subshell_enter_command_with_shell_compatibility, parse_macro_prompt_invocation,
+    ShellClassification, agent_subshell_enter_command_with_shell_compatibility,
+    bash_private_source_input, parse_macro_prompt_invocation,
 };
 
 /// Authenticated provenance carried with one live agent-shell command.
@@ -1101,14 +1102,10 @@ impl RuntimeSessionService {
         }
         let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
         let classification = shell_identity.classification();
-        let zsh_history_token = self.zsh_history_token_for_pane(pane_id);
-        let bash_receiver_rcfile = self.bash_receiver_rcfile_for_pane(pane_id);
-        let shell_command = agent_subshell_enter_command_with_shell_compatibility(
-            shell_identity.shell_path(),
-            classification,
-            zsh_history_token,
-            bash_receiver_rcfile,
-        )?;
+        let zsh_history_token = self.zsh_history_token_for_pane(pane_id).cloned();
+        let bash_receiver_rcfile = self
+            .bash_receiver_rcfile_for_pane(pane_id)
+            .map(std::path::Path::to_path_buf);
         self.begin_agent_subshell_shell_handoff(pane_id)?;
         let prepared_bootstrap = match self.prepare_bootstrap_to_pane(pane_id) {
             Ok(prepared_bootstrap) => prepared_bootstrap,
@@ -1117,11 +1114,48 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
+        let bash_receiver_install_marker = prepared_bootstrap
+            .as_ref()
+            .map(|(marker, _)| marker.as_str());
+        let shell_command = agent_subshell_enter_command_with_shell_compatibility(
+            shell_identity.shell_path(),
+            classification,
+            zsh_history_token.as_ref(),
+            bash_receiver_rcfile.as_deref(),
+            bash_receiver_install_marker,
+        )?;
         if let Some((marker, wrapper)) = prepared_bootstrap.as_ref() {
             self.bind_agent_subshell_bootstrap_marker(pane_id, marker);
             self.defer_agent_subshell_bootstrap_wrapper(pane_id, marker, wrapper.clone());
         }
-        match self.write_runtime_pane_shell_input(pane_id, shell_command.as_bytes()) {
+        let shell_input = if classification == ShellClassification::Bash {
+            let (marker, _) = prepared_bootstrap.as_ref().ok_or_else(|| {
+                MezError::invalid_state(
+                    "managed Bash subshell handoff requires a registered bootstrap owner",
+                )
+            })?;
+            let token = self
+                .bash_receiver_token_for_pane(pane_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "managed Bash receiver is unavailable for agent subshell handoff",
+                    )
+                })?;
+            let private_input = bash_private_source_input(&shell_command, &token, marker);
+            self.prepend_shell_receiver_payload(
+                marker,
+                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    private_input.receiver_payload.into_bytes(),
+                    marker.clone(),
+                    true,
+                ),
+            );
+            private_input.wrapper
+        } else {
+            shell_command
+        };
+        match self.write_runtime_pane_shell_input(pane_id, shell_input.as_bytes()) {
             Ok(()) => {
                 self.enter_agent_subshell(pane_id);
                 self.take_agent_subshell_command_exit(pane_id);

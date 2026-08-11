@@ -280,7 +280,6 @@ impl RuntimeSessionService {
         let result = (|| {
             let mut executor = RuntimeFocusedShellPaneExecutor {
                 service: self,
-                primary_client_id: primary_client_id.clone(),
                 continuation: None,
             };
             let mut dispatches = Vec::new();

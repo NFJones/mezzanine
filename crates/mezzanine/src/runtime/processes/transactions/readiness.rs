@@ -54,6 +54,7 @@ impl RuntimeSessionService {
                 | TerminalOscEvent::ShellCommandOutputStart
                 | TerminalOscEvent::ShellCommandFinished { .. }
                 | TerminalOscEvent::ShellReceiverReady { .. }
+                | TerminalOscEvent::ShellReceiverInstalled { .. }
                 | TerminalOscEvent::ShellReceiverComplete { .. }
                 | TerminalOscEvent::ShellTransactionStart { .. }
                 | TerminalOscEvent::ShellTransactionEnd { .. } => {}
@@ -229,6 +230,7 @@ impl RuntimeSessionService {
             )?,
         );
         let transaction_input = transaction.render_for_classification_input(classification);
+        self.require_generated_shell_input(&transaction_input)?;
         let receiver_payload = (!transaction_input.receiver_payload.is_empty()).then(|| {
             mez_mux::process::ShellInputDelivery::receiver_acknowledged(
                 transaction_input.receiver_payload.clone().into_bytes(),

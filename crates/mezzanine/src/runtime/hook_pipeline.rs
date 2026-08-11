@@ -257,7 +257,6 @@ impl RuntimeSessionService {
             .collect::<BTreeSet<_>>();
         let mut executor = RuntimeFocusedShellPaneExecutor {
             service: self,
-            primary_client_id: primary_client_id.clone(),
             continuation,
         };
         let initial = execute_focused_shell_hook(plan, &mut executor)?;

@@ -962,6 +962,14 @@ impl ShellTransaction {
         &self,
         classification: ShellClassification,
     ) -> ShellTransactionInput {
+        if classification == ShellClassification::Bash && self.bash_receiver_token.is_none() {
+            return ShellTransactionInput {
+                wrapper: String::new(),
+                receiver_payload: String::new(),
+                payload: String::new(),
+                payload_receiver_acknowledgements: false,
+            };
+        }
         let function_name = transaction_function_name(self.marker.as_str());
         let command_materialization = posix_command_file_materialization(
             &self.command,
@@ -995,7 +1003,14 @@ impl ShellTransaction {
                 .and_then(|launch| launch.status_fd),
         );
         let (history_start, history_restore, history_marker_finish) =
-            if classification == ShellClassification::Zsh && self.zsh_history_token.is_some() {
+            if classification == ShellClassification::Bash && self.bash_receiver_token.is_some() {
+                (
+                    posix_shell_state_suppression_start().to_string(),
+                    String::new(),
+                    posix_shell_state_marker_finish_prefix().to_string(),
+                )
+            } else if classification == ShellClassification::Zsh && self.zsh_history_token.is_some()
+            {
                 (
                     zsh_shell_history_suppression_start().to_string(),
                     String::new(),
@@ -1119,19 +1134,26 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
         let function_name = transaction_function_name(self.marker.as_str());
         let zsh_history_isolation =
             classification == ShellClassification::Zsh && self.zsh_history_token.is_some();
-        let (history_start, history_restore, history_marker_finish) = if zsh_history_isolation {
-            (
-                zsh_shell_history_suppression_start().to_string(),
-                String::new(),
-                zsh_shell_history_marker_finish_prefix(self.zsh_history_token.as_ref()),
-            )
-        } else {
-            (
-                posix_shell_history_suppression_start_for_classification(classification),
-                posix_shell_history_file_restore().to_string(),
-                posix_shell_history_marker_finish_prefix_for_classification(classification),
-            )
-        };
+        let (history_start, history_restore, history_marker_finish) =
+            if classification == ShellClassification::Bash && self.bash_receiver_token.is_some() {
+                (
+                    posix_shell_state_suppression_start().to_string(),
+                    String::new(),
+                    posix_shell_state_marker_finish_prefix().to_string(),
+                )
+            } else if zsh_history_isolation {
+                (
+                    zsh_shell_history_suppression_start().to_string(),
+                    String::new(),
+                    zsh_shell_history_marker_finish_prefix(self.zsh_history_token.as_ref()),
+                )
+            } else {
+                (
+                    posix_shell_history_suppression_start_for_classification(classification),
+                    posix_shell_history_file_restore().to_string(),
+                    posix_shell_history_marker_finish_prefix_for_classification(classification),
+                )
+            };
         let source = format!(
             "{history_start}\
 {function_name}() {{\n\
@@ -1183,6 +1205,14 @@ unset -f {function_name} 2>/dev/null || :\n\
         &self,
         classification: ShellClassification,
     ) -> ShellTransactionInput {
+        if classification == ShellClassification::Bash && self.bash_receiver_token.is_none() {
+            return ShellTransactionInput {
+                wrapper: String::new(),
+                receiver_payload: String::new(),
+                payload: String::new(),
+                payload_receiver_acknowledgements: false,
+            };
+        }
         let source = if classification == ShellClassification::Fish {
             self.render_fish_stateful()
         } else {
@@ -1518,6 +1548,7 @@ fn posix_shell_interactive_invocation_words_with_bash_receiver(
     shell_path: &str,
     classification: ShellClassification,
     bash_receiver_rcfile: Option<&Path>,
+    bash_receiver_install_marker: Option<&str>,
 ) -> String {
     if classification != ShellClassification::Bash {
         return posix_shell_interactive_invocation_words(shell_path, classification);
@@ -1527,11 +1558,9 @@ fn posix_shell_interactive_invocation_words_with_bash_receiver(
     };
     let shell = shell_quote(shell_path);
     let rcfile = shell_quote(&rcfile.to_string_lossy());
+    let install_marker = shell_quote(bash_receiver_install_marker.unwrap_or_default());
     format!(
-        "{shell} --noprofile --rcfile {rcfile} -c {}",
-        shell_quote(&format!(
-            "command printf '\\033]133;B\\033\\\\'; exec {shell} --noprofile --rcfile {rcfile} -i"
-        ))
+        "MEZ_BASH_RECEIVER_INSTALL_MARKER={install_marker} {shell} --noprofile --rcfile {rcfile} -i"
     )
 }
 
@@ -1911,10 +1940,6 @@ pub(super) fn posix_shell_wrapper_transport(
         .and_then(|chunk| std::str::from_utf8(chunk).ok())
         .unwrap_or_default();
     let mut transport = zsh_history_transport_start(classification, zsh_history_token);
-    transport.push_str(&bash_history_transport_start(
-        classification,
-        source.as_str(),
-    ));
     transport.push_str(&format!(
         "MEZ_WRAPPER_STTY=$(stty -g 2>/dev/null) || MEZ_WRAPPER_STTY=; {ACK}\n\
 MEZ_WRAPPER_PS1=${{PS1-}}; PS1=; stty -echo 2>/dev/null || :; {ACK}\n\
@@ -2005,25 +2030,25 @@ fn bash_private_receiver_transport(
     Some(BashPrivateReceiverTransport { trigger, payload })
 }
 
-/// Disables Bash history before the first physical wrapper framing record.
+/// Renders arbitrary runtime-owned Bash source for private receiver admission.
 ///
-/// Interactive Bash records each complete input line before executing it. The
-/// initiating record therefore removes only itself, remembers whether history
-/// was enabled, and leaves restoration to decoded transaction cleanup. The
-/// marker is retained so cleanup can remove this exact bootstrap record if
-/// Bash read ahead has advanced `HISTCMD` before the initial deletion runs.
-fn bash_history_transport_start(classification: ShellClassification, source: &str) -> String {
-    if classification != ShellClassification::Bash {
-        return String::new();
+/// The returned wrapper contains only the non-newline admission trigger. The
+/// authenticated source frames remain separate in `receiver_payload` so the
+/// runtime can retain them until receiver-ready while holding its input lease.
+pub fn bash_private_source_input(
+    source: &str,
+    token: &MarkerToken,
+    marker: &str,
+) -> ShellTransactionInput {
+    let transport =
+        bash_private_receiver_transport(source, ShellClassification::Bash, Some(token), marker)
+            .expect("explicit Bash private source rendering requires a receiver transport");
+    ShellTransactionInput {
+        wrapper: transport.trigger,
+        receiver_payload: transport.payload,
+        payload: String::new(),
+        payload_receiver_acknowledgements: true,
     }
-    let token = Sha256::digest(source.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!(
-        "MEZ_BASH_HISTORY_OUTER_TOKEN={}; MEZ_BASH_HISTORY_OUTER_ACTIVE=1; MEZ_BASH_HISTORY_OUTER_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{{print $2; exit}}')\" in on) MEZ_BASH_HISTORY_OUTER_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD-1)) 2>/dev/null || :;; esac; printf '\\036'\n",
-        shell_quote(&token)
-    )
 }
 
 /// Starts a zsh-private history frame before any generated transport record.
@@ -2049,9 +2074,6 @@ fn posix_shell_history_transport_fallback(
     classification: ShellClassification,
     token: Option<&MarkerToken>,
 ) -> String {
-    if classification == ShellClassification::Bash {
-        return "if [ \"${MEZ_BASH_HISTORY_OUTER_ACTIVE-}\" = 1 ]; then MEZ_BASH_HISTORY_OUTER_RESTORE_NOW=${MEZ_BASH_HISTORY_OUTER_RESTORE:-0}; for MEZ_BASH_HISTORY_OUTER_ENTRY in $(history | command awk -v token=\"$MEZ_BASH_HISTORY_OUTER_TOKEN\" '$0 ~ token { print $1 }' | command sort -rn); do history -d \"$MEZ_BASH_HISTORY_OUTER_ENTRY\" 2>/dev/null || :; done; unset MEZ_BASH_HISTORY_OUTER_ENTRY MEZ_BASH_HISTORY_OUTER_ACTIVE MEZ_BASH_HISTORY_OUTER_RESTORE MEZ_BASH_HISTORY_OUTER_TOKEN; if [ \"$MEZ_BASH_HISTORY_OUTER_RESTORE_NOW\" = 1 ]; then set -o history 2>/dev/null || :; fi; unset MEZ_BASH_HISTORY_OUTER_RESTORE_NOW; fi; unset MEZ_WRAPPER_SOURCE".to_string();
-    }
     if classification != ShellClassification::Zsh {
         return "unset MEZ_WRAPPER_SOURCE".to_string();
     }
@@ -2150,21 +2172,16 @@ fn fish_agent_subshell_env_word_list() -> Vec<String> {
 /// that current history entry before later wrapper lines are read.
 pub fn posix_shell_history_suppression_start() -> &'static str {
     "MEZ_SHELL_STTY_STATE=$(stty -g 2>/dev/null) || MEZ_SHELL_STTY_STATE=; if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT=0; case $- in *e*) MEZ_RESTORE_ERREXIT=1; set +e;; esac; MEZ_RESTORE_NOUNSET=0; case $- in *u*) MEZ_RESTORE_NOUNSET=1; set +u;; esac; MEZ_HISTORY_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{print $2; exit}')\" in on) MEZ_HISTORY_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD-1)) 2>/dev/null || :;; esac\n\
-if [ \"${MEZ_BASH_HISTORY_OUTER_ACTIVE-}\" = 1 ]; then MEZ_HISTORY_RESTORE=${MEZ_BASH_HISTORY_OUTER_RESTORE:-0}; fi\n\
 MEZ_HISTORY_HISTFILE_WAS_SET=0\n\
 if [ \"${HISTFILE+x}\" = x ]; then MEZ_HISTORY_HISTFILE_WAS_SET=1; MEZ_HISTORY_HISTFILE_SAVED=$HISTFILE; fi\n\
 HISTFILE=/dev/null\n"
 }
 
-/// Returns history setup with Bash-only outer transport cleanup support.
+/// Returns history setup for source evaluated inside an existing shell.
 fn posix_shell_history_suppression_start_for_classification(
-    classification: ShellClassification,
+    _classification: ShellClassification,
 ) -> String {
-    let mut source = posix_shell_history_suppression_start().to_string();
-    if classification == ShellClassification::Bash {
-        source.push_str("__mez_bash_history_outer_cleanup() { if [ \"${MEZ_BASH_HISTORY_OUTER_ACTIVE-}\" = 1 ]; then for MEZ_BASH_HISTORY_OUTER_ENTRY in $(history | command awk -v token=\"$MEZ_BASH_HISTORY_OUTER_TOKEN\" '$0 ~ token { print $1 }' | command sort -rn); do history -d \"$MEZ_BASH_HISTORY_OUTER_ENTRY\" 2>/dev/null || :; done; fi; unset MEZ_BASH_HISTORY_OUTER_ENTRY MEZ_BASH_HISTORY_OUTER_ACTIVE MEZ_BASH_HISTORY_OUTER_RESTORE MEZ_BASH_HISTORY_OUTER_TOKEN; }\n");
-    }
-    source
+    posix_shell_history_suppression_start().to_string()
 }
 
 /// Returns POSIX-compatible cleanup that restores `HISTFILE`, shell history,
@@ -2179,7 +2196,6 @@ MEZ_RESTORE_HISTORY_NOW=$MEZ_HISTORY_RESTORE\n\
 MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
 MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
 unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET\n\
-__mez_bash_history_outer_cleanup; unset -f __mez_bash_history_outer_cleanup 2>/dev/null || :\n\
 if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\n\
 unset MEZ_SHELL_STTY_STATE\n\
 if [ \"${MEZ_RESTORE_HISTORY_NOW:-0}\" = 1 ]; then set -o history 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT_APPLY=${MEZ_RESTORE_ERREXIT_NOW:-0}; MEZ_RESTORE_NOUNSET_APPLY=${MEZ_RESTORE_NOUNSET_NOW:-0}; unset MEZ_RESTORE_HISTORY_NOW MEZ_RESTORE_ERREXIT_NOW MEZ_RESTORE_NOUNSET_NOW; case \"$MEZ_RESTORE_ERREXIT_APPLY\" in 1) set -e;; esac; case \"$MEZ_RESTORE_NOUNSET_APPLY\" in 1) set -u;; esac; unset MEZ_RESTORE_ERREXIT_APPLY MEZ_RESTORE_NOUNSET_APPLY; :\n"
@@ -2212,27 +2228,33 @@ unset MEZ_SHELL_STTY_STATE\n\
 if [ \"$MEZ_RESTORE_HISTORY_NOW\" = 1 ]; then set -o history 2>/dev/null || :; fi; "
 }
 
-/// Returns completion cleanup with Bash-only outer transport cleanup support.
+/// Returns completion cleanup for POSIX-compatible transaction state.
 fn posix_shell_history_marker_finish_prefix_for_classification(
-    classification: ShellClassification,
+    _classification: ShellClassification,
 ) -> String {
-    let mut source = posix_shell_history_marker_finish_prefix().to_string();
-    if classification == ShellClassification::Bash {
-        source = source.replacen(
-            "if [ -n \"$MEZ_SHELL_STTY_STATE\" ];",
-            "__mez_bash_history_outer_cleanup; unset -f __mez_bash_history_outer_cleanup 2>/dev/null || :\nif [ -n \"$MEZ_SHELL_STTY_STATE\" ];",
-            1,
-        );
-    }
-    source
+    posix_shell_history_marker_finish_prefix().to_string()
+}
+
+/// Preserves strict POSIX shell options and terminal echo state.
+///
+/// Managed Bash and zsh transports establish their history boundary before
+/// this source executes, so transaction-local source must not mutate history.
+fn posix_shell_state_suppression_start() -> &'static str {
+    "MEZ_SHELL_STTY_STATE=$(stty -g 2>/dev/null) || MEZ_SHELL_STTY_STATE=; if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT=0; case $- in *e*) MEZ_RESTORE_ERREXIT=1; set +e;; esac; MEZ_RESTORE_NOUNSET=0; case $- in *u*) MEZ_RESTORE_NOUNSET=1; set +u;; esac\n"
+}
+
+/// Restores state-only transaction setup immediately before completion.
+fn posix_shell_state_marker_finish_prefix() -> &'static str {
+    "MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
+MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
+unset MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET\n\
+if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi\n\
+unset MEZ_SHELL_STTY_STATE\n"
 }
 
 /// Returns the zsh-compatible transaction prologue.
-///
-/// History is already private before this decoded source executes, so this
-/// prologue only preserves strict shell options and terminal echo state.
 fn zsh_shell_history_suppression_start() -> &'static str {
-    "MEZ_SHELL_STTY_STATE=$(stty -g 2>/dev/null) || MEZ_SHELL_STTY_STATE=; if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty -echo 2>/dev/null || :; fi; MEZ_RESTORE_ERREXIT=0; case $- in *e*) MEZ_RESTORE_ERREXIT=1; set +e;; esac; MEZ_RESTORE_NOUNSET=0; case $- in *u*) MEZ_RESTORE_NOUNSET=1; set +u;; esac\n"
+    posix_shell_state_suppression_start()
 }
 
 /// Restores zsh's prior history context before the completion marker.
@@ -2399,6 +2421,7 @@ pub fn agent_subshell_enter_command_with_zsh_history_token(
         classification,
         zsh_history_token,
         None,
+        None,
     )
 }
 
@@ -2412,6 +2435,7 @@ pub fn agent_subshell_enter_command_with_shell_compatibility(
     classification: ShellClassification,
     zsh_history_token: Option<&MarkerToken>,
     bash_receiver_rcfile: Option<&Path>,
+    bash_receiver_install_marker: Option<&str>,
 ) -> AgentShellValidationResult<String> {
     if !shell_path.is_absolute() {
         return Err(AgentShellValidationError::invalid_args(
@@ -2469,7 +2493,31 @@ __mez_agent_subshell_handoff; unset -f __mez_agent_subshell_handoff 2>/dev/null 
             &shell,
             classification,
             bash_receiver_rcfile,
+            bash_receiver_install_marker,
         );
+        let managed_bash =
+            classification == ShellClassification::Bash && bash_receiver_rcfile.is_some();
+        let history_start = if managed_bash {
+            posix_shell_state_suppression_start()
+        } else {
+            posix_shell_history_suppression_start()
+        };
+        let history_cleanup = if managed_bash {
+            "MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
+MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
+unset MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET"
+        } else {
+            "if [ \"$MEZ_HISTORY_HISTFILE_WAS_SET\" = 1 ]; then HISTFILE=$MEZ_HISTORY_HISTFILE_SAVED; else unset HISTFILE; fi\n\
+MEZ_RESTORE_HISTORY_NOW=$MEZ_HISTORY_RESTORE\n\
+MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT\n\
+MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
+unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET"
+        };
+        let history_restore = if managed_bash {
+            ""
+        } else {
+            "if [ \"${MEZ_RESTORE_HISTORY_NOW:-0}\" = 1 ]; then set -o history 2>/dev/null || :; fi\n"
+        };
         format!(
             "{history_start}__mez_agent_subshell_handoff() {{
 if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi
@@ -2480,16 +2528,11 @@ command env \\
 :
 }}
 __mez_agent_subshell_cleanup() {{
-if [ \"$MEZ_HISTORY_HISTFILE_WAS_SET\" = 1 ]; then HISTFILE=$MEZ_HISTORY_HISTFILE_SAVED; else unset HISTFILE; fi
-MEZ_RESTORE_HISTORY_NOW=$MEZ_HISTORY_RESTORE
-MEZ_RESTORE_ERREXIT_NOW=$MEZ_RESTORE_ERREXIT
-MEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET
-unset MEZ_HISTORY_RESTORE MEZ_HISTORY_HISTFILE_WAS_SET MEZ_HISTORY_HISTFILE_SAVED MEZ_RESTORE_ERREXIT MEZ_RESTORE_NOUNSET
+{history_cleanup}
 :
 }}
 __mez_agent_subshell_restore_options() {{
-if [ \"${{MEZ_RESTORE_HISTORY_NOW:-0}}\" = 1 ]; then set -o history 2>/dev/null || :; fi
-MEZ_RESTORE_ERREXIT_APPLY=${{MEZ_RESTORE_ERREXIT_NOW:-0}}
+{history_restore}MEZ_RESTORE_ERREXIT_APPLY=${{MEZ_RESTORE_ERREXIT_NOW:-0}}
 MEZ_RESTORE_NOUNSET_APPLY=${{MEZ_RESTORE_NOUNSET_NOW:-0}}
 unset MEZ_RESTORE_HISTORY_NOW MEZ_RESTORE_ERREXIT_NOW MEZ_RESTORE_NOUNSET_NOW
 case \"$MEZ_RESTORE_ERREXIT_APPLY\" in 1) set -e;; esac
@@ -2499,12 +2542,16 @@ unset MEZ_RESTORE_ERREXIT_APPLY MEZ_RESTORE_NOUNSET_APPLY
 }}
 __mez_agent_subshell_handoff; __mez_agent_subshell_cleanup; unset -f __mez_agent_subshell_handoff __mez_agent_subshell_cleanup 2>/dev/null || :; __mez_agent_subshell_restore_options; unset -f __mez_agent_subshell_restore_options 2>/dev/null || :
 ",
-            history_start = posix_shell_history_suppression_start(),
+            history_start = history_start,
+            history_cleanup = history_cleanup,
+            history_restore = history_restore,
             env_words = env_words,
             shell_invocation = shell_invocation,
         )
     };
-    if classification == ShellClassification::Fish {
+    if classification == ShellClassification::Fish
+        || (classification == ShellClassification::Bash && bash_receiver_rcfile.is_some())
+    {
         Ok(source)
     } else {
         Ok(posix_shell_wrapper_transport(

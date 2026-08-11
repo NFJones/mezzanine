@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AsyncMcpActionExecutor, AuditActor, AuditLog, AuditRecord, AuthStore, BTreeMap, ClientId,
-    Command, DEFAULT_COMMAND_SHELL_CLASSIFICATION, Duration, EventKind, FocusedShellExecutor,
+    AsyncMcpActionExecutor, AuditActor, AuditLog, AuditRecord, AuthStore, BTreeMap, Command,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, Duration, EventKind, FocusedShellExecutor,
     FocusedShellHookOutput, HookEvent, HookExecutionPlan, HookExecutionResult, HookExecutionStatus,
     HookFailure, HookFailureKind, MarkerToken, McpActionExecutor, McpExecutionRequest,
     McpExecutionResponse, McpToolCallPlan, MezError, PaneDescriptor, Path,
@@ -139,11 +139,6 @@ pub(super) struct RuntimeFocusedShellPaneExecutor<'a> {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) service: &'a mut RuntimeSessionService,
-    /// Stores the primary client id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) primary_client_id: ClientId,
     /// Stores the continuation value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -351,39 +346,85 @@ unset MEZ_HOOK_PAYLOAD\n\
                 hook_command,
             )?,
         );
-        let input = transaction.render_stateful_for_classification(classification);
-        match self.service.write_input_to_pane_descriptor(
-            &self.primary_client_id,
-            &descriptor,
-            input.as_bytes(),
-        ) {
-            Ok(_) => {
+        let input = transaction.render_stateful_for_classification_input(classification);
+        self.service.require_generated_shell_input(&input)?;
+        let mut wrapper = input.wrapper.clone();
+        if !wrapper.ends_with('\n') {
+            wrapper.push('\n');
+        }
+        let marker_id = marker.as_str().to_string();
+        let receiver_payload = (!input.receiver_payload.is_empty()).then(|| {
+            mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                input.receiver_payload.into_bytes(),
+                marker_id.clone(),
+                true,
+            )
+        });
+        self.service.register_running_shell_transaction(
+            marker_id.clone(),
+            crate::runtime::RunningShellTransactionRef {
+                turn_id: format!("hook:{}", plan.hook_id),
+                kind: crate::runtime::RunningShellTransactionKind::FocusedShellHook,
+                pane_id: descriptor.pane_id.to_string(),
+                command: shell_command.to_string(),
+                started_at_unix_ms: current_unix_millis(),
+                timeout_ms: None,
+                pending_input_payload: None,
+                observed_output_bytes: 0,
+                observed_output_preview: String::new(),
+                observed_output_truncated: false,
+            },
+            true,
+        );
+        if let Some(receiver_payload) = receiver_payload {
+            self.service
+                .register_shell_receiver_payload(&marker_id, receiver_payload);
+        }
+        self.service
+            .integration
+            .focused_shell_hook_transactions_mut()
+            .insert(
+                marker_id.clone(),
+                PendingFocusedShellHookTransaction {
+                    pane_id: descriptor.pane_id.to_string(),
+                    plan: plan.clone(),
+                    started_at_unix_ms: current_unix_millis(),
+                    timeout_ms: plan.timeout_ms,
+                    continuation: self.continuation.clone(),
+                },
+            );
+        match self
+            .service
+            .write_runtime_pane_shell_input(descriptor.pane_id.as_str(), wrapper.as_bytes())
+        {
+            Ok(_) => Ok(FocusedShellHookOutput {
+                exit_code: None,
+                stdout: "focused-shell hook queued in active pane".to_string(),
+                stderr: String::new(),
+                timed_out: false,
+                shell_unavailable: false,
+                policy_denied: false,
+            }),
+            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {
+                self.service.remove_running_shell_transaction(&marker_id);
+                self.service
+                    .clear_shell_transaction_protocol_state(&marker_id);
                 self.service
                     .integration
                     .focused_shell_hook_transactions_mut()
-                    .insert(
-                        marker.as_str().to_string(),
-                        PendingFocusedShellHookTransaction {
-                            pane_id: descriptor.pane_id.to_string(),
-                            plan: plan.clone(),
-                            started_at_unix_ms: current_unix_millis(),
-                            timeout_ms: plan.timeout_ms,
-                            continuation: self.continuation.clone(),
-                        },
-                    );
-                Ok(FocusedShellHookOutput {
-                    exit_code: None,
-                    stdout: "focused-shell hook queued in active pane".to_string(),
-                    stderr: String::new(),
-                    timed_out: false,
-                    shell_unavailable: false,
-                    policy_denied: false,
-                })
-            }
-            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {
+                    .remove(&marker_id);
                 Ok(focused_shell_unavailable_output())
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                self.service.remove_running_shell_transaction(&marker_id);
+                self.service
+                    .clear_shell_transaction_protocol_state(&marker_id);
+                self.service
+                    .integration
+                    .focused_shell_hook_transactions_mut()
+                    .remove(&marker_id);
+                Err(error)
+            }
         }
     }
 }

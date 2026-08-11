@@ -339,6 +339,8 @@ pub(crate) enum RunningShellTransactionKind {
         /// boundary and should remain aligned with the owning type invariant.
         action_id: String,
     },
+    /// Stateful configured hook executed in the focused pane shell.
+    FocusedShellHook,
     /// Represents the Readiness Probe case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

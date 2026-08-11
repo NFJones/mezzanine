@@ -1,7 +1,8 @@
 //! Pane bootstrap dispatch and completion.
 
 use mez_agent::{
-    AgentShellVisibility, parse_shell_identity_probe_output, shell_identity_probe_command,
+    AgentShellVisibility, ShellClassification, bash_private_source_input,
+    parse_shell_identity_probe_output, shell_identity_probe_command,
 };
 
 use super::super::{
@@ -51,7 +52,20 @@ impl RuntimeSessionService {
         ))?;
         let marker_id = marker.as_str().to_string();
         let command = shell_identity_probe_command(&marker_id, &turn_id, &agent_id, pane_id)?;
-        let mut input = command.clone();
+        let classification = self.shell_classification_for_pane(pane_id);
+        let private_input = if classification == ShellClassification::Bash {
+            let token = self.bash_receiver_token_for_pane(pane_id).ok_or_else(|| {
+                MezError::invalid_state(
+                    "managed Bash receiver is unavailable for shell identity probe",
+                )
+            })?;
+            Some(bash_private_source_input(&command, token, &marker_id))
+        } else {
+            None
+        };
+        let mut input = private_input
+            .as_ref()
+            .map_or_else(|| command.clone(), |input| input.wrapper.clone());
         if !input.ends_with('\n') {
             input.push('\n');
         }
@@ -76,6 +90,16 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if let Some(private_input) = private_input {
+            self.register_shell_receiver_payload(
+                &marker_id,
+                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    private_input.receiver_payload.into_bytes(),
+                    marker_id.clone(),
+                    true,
+                ),
+            );
+        }
         Ok(Some((marker_id, input)))
     }
 
@@ -136,6 +160,7 @@ impl RuntimeSessionService {
             )?,
         );
         let transaction_input = transaction.render_for_classification_input(classification);
+        self.require_generated_shell_input(&transaction_input)?;
         let receiver_payload = (!transaction_input.receiver_payload.is_empty()).then(|| {
             mez_mux::process::ShellInputDelivery::receiver_acknowledged(
                 transaction_input.receiver_payload.clone().into_bytes(),
@@ -497,8 +522,12 @@ impl RuntimeSessionService {
                     .pane_shell_handoffs
                     .get(k.as_str())
                     .is_some_and(|handoff| handoff.deferred_bootstrap_wrapper.is_some());
+                let awaits_managed_bash_receiver = has_deferred_wrapper
+                    && self.shell_classification_for_pane(k.as_str())
+                        == mez_agent::ShellClassification::Bash;
                 self.process.pane_bootstrap_pending.contains(k.as_str())
                     && !self.pane_agent_subshell_certification_is_pending(k.as_str())
+                    && !awaits_managed_bash_receiver
                     && (has_deferred_wrapper
                         || !self
                             .process

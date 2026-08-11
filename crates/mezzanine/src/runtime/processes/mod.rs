@@ -472,9 +472,11 @@ pub(crate) struct RuntimeProcessComponent {
     /// released. Filtering is therefore marker-scoped and cannot suppress an
     /// ordinary child process record-separator byte after the payload drains.
     shell_transaction_receiver_acknowledgements: std::collections::BTreeMap<String, usize>,
-    /// Managed Bash source frames retained until authenticated receiver admission.
-    shell_receiver_pending_payloads:
-        std::collections::BTreeMap<String, mez_mux::process::ShellInputDelivery>,
+    /// Managed Bash source stages retained until authenticated receiver admission.
+    shell_receiver_pending_payloads: std::collections::BTreeMap<
+        String,
+        std::collections::VecDeque<mez_mux::process::ShellInputDelivery>,
+    >,
     /// Transactions whose inner end marker cannot settle before receiver completion.
     shell_receiver_completion_required: BTreeSet<String>,
     /// Inner transaction-end metadata retained until the Bash callback completes.
@@ -653,7 +655,25 @@ impl RuntimeSessionService {
     ) {
         self.process
             .shell_receiver_pending_payloads
-            .insert(marker.to_string(), payload);
+            .entry(marker.to_string())
+            .or_default()
+            .push_back(payload);
+        self.process
+            .shell_receiver_completion_required
+            .insert(marker.to_string());
+    }
+
+    /// Prepends one managed Bash source stage before already-retained work.
+    pub(crate) fn prepend_shell_receiver_payload(
+        &mut self,
+        marker: &str,
+        payload: mez_mux::process::ShellInputDelivery,
+    ) {
+        self.process
+            .shell_receiver_pending_payloads
+            .entry(marker.to_string())
+            .or_default()
+            .push_front(payload);
         self.process
             .shell_receiver_completion_required
             .insert(marker.to_string());
@@ -1555,6 +1575,19 @@ impl RuntimeSessionService {
         transaction.with_payload_receiver_acknowledgements(cfg!(target_os = "macos"))
     }
 
+    /// Rejects generated shell input when a required managed transport is absent.
+    pub(super) fn require_generated_shell_input(
+        &self,
+        input: &mez_agent::ShellTransactionInput,
+    ) -> Result<()> {
+        if input.is_empty() {
+            return Err(MezError::invalid_state(
+                "managed Bash private receiver is unavailable for generated shell input",
+            ));
+        }
+        Ok(())
+    }
+
     /// Returns the managed zsh history token installed for one pane.
     pub(super) fn zsh_history_token_for_pane(
         &self,
@@ -1917,7 +1950,8 @@ impl RuntimeSessionService {
                 RunningShellTransactionKind::AgentAction { action_id } => {
                     format!(" action={action_id}")
                 }
-                RunningShellTransactionKind::ReadinessProbe
+                RunningShellTransactionKind::FocusedShellHook
+                | RunningShellTransactionKind::ReadinessProbe
                 | RunningShellTransactionKind::Bootstrap
                 | RunningShellTransactionKind::ShellIdentityProbe { .. }
                 | RunningShellTransactionKind::PathResolution { .. }

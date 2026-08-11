@@ -134,7 +134,12 @@ impl RuntimeSessionService {
                 "Bash receiver-ready metadata does not match runtime dispatch state",
             );
         }
-        let Some(payload) = self.process.shell_receiver_pending_payloads.remove(marker) else {
+        let payload = self
+            .process
+            .shell_receiver_pending_payloads
+            .get_mut(marker)
+            .and_then(std::collections::VecDeque::pop_front);
+        let Some(payload) = payload else {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
@@ -142,6 +147,14 @@ impl RuntimeSessionService {
                 "Bash receiver emitted ready without pending private source frames",
             );
         };
+        if self
+            .process
+            .shell_receiver_pending_payloads
+            .get(marker)
+            .is_some_and(std::collections::VecDeque::is_empty)
+        {
+            self.process.shell_receiver_pending_payloads.remove(marker);
+        }
         let payload_len = payload.bytes.len();
         if payload.receiver_acknowledgements {
             let acknowledgement_count = payload
@@ -165,6 +178,57 @@ impl RuntimeSessionService {
             &transaction.turn_id,
             &format!("shell_receiver admitted marker={marker} bytes={payload_len}"),
         )?;
+        Ok(1)
+    }
+
+    /// Releases a deferred agent-subshell bootstrap trigger after the managed
+    /// Bash child proves that its private receiver is installed and waiting.
+    pub(crate) fn observe_shell_receiver_installed(
+        &mut self,
+        output_pane_id: &str,
+        token: &str,
+        marker: &str,
+    ) -> Result<usize> {
+        let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
+            return Ok(0);
+        };
+        let handoff_matches = self
+            .process
+            .pane_shell_handoffs
+            .get(output_pane_id)
+            .is_some_and(|handoff| handoff.bootstrap_marker.as_deref() == Some(marker));
+        if transaction.pane_id != output_pane_id
+            || self
+                .bash_receiver_token_for_pane(output_pane_id)
+                .is_none_or(|expected| expected.as_str() != token)
+            || !handoff_matches
+        {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "receiver-installed-metadata-mismatch",
+                "Bash receiver-installed metadata does not match the pending subshell handoff",
+            );
+        }
+        let wrapper = self
+            .process
+            .pane_shell_handoffs
+            .get_mut(output_pane_id)
+            .and_then(|handoff| handoff.deferred_bootstrap_wrapper.take());
+        let Some(wrapper) = wrapper else {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "unexpected-receiver-installed",
+                "Bash child reported receiver installation without a deferred bootstrap trigger",
+            );
+        };
+        if let Err(error) = self.write_runtime_pane_shell_input(output_pane_id, wrapper.as_bytes())
+        {
+            self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
+            return Err(error);
+        }
+        self.record_bootstrap_sent(output_pane_id, marker)?;
         Ok(1)
     }
 
@@ -388,6 +452,14 @@ impl RuntimeSessionService {
             .sandboxed_shell_transaction_markers
             .contains(marker);
         self.clear_shell_transaction_protocol_state(marker);
+        if transaction_ref.kind == RunningShellTransactionKind::FocusedShellHook {
+            return self.observe_focused_shell_hook_transaction_end(
+                output_pane_id,
+                marker,
+                pane_id,
+                exit_code,
+            );
+        }
         if transaction_ref.kind == RunningShellTransactionKind::ReadinessProbe {
             return self.observe_readiness_probe_transaction_end(
                 marker, turn_id, agent_id, pane_id, exit_code,

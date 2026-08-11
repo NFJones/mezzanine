@@ -59,6 +59,14 @@ impl RuntimeSessionService {
                         elapsed_ms,
                     )?;
                 }
+                RunningShellTransactionKind::FocusedShellHook => {
+                    let _ = self.observe_focused_shell_hook_transaction_end(
+                        &transaction.pane_id,
+                        &marker,
+                        &transaction.pane_id,
+                        124,
+                    )?;
+                }
                 RunningShellTransactionKind::ReadinessProbe => {
                     self.expire_readiness_probe_shell_transaction(
                         &marker,
@@ -139,6 +147,10 @@ impl RuntimeSessionService {
             else {
                 continue;
             };
+            self.cancel_runtime_pane_shell_delivery(&pending.pane_id, &marker);
+            self.remove_running_shell_transaction(&marker);
+            self.clear_shell_transaction_protocol_state(&marker);
+            self.interrupt_shell_transaction_pane_if_live(&pending.pane_id)?;
             expired_count = expired_count.saturating_add(1);
             let result = focused_shell_pre_action_timeout_result(&pending.plan);
             if let Some(audit_log) = self.persistence.audit_log_mut() {

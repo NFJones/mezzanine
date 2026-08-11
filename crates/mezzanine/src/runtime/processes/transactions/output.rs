@@ -135,7 +135,8 @@ impl RuntimeSessionService {
                             &transaction.command,
                         )
                     }
-                    RunningShellTransactionKind::ReadinessProbe
+                    RunningShellTransactionKind::FocusedShellHook
+                    | RunningShellTransactionKind::ReadinessProbe
                     | RunningShellTransactionKind::Bootstrap
                     | RunningShellTransactionKind::ShellIdentityProbe { .. }
                     | RunningShellTransactionKind::PathResolution { .. }

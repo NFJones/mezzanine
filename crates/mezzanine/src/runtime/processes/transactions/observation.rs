@@ -1216,6 +1216,13 @@ impl RuntimeSessionService {
                         marker,
                     )?);
                 }
+                TerminalOscEvent::ShellReceiverInstalled { token, marker } => {
+                    observed = observed.saturating_add(self.observe_shell_receiver_installed(
+                        output_pane_id,
+                        token,
+                        marker,
+                    )?);
+                }
                 TerminalOscEvent::ShellReceiverComplete {
                     token,
                     marker,

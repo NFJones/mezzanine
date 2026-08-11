@@ -58,6 +58,13 @@ impl RuntimeSessionService {
                     },
                 )
             }
+            RunningShellTransactionKind::FocusedShellHook => self
+                .observe_focused_shell_hook_transaction_end(
+                    &transaction.pane_id,
+                    marker,
+                    &transaction.pane_id,
+                    1,
+                ),
             RunningShellTransactionKind::ReadinessProbe => {
                 if !self
                     .process
@@ -209,6 +216,10 @@ impl RuntimeSessionService {
                         &action_id,
                         error,
                     )?;
+                }
+                RunningShellTransactionKind::FocusedShellHook => {
+                    let _ = self
+                        .observe_focused_shell_hook_transaction_end(pane_id, &marker, pane_id, 1)?;
                 }
                 RunningShellTransactionKind::ReadinessProbe => {
                     self.fail_readiness_probe_for_pane_write_failure(&marker, transaction, error)?;

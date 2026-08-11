@@ -155,6 +155,7 @@ impl RuntimeSessionService {
             )?,
         );
         let input = transaction.render_for_classification_input(classification);
+        self.require_generated_shell_input(&input)?;
         let receiver_payload = (!input.receiver_payload.is_empty()).then(|| {
             mez_mux::process::ShellInputDelivery::receiver_acknowledged(
                 input.receiver_payload.clone().into_bytes(),

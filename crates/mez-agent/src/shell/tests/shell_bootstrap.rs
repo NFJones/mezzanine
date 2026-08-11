@@ -443,10 +443,13 @@ fn shell_classification_selects_matching_wrappers_and_probe_commands() {
     assert!(decoded_posix_wrapper_source(&posix).contains("env -u MEZ_MARKER_TOKEN"));
     let bash = ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/bash"), "true")
         .unwrap()
-        .render_for_classification(ShellClassification::Bash);
+        .with_bash_receiver_token(MarkerToken::new("abcdef0123456789abcdef0123456789").unwrap())
+        .render_for_classification_input(ShellClassification::Bash);
+    assert!(bash.wrapper.starts_with('\u{7}'), "{:?}", bash.wrapper);
     assert!(
-        decoded_posix_wrapper_source(&bash)
-            .contains("'/bin/bash' --noprofile --norc \"$MEZ_COMMAND_FILE\"")
+        bash.receiver_payload.contains("MEZ_BASH_RX1_DATA"),
+        "{}",
+        bash.receiver_payload
     );
     let zsh = ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/bin/zsh"), "true")
         .unwrap()

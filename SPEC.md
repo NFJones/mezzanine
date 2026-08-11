@@ -4065,6 +4065,16 @@ the token, marker, sequence, declared byte length, SHA-256 digest, and explicit
 end record before evaluating source, and malformed or unavailable receiver
 support MUST fail closed without ordinary Readline command injection.
 
+When a generated Bash transaction starts a managed child Bash and subsequent
+work targets that child, the child MUST emit a receiver-installed record only
+after its pane-private receiver is installed and waiting. The record MUST carry
+the pane-scoped token and the owning transaction marker. Mezzanine MUST retain
+the child transaction trigger until that authenticated record is observed; a
+generic prompt marker or foreground-process observation is not sufficient to
+release it. Multiple private source stages under one owner MUST be released in
+order and MUST retain the same generation-fenced input lease through final
+receiver completion.
+
 The runtime MUST retain the generation-fenced transaction input lease from
 before the admission trigger is delivered until an authenticated
 receiver-complete record is observed or bounded transaction recovery revokes
