@@ -601,19 +601,20 @@ impl RuntimeSessionService {
                 "Bubblewrap path resolution requires the retained permission evaluation",
             )
         })?;
-        if self.pane_environment_signature(&turn.pane_id).is_none() {
-            if self.pane_bootstrap_is_pending(&turn.pane_id) {
+        match self.pane_environment_authority(&turn.pane_id) {
+            crate::runtime::processes::RuntimePaneEnvironmentAuthority::Certified => {}
+            crate::runtime::processes::RuntimePaneEnvironmentAuthority::Pending => {
                 self.dispatch_bootstrap_to_pane(&turn.pane_id)?;
                 return Ok(false);
             }
-            if let Some(reason) = self.pane_agent_subshell_certification_rejection(&turn.pane_id) {
-                return Err(MezError::invalid_state(format!(
-                    "pane agent-subshell bootstrap certification failed: {reason}"
-                )));
+            authority @ (crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(_)
+            | crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unknown) => {
+                return Err(MezError::invalid_state(
+                    authority.failure_message().unwrap_or_else(|| {
+                        "pane environment authority is unavailable".to_string()
+                    }),
+                ));
             }
-            return Err(MezError::invalid_state(
-                "pane bootstrap did not produce an environment signature",
-            ));
         }
         let primary = match self.primary_path_resolution_request(&turn.pane_id)? {
             Some(request) => match self.path_scopes_for_pane_request(&turn.pane_id, &request)? {

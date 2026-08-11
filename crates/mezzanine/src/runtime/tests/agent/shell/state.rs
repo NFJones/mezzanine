@@ -2530,7 +2530,13 @@ fn runtime_missing_environment_after_bootstrap_fails_bubblewrap_action_closed() 
 
     assert_eq!(
         error.message(),
-        "pane bootstrap did not produce an environment signature"
+        "pane bootstrap completed without a parseable environment signature"
+    );
+    assert_eq!(
+        service.pane_environment_authority("%1"),
+        crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::EnvironmentSignatureMissing,
+        )
     );
     assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
     assert!(

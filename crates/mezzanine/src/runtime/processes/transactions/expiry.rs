@@ -341,6 +341,10 @@ impl RuntimeSessionService {
         self.process
             .pane_bootstrap_pending
             .remove(&transaction.pane_id);
+        self.mark_pane_environment_authority_unavailable(
+            &transaction.pane_id,
+            super::RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTimedOut,
+        );
         let previous = self.pane_readiness_state(&transaction.pane_id);
         self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
         self.append_lifecycle_event(

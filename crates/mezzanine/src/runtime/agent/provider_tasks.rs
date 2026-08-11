@@ -516,8 +516,10 @@ impl RuntimeSessionService {
             .flatten();
         let path_resolution_required =
             primary_path_resolution_request.is_some() || subagent_path_resolution_request.is_some();
-        if path_resolution_required && self.pane_environment_signature(&turn.pane_id).is_none() {
-            if self.pane_bootstrap_is_pending(&turn.pane_id) {
+        if path_resolution_required {
+            match self.pane_environment_authority(&turn.pane_id) {
+                crate::runtime::processes::RuntimePaneEnvironmentAuthority::Certified => {}
+                crate::runtime::processes::RuntimePaneEnvironmentAuthority::Pending => {
                 if !self.pane_bootstrap_has_bounded_progress_owner(&turn.pane_id)
                     && matches!(
                         self.pane_readiness_state(&turn.pane_id),
@@ -537,11 +539,15 @@ impl RuntimeSessionService {
                     "provider_task deferred reason=pane_bootstrap_pending",
                 )?;
                 return Ok(None);
-            }
-            if let Some(reason) = self.pane_agent_subshell_certification_rejection(&turn.pane_id) {
-                return Err(MezError::invalid_state(format!(
-                    "pane agent-subshell bootstrap certification failed: {reason}"
-                )));
+                }
+                authority @ (crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(_)
+                | crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unknown) => {
+                    return Err(MezError::invalid_state(
+                        authority.failure_message().unwrap_or_else(|| {
+                            "pane environment authority is unavailable".to_string()
+                        }),
+                    ));
+                }
             }
         }
 

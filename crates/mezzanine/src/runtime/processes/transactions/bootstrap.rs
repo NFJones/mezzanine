@@ -11,9 +11,10 @@ use super::super::{
 };
 use super::{
     AgentTurnState, DEFAULT_BOOTSTRAP_TIMEOUT_MS, EventKind, MezError, PaneReadinessState, Result,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
-    ShellTransaction, bootstrap_script_for_classification, current_unix_millis,
-    current_unix_seconds, json_escape, parse_bootstrap_env_output, runtime_random_marker_token,
+    RunningShellTransactionKind, RunningShellTransactionRef,
+    RuntimePaneEnvironmentAuthorityUnavailableReason, RuntimeSessionService, ShellTransaction,
+    bootstrap_script_for_classification, current_unix_millis, current_unix_seconds, json_escape,
+    parse_bootstrap_env_output, runtime_random_marker_token,
 };
 use std::path::PathBuf;
 
@@ -148,6 +149,7 @@ impl RuntimeSessionService {
         let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
         let classification = shell_identity.classification();
         let bootstrap_script = bootstrap_script_for_classification(classification);
+        self.clear_pane_environment_authority_failure(pane_id);
         let transaction = self.configure_shell_transaction_for_pane(
             pane_id,
             ShellTransaction::new(
@@ -296,6 +298,10 @@ impl RuntimeSessionService {
             self.process.pane_probed_shell_identities.remove(pane_id);
             self.process.pane_bootstrap_pending.remove(pane_id);
             self.clear_agent_subshell_shell_identity(pane_id);
+            self.mark_pane_environment_authority_unavailable(
+                pane_id,
+                RuntimePaneEnvironmentAuthorityUnavailableReason::ShellIdentityProbeFailed,
+            );
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
             self.append_lifecycle_event(
                 EventKind::Diagnostic,
@@ -350,7 +356,6 @@ impl RuntimeSessionService {
         observed_output_preview: &str,
         observed_output_truncated: bool,
     ) -> Result<usize> {
-        let mut bootstrap_parsed = false;
         let mut bootstrap_environment = None;
         if exit_code == 0 {
             let all_output = if observed_output_preview.trim().is_empty() {
@@ -377,7 +382,6 @@ impl RuntimeSessionService {
                 parse_bootstrap_env_output(&all_output, &resolved_shell_path);
 
             if let Some(sig) = signature {
-                bootstrap_parsed = true;
                 bootstrap_environment = Some(RuntimePendingBootstrapEnvironment {
                     signature: sig,
                     tool_inventory: inventory,
@@ -450,11 +454,17 @@ impl RuntimeSessionService {
                 self.process.pane_bootstrap_pending.remove(pane_id);
                 if let Some(environment) = bootstrap_environment {
                     self.publish_bootstrap_environment(pane_id, environment);
-                }
-                if bootstrap_parsed || exit_code == 0 {
                     self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
-                } else if self.pane_readiness_state(pane_id) == PaneReadinessState::Busy {
-                    self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
+                } else {
+                    let reason = if observed_output_truncated {
+                        RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapOutputTruncated
+                    } else if exit_code == 0 {
+                        RuntimePaneEnvironmentAuthorityUnavailableReason::EnvironmentSignatureMissing
+                    } else {
+                        RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTransactionFailed
+                    };
+                    self.mark_pane_environment_authority_unavailable(pane_id, reason);
+                    self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
                 }
             }
             RuntimeAgentSubshellCertificationOutcome::Certified => {

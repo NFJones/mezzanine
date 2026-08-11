@@ -188,6 +188,7 @@ impl RuntimeSessionService {
                     crate::error::MezError::invalid_state("pane shell process is unavailable")
                 })?;
         let mut execution_identity = self.shell_execution_identity_for_pane(pane_id)?;
+        self.clear_pane_environment_authority_failure(pane_id);
         self.process.next_shell_interaction_generation = self
             .process
             .next_shell_interaction_generation
@@ -907,6 +908,7 @@ impl RuntimeSessionService {
             tool_inventory,
             instruction_files,
         } = environment;
+        self.clear_pane_environment_authority_failure(pane_id);
         self.process
             .pane_path_scopes
             .retain(|key, _| key.pane_id != pane_id);
@@ -1084,6 +1086,7 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);
+        self.clear_pane_environment_authority_failure(pane_id);
         self.process.pane_environment_signatures.remove(pane_id);
         self.process
             .pane_path_scopes

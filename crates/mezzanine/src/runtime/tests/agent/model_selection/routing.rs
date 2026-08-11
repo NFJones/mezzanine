@@ -1784,9 +1784,9 @@ fn runtime_routed_worker_provider_restarts_prompt_ready_ownerless_bootstrap() {
 
 /// Verifies a routed worker retained for pending bootstrap still fails closed
 /// after that one-shot bootstrap settles without a usable environment
-/// signature. A retained subshell-certification rejection must replace the
-/// generic missing-environment diagnostic, and the provider task must be
-/// removed instead of deferring forever or proceeding without authority.
+/// signature. The typed unavailable authority must fail provider preparation
+/// before path resolution instead of deferring forever or leaking a downstream
+/// missing-environment diagnostic.
 #[test]
 fn runtime_routed_worker_provider_fails_after_unparsed_bootstrap() {
     let root = temp_root("runtime-routed-worker-provider-bootstrap-failure");
@@ -1838,13 +1838,11 @@ fn runtime_routed_worker_provider_fails_after_unparsed_bootstrap() {
             0,
         )
         .unwrap();
-    service.set_pane_agent_subshell_certification_rejection_for_tests(
-        &worker_turn.pane_id,
-        crate::runtime::processes::RuntimeAgentSubshellCertificationRejection::EnvironmentSignatureMissing,
-    );
     assert_eq!(
-        service.pane_agent_subshell_certification_rejection(&worker_turn.pane_id),
-        Some("environment_signature_missing")
+        service.pane_environment_authority(&worker_turn.pane_id),
+        crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::EnvironmentSignatureMissing,
+        )
     );
     assert!(
         service

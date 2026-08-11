@@ -118,6 +118,10 @@ impl RuntimeSessionService {
                     .pane_probed_shell_identities
                     .remove(&transaction.pane_id);
                 self.clear_agent_subshell_shell_identity(&transaction.pane_id);
+                self.mark_pane_environment_authority_unavailable(
+                    &transaction.pane_id,
+                    super::RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapProtocolViolation,
+                );
                 self.append_agent_error_text_to_terminal_buffer(
                     &transaction.pane_id,
                     &format!("agent: shell bootstrap protocol violation: {message}"),
@@ -377,6 +381,10 @@ impl RuntimeSessionService {
         self.process
             .pane_bootstrap_pending
             .remove(&transaction.pane_id);
+        self.mark_pane_environment_authority_unavailable(
+            &transaction.pane_id,
+            super::RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapWriteFailed,
+        );
         let previous = self.pane_readiness_state(&transaction.pane_id);
         self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
         self.append_lifecycle_event(

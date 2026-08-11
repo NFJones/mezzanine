@@ -193,6 +193,87 @@ pub(crate) enum RuntimeAgentSubshellCertificationOutcome {
     Rejected(RuntimeAgentSubshellCertificationRejection),
 }
 
+/// Stable reason that pane environment authority settled unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimePaneEnvironmentAuthorityUnavailableReason {
+    /// Bootstrap completed successfully but did not publish an environment.
+    EnvironmentSignatureMissing,
+    /// Bootstrap output exceeded the bounded observation limit.
+    BootstrapOutputTruncated,
+    /// Bootstrap returned a non-zero status before publishing an environment.
+    BootstrapTransactionFailed,
+    /// Bootstrap exceeded its bounded runtime deadline.
+    BootstrapTimedOut,
+    /// Bootstrap input could not be delivered to the pane process.
+    BootstrapWriteFailed,
+    /// Bootstrap violated its registered shell protocol boundary.
+    BootstrapProtocolViolation,
+    /// Syntax-neutral shell identity discovery failed before bootstrap.
+    ShellIdentityProbeFailed,
+    /// Agent-subshell certification rejected the discovered environment.
+    AgentSubshellCertification(RuntimeAgentSubshellCertificationRejection),
+}
+
+impl RuntimePaneEnvironmentAuthorityUnavailableReason {
+    /// Returns a stable diagnostic that identifies the failed authority boundary.
+    pub(crate) fn diagnostic(self) -> String {
+        match self {
+            Self::EnvironmentSignatureMissing => {
+                "pane bootstrap completed without a parseable environment signature".to_string()
+            }
+            Self::BootstrapOutputTruncated => {
+                "pane bootstrap output was truncated before environment certification".to_string()
+            }
+            Self::BootstrapTransactionFailed => {
+                "pane bootstrap failed before environment certification".to_string()
+            }
+            Self::BootstrapTimedOut => {
+                "pane bootstrap timed out before environment certification".to_string()
+            }
+            Self::BootstrapWriteFailed => {
+                "pane bootstrap input failed before environment certification".to_string()
+            }
+            Self::BootstrapProtocolViolation => {
+                "pane bootstrap protocol failed before environment certification".to_string()
+            }
+            Self::ShellIdentityProbeFailed => {
+                "pane shell identity probe failed before environment certification".to_string()
+            }
+            Self::AgentSubshellCertification(reason) => format!(
+                "pane agent-subshell bootstrap certification failed: {}",
+                reason.as_str()
+            ),
+        }
+    }
+}
+
+/// Current authority available for pane-relative provider and sandbox work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimePaneEnvironmentAuthority {
+    /// A bounded bootstrap or certification owner is still discovering authority.
+    Pending,
+    /// A current bootstrap-derived environment signature is published.
+    Certified,
+    /// Discovery settled without usable authority for a stable reason.
+    Unavailable(RuntimePaneEnvironmentAuthorityUnavailableReason),
+    /// No bootstrap result or current signature exists for the pane.
+    Unknown,
+}
+
+impl RuntimePaneEnvironmentAuthority {
+    /// Returns an actionable failure for settled or unsupported authority states.
+    pub(crate) fn failure_message(self) -> Option<String> {
+        match self {
+            Self::Pending | Self::Certified => None,
+            Self::Unavailable(reason) => Some(reason.diagnostic()),
+            Self::Unknown => Some(
+                "pane environment authority is unavailable because bootstrap has not certified this pane"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
 /// Certified non-primary shell identity for one live pane-process epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimePaneCertifiedShellIdentity {
@@ -444,6 +525,9 @@ pub(crate) struct RuntimeProcessComponent {
     >,
     /// Panes with an in-flight bootstrap transaction.
     pane_bootstrap_pending: BTreeSet<String>,
+    /// Stable unavailable outcomes retained after bootstrap settlement.
+    pane_environment_authority_failures:
+        std::collections::BTreeMap<String, RuntimePaneEnvironmentAuthorityUnavailableReason>,
     /// Authoritative process terminal screen state keyed by pane id.
     process_pane_screens: std::collections::BTreeMap<String, TerminalScreen>,
     /// Conversation-bound agent log screen state keyed by pane id.
@@ -1180,6 +1264,73 @@ impl RuntimeSessionService {
         self.process.pane_environment_signatures.get(pane_id)
     }
 
+    /// Returns the typed authority state for pane-relative provider work.
+    pub(crate) fn pane_environment_authority(
+        &self,
+        pane_id: &str,
+    ) -> RuntimePaneEnvironmentAuthority {
+        if self.process.pane_bootstrap_pending.contains(pane_id) {
+            return RuntimePaneEnvironmentAuthority::Pending;
+        }
+        if self
+            .process
+            .pane_environment_signatures
+            .contains_key(pane_id)
+        {
+            return RuntimePaneEnvironmentAuthority::Certified;
+        }
+        if let Some(reason) = self
+            .process
+            .pane_agent_subshell_certification_rejections
+            .get(pane_id)
+            .copied()
+        {
+            return RuntimePaneEnvironmentAuthority::Unavailable(
+                RuntimePaneEnvironmentAuthorityUnavailableReason::AgentSubshellCertification(
+                    reason,
+                ),
+            );
+        }
+        self.process
+            .pane_environment_authority_failures
+            .get(pane_id)
+            .copied()
+            .map(RuntimePaneEnvironmentAuthority::Unavailable)
+            .unwrap_or(RuntimePaneEnvironmentAuthority::Unknown)
+    }
+
+    /// Records a settled bootstrap failure and invalidates signature-bound caches.
+    pub(crate) fn mark_pane_environment_authority_unavailable(
+        &mut self,
+        pane_id: &str,
+        reason: RuntimePaneEnvironmentAuthorityUnavailableReason,
+    ) {
+        self.process.pane_environment_signatures.remove(pane_id);
+        self.process
+            .pane_path_scopes
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_path_scope_failures
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_environment_evidence
+            .retain(|key, _| key.pane_id != pane_id);
+        self.process
+            .pane_bubblewrap_capabilities
+            .retain(|key, _| key.pane_id != pane_id);
+        self.clear_pane_agent_instruction_files(pane_id);
+        self.process
+            .pane_environment_authority_failures
+            .insert(pane_id.to_string(), reason);
+    }
+
+    /// Clears a stale unavailable result when bounded discovery starts or succeeds.
+    pub(crate) fn clear_pane_environment_authority_failure(&mut self, pane_id: &str) {
+        self.process
+            .pane_environment_authority_failures
+            .remove(pane_id);
+    }
+
     /// Reports whether one pane is still awaiting its one-shot environment
     /// bootstrap attempt.
     pub(crate) fn pane_bootstrap_is_pending(&self, pane_id: &str) -> bool {
@@ -1301,9 +1452,14 @@ impl RuntimeSessionService {
         pane_id: impl Into<String>,
         signature: EnvironmentSignature,
     ) {
+        let pane_id = pane_id.into();
+        self.process.pane_bootstrap_pending.remove(&pane_id);
+        self.process
+            .pane_environment_authority_failures
+            .remove(&pane_id);
         self.process
             .pane_environment_signatures
-            .insert(pane_id.into(), signature);
+            .insert(pane_id, signature);
     }
 
     /// Installs one certification rejection for lifecycle and preflight tests.
@@ -2861,6 +3017,9 @@ impl RuntimeSessionService {
             .pane_readiness_overrides
             .revoke(pane_id, ReadinessOverrideRevocation::PaneClosed);
         self.process.pane_environment_signatures.remove(pane_id);
+        self.process
+            .pane_environment_authority_failures
+            .remove(pane_id);
         self.process
             .pane_path_scopes
             .retain(|key, _| key.pane_id != pane_id);
