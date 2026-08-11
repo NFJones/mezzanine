@@ -373,7 +373,13 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
     assert!(service.pane_environment_signature("%1").is_none());
     assert_eq!(
         service.pane_readiness_state("%1"),
-        PaneReadinessState::Ready
+        PaneReadinessState::Degraded
+    );
+    assert_eq!(
+        service.pane_environment_authority("%1"),
+        crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::EnvironmentSignatureMissing,
+        )
     );
     service.maybe_bootstrap_ready_panes().unwrap();
     assert!(
