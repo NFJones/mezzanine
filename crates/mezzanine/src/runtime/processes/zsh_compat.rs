@@ -102,6 +102,7 @@ function zshaddhistory() {
   fi
   return 0
 }
+functions[__mez_zshaddhistory_guard]=$functions[zshaddhistory]
 ZDOTDIR=${MEZ_ZSH_MANAGED_ZDOTDIR}
 "#;
 
@@ -120,6 +121,31 @@ if [[ -r ${ZDOTDIR}/.zlogin ]]; then
   builtin source -- ${ZDOTDIR}/.zlogin
 fi
 typeset -g MEZ_ZSH_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
+if (( ${+functions[__mez_zshaddhistory_guard]} )) && \
+   [[ ${functions[zshaddhistory]-} == ${functions[__mez_zshaddhistory_guard]} ]]; then
+  :
+elif (( ${+functions[zshaddhistory]} )); then
+  functions[__mez_user_zshaddhistory]=$functions[zshaddhistory]
+else
+  unfunction __mez_user_zshaddhistory 2>/dev/null || true
+fi
+function zshaddhistory() {
+  emulate -L zsh
+  local mez_line=${1%$'\n'}
+  # ZLE passes parsed assignments without quote characters, while pipe input
+  # retains the original single-quoted assignment text.
+  local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}; printf '\036'"
+  local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'; printf '\036'"
+  if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} ) ]]; then
+    return 1
+  fi
+  if (( ${+functions[__mez_user_zshaddhistory]} )); then
+    __mez_user_zshaddhistory "$@"
+    return $?
+  fi
+  return 0
+}
+functions[__mez_zshaddhistory_guard]=$functions[zshaddhistory]
 ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
 unset MEZ_ZSH_MANAGED_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET
 "#;
@@ -365,7 +391,14 @@ function zshaddhistory() {{\n\
             .unwrap();
             fs::write(
                 user_zdotdir.join(".zlogin"),
-                "print -r -- zlogin >> \"$HOME/startup.log\"\n",
+                format!(
+                    "print -r -- zlogin >> \"$HOME/startup.log\"\n\
+function zshaddhistory() {{\n\
+  print -r -- \"${{1%$'\\n'}}\" >> {}\n\
+  return 0\n\
+}}\n",
+                    shell_single_quote_path(&hook_log),
+                ),
             )
             .unwrap();
 
