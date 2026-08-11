@@ -1,6 +1,7 @@
 //! Agent shell navigation tests.
 
 use super::*;
+use crate::runtime::processes::RuntimePaneEnvironmentAuthority;
 
 /// Verifies runtime attached mux action toggles agent shell state.
 ///
@@ -712,6 +713,150 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
         cursor_column,
         Some(prompt_column),
         "parent prompt cursor should land after the trailing prompt space; observed_cursor={observed_cursor:?}; observed_screen={observed_screen:?}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a managed Bash pane can leave agent mode, execute ordinary parent
+/// shell commands, and re-enter agent mode through a real identity probe.
+///
+/// This exercises the PTY, private Bash receiver, transaction output parser,
+/// and deferred re-entry path together. State-only probe fixtures cannot catch
+/// a receiver or prompt-boundary failure that drops the identity frame.
+#[test]
+fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_probe() {
+    let shell_path = PathBuf::from("/bin/bash");
+    let shell_available = fs::metadata(&shell_path)
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false);
+    if !shell_available {
+        eprintln!("skipping live Bash re-entry regression because /bin/bash is unavailable");
+        return;
+    }
+    let root = temp_root("agent-shell-bash-reentry");
+    let mut service = RuntimeSessionService::with_event_log(
+        Session::new_default(
+            ResolvedShell::new(shell_path, ShellSource::ShellEnv),
+            Size::new(80, 24).unwrap(),
+        ),
+        root.join("control.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+    *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+
+    let show = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(show.contains("visibility=visible"), "{show}");
+    let mut first_bootstrap_completed = false;
+    for _ in 0..400 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service.pane_environment_signature("%1").is_some()
+            && !service.pane_bootstrap_is_pending_for_tests("%1")
+        {
+            first_bootstrap_completed = true;
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        first_bootstrap_completed,
+        "initial Bash agent-subshell bootstrap did not complete; authority={:?}",
+        service.pane_environment_authority("%1")
+    );
+
+    let hide = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(hide.contains("visibility=hidden"), "{hide}");
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service.pane_foreground_certified_shell_state("%1") == Some(true) {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert_eq!(
+        service.pane_foreground_certified_shell_state("%1"),
+        Some(true),
+        "parent Bash did not regain the foreground after agent exit"
+    );
+
+    service
+        .write_input_to_pane(
+            &primary,
+            Some("%1"),
+            b"printf '__MEZ_PARENT_COMMAND_ONE__\\n'; printf '__MEZ_PARENT_COMMAND_TWO__\\n'\n",
+        )
+        .unwrap();
+    let mut parent_commands_completed = false;
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        let screen = service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        if screen.contains("__MEZ_PARENT_COMMAND_ONE__")
+            && screen.contains("__MEZ_PARENT_COMMAND_TWO__")
+        {
+            parent_commands_completed = true;
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        parent_commands_completed,
+        "parent Bash commands did not complete"
+    );
+
+    service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
+    let show_again = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(show_again.contains("visibility=visible"), "{show_again}");
+    let mut reentry_completed = false;
+    for _ in 0..500 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service.agent_subshell_is_active("%1")
+            && service.pane_environment_signature("%1").is_some()
+            && !service.pane_bootstrap_is_pending_for_tests("%1")
+        {
+            reentry_completed = true;
+            break;
+        }
+        if matches!(
+            service.pane_environment_authority("%1"),
+            RuntimePaneEnvironmentAuthority::Unavailable(_)
+        ) {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    let diagnostic_events =
+        service
+            .event_log()
+            .unwrap()
+            .replay_after_for(&EventAudience::Primary, 0, 4096);
+    let process_screen = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        reentry_completed,
+        "Bash agent-shell re-entry did not complete; authority={:?}; readiness={:?}; transactions={:?}; events={diagnostic_events:?}; process_screen={process_screen:?}",
+        service.pane_environment_authority("%1"),
+        service.pane_readiness_state("%1"),
+        service.running_shell_transactions_for_tests()
     );
     service.terminate_all_pane_processes().unwrap();
 }

@@ -78,6 +78,24 @@ impl RuntimeSessionService {
         let mut status_line_updates = Vec::new();
         for (marker, transaction) in self.process.running_shell_transactions.iter_mut() {
             if transaction.pane_id == pane_id {
+                let acknowledged_bytes = if let Some(remaining) = self
+                    .process
+                    .shell_transaction_receiver_acknowledgements
+                    .get_mut(marker)
+                {
+                    let mut filtered = Vec::with_capacity(bytes.len());
+                    for byte in bytes {
+                        if *byte == mez_mux::process::SHELL_INPUT_RECORD_ACK_BYTE && *remaining > 0
+                        {
+                            *remaining -= 1;
+                        } else {
+                            filtered.push(*byte);
+                        }
+                    }
+                    filtered
+                } else {
+                    bytes.to_vec()
+                };
                 let requires_unobserved_start = self
                     .process
                     .shell_transaction_require_start_markers
@@ -92,41 +110,23 @@ impl RuntimeSessionService {
                             .shell_transaction_start_boundary_pending
                             .entry(marker.clone())
                             .or_default(),
-                        bytes,
+                        &acknowledged_bytes,
                         marker,
                     ) else {
                         continue;
                     };
                     boundary_bytes
                 } else {
-                    bytes.to_vec()
+                    acknowledged_bytes
                 };
                 let transaction_bytes =
                     agent_shell_transaction_bytes_before_end_marker(&boundary_bytes, marker);
-                let transaction_bytes = if let Some(remaining) = self
-                    .process
-                    .shell_transaction_receiver_acknowledgements
-                    .get_mut(marker)
-                {
-                    let mut filtered = Vec::with_capacity(transaction_bytes.len());
-                    for byte in transaction_bytes {
-                        if *byte == mez_mux::process::SHELL_INPUT_RECORD_ACK_BYTE && *remaining > 0
-                        {
-                            *remaining -= 1;
-                        } else {
-                            filtered.push(*byte);
-                        }
-                    }
-                    filtered
-                } else {
-                    transaction_bytes.to_vec()
-                };
                 let complete_bytes = complete_transaction_utf8_bytes(
                     self.process
                         .shell_transaction_output_utf8_pending
                         .entry(marker.clone())
                         .or_default(),
-                    &transaction_bytes,
+                    transaction_bytes,
                 );
                 let observed_bytes = match transaction.kind {
                     RunningShellTransactionKind::AgentAction { .. } => {

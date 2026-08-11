@@ -1525,6 +1525,17 @@ impl RuntimeSessionService {
             .contains(marker)
     }
 
+    /// Installs the remaining private-receiver acknowledgement count for a test transaction.
+    pub(crate) fn set_shell_transaction_receiver_acknowledgements_for_tests(
+        &mut self,
+        marker: &str,
+        remaining: usize,
+    ) {
+        self.process
+            .shell_transaction_receiver_acknowledgements
+            .insert(marker.to_string(), remaining);
+    }
+
     /// Installs a manual readiness override for a test epoch.
     pub(crate) fn mark_pane_readiness_override_for_tests(
         &mut self,

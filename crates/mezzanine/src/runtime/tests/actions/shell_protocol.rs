@@ -234,6 +234,31 @@ fn runtime_shell_transaction_capture_preserves_split_start_boundary() {
     assert_eq!(transaction.observed_output_bytes, 9);
 }
 
+/// Verifies private receiver acknowledgements emitted before the mandatory
+/// transaction start boundary are consumed before transaction output is
+/// sliced. Identity probes use the same record-separator byte in their framed
+/// payload, so a stale acknowledgement count must not remove those fields.
+#[test]
+fn runtime_shell_transaction_capture_consumes_receiver_acks_before_start_boundary() {
+    let mut service = test_runtime_service();
+    register_required_start_capture(&mut service);
+    service.set_shell_transaction_receiver_acknowledgements_for_tests("marker-1", 2);
+
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"\x1e\x1e\x1b]133;C;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\\x1emez_shell_identity_begin=marker-1\n\x1emez_shell_path=/bin/bash\n\x1emez_shell_identity_end=marker-1\n\x1b]133;D;0;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\",
+    );
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
+    assert_eq!(
+        transaction.observed_output_preview,
+        "\u{1e}mez_shell_identity_begin=marker-1\n\u{1e}mez_shell_path=/bin/bash\n\u{1e}mez_shell_identity_end=marker-1\n"
+    );
+}
+
 /// Verifies output capture still fails closed semantically: bytes after the
 /// trusted start boundary remain evidence, while prompt bytes after the
 /// matching end marker are excluded.
