@@ -154,7 +154,7 @@ __mez_bash_receiver() {
     unset MEZ_BASH_RECEIVER_COMPLETE_MARKER MEZ_BASH_RECEIVER_COMPLETE_STATUS
 }
 bind -m emacs-standard -x '"\C-g":__mez_bash_receiver'
-bind -m vi-insertion -x '"\C-g":__mez_bash_receiver'
+bind -m vi-insert -x '"\C-g":__mez_bash_receiver'
 bind -m vi-command -x '"\C-g":__mez_bash_receiver'
 if [[ -n ${MEZ_BASH_RECEIVER_INSTALL_MARKER-} ]]; then
     MEZ_BASH_RECEIVER_INSTALLED_MARKER=$MEZ_BASH_RECEIVER_INSTALL_MARKER
@@ -209,6 +209,19 @@ mod tests {
     use mez_mux::process::pane_command_plan;
     use sha2::{Digest as _, Sha256};
     use std::process::{Command, Stdio};
+
+    /// Verifies the generated receiver binds its trigger in Readline's real vi
+    /// insertion map so ordinary Bash startup does not emit a keymap diagnostic.
+    #[test]
+    fn managed_bash_receiver_uses_valid_readline_keymaps() {
+        let token = MarkerToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let source = managed_bash_receiver_source(&token);
+
+        assert!(source.contains("bind -m emacs-standard"), "{source}");
+        assert!(source.contains("bind -m vi-insert"), "{source}");
+        assert!(source.contains("bind -m vi-command"), "{source}");
+        assert!(!source.contains("vi-insertion"), "{source}");
+    }
 
     /// Verifies the managed Bash receiver evaluates an authenticated frame
     /// without placing its trigger, metadata, or source in Bash history.
@@ -287,11 +300,12 @@ mod tests {
         drop(child.stdin.take());
         let output = child.wait_with_output().unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             output.status.success(),
-            "stdout={stdout:?} stderr={:?}",
-            String::from_utf8_lossy(&output.stderr)
+            "stdout={stdout:?} stderr={stderr:?}",
         );
+        assert!(!stderr.contains("invalid keymap name"), "{stderr:?}");
         assert!(
             stdout.contains("__MEZ_BASH_RECEIVER_EXECUTED_π__"),
             "{stdout:?}"
