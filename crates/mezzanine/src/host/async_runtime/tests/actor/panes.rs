@@ -779,6 +779,115 @@ async fn async_actor_preserves_typed_shell_delivery_and_priority_order() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a generation-fenced shell transaction lease defers foreign pane
+/// input across the wrapper-to-payload gap until the matching owner releases
+/// it. This protects generated shell framing from user-input interleaving.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_defers_foreign_input_until_matching_shell_lease_release() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let instance = PaneProcessInstance {
+        pane_id: "%1".to_string(),
+        generation: 7,
+    };
+    let owner_id = "marker-lease".to_string();
+    let wrapper = mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+        b"wrapper\n".to_vec(),
+        owner_id.clone(),
+    );
+    let payload = mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+        b"payload\n".to_vec(),
+        owner_id.clone(),
+        true,
+    );
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::AcquireShellInputLease {
+                        owner_id: owner_id.clone(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteInput {
+                        bytes: b"user-input".to_vec(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteShellInput {
+                        delivery: wrapper.clone(),
+                    },
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(instance.clone(), 8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::PaneProcessIo {
+                instance: instance.clone(),
+                effect: PaneProcessIoEffect::WriteShellInput { delivery: wrapper },
+            }]
+        );
+
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::WriteShellInput {
+                        delivery: payload.clone(),
+                    },
+                },
+                RuntimeSideEffect::PaneProcessIo {
+                    instance: instance.clone(),
+                    effect: PaneProcessIoEffect::ReleaseShellInputLease {
+                        owner_id: owner_id.clone(),
+                    },
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(instance.clone(), 8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::PaneProcessIo {
+                instance: instance.clone(),
+                effect: PaneProcessIoEffect::WriteShellInput { delivery: payload },
+            }]
+        );
+        assert_eq!(
+            handle
+                .drain_pane_process_io_side_effects(instance, 8)
+                .await
+                .unwrap(),
+            vec![RuntimeSideEffect::PaneProcessIo {
+                instance: PaneProcessInstance {
+                    pane_id: "%1".to_string(),
+                    generation: 7,
+                },
+                effect: PaneProcessIoEffect::WriteInput {
+                    bytes: b"user-input".to_vec(),
+                },
+            }]
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies shell-delivery cancellation removes only the matching transaction
 /// payload for the exact process generation that owns it.
 ///

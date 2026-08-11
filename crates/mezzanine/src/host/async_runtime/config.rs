@@ -8,8 +8,9 @@ use super::{
     AgentId, Arc, AsyncRuntimeRequest, ControlConnectionState,
     DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH, DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION,
     DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, Duration, EventAudience, FanoutBatch, HashMap, HashSet,
-    MessageConnection, MezError, Notify, Result, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeSideEffect, RuntimeTimerKey, UnixListener, VecDeque, current_effective_uid, mpsc, watch,
+    MessageConnection, MezError, Notify, PaneProcessInstance, Result, RuntimeLifecycleState,
+    RuntimeSessionService, RuntimeSideEffect, RuntimeTimerKey, UnixListener, VecDeque,
+    current_effective_uid, mpsc, watch,
 };
 use crate::storage::snapshot::SnapshotRepository;
 
@@ -248,6 +249,8 @@ pub struct AsyncRuntimeSessionActor {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) side_effects: VecDeque<RuntimeSideEffect>,
+    /// Active transaction input leases keyed by exact pane process generation.
+    pub(super) pane_input_leases: HashMap<PaneProcessInstance, String>,
     /// Adapter-owned timer scheduling and stale-generation state.
     pub(super) timers: RuntimeTimerTracker,
     /// Stores the side effect buffer value for this data structure.

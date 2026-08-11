@@ -2144,7 +2144,7 @@ fn runtime_pane_write_failure_fails_running_file_action() {
         )
         .unwrap();
     assert_eq!(first.terminal_state, AgentTurnState::Running);
-    assert_eq!(service.drain_pane_io_transition().side_effects.len(), 1);
+    assert_eq!(service.drain_pane_io_transition().side_effects.len(), 2);
     assert!(
         service
             .running_shell_transactions_for_tests()

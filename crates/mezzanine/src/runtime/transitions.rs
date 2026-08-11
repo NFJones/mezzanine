@@ -35,6 +35,16 @@ pub struct PaneProcessInstance {
 /// One I/O operation targeted to an exact adapter-owned pane process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaneProcessIoEffect {
+    /// Acquires exclusive generated-input ownership for one shell transaction.
+    AcquireShellInputLease {
+        /// Opaque transaction marker that owns the lease.
+        owner_id: String,
+    },
+    /// Releases ownership when the matching transaction settles or is revoked.
+    ReleaseShellInputLease {
+        /// Opaque transaction marker that must match the active owner.
+        owner_id: String,
+    },
     /// Write ordinary input bytes.
     WriteInput { bytes: Vec<u8> },
     /// Write typed generated shell input without losing delivery semantics.

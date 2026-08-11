@@ -46,6 +46,23 @@ impl ShellInputDelivery {
         }
     }
 
+    /// Builds generated wrapper source owned by one shell transaction.
+    ///
+    /// The delivery identity lets runtime-owned PTY arbitration distinguish
+    /// transaction source from deferred user and foreign runtime input.
+    pub fn generated_source_for_transaction(
+        bytes: Vec<u8>,
+        delivery_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            bytes,
+            priority: false,
+            pacing: ShellInputPacing::GeneratedSource,
+            delivery_id: Some(delivery_id.into()),
+            receiver_acknowledgements: false,
+        }
+    }
+
     /// Builds a priority deferred payload bound to one transaction marker.
     pub fn receiver_acknowledged(
         bytes: Vec<u8>,

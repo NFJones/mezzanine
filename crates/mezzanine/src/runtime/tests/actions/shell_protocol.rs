@@ -1395,7 +1395,14 @@ fn runtime_agent_subshell_bootstrap_waits_for_start_before_releasing_payload() {
 
     assert!(service.enter_agent_subshell_if_needed(&pane_id).unwrap());
     let handoff = service.drain_pane_io_transition().side_effects;
-    assert_eq!(handoff.len(), 1);
+    assert_eq!(handoff.len(), 2);
+    assert!(matches!(
+        handoff.first(),
+        Some(RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { .. },
+            ..
+        })
+    ));
     let (marker, transaction) = service
         .running_shell_transactions_for_tests()
         .iter()
@@ -1574,11 +1581,18 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     let deferred_wrapper = service.drain_pane_io_transition().side_effects;
-    assert_eq!(deferred_wrapper.len(), 1);
+    assert_eq!(deferred_wrapper.len(), 2);
+    let RuntimeSideEffect::PaneProcessIo {
+        effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { owner_id },
+        ..
+    } = &deferred_wrapper[0]
+    else {
+        panic!("expected shell input lease acquisition: {deferred_wrapper:?}");
+    };
     let RuntimeSideEffect::PaneProcessIo {
         effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
         ..
-    } = &deferred_wrapper[0]
+    } = &deferred_wrapper[1]
     else {
         panic!("expected typed generated wrapper delivery: {deferred_wrapper:?}");
     };
@@ -1587,8 +1601,8 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
         mez_mux::process::ShellInputPacing::GeneratedSource
     );
     assert!(!delivery.priority);
-    assert_eq!(delivery.delivery_id, None);
-    let wrapper_text = String::from_utf8_lossy(deferred_wrapper[0].pane_input_parts().1);
+    assert_eq!(delivery.delivery_id.as_deref(), Some(owner_id.as_str()));
+    let wrapper_text = String::from_utf8_lossy(deferred_wrapper[1].pane_input_parts().1);
     let wrapper_source = decoded_posix_shell_wrapper_sources(&wrapper_text);
     assert!(wrapper_source.contains("__mez_tx_"), "{wrapper_source}");
     assert!(!wrapper_text.contains("payload-marker"), "{wrapper_text}");

@@ -446,6 +446,8 @@ pub(crate) struct RuntimeProcessComponent {
     agent_pane_screens: std::collections::BTreeMap<String, AgentPaneScreen>,
     /// Live shell transactions keyed by their OSC marker.
     running_shell_transactions: std::collections::BTreeMap<String, RunningShellTransactionRef>,
+    /// Exact process instances holding each transaction's exclusive input lease.
+    shell_transaction_input_leases: std::collections::BTreeMap<String, PaneProcessInstance>,
     /// Immutable bounded wrapper-filter commands keyed by transaction marker.
     ///
     /// Registration derives this descriptor once so steady-state PTY output
@@ -608,6 +610,23 @@ impl RuntimeSessionService {
         self.process
             .running_shell_transactions
             .insert(marker.clone(), transaction);
+        if let Some(instance) = self.adapter_owned_pane_process_instance(
+            self.process
+                .running_shell_transactions
+                .get(&marker)
+                .map_or("", |transaction| transaction.pane_id.as_str()),
+        ) {
+            self.process
+                .shell_transaction_input_leases
+                .insert(marker.clone(), instance.clone());
+            self.persistence
+                .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect: PaneProcessIoEffect::AcquireShellInputLease {
+                        owner_id: marker.clone(),
+                    },
+                });
+        }
         if require_start_marker {
             self.process
                 .shell_transaction_require_start_markers
@@ -732,6 +751,15 @@ impl RuntimeSessionService {
         marker: &str,
     ) -> Option<RunningShellTransactionRef> {
         self.process.managed_home_activity_locks.remove(marker);
+        if let Some(instance) = self.process.shell_transaction_input_leases.remove(marker) {
+            self.persistence
+                .queue_pane_input(RuntimeSideEffect::PaneProcessIo {
+                    instance,
+                    effect: PaneProcessIoEffect::ReleaseShellInputLease {
+                        owner_id: marker.to_string(),
+                    },
+                });
+        }
         self.process
             .shell_transaction_wrapper_filter_commands
             .remove(marker);
@@ -2411,10 +2439,23 @@ impl RuntimeSessionService {
         pane_id: &str,
         input: &[u8],
     ) -> Result<()> {
-        self.write_runtime_pane_shell_delivery(
-            pane_id,
-            mez_mux::process::ShellInputDelivery::generated_source(input.to_vec()),
-        )
+        let delivery = self
+            .process
+            .running_shell_transactions
+            .iter()
+            .find_map(|(marker, transaction)| {
+                (transaction.pane_id == pane_id).then(|| marker.clone())
+            })
+            .map_or_else(
+                || mez_mux::process::ShellInputDelivery::generated_source(input.to_vec()),
+                |marker| {
+                    mez_mux::process::ShellInputDelivery::generated_source_for_transaction(
+                        input.to_vec(),
+                        marker,
+                    )
+                },
+            );
+        self.write_runtime_pane_shell_delivery(pane_id, delivery)
     }
 
     /// Writes one typed shell delivery without dropping pacing or identity.

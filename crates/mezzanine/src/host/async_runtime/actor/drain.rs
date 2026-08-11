@@ -355,6 +355,28 @@ impl AsyncRuntimeSessionActor {
         let mut drained = Vec::new();
         let mut retained = VecDeque::with_capacity(self.side_effects.len());
         while let Some(effect) = self.side_effects.pop_front() {
+            if let RuntimeSideEffect::PaneProcessIo {
+                instance: effect_instance,
+                effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { owner_id },
+            } = &effect
+                && effect_instance.pane_id == pane_id
+            {
+                self.pane_input_leases
+                    .entry(effect_instance.clone())
+                    .or_insert_with(|| owner_id.clone());
+                continue;
+            }
+            if let RuntimeSideEffect::PaneProcessIo {
+                instance: effect_instance,
+                effect: crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease { owner_id },
+            } = &effect
+                && effect_instance.pane_id == pane_id
+            {
+                if self.pane_input_leases.get(effect_instance) == Some(owner_id) {
+                    self.pane_input_leases.remove(effect_instance);
+                }
+                continue;
+            }
             if drained.len() < limit && pane_io_side_effect_targets_pane(&effect, pane_id) {
                 drained.push(effect);
             } else {
@@ -367,6 +389,12 @@ impl AsyncRuntimeSessionActor {
             .into_iter()
             .map(|effect| match effect {
                 RuntimeSideEffect::PaneProcessIo { instance, effect } => match effect {
+                    crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { .. }
+                    | crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease { .. } => {
+                        unreachable!(
+                            "pane input lease control effects are consumed by actor arbitration"
+                        )
+                    }
                     crate::runtime::PaneProcessIoEffect::WriteInput { bytes } => {
                         RuntimeSideEffect::WritePaneInput {
                             pane_id: instance.pane_id,
@@ -440,6 +468,65 @@ impl AsyncRuntimeSessionActor {
         let mut drained = Vec::new();
         let mut retained = VecDeque::with_capacity(self.side_effects.len());
         while let Some(effect) = self.side_effects.pop_front() {
+            if let RuntimeSideEffect::PaneProcessIo {
+                instance: effect_instance,
+                effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { owner_id },
+            } = &effect
+                && effect_instance == instance
+            {
+                self.pane_input_leases
+                    .entry(effect_instance.clone())
+                    .or_insert_with(|| owner_id.clone());
+                continue;
+            }
+            if let RuntimeSideEffect::PaneProcessIo {
+                instance: effect_instance,
+                effect: crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease { owner_id },
+            } = &effect
+                && effect_instance == instance
+            {
+                if self.pane_input_leases.get(effect_instance) == Some(owner_id) {
+                    self.pane_input_leases.remove(effect_instance);
+                }
+                continue;
+            }
+            let lease_allows_effect = match (&effect, self.pane_input_leases.get(instance)) {
+                (
+                    RuntimeSideEffect::PaneProcessIo {
+                        effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+                        ..
+                    },
+                    Some(owner_id),
+                ) => delivery.delivery_id.as_deref() == Some(owner_id.as_str()),
+                (
+                    RuntimeSideEffect::PaneProcessIo {
+                        effect: crate::runtime::PaneProcessIoEffect::Terminate { .. },
+                        ..
+                    },
+                    Some(_),
+                ) => true,
+                (
+                    RuntimeSideEffect::PaneProcessIo {
+                        effect: crate::runtime::PaneProcessIoEffect::ObserveForegroundProcess { .. },
+                        ..
+                    },
+                    Some(_),
+                ) => true,
+                (
+                    RuntimeSideEffect::PaneProcessIo {
+                        effect:
+                            crate::runtime::PaneProcessIoEffect::CancelShellInput { delivery_id },
+                        ..
+                    },
+                    Some(owner_id),
+                ) => delivery_id == owner_id,
+                (_, Some(_)) => false,
+                (_, None) => true,
+            };
+            if !lease_allows_effect {
+                retained.push_back(effect);
+                continue;
+            }
             if drained.len() < limit && pane_io_side_effect_targets_instance(&effect, instance) {
                 drained.push(effect);
             } else {

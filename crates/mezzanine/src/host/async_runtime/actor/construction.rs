@@ -119,6 +119,7 @@ impl AsyncRuntimeSessionActor {
                 side_effect_delivery_tx,
                 lifecycle_state_tx,
                 side_effects: VecDeque::with_capacity(config.side_effect_buffer),
+                pane_input_leases: Default::default(),
                 timers: Default::default(),
                 side_effect_buffer: config.side_effect_buffer,
                 commands_processed: 0,

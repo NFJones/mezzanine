@@ -3458,8 +3458,9 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
             .contains("control show visible text")
     );
     let enter_input = service.drain_pane_io_transition().side_effects;
-    assert_eq!(pane_input_effects(&enter_input).len(), 1);
-    assert_eq!(enter_input[0].pane_input_parts().0, pane_id);
+    let enter_inputs = pane_input_effects(&enter_input);
+    assert_eq!(enter_inputs.len(), 1);
+    assert_eq!(enter_inputs[0].pane_input_parts().0, pane_id);
     assert!(service.agent_subshell_is_active(&pane_id));
 
     let hide = service.dispatch_runtime_control_body(

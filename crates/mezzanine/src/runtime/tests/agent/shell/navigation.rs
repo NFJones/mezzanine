@@ -202,9 +202,10 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
         .unwrap();
     assert!(show.contains("visibility=visible"), "{show}");
     let enter_input = service.drain_pane_io_transition().side_effects;
-    assert_eq!(pane_input_effects(&enter_input).len(), 1);
-    assert_eq!(enter_input[0].pane_input_parts().0, pane_id);
-    let enter_text = String::from_utf8_lossy(enter_input[0].pane_input_parts().1);
+    let enter_inputs = pane_input_effects(&enter_input);
+    assert_eq!(enter_inputs.len(), 1);
+    assert_eq!(enter_inputs[0].pane_input_parts().0, pane_id);
+    let enter_text = String::from_utf8_lossy(enter_inputs[0].pane_input_parts().1);
     let enter_source = decoded_posix_shell_wrapper_sources(&enter_text);
     assert!(
         enter_source.contains("command env \\\n  -u BASH_ENV \\\n  -u ENV \\\n  -u ZDOTDIR"),
