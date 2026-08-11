@@ -978,6 +978,7 @@ impl RuntimeSessionService {
 
     /// Invalidates every non-primary shell proof associated with one pane.
     pub(crate) fn clear_agent_subshell_shell_identity(&mut self, pane_id: &str) {
+        self.clear_deferred_agent_subshell_entry(pane_id);
         self.process
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);

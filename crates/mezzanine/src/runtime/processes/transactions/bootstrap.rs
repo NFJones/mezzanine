@@ -433,6 +433,19 @@ impl RuntimeSessionService {
 
     /// Resumes deferred agent work only after bootstrap authority is settled.
     pub(crate) fn resume_after_bootstrap_settlement(&mut self, pane_id: &str) -> Result<()> {
+        if self.agent_subshell_entry_is_deferred(pane_id) {
+            if !self.agent_subshell_is_active(pane_id)
+                && self.pane_readiness_state(pane_id) == PaneReadinessState::Ready
+                && self
+                    .agent_shell_store()
+                    .get(pane_id)
+                    .is_some_and(|session| session.visibility == AgentShellVisibility::Visible)
+            {
+                let _ = self.enter_agent_subshell_if_needed(pane_id)?;
+            } else if !self.pane_bootstrap_is_pending(pane_id) {
+                self.clear_deferred_agent_subshell_entry(pane_id);
+            }
+        }
         let pending_shell_turns = self
             .agent_turn_executions()
             .iter()

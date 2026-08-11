@@ -1109,6 +1109,24 @@ impl RuntimeSessionService {
         self.process.pane_bootstrap_pending.contains(pane_id)
     }
 
+    /// Reports whether a pending bootstrap still needs current-epoch shell
+    /// identity evidence before commands can safely enter a child shell.
+    pub(crate) fn pane_bootstrap_awaits_shell_identity(&self, pane_id: &str) -> bool {
+        self.process.pane_bootstrap_pending.contains(pane_id)
+            && self
+                .process
+                .pane_shell_interaction_generations
+                .contains_key(pane_id)
+            && !self
+                .process
+                .pane_certified_shell_identities
+                .contains_key(pane_id)
+            && !self
+                .process
+                .pane_probed_shell_identities
+                .contains_key(pane_id)
+    }
+
     /// Clears pane readiness states and manual overrides for session replacement.
     pub(crate) fn clear_pane_readiness_state_and_overrides(&mut self) {
         self.process.pane_readiness_states.clear();

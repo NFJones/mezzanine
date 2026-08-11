@@ -171,6 +171,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+        self.clear_deferred_agent_subshell_entry(pane_id);
         let running_turn_id = self
             .agent_shell_store()
             .get(pane_id)
@@ -1092,6 +1093,10 @@ impl RuntimeSessionService {
         if self.agent_subshell_is_active(pane_id)
             || self.primary_pid_for_live_pane_process(pane_id).is_none()
         {
+            return Ok(false);
+        }
+        if self.pane_bootstrap_awaits_shell_identity(pane_id) {
+            self.defer_agent_subshell_entry(pane_id);
             return Ok(false);
         }
         let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;

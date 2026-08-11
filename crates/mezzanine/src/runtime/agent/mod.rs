@@ -168,6 +168,8 @@ pub(crate) struct RuntimeAgentComponent {
     provider_retry_scheduler: ProviderRetryScheduler,
     /// Panes whose visible agent session is scoped to a child shell.
     agent_subshell_panes: BTreeSet<String>,
+    /// Visible panes waiting for parent bootstrap before entering a child shell.
+    deferred_agent_subshell_entry_panes: BTreeSet<String>,
     /// Interrupted subshells that must exit with a line-oriented command.
     agent_subshell_command_exit_panes: BTreeSet<String>,
     /// Bounded hidden diagnostic lines retained by pane.
@@ -2162,7 +2164,32 @@ impl RuntimeSessionService {
 
     /// Marks one pane as owning an agent child shell.
     pub(crate) fn enter_agent_subshell(&mut self, pane_id: impl Into<String>) {
-        self.agent.agent_subshell_panes.insert(pane_id.into());
+        let pane_id = pane_id.into();
+        self.agent
+            .deferred_agent_subshell_entry_panes
+            .remove(&pane_id);
+        self.agent.agent_subshell_panes.insert(pane_id);
+    }
+
+    /// Records that child-shell entry must resume after parent bootstrap.
+    pub(crate) fn defer_agent_subshell_entry(&mut self, pane_id: impl Into<String>) {
+        self.agent
+            .deferred_agent_subshell_entry_panes
+            .insert(pane_id.into());
+    }
+
+    /// Reports whether one pane has an explicit deferred child-shell entry.
+    pub(crate) fn agent_subshell_entry_is_deferred(&self, pane_id: &str) -> bool {
+        self.agent
+            .deferred_agent_subshell_entry_panes
+            .contains(pane_id)
+    }
+
+    /// Cancels a deferred child-shell entry for one pane.
+    pub(crate) fn clear_deferred_agent_subshell_entry(&mut self, pane_id: &str) -> bool {
+        self.agent
+            .deferred_agent_subshell_entry_panes
+            .remove(pane_id)
     }
 
     /// Removes one pane from active agent child-shell ownership.
@@ -2185,6 +2212,9 @@ impl RuntimeSessionService {
     /// Clears all agent child-shell state for a removed pane.
     pub(crate) fn clear_agent_subshell_state(&mut self, pane_id: &str) {
         self.agent.agent_subshell_panes.remove(pane_id);
+        self.agent
+            .deferred_agent_subshell_entry_panes
+            .remove(pane_id);
         self.agent.agent_subshell_command_exit_panes.remove(pane_id);
     }
 }

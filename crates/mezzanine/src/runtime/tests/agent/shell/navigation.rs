@@ -259,6 +259,237 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies an immediate agent-shell re-entry waits for the restored parent
+/// shell's current interaction epoch to be probed and bootstrapped. This
+/// protects the fail-closed identity boundary while ensuring a rapid toggle is
+/// resumed automatically instead of failing with an unprobed-identity error.
+#[test]
+fn runtime_agent_shell_immediate_reentry_resumes_after_parent_bootstrap() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    let show_again = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(show_again.contains("visibility=visible"), "{show_again}");
+    assert!(!service.agent_subshell_is_active(&pane_id));
+    assert_eq!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::Unknown
+    );
+    assert!(service.pane_bootstrap_is_pending_for_tests(&pane_id));
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "re-entry must not write to the PTY before the parent shell is ready"
+    );
+
+    service.set_pane_readiness(&pane_id, PaneReadinessState::PromptCandidate);
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+    assert_eq!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+        1,
+        "the restored parent prompt should dispatch one identity probe"
+    );
+    let (identity_marker, identity_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("parent identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    let identity_output = format!(
+        "\u{1e}mez_shell_identity_begin={identity_marker}\n\
+         \u{1e}mez_shell_path=/bin/sh\n\
+         \u{1e}mez_shell_version=sh\n\
+         \u{1e}mez_shell_identity_end={identity_marker}\n"
+    );
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&identity_marker)
+        .unwrap();
+    transaction.observed_output_bytes = identity_output.len();
+    transaction.observed_output_preview = identity_output;
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    let (bootstrap_marker, bootstrap_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            (transaction.kind == RunningShellTransactionKind::Bootstrap)
+                .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("parent bootstrap should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    service.drain_pane_io_transition();
+    let bootstrap_output = "env\tos\tLinux\n\
+env\tarch\tx86_64\n\
+env\thost\ttest-host\n\
+env\tuser\ttest-user\n\
+env\tshell_path\t/bin/sh\n\
+env\tshell_class\tposix-sh\n\
+env\tpath\t/usr/bin:/bin\n\
+env\tcwd\t/tmp\n\
+env\tgit_repo\t0\n\
+bootstrap\tcomplete\t1714500000\n";
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&bootstrap_marker)
+        .unwrap();
+    transaction.observed_output_bytes = bootstrap_output.len();
+    transaction.observed_output_preview = bootstrap_output.to_string();
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &bootstrap_marker,
+            &bootstrap_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            0,
+        )
+        .unwrap();
+
+    assert!(service.agent_subshell_is_active(&pane_id));
+    assert_eq!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+        1,
+        "successful parent bootstrap should enter exactly one agent subshell"
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies a failed restored-parent identity probe leaves rapid agent-shell
+/// re-entry fail-closed. No child-shell command may be written when the new
+/// interaction epoch cannot establish a valid shell identity.
+#[test]
+fn runtime_agent_shell_immediate_reentry_stays_closed_after_failed_identity_probe() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    service.set_pane_readiness(&pane_id, PaneReadinessState::PromptCandidate);
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+    service.drain_pane_io_transition();
+    let (identity_marker, identity_turn_id) = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )
+            .then(|| (marker.clone(), transaction.turn_id.clone()))
+        })
+        .expect("parent identity probe should be registered");
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+        )
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end(
+            &pane_id,
+            &identity_marker,
+            &identity_turn_id,
+            &format!("agent-{pane_id}"),
+            &pane_id,
+            1,
+        )
+        .unwrap();
+
+    assert!(!service.agent_subshell_is_active(&pane_id));
+    assert_eq!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::Degraded
+    );
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "a failed identity probe must not enter the agent subshell"
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies that the live subshell EOF path also restores the parent prompt
 /// cursor after agent-authored text has already moved the pane screen. This
 /// covers the Ctrl+D path that exits the child agent shell, waits for the parent
