@@ -83,6 +83,19 @@ impl ModelProfile {
             .or_else(|| known_provider_model_context_window_tokens(&self.provider, &self.model))
     }
 
+    /// Returns the configured maximum number of provider-visible input tokens.
+    ///
+    /// This limit is deliberately distinct from the context window because a
+    /// provider may reserve part of its context for output, reasoning, and
+    /// request framing.
+    pub fn max_input_tokens(&self) -> Option<usize> {
+        self.provider_options
+            .get("max_input_tokens")
+            .or_else(|| self.provider_options.get("input_token_limit"))
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|tokens| *tokens > 0)
+    }
+
     /// Returns the configured provider output-token cap, if present.
     ///
     /// OpenAI-compatible providers use `max_output_tokens`; compatible
@@ -154,7 +167,9 @@ impl ModelProfile {
     /// Returns the word budget used when explicit context compaction needs a
     /// model-window-sized target.
     pub fn context_window_budget_words(&self) -> usize {
-        self.context_window_tokens()
+        self.max_input_tokens()
+            .unwrap_or_else(|| self.context_window_tokens())
+            .min(self.context_window_tokens())
             .saturating_mul(MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_NUMERATOR)
             .saturating_div(MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_DENOMINATOR)
             .max(1)

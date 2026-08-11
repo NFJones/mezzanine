@@ -1,5 +1,5 @@
 # Mezzanine default configuration.
-version = 58
+version = 59
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.

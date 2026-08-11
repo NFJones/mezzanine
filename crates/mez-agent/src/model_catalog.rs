@@ -94,6 +94,8 @@ pub struct ModelCatalogEntry {
     pub reasoning_levels: Vec<String>,
     /// Known positive context-window size in tokens.
     pub context_window_tokens: Option<usize>,
+    /// Known positive maximum request-input size in tokens.
+    pub max_input_tokens: Option<usize>,
     /// Ordered provider-neutral capability tags.
     pub capabilities: Vec<String>,
     /// Ordered alternate identifiers for selection.
@@ -116,6 +118,7 @@ impl ModelCatalogEntry {
                 display_name: self.display_name.clone(),
                 reasoning_levels: self.reasoning_levels.clone(),
                 context_window_tokens: self.context_window_tokens,
+                max_input_tokens: self.max_input_tokens,
                 capabilities: self.capabilities.clone(),
             },
             source: self.source,
@@ -382,6 +385,7 @@ fn normalized_candidate(candidate: ModelCatalogCandidate) -> Option<ModelCatalog
             .model
             .context_window_tokens
             .filter(|limit| *limit > 0),
+        max_input_tokens: candidate.model.max_input_tokens.filter(|limit| *limit > 0),
         capabilities: normalize_model_catalog_values(candidate.model.capabilities),
         aliases,
         source: candidate.source,
@@ -398,6 +402,7 @@ fn merge_catalog_entry(existing: &mut ModelCatalogEntry, incoming: ModelCatalogE
         existing.context_window_tokens = incoming
             .context_window_tokens
             .or(existing.context_window_tokens);
+        existing.max_input_tokens = incoming.max_input_tokens.or(existing.max_input_tokens);
         existing.reasoning_levels = normalize_model_catalog_values(
             incoming
                 .reasoning_levels
@@ -427,6 +432,9 @@ fn merge_catalog_entry(existing: &mut ModelCatalogEntry, incoming: ModelCatalogE
         }
         if existing.context_window_tokens.is_none() {
             existing.context_window_tokens = incoming.context_window_tokens;
+        }
+        if existing.max_input_tokens.is_none() {
+            existing.max_input_tokens = incoming.max_input_tokens;
         }
         existing.reasoning_levels = normalize_model_catalog_values(
             std::mem::take(&mut existing.reasoning_levels)
@@ -507,6 +515,7 @@ mod tests {
                     .map(|level| (*level).to_string())
                     .collect(),
                 context_window_tokens,
+                max_input_tokens: None,
                 capabilities: Vec::new(),
             },
         )

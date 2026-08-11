@@ -606,6 +606,7 @@ pub(super) const MODEL_PROFILE_KEYS: &[&str] = &[
     "multimodal",
     "context_window_tokens",
     "context_limit_tokens",
+    "max_input_tokens",
     "max_output_tokens",
     "provider_options",
     "safety_tier",

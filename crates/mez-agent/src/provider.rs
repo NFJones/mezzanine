@@ -1145,6 +1145,8 @@ pub struct ProviderModelInfo {
     pub reasoning_levels: Vec<String>,
     /// Provider-reported or locally documented context-window size in tokens.
     pub context_window_tokens: Option<usize>,
+    /// Provider-reported maximum request-input size in tokens.
+    pub max_input_tokens: Option<usize>,
     /// Provider-reported capability tags such as `tool_use`.
     pub capabilities: Vec<String>,
 }
@@ -1566,7 +1568,7 @@ mod model_catalog_parse_tests {
     /// known model reasoning and context-window defaults.
     fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
         let models = parse_openai_models_http_body(
-            r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":262144},{"id":"lmstudio-local","capabilities":["tool_use"],"structured_output":true}]}"#,
+            r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":400000,"max_input_tokens":272000},{"id":"lmstudio-local","capabilities":["tool_use"],"structured_output":true}]}"#,
         )
         .unwrap();
 
@@ -1577,7 +1579,8 @@ mod model_catalog_parse_tests {
             .unwrap();
         assert_eq!(custom.display_name.as_deref(), Some("Custom"));
         assert_eq!(custom.reasoning_levels, vec!["tiny", "large"]);
-        assert_eq!(custom.context_window_tokens, Some(262_144));
+        assert_eq!(custom.context_window_tokens, Some(400_000));
+        assert_eq!(custom.max_input_tokens, Some(272_000));
         let local = models
             .iter()
             .find(|model| model.id == "lmstudio-local")
@@ -1669,6 +1672,7 @@ where
         reasoning_levels,
         context_window_tokens: provider_context_window_tokens_from_value(value)
             .or_else(|| known_context_window_tokens(&id)),
+        max_input_tokens: provider_max_input_tokens_from_value(value),
         capabilities: provider_capabilities_from_value(value),
     })
 }
@@ -1721,8 +1725,6 @@ fn provider_context_window_tokens_from_value(value: &serde_json::Value) -> Optio
         "context_window",
         "context_length",
         "max_context_length",
-        "input_token_limit",
-        "max_input_tokens",
     ] {
         if let Some(tokens) = object
             .get(field)
@@ -1744,6 +1746,38 @@ fn provider_context_window_tokens_from_value(value: &serde_json::Value) -> Optio
         "/capabilities/context_window",
         "/capabilities/context_length",
         "/capabilities/max_context_length",
+    ] {
+        if let Some(tokens) = value
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+        {
+            return Some(tokens);
+        }
+    }
+    None
+}
+
+/// Returns a provider-advertised maximum input limit without conflating it
+/// with the larger context window that also includes output capacity.
+fn provider_max_input_tokens_from_value(value: &serde_json::Value) -> Option<usize> {
+    let object = value.as_object()?;
+    for field in ["input_token_limit", "max_input_tokens"] {
+        if let Some(tokens) = object
+            .get(field)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+        {
+            return Some(tokens);
+        }
+    }
+    for pointer in [
+        "/limits/input_token_limit",
+        "/limits/max_input_tokens",
+        "/capabilities/input_token_limit",
+        "/capabilities/max_input_tokens",
     ] {
         if let Some(tokens) = value
             .pointer(pointer)
@@ -1968,6 +2002,7 @@ mod tests {
                 display_name: Some("Model".to_string()),
                 reasoning_levels: vec!["high".to_string()],
                 context_window_tokens: Some(128_000),
+                max_input_tokens: Some(120_000),
                 capabilities: vec!["tool_use".to_string()],
             }],
             reasoning_levels: vec!["high".to_string()],
@@ -1976,6 +2011,7 @@ mod tests {
 
         assert_eq!(catalog.provider, "provider");
         assert_eq!(catalog.models[0].context_window_tokens, Some(128_000));
+        assert_eq!(catalog.models[0].max_input_tokens, Some(120_000));
         assert_eq!(catalog.models[0].capabilities, ["tool_use"]);
     }
 

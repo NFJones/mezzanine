@@ -27,6 +27,30 @@ fn model_profile_context_window_preserves_explicit_override() {
 }
 
 #[test]
+/// Verifies a configured maximum input remains distinct from the advertised
+/// context window and lowers the compaction target when it is the tighter
+/// provider constraint. This prevents stateless Responses retries from
+/// treating output and provider overhead capacity as usable prompt context.
+fn model_profile_max_input_limit_constrains_context_budget() {
+    let mut provider_options = std::collections::BTreeMap::new();
+    provider_options.insert("context_window_tokens".to_string(), "400000".to_string());
+    provider_options.insert("max_input_tokens".to_string(), "272000".to_string());
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-5.3-codex".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options,
+        safety_tier: None,
+    };
+
+    assert_eq!(profile.context_window_tokens(), 400_000);
+    assert_eq!(profile.max_input_tokens(), Some(272_000));
+    assert_eq!(profile.context_window_budget_words(), 204_000);
+}
+
+#[test]
 /// Verifies that known DeepSeek V4 models use their documented 1M-token
 /// context windows when a profile omits an explicit context override. This
 /// protects custom DeepSeek profiles from falling back to the conservative

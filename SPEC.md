@@ -2930,15 +2930,16 @@ The `model_profiles` table MUST be a map keyed by model profile identity. Each
 profile MUST define `provider` and `model`, and MAY define
 `reasoning_profile`, `reasoning_effort`, `latency_preference`,
 `multimodal_required`, `context_window_tokens`, `context_limit_tokens`,
-`max_output_tokens`, `provider_options`, `safety_tier`, `privacy_tier`,
+`max_input_tokens`, `max_output_tokens`, `provider_options`, `safety_tier`, `privacy_tier`,
 `residency`, `approval_policy`, and
 `fallback_profiles`. `reasoning_profile` is the canonical Mezzanine
 reasoning-level setting. `reasoning_effort` is accepted as a legacy alias and
 MUST be normalized as if `reasoning_profile` were set when the canonical field
-is absent. `context_window_tokens`, `context_limit_tokens`, and
+is absent. `context_window_tokens`, `context_limit_tokens`, `max_input_tokens`, and
 `max_output_tokens` MUST be positive token counts when present.
 `context_window_tokens` and `context_limit_tokens` MUST drive context-usage
-display percentages and explicit compaction budget targets for that profile.
+display percentages. `max_input_tokens` MUST cap explicit compaction budget
+targets when it is lower than the context-window limit.
 Generated default model profiles SHOULD include provider/model-aware recommended
 `max_output_tokens` values for known agent workloads when the selected provider
 exposes a compatible output-budget control. Profiles for unknown or generic

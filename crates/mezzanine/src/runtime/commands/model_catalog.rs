@@ -711,6 +711,7 @@ fn runtime_catalog_candidate(
             display_name: None,
             reasoning_levels,
             context_window_tokens: mez_agent::known_model_context_window_tokens(model),
+            max_input_tokens: None,
             capabilities: Vec::new(),
         },
     )

@@ -112,6 +112,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
             display_name: Some("Provider Only".to_string()),
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
             context_window_tokens: Some(777_777),
+            max_input_tokens: Some(666_666),
             capabilities: Vec::new(),
         }],
         vec!["low".to_string(), "high".to_string()],
@@ -167,6 +168,10 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
     assert_eq!(
         model_profile.provider_options.get("context_window_tokens"),
         Some(&"777777".to_string())
+    );
+    assert_eq!(
+        model_profile.provider_options.get("max_input_tokens"),
+        Some(&"666666".to_string())
     );
 
     let open_reasoning = AttachedTerminalClientStepPlan {

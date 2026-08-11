@@ -499,6 +499,7 @@ pub fn validate_config_text(
             });
         } else if path.ends_with(".context_window_tokens")
             || path.ends_with(".context_limit_tokens")
+            || path.ends_with(".max_input_tokens")
             || path.ends_with(".max_output_tokens")
         {
             if let Some(message) = validate_positive_usize_value(&value, &path) {

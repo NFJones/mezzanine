@@ -849,6 +849,9 @@ impl RuntimeSessionService {
                 context_window_tokens.to_string(),
             );
         }
+        if let Some(max_input_tokens) = model.max_input_tokens {
+            provider_options.insert("max_input_tokens".to_string(), max_input_tokens.to_string());
+        }
         if !model.capabilities.is_empty() {
             provider_options.insert(
                 "model_capabilities".to_string(),

@@ -288,6 +288,13 @@ fn runtime_model_profile_from_config(
             .entry("context_window_tokens".to_string())
             .or_insert_with(|| context_window_tokens.to_string());
     }
+    if let Some(max_input_tokens) =
+        runtime_model_profile_positive_token_count(profile_name, object, "max_input_tokens")?
+    {
+        provider_options
+            .entry("max_input_tokens".to_string())
+            .or_insert_with(|| max_input_tokens.to_string());
+    }
     if let Some(max_output_tokens) =
         runtime_model_profile_positive_token_count(profile_name, object, "max_output_tokens")?
     {

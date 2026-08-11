@@ -98,7 +98,7 @@ fn retain_named_tables(
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 58
+version = 59
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -449,6 +449,8 @@ reasoning_profile = "high"
 latency_preference = "default"
 multimodal_required = false
 context_window_tokens = 1050000
+# Responses input must leave provider-reserved output, reasoning, and framing capacity.
+max_input_tokens = 922000
 # Provider-aware recommended output-token cap for the default OpenAI agent profile.
 # Mezzanine may temporarily raise this for one output-limit recovery retry.
 max_output_tokens = 16384

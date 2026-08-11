@@ -1799,6 +1799,35 @@ fn migrates_both_colliding_schema_57_shapes() {
     }
 }
 
+/// Verifies schema v59 accepts the optional model maximum-input ceiling while
+/// advancing documents that predate the field without materializing a value.
+#[test]
+fn migrates_schema_58_maximum_input_limit_without_backfill() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 58\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.6-terra\"\nmax_input_tokens = 922000\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":58,"model_profiles":{"default":{"provider":"openai","model":"gpt-5.6-terra","max_input_tokens":922000}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 58\nmodel_profiles:\n  default:\n    provider: openai\n    model: gpt-5.6-terra\n    max_input_tokens: 922000\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+        assert_eq!(plan.from_version, 58);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            values.get("model_profiles.default.max_input_tokens"),
+            Some(&"922000".to_string())
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

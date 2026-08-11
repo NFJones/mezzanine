@@ -100,23 +100,20 @@ fn validates_named_model_profile_schema() {
             })
     );
 
-    let invalid_max_output_tokens = validate_config_text(
-        ConfigFormat::Toml,
-        "[model_profiles.default]\nmax_output_tokens = 0\n",
-        ConfigScope::Primary,
-    );
+    for key in ["max_input_tokens", "max_output_tokens"] {
+        let invalid_token_limit = validate_config_text(
+            ConfigFormat::Toml,
+            &format!("[model_profiles.default]\n{key} = 0\n"),
+            ConfigScope::Primary,
+        );
 
-    assert!(!invalid_max_output_tokens.valid);
-    assert!(
-        invalid_max_output_tokens
-            .diagnostics
-            .iter()
-            .any(|diagnostic| {
-                diagnostic.path == "model_profiles.default.max_output_tokens"
-                    && diagnostic.message
-                        == "model_profiles.default.max_output_tokens must be a positive integer"
-            })
-    );
+        assert!(!invalid_token_limit.valid);
+        assert!(invalid_token_limit.diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == format!("model_profiles.default.{key}")
+                && diagnostic.message
+                    == format!("model_profiles.default.{key} must be a positive integer")
+        }));
+    }
 }
 
 /// Verifies that implementation-exposed audit config keys remain listed in the
