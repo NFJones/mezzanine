@@ -96,6 +96,7 @@ end
 function __mez_fish_passive_preexec --on-event fish_preexec
     set -l command_line "$argv[1]"
     if __mez_fish_passive_command_is_internal "$command_line"
+        builtin history delete --exact --case-sensitive "$command_line" >/dev/null 2>&1
         set -g __MEZ_FISH_PASSIVE_SKIP_POSTEXEC 1
         set -e __MEZ_FISH_PASSIVE_COMMAND_ACTIVE
         return 0
@@ -128,6 +129,7 @@ mod tests {
     use mez_agent::shell::{
         PanePathResolutionRequest, ShellClassification, ShellTransaction,
         pane_path_resolution_command, parse_pane_path_resolution_output,
+        shell_identity_probe_command,
     };
     use mez_mux::layout::Size;
     use mez_mux::process::{
@@ -211,7 +213,8 @@ mod tests {
         let launch = PaneProcessLaunch::new(fish.to_path_buf())
             .with_interactive_arguments(["--init-command", compatibility.init_command(), "-i"])
             .with_environment_variable("HOME", home.as_os_str())
-            .with_environment_variable("XDG_CONFIG_HOME", config_home.as_os_str());
+            .with_environment_variable("XDG_CONFIG_HOME", config_home.as_os_str())
+            .with_environment_variable("XDG_DATA_HOME", home.join("data").as_os_str());
         spawn_pane_process(
             &launch,
             None,
@@ -515,6 +518,65 @@ mod tests {
             String::from_utf8_lossy(&after).contains("__MEZ_AFTER_RESOLVER__"),
             "{:?}",
             String::from_utf8_lossy(&after)
+        );
+
+        process.terminate(Duration::from_millis(100)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    /// Verifies the syntax-neutral shell identity probe is removed from Fish
+    /// history before a later shell exit can persist the command source.
+    ///
+    /// The probe runs before dialect-specific transaction wrappers exist, so
+    /// this protects the initial Fish bootstrap path that previously leaked
+    /// the complete `/bin/sh -c` command into user history.
+    fn managed_fish_compatibility_does_not_persist_shell_identity_probe() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!("skipping managed Fish history assertion because fish is unavailable");
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-fish-identity-history-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let compatibility = ManagedFishCompatibility::new(
+            MarkerToken::new("55555555555555555555555555555555").unwrap(),
+        );
+        let mut process = spawn_managed_fish(&fish, &compatibility, &root);
+        std::thread::sleep(Duration::from_millis(100));
+        let _ = process.read_available_output(64 * 1024);
+
+        let marker = MarkerToken::new("66666666666666666666666666666666").unwrap();
+        let probe =
+            shell_identity_probe_command(marker.as_str(), "identity-turn", "agent-p1", "p1")
+                .unwrap();
+        process
+            .write_input(format!("{probe}\n").as_bytes())
+            .unwrap();
+        let end_marker = format!("\x1b]133;D;0;mez_marker={};", marker.as_str());
+        let _ = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(end_marker.len())
+                .any(|window| window == end_marker.as_bytes())
+        });
+        process
+            .write_input(b"history save\nprintf '__MEZ_HISTORY_SAVED__\\n'\n")
+            .unwrap();
+        let _ = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(b"__MEZ_HISTORY_SAVED__".len())
+                .any(|window| window == b"__MEZ_HISTORY_SAVED__")
+        });
+
+        let history = std::fs::read_to_string(root.join("data/fish/fish_history"))
+            .expect("Fish should persist the isolated history file");
+        assert!(
+            !history.contains("mez_marker=66666666666666666666666666666666"),
+            "shell identity probe leaked into Fish history: {history:?}"
         );
 
         process.terminate(Duration::from_millis(100)).unwrap();
