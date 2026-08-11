@@ -244,6 +244,18 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     service
         .apply_pane_output_bytes(pane_id.clone(), b"user@host ~/repo $ ".to_vec())
         .unwrap();
+    assert!(
+        std::ptr::eq(
+            service.pane_screen(&pane_id).unwrap(),
+            service.agent_pane_screen(&pane_id).unwrap(),
+        ),
+        "markerless parent output must remain gated until its cursor is stable"
+    );
+    for _ in 0..=crate::runtime::agent::RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS {
+        service
+            .apply_idle_cleanup_timer_event_with_actor_progress(&std::collections::BTreeSet::new())
+            .unwrap();
+    }
     let view = service
         .render_client_view(
             ClientViewRole::Primary,

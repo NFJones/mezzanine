@@ -757,9 +757,13 @@ impl RuntimeSessionService {
                 agent_screen_size.is_some_and(|size| size.columns != process_size.columns);
             let agent_screen_geometry_changed =
                 agent_screen_size.is_some_and(|size| size != process_size);
-            let agent_geometry_should_update = self.presented_pane_surface(pane_id)
-                == crate::runtime::PaneSurfaceKind::Agent
-                || process_presentation_geometry_changed;
+            let agent_geometry_should_update =
+                self.agent_shell_store()
+                    .get(pane_id)
+                    .is_some_and(|session| {
+                        session.visibility != crate::runtime::AgentShellVisibility::Hidden
+                    })
+                    || process_presentation_geometry_changed;
             let defer_agent_presentation = agent_geometry_should_update
                 && agent_screen_width_changed
                 && self.presentation.mouse_resize_drag_active();
