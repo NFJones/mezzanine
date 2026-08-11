@@ -123,12 +123,45 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
     );
     assert_eq!(exit_bytes.last(), Some(&b'\x04'));
 
-    let prompt = b"user@host ~/repo $ ";
-    let prompt_repaint = service.renderable_pane_output_bytes(&pane_id, prompt);
-    assert_eq!(prompt_repaint, prompt);
+    assert!(
+        std::ptr::eq(
+            service.pane_screen(&pane_id).unwrap(),
+            service.agent_pane_screen(&pane_id).unwrap(),
+        ),
+        "the retained agent surface must remain presented before the parent prompt repaint"
+    );
     service
-        .apply_pane_output_bytes(pane_id.clone(), prompt.to_vec())
+        .apply_pane_output_bytes(pane_id.clone(), b"\x1b]133;A\x1b\\user@host".to_vec())
         .unwrap();
+    assert!(
+        std::ptr::eq(
+            service.pane_screen(&pane_id).unwrap(),
+            service.agent_pane_screen(&pane_id).unwrap(),
+        ),
+        "a partial parent prompt must not expose its intermediate cursor"
+    );
+    for _ in 0..RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS {
+        service
+            .apply_idle_cleanup_timer_event_with_actor_progress(&std::collections::BTreeSet::new())
+            .unwrap();
+    }
+    assert!(
+        std::ptr::eq(
+            service.pane_screen(&pane_id).unwrap(),
+            service.agent_pane_screen(&pane_id).unwrap(),
+        ),
+        "an incomplete integrated prompt must not be released by the markerless fallback"
+    );
+    service
+        .apply_pane_output_bytes(pane_id.clone(), b" ~/repo $ \x1b]133;B\x1b\\".to_vec())
+        .unwrap();
+    assert!(
+        std::ptr::eq(
+            service.pane_screen(&pane_id).unwrap(),
+            service.process_pane_screen(&pane_id).unwrap(),
+        ),
+        "the completed parent prompt must release the process presentation"
+    );
     let view = service
         .render_client_view(
             ClientViewRole::Primary,

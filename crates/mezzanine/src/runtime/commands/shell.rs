@@ -1224,6 +1224,7 @@ impl RuntimeSessionService {
         match self.write_runtime_pane_input(pane_id, &input) {
             Ok(()) => {
                 self.leave_agent_subshell(pane_id);
+                self.begin_agent_subshell_parent_return(pane_id);
                 self.schedule_parent_shell_rebootstrap_after_agent_subshell(pane_id);
                 Ok(true)
             }
