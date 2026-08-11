@@ -264,7 +264,6 @@ fn run_interactive_bash_history_transaction(
     stdin
         .write_all(input.wrapper.as_bytes())
         .expect("the transaction wrapper should be written");
-    thread::sleep(Duration::from_millis(50));
     stdin
         .write_all(input.payload.as_bytes())
         .expect("the transaction payload should be written");
