@@ -157,7 +157,7 @@ use presentation::{
 
 /// Number of stable cleanup observations required before a markerless parent
 /// shell may be presented after agent-subshell exit.
-const RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS: usize = 4;
+pub(crate) const RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS: usize = 4;
 
 /// Maximum cleanup observations allowed before a return-to-parent transition
 /// falls back to the latest valid process terminal state.

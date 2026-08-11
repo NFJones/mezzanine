@@ -140,7 +140,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         ),
         "a partial parent prompt must not expose its intermediate cursor"
     );
-    for _ in 0..RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS {
+    for _ in 0..crate::runtime::agent::RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS {
         service
             .apply_idle_cleanup_timer_event_with_actor_progress(&std::collections::BTreeSet::new())
             .unwrap();
