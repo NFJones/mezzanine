@@ -500,6 +500,33 @@ fn runtime_agent_shell_immediate_reentry_stays_closed_after_failed_identity_prob
         pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
         "a failed identity probe must not enter the agent subshell"
     );
+
+    let observed = service
+        .observe_passive_shell_prompt_candidate(&pane_id, "osc133-prompt")
+        .unwrap();
+
+    assert_eq!(observed, 1);
+    assert_eq!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::PromptCandidate
+    );
+    assert!(
+        service.pane_bootstrap_is_pending_for_tests(&pane_id),
+        "a fresh parent prompt must re-arm the failed identity bootstrap"
+    );
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| {
+                matches!(
+                    transaction.kind,
+                    RunningShellTransactionKind::ShellIdentityProbe { .. }
+                )
+            }),
+        "the re-armed bootstrap must dispatch a second identity probe"
+    );
     let _ = process.terminate(Duration::from_millis(10));
 }
 

@@ -1,5 +1,7 @@
 //! Passive shell readiness and readiness-probe transitions.
 
+use crate::runtime::processes::RuntimePaneEnvironmentAuthority;
+
 use super::{
     AgentTurnRecord, AgentTurnState, ClipboardAuthorization, ClipboardDecision, EventKind,
     MezError, PaneReadinessState, RUNTIME_READINESS_PROBE_TIMEOUT_MS, ReadinessOverrideRevocation,
@@ -83,6 +85,13 @@ impl RuntimeSessionService {
         ) && foreground_primary_shell == Some(true);
         let may_recover_degraded =
             previous == PaneReadinessState::Degraded && foreground_primary_shell != Some(false);
+        let rearm_identity_bootstrap = may_recover_degraded
+            && matches!(
+                self.pane_environment_authority(pane_id),
+                RuntimePaneEnvironmentAuthority::Unavailable(
+                    super::RuntimePaneEnvironmentAuthorityUnavailableReason::ShellIdentityProbeFailed
+                )
+            );
         if !matches!(
             previous,
             PaneReadinessState::Unknown | PaneReadinessState::Busy
@@ -90,6 +99,12 @@ impl RuntimeSessionService {
             && !may_recover_degraded
         {
             return Ok(0);
+        }
+        if rearm_identity_bootstrap {
+            self.clear_pane_environment_authority_failure(pane_id);
+            self.process
+                .pane_bootstrap_pending
+                .insert(pane_id.to_string());
         }
         self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
         self.append_lifecycle_event(
