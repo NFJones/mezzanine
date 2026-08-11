@@ -1841,7 +1841,83 @@ fn runtime_routed_worker_provider_fails_after_unparsed_bootstrap() {
     assert_eq!(
         service.pane_environment_authority(&worker_turn.pane_id),
         crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
-            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::EnvironmentSignatureMissing,
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::AgentSubshellCertification(
+                crate::runtime::processes::RuntimeAgentSubshellCertificationRejection::EnvironmentSignatureMissing,
+            ),
+        )
+    );
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!service.agent_provider_task_is_pending(&worker_turn.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .all(|transaction| !matches!(
+                transaction.kind,
+                RunningShellTransactionKind::PathResolution { .. }
+            ))
+    );
+
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies a routed worker whose bounded bootstrap expires retains a typed
+/// timeout authority failure and never reaches signature-keyed path resolution.
+/// The provider task must settle once instead of leaking the downstream generic
+/// missing-environment error or remaining deferred behind a cleared pending flag.
+#[test]
+fn runtime_routed_worker_provider_fails_after_bootstrap_timeout() {
+    let root = temp_root("runtime-routed-worker-provider-bootstrap-timeout");
+    fs::create_dir_all(&root).unwrap();
+    let (mut service, _parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 inspect timed out routed worker bootstrap");
+    configure_routed_path_resolution_bubblewrap(&mut service, &root);
+    let worker_agent_id = AgentId::opaque(worker_turn.agent_id.clone()).unwrap();
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&worker_agent_id, &worker_turn.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    let bootstrap = service
+        .running_shell_transactions_for_tests()
+        .values()
+        .find(|transaction| {
+            transaction.pane_id == worker_turn.pane_id
+                && transaction.kind == RunningShellTransactionKind::Bootstrap
+        })
+        .cloned()
+        .expect("fresh routed worker should retain its bounded bootstrap");
+    let deadline = bootstrap
+        .started_at_unix_ms
+        .saturating_add(bootstrap.timeout_ms.unwrap());
+
+    assert!(
+        service
+            .expire_timed_out_shell_transactions(deadline)
+            .unwrap()
+            >= 1
+    );
+    assert_eq!(
+        service.pane_environment_authority(&worker_turn.pane_id),
+        crate::runtime::processes::RuntimePaneEnvironmentAuthority::Unavailable(
+            crate::runtime::processes::RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTimedOut,
         )
     );
     assert!(
