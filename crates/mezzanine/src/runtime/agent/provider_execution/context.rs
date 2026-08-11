@@ -209,21 +209,41 @@ impl RuntimeSessionService {
                 group_id.clone(),
             )
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
-        let mut provider_tool_call_ids = Vec::new();
+        let mut provider_tool_calls = Vec::new();
         for (index, event) in execution
             .response
             .provider_transcript_events
             .iter()
             .enumerate()
         {
-            provider_tool_call_ids.extend(event.deepseek_tool_call_ids());
+            provider_tool_calls.extend(
+                event
+                    .deepseek_tool_call_ids()
+                    .into_iter()
+                    .map(|id| (mez_agent::ProviderContinuityOwner::DeepSeek, id)),
+            );
+            provider_tool_calls.extend(
+                event
+                    .openai_function_call_ids()
+                    .into_iter()
+                    .map(|id| (mez_agent::ProviderContinuityOwner::OpenAi, id)),
+            );
+            let provider_owner = match event.provider_id() {
+                "openai" => mez_agent::ProviderContinuityOwner::OpenAi,
+                "deepseek" => mez_agent::ProviderContinuityOwner::DeepSeek,
+                provider => {
+                    return Err(MezError::invalid_state(format!(
+                        "provider continuity event has unsupported owner `{provider}`"
+                    )));
+                }
+            };
             context
                 .append_evidence_event(
                     ContextSourceKind::TranscriptTool,
                     format!("provider continuity event {}", index.saturating_add(1)),
                     event.to_transcript_content(),
                     group_id.clone(),
-                    Some(mez_agent::ProviderContinuityOwner::DeepSeek),
+                    Some(provider_owner),
                     true,
                 )
                 .map_err(|error| MezError::invalid_state(error.to_string()))?;
@@ -238,12 +258,12 @@ impl RuntimeSessionService {
         for action_id in action_ids {
             groups.insert(action_id, group_id.clone());
         }
-        if !provider_tool_call_ids.is_empty() {
+        if !provider_tool_calls.is_empty() {
             self.agent
                 .agent_provider_tool_calls_by_turn
                 .entry(turn.turn_id.clone())
                 .or_default()
-                .insert(group_id, provider_tool_call_ids);
+                .insert(group_id, provider_tool_calls);
         }
         Ok(())
     }

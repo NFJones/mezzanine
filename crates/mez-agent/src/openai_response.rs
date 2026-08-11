@@ -5,6 +5,7 @@
 //! argument accumulation and provider token-usage extraction. Product
 //! transports and conversion into product errors remain outside this crate.
 
+use crate::ProviderTranscriptEvent;
 use crate::accounting::ModelTokenUsage;
 use crate::http::{DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, parse_sse_events_with};
 #[cfg(test)]
@@ -26,7 +27,12 @@ pub fn parse_openai_responses_provider_body(
     body: &str,
     fallback_model: &str,
     stream: bool,
-) -> ProviderResponseResult<(String, String, ModelTokenUsage)> {
+) -> ProviderResponseResult<(
+    String,
+    String,
+    ModelTokenUsage,
+    Vec<ProviderTranscriptEvent>,
+)> {
     if stream {
         parse_openai_responses_stream_body(body, fallback_model)
     } else {
@@ -38,7 +44,12 @@ pub fn parse_openai_responses_provider_body(
 pub fn parse_openai_responses_http_body(
     body: &str,
     fallback_model: &str,
-) -> ProviderResponseResult<(String, String, ModelTokenUsage)> {
+) -> ProviderResponseResult<(
+    String,
+    String,
+    ModelTokenUsage,
+    Vec<ProviderTranscriptEvent>,
+)> {
     let value: serde_json::Value = serde_json::from_str(body).map_err(|error| {
         ProviderResponseError::invalid_state(format!("OpenAI response was not JSON: {error}"))
     })?;
@@ -69,18 +80,26 @@ pub fn parse_openai_responses_http_body(
         ));
     };
     let usage = openai_token_usage_from_response_value(&value);
-    Ok((model, raw_text, usage))
+    let provider_transcript_events = openai_response_output_event(&value);
+    Ok((model, raw_text, usage, provider_transcript_events))
 }
 
 /// Parses one streaming OpenAI Responses API SSE body.
 pub fn parse_openai_responses_stream_body(
     body: &str,
     fallback_model: &str,
-) -> ProviderResponseResult<(String, String, ModelTokenUsage)> {
+) -> ProviderResponseResult<(
+    String,
+    String,
+    ModelTokenUsage,
+    Vec<ProviderTranscriptEvent>,
+)> {
     let mut model = None;
     let mut completed = false;
     let mut usage = ModelTokenUsage::default();
     let mut function_calls = BTreeMap::<u64, OpenAiFunctionCallAccumulator>::new();
+    let mut completed_output_items = BTreeMap::<u64, serde_json::Value>::new();
+    let mut completed_response_output = None;
     let mut output_item_text = String::new();
     let mut delta_text = String::new();
 
@@ -134,6 +153,10 @@ pub fn parse_openai_responses_stream_body(
                             item,
                         )?;
                         append_openai_response_item_text(item, &mut output_item_text);
+                        if event_type == "response.output_item.done" {
+                            let output_index = openai_output_index(&value).unwrap_or_default();
+                            completed_output_items.insert(output_index, item.clone());
+                        }
                     }
                 }
                 "response.output_text.delta" => {
@@ -172,6 +195,10 @@ pub fn parse_openai_responses_stream_body(
                 }
                 "response.completed" => {
                     completed = true;
+                    completed_response_output = value
+                        .pointer("/response/output")
+                        .and_then(serde_json::Value::as_array)
+                        .cloned();
                 }
                 "response.failed" => {
                     return Err(ProviderResponseError::invalid_state(
@@ -258,11 +285,29 @@ pub fn parse_openai_responses_stream_body(
             "OpenAI stream closed before response.completed",
         ));
     }
+    let native_output =
+        completed_response_output.unwrap_or_else(|| completed_output_items.into_values().collect());
+    let provider_transcript_events =
+        ProviderTranscriptEvent::validated_openai_response_output(native_output)
+            .into_iter()
+            .collect();
     Ok((
         model.unwrap_or_else(|| fallback_model.to_string()),
         raw_text,
         usage,
+        provider_transcript_events,
     ))
+}
+
+/// Captures one complete non-streaming Responses output sequence when valid.
+fn openai_response_output_event(value: &serde_json::Value) -> Vec<ProviderTranscriptEvent> {
+    value
+        .get("output")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .and_then(ProviderTranscriptEvent::validated_openai_response_output)
+        .into_iter()
+        .collect()
 }
 
 /// Extracts OpenAI-style token usage from a response or stream event object.
@@ -534,6 +579,96 @@ fn openai_output_index(value: &serde_json::Value) -> Option<u64> {
 mod tests {
     use super::*;
 
+    /// Verifies unary Responses parsing preserves the complete ordered native
+    /// output sequence needed by a stateless follow-up request.
+    ///
+    /// Encrypted reasoning, assistant phase, item identities, and function-call
+    /// identity are provider-only continuity state and must survive unchanged.
+    #[test]
+    fn openai_http_parser_preserves_native_output_continuity() {
+        let items = vec![
+            serde_json::json!({
+                "type": "reasoning",
+                "id": "rs_1",
+                "encrypted_content": "opaque-ciphertext"
+            }),
+            serde_json::json!({
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "working"}]
+            }),
+            serde_json::json!({
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "submit_maap_action_batch",
+                "arguments": "{\"actions\":[]}"
+            }),
+        ];
+        let body = serde_json::json!({
+            "model": "gpt-test",
+            "output": items
+        })
+        .to_string();
+
+        let (_, raw_text, _, events) = parse_openai_responses_http_body(&body, "fallback").unwrap();
+
+        assert_eq!(raw_text, "{\"actions\":[]}");
+        assert_eq!(
+            events,
+            vec![ProviderTranscriptEvent::OpenAiResponseOutput { items }]
+        );
+    }
+
+    /// Verifies streaming Responses parsing prefers the completed response
+    /// snapshot and preserves its provider-native item order exactly.
+    ///
+    /// Incremental events may be fragmented or duplicated, so replay must use
+    /// the authoritative completed output sequence when the provider supplies it.
+    #[test]
+    fn openai_stream_parser_preserves_completed_native_output_continuity() {
+        let items = vec![
+            serde_json::json!({
+                "type": "reasoning",
+                "id": "rs_1",
+                "encrypted_content": "opaque-ciphertext"
+            }),
+            serde_json::json!({
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "submit_maap_action_batch",
+                "arguments": "{\"actions\":[]}"
+            }),
+        ];
+        let stream_body = format!(
+            "event: response.output_item.done\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": items[1]
+            }),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "model": "gpt-test",
+                    "output": items
+                }
+            })
+        );
+
+        let (_, raw_text, _, events) =
+            parse_openai_responses_stream_body(&stream_body, "fallback").unwrap();
+
+        assert_eq!(raw_text, "{\"actions\":[]}");
+        assert_eq!(
+            events,
+            vec![ProviderTranscriptEvent::OpenAiResponseOutput { items }]
+        );
+    }
+
     #[test]
     /// Verifies cached-token accounting distinguishes omitted provider fields from
     /// an explicit provider-reported zero.
@@ -624,16 +759,17 @@ mod tests {
             })
         );
 
-        let (_, _, missing_usage) =
+        let (_, _, missing_usage, _) =
             parse_openai_responses_http_body(&missing_body, "gpt-test").unwrap();
-        let (_, _, zero_usage) = parse_openai_responses_http_body(&zero_body, "gpt-test").unwrap();
-        let (_, _, prompt_details_usage) =
+        let (_, _, zero_usage, _) =
+            parse_openai_responses_http_body(&zero_body, "gpt-test").unwrap();
+        let (_, _, prompt_details_usage, _) =
             parse_openai_responses_http_body(&prompt_details_body, "gpt-test").unwrap();
-        let (_, _, controller_alias_usage) =
+        let (_, _, controller_alias_usage, _) =
             parse_openai_responses_http_body(&controller_alias_body, "gpt-test").unwrap();
-        let (_, _, multi_cached_usage) =
+        let (_, _, multi_cached_usage, _) =
             parse_openai_responses_http_body(&multi_cached_body, "gpt-test").unwrap();
-        let (_, _, stream_usage) =
+        let (_, _, stream_usage, _) =
             parse_openai_responses_stream_body(&stream_body, "gpt-test").unwrap();
 
         assert_eq!(missing_usage.cached_input_tokens, None);

@@ -153,6 +153,26 @@ mod tests {
                 }
             })],
         };
+        let openai_output = ProviderTranscriptEvent::OpenAiResponseOutput {
+            items: vec![
+                serde_json::json!({
+                    "type": "reasoning",
+                    "id": "rs_openai",
+                    "encrypted_content": "opaque-openai-ciphertext"
+                }),
+                serde_json::json!({
+                    "type": "function_call",
+                    "id": "fc_openai",
+                    "call_id": "call_openai",
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{}"
+                }),
+            ],
+        };
+        let openai_result = ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+            call_id: "call_openai".to_string(),
+            output: "[action_result action-1 shell_command succeeded]".to_string(),
+        };
         let request = ModelRequest {
             provider: "openai".to_string(),
             model: "gpt-test".to_string(),
@@ -187,6 +207,18 @@ mod tests {
                     content: event.to_transcript_content(),
                 },
                 ModelMessage {
+                    role: ModelMessageRole::System,
+                    source: ContextSourceKind::Transcript,
+                    placement: crate::ContextPlacement::ConversationAppend,
+                    content: openai_output.to_transcript_content(),
+                },
+                ModelMessage {
+                    role: ModelMessageRole::System,
+                    source: ContextSourceKind::Transcript,
+                    placement: crate::ContextPlacement::ConversationAppend,
+                    content: openai_result.to_transcript_content(),
+                },
+                ModelMessage {
                     role: ModelMessageRole::User,
                     source: ContextSourceKind::UserInstruction,
                     placement: crate::ContextPlacement::ConversationAppend,
@@ -198,10 +230,13 @@ mod tests {
         let rendered = openai_render_request_messages(&request).unwrap();
         let rendered_json = serde_json::to_string(&rendered.input).unwrap();
 
-        assert_eq!(rendered.input.len(), 2);
+        assert_eq!(rendered.input.len(), 5);
         assert!(rendered.instructions.contains("system prompt"));
         assert!(rendered_json.contains("continue"));
         assert!(rendered_json.contains("[OpenAI request state]"));
+        assert!(rendered_json.contains("opaque-openai-ciphertext"));
+        assert!(rendered_json.contains("\"call_id\":\"call_openai\""));
+        assert!(rendered_json.contains("function_call_output"));
         assert!(!rendered.instructions.contains("DeepSeek-only reasoning"));
         assert!(!rendered_json.contains("reasoning_content"));
         assert!(!rendered_json.contains("call_1"));

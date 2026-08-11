@@ -237,12 +237,17 @@ pub(crate) struct RuntimeAgentComponent {
     /// they settle.
     agent_execution_groups_by_turn:
         BTreeMap<String, BTreeMap<String, mez_agent::ContextExecutionGroupId>>,
-    /// DeepSeek-native tool-call ids keyed by turn and causal execution group.
+    /// Provider-native tool-call ids keyed by turn and causal execution group.
     ///
     /// Once every action in the group settles, the runtime appends the matching
     /// native tool-result events without replacing provider-neutral chronology.
-    agent_provider_tool_calls_by_turn:
-        BTreeMap<String, BTreeMap<mez_agent::ContextExecutionGroupId, Vec<String>>>,
+    agent_provider_tool_calls_by_turn: BTreeMap<
+        String,
+        BTreeMap<
+            mez_agent::ContextExecutionGroupId,
+            Vec<(mez_agent::ProviderContinuityOwner, String)>,
+        >,
+    >,
     /// Successful normalized issue queries keyed by turn and freshness key.
     ///
     /// Values retain the originating action id so a redundant query can point

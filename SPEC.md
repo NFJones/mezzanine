@@ -3565,8 +3565,18 @@ typed provider-native replay events for the same owner. Request assembly for
 the owning provider MUST emit only the native assistant/tool-call projection;
 assembly for every other provider MUST emit only the neutral assistant/action-
 result projection. Persistence and restoration MUST reconstruct the same
-complete owner before making that selection. Provider-neutral continuity
-diagnostics MUST keep
+complete owner before making that selection. For stateless OpenAI Responses
+requests with `store: false`, the native projection MUST retain the complete
+ordered validated response `output` sequence, including opaque reasoning
+fields, item identifiers, assistant-message `phase`, function-call identifiers,
+and `call_id`. Once local actions settle, it MUST append a matching native
+`function_call_output` for each retained MAAP call before the next Responses
+request. Opaque OpenAI fields MUST remain hidden from provider-neutral/UI
+transcript projections and MUST NOT be sent to another provider. Malformed or
+partial native chains MUST fail closed to the provider-neutral projection.
+Compaction MUST retain or replace each native output/function-output execution
+group atomically and MUST NOT replay a partial chain. Provider-neutral
+continuity diagnostics MUST keep
 immutable and volatile token estimates, the immutable projection byte length
 and digest, the longest common immutable prefix, and an append-only flag without
 retaining prompt text. Transitions MUST distinguish new turns, compaction,

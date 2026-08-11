@@ -745,7 +745,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
                 &response.body,
             )));
         }
-        let (model, raw_text, usage) =
+        let (model, raw_text, usage, provider_transcript_events) =
             parse_openai_responses_provider_body(&response.body, &request.model, self.stream)?;
         let quota_usage = provider_quota_usage_from_headers(&response.headers);
         let action_batch = if !request.interaction_kind.expects_maap_batch() {
@@ -769,7 +769,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
             latest_request_usage: None,
             quota_usage,
             action_batch,
-            provider_transcript_events: Vec::new(),
+            provider_transcript_events,
         })
     }
 }
@@ -859,7 +859,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                     &response.body,
                 )));
             }
-            let (model, raw_text, usage) =
+            let (model, raw_text, usage, provider_transcript_events) =
                 parse_openai_responses_provider_body(&response.body, &request.model, self.stream)?;
             let quota_usage = provider_quota_usage_from_headers(&response.headers);
             let action_batch = if !request.interaction_kind.expects_maap_batch() {
@@ -883,7 +883,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 latest_request_usage: None,
                 quota_usage,
                 action_batch,
-                provider_transcript_events: Vec::new(),
+                provider_transcript_events,
             })
         })
     }

@@ -377,6 +377,8 @@ impl StableContextBlock {
 /// Provider that exclusively owns one opaque continuity event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ProviderContinuityOwner {
+    /// OpenAI Responses reasoning and function-call replay state.
+    OpenAi,
     /// DeepSeek thinking/tool-call replay state.
     DeepSeek,
 }
@@ -385,6 +387,7 @@ impl ProviderContinuityOwner {
     /// Returns whether this owner matches a configured provider id.
     pub fn matches_provider(self, provider: &str) -> bool {
         match self {
+            Self::OpenAi => provider == "openai",
             Self::DeepSeek => provider == "deepseek",
         }
     }
@@ -2264,8 +2267,13 @@ fn context_semantic_error(index: usize, block: &ContextBlock, reason: &str) -> A
 
 /// Returns the exclusive owner encoded by one provider continuity payload.
 fn provider_owner_for_block(block: &ContextBlock) -> Option<ProviderContinuityOwner> {
-    ProviderTranscriptEvent::from_transcript_content(&block.content)
-        .map(|_| ProviderContinuityOwner::DeepSeek)
+    ProviderTranscriptEvent::from_transcript_content(&block.content).and_then(|event| {
+        match event.provider_id() {
+            "openai" => Some(ProviderContinuityOwner::OpenAi),
+            "deepseek" => Some(ProviderContinuityOwner::DeepSeek),
+            _ => None,
+        }
+    })
 }
 
 /// Validates producer-selected metadata against structural placement rules.

@@ -252,7 +252,7 @@ impl RuntimeSessionService {
             );
         }
         for group in touched_groups {
-            let Some(tool_call_ids) = provider_tool_calls.get(&group) else {
+            let Some(tool_calls) = provider_tool_calls.get(&group) else {
                 continue;
             };
             let owned_action_ids = action_ownership
@@ -280,10 +280,20 @@ impl RuntimeSessionService {
                 .map(|event| event.block().content.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            for tool_call_id in tool_call_ids {
-                let event = mez_agent::ProviderTranscriptEvent::DeepSeekToolResult {
-                    tool_call_id: tool_call_id.clone(),
-                    content: tool_result_content.clone(),
+            for (provider_owner, tool_call_id) in tool_calls {
+                let event = match provider_owner {
+                    mez_agent::ProviderContinuityOwner::OpenAi => {
+                        mez_agent::ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+                            call_id: tool_call_id.clone(),
+                            output: tool_result_content.clone(),
+                        }
+                    }
+                    mez_agent::ProviderContinuityOwner::DeepSeek => {
+                        mez_agent::ProviderTranscriptEvent::DeepSeekToolResult {
+                            tool_call_id: tool_call_id.clone(),
+                            content: tool_result_content.clone(),
+                        }
+                    }
                 };
                 let content = event.to_transcript_content();
                 if context
@@ -299,7 +309,7 @@ impl RuntimeSessionService {
                         format!("provider tool result {tool_call_id}"),
                         content,
                         group.clone(),
-                        Some(mez_agent::ProviderContinuityOwner::DeepSeek),
+                        Some(*provider_owner),
                         true,
                     )
                     .map_err(|error| MezError::invalid_state(error.to_string()))?;

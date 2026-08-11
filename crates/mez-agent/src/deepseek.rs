@@ -131,7 +131,9 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
     let mut messages = Vec::with_capacity(request.messages.len());
     for message in &request.messages {
         if let Some(event) = ProviderTranscriptEvent::from_transcript_content(&message.content) {
-            messages.push(deepseek_provider_transcript_event_message(&event));
+            if event.provider_id() == "deepseek" {
+                messages.push(deepseek_provider_transcript_event_message(&event));
+            }
             continue;
         }
         let (role, content) = match message.role {
@@ -220,6 +222,8 @@ fn deepseek_provider_transcript_event_message(
     event: &ProviderTranscriptEvent,
 ) -> serde_json::Value {
     match event {
+        ProviderTranscriptEvent::OpenAiResponseOutput { .. }
+        | ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. } => serde_json::Value::Null,
         ProviderTranscriptEvent::DeepSeekAssistantToolCall {
             content,
             reasoning_content,

@@ -130,6 +130,12 @@ fn provider_transcript_entries_for_execution(
     let mut events = Vec::new();
     for event in &execution.response.provider_transcript_events {
         events.push(event.clone());
+        for call_id in event.openai_function_call_ids() {
+            events.push(ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+                call_id,
+                output: provider_tool_result_content_for_execution(execution),
+            });
+        }
         for tool_call_id in event.deepseek_tool_call_ids() {
             events.push(ProviderTranscriptEvent::DeepSeekToolResult {
                 tool_call_id,
@@ -774,6 +780,73 @@ mod tests {
         );
         assert!(assistant.content.ends_with(visible_text));
         assert!(!assistant.content.contains("say text="));
+    }
+
+    /// Verifies OpenAI native output and its linked function result are durable
+    /// without exposing opaque reasoning state in the visible transcript.
+    ///
+    /// Stateless Responses follow-ups need the exact ordered output items and
+    /// matching `call_id`, while UI and provider-neutral history must retain
+    /// only the semantic assistant and action-result projections.
+    #[test]
+    fn turn_execution_transcript_links_hidden_openai_function_output() {
+        let turn = turn();
+        let action = shell_action();
+        let result = ActionResult::running(
+            &turn,
+            &action,
+            vec!["shell command accepted for pane execution".to_string()],
+            None,
+        );
+        let execution = execution(
+            vec![message(
+                ContextSourceKind::UserInstruction,
+                "user",
+                "run pwd",
+            )],
+            "executing",
+            None,
+            vec![ProviderTranscriptEvent::OpenAiResponseOutput {
+                items: vec![
+                    serde_json::json!({
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "encrypted_content": "opaque-ciphertext"
+                    }),
+                    serde_json::json!({
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "submit_maap_action_batch",
+                        "arguments": "{}"
+                    }),
+                ],
+            }],
+            vec![result],
+        );
+
+        let entries = transcript_entries_for_execution("conv1", 1, 200, &turn, &execution).unwrap();
+        let hidden = entries
+            .iter()
+            .filter(|entry| entry.role == TranscriptRole::System)
+            .map(|entry| ProviderTranscriptEvent::from_transcript_content(&entry.content).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(hidden.len(), 2);
+        let ProviderTranscriptEvent::OpenAiFunctionCallOutput { call_id, output } = &hidden[1]
+        else {
+            panic!("expected OpenAI function-call-output event");
+        };
+        assert_eq!(call_id, "call_1");
+        assert!(output.contains("[action_result a1 shell_command running]"));
+        let visible = entries
+            .iter()
+            .filter(|entry| entry.role != TranscriptRole::System)
+            .map(|entry| entry.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!visible.contains("opaque-ciphertext"));
+        assert!(!visible.contains("call_1"));
     }
 
     #[test]

@@ -39,7 +39,19 @@ pub fn openai_render_messages(
     let mut volatile_input = Vec::new();
     let mut stable_input_open = true;
     for message in messages {
-        if ProviderTranscriptEvent::from_transcript_content(&message.content).is_some() {
+        if let Some(event) = ProviderTranscriptEvent::from_transcript_content(&message.content) {
+            if let Some(items) = event.openai_input_items() {
+                for item in items {
+                    openai_push_input_value(
+                        item,
+                        message,
+                        &mut input,
+                        &mut stable_input,
+                        &mut volatile_input,
+                        &mut stable_input_open,
+                    );
+                }
+            }
             continue;
         }
         if message.role == ModelMessageRole::System {
@@ -76,6 +88,25 @@ fn openai_push_input_message(
     stable_input_open: &mut bool,
 ) {
     let value = openai_input_message_value(message);
+    openai_push_input_value(
+        value,
+        message,
+        input,
+        stable_input,
+        volatile_input,
+        stable_input_open,
+    );
+}
+
+/// Adds one already native Responses item to input and cache diagnostics.
+fn openai_push_input_value(
+    value: serde_json::Value,
+    message: &ModelMessage,
+    input: &mut Vec<serde_json::Value>,
+    stable_input: &mut Vec<serde_json::Value>,
+    volatile_input: &mut Vec<serde_json::Value>,
+    stable_input_open: &mut bool,
+) {
     if *stable_input_open && openai_message_stable_prefix_eligible(message) {
         stable_input.push(value.clone());
     } else {
