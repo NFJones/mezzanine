@@ -16,7 +16,7 @@ use super::{
 use crate::integrations::agent::slash::AgentShellPresentation;
 use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::{
-    agent_subshell_enter_command_with_zsh_history_token, parse_macro_prompt_invocation,
+    agent_subshell_enter_command_with_shell_compatibility, parse_macro_prompt_invocation,
 };
 
 /// Authenticated provenance carried with one live agent-shell command.
@@ -1102,10 +1102,12 @@ impl RuntimeSessionService {
         let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
         let classification = shell_identity.classification();
         let zsh_history_token = self.zsh_history_token_for_pane(pane_id);
-        let shell_command = agent_subshell_enter_command_with_zsh_history_token(
+        let bash_receiver_rcfile = self.bash_receiver_rcfile_for_pane(pane_id);
+        let shell_command = agent_subshell_enter_command_with_shell_compatibility(
             shell_identity.shell_path(),
             classification,
             zsh_history_token,
+            bash_receiver_rcfile,
         )?;
         self.begin_agent_subshell_shell_handoff(pane_id)?;
         let prepared_bootstrap = match self.prepare_bootstrap_to_pane(pane_id) {

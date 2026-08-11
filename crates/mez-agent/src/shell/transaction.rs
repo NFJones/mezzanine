@@ -234,6 +234,7 @@ pub struct ShellTransaction {
     /// The token is only used when rendering for zsh. Other shell
     /// classifications retain their native history-suppression paths.
     zsh_history_token: Option<MarkerToken>,
+    bash_receiver_token: Option<MarkerToken>,
     /// Optional typed process launch that receives the materialized command
     /// file as one argv element instead of executing it directly in a child
     /// shell.
@@ -864,6 +865,7 @@ impl ShellTransaction {
             command: command.into(),
             input_sidecar: None,
             zsh_history_token: None,
+            bash_receiver_token: None,
             child_launch: None,
             output_transport: ShellTransactionOutputTransport::Raw,
             output_max_raw_bytes: SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
@@ -890,6 +892,12 @@ impl ShellTransaction {
     /// context before any transaction transport records are submitted.
     pub fn with_zsh_history_token(mut self, token: MarkerToken) -> Self {
         self.zsh_history_token = Some(token);
+        self
+    }
+
+    /// Selects the pane-scoped private Bash receiver for generated transport.
+    pub fn with_bash_receiver_token(mut self, token: MarkerToken) -> Self {
+        self.bash_receiver_token = Some(token);
         self
     }
 
@@ -1031,11 +1039,18 @@ unset MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS; {errexit_restore}
             child_invocation = child_invocation,
         );
         ShellTransactionInput {
-            wrapper: posix_shell_wrapper_transport(
+            wrapper: bash_private_receiver_transport(
                 &wrapper,
                 classification,
-                self.zsh_history_token.as_ref(),
-            ),
+                self.bash_receiver_token.as_ref(),
+            )
+            .unwrap_or_else(|| {
+                posix_shell_wrapper_transport(
+                    &wrapper,
+                    classification,
+                    self.zsh_history_token.as_ref(),
+                )
+            }),
             payload: command_materialization.payload,
             payload_receiver_acknowledgements: self.payload_receiver_acknowledgements,
         }
@@ -1454,6 +1469,28 @@ fn posix_shell_interactive_invocation_words(
     )
 }
 
+/// Renders a persistent shell invocation with an optional managed Bash rcfile.
+fn posix_shell_interactive_invocation_words_with_bash_receiver(
+    shell_path: &str,
+    classification: ShellClassification,
+    bash_receiver_rcfile: Option<&Path>,
+) -> String {
+    if classification != ShellClassification::Bash {
+        return posix_shell_interactive_invocation_words(shell_path, classification);
+    }
+    let Some(rcfile) = bash_receiver_rcfile else {
+        return posix_shell_interactive_invocation_words(shell_path, classification);
+    };
+    let shell = shell_quote(shell_path);
+    let rcfile = shell_quote(&rcfile.to_string_lossy());
+    format!(
+        "{shell} --noprofile --rcfile {rcfile} -c {}",
+        shell_quote(&format!(
+            "command printf '\\033]133;B\\033\\\\'; exec {shell} --noprofile --rcfile {rcfile} -i"
+        ))
+    )
+}
+
 /// Renders a persistent POSIX-shell child invocation with optional startup
 /// suppression. Managed zsh children retain their pane-scoped startup shim so
 /// ordinary user commands keep the user's history configuration.
@@ -1861,6 +1898,26 @@ eval \"$MEZ_WRAPPER_SOURCE\"; {}\n",
     transport
 }
 
+/// Renders Bash source for the managed private Readline receiver.
+///
+/// The trigger is a bound control byte rather than a newline-terminated
+/// command, so Bash never admits generated source into ordinary history. The
+/// receiver validates the pane-scoped token before it decodes and evaluates
+/// the following Base64 frame.
+fn bash_private_receiver_transport(
+    source: &str,
+    classification: ShellClassification,
+    token: Option<&MarkerToken>,
+) -> Option<String> {
+    if classification != ShellClassification::Bash {
+        return None;
+    }
+    let token = token?;
+    let source = format!("unset MEZ_WRAPPER_SOURCE\n{source}");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
+    Some(format!("\x07MEZ_BASH_RX {} {}\n", token.as_str(), encoded))
+}
+
 /// Disables Bash history before the first physical wrapper framing record.
 ///
 /// Interactive Bash records each complete input line before executing it. The
@@ -2250,6 +2307,25 @@ pub fn agent_subshell_enter_command_with_zsh_history_token(
     classification: ShellClassification,
     zsh_history_token: Option<&MarkerToken>,
 ) -> AgentShellValidationResult<String> {
+    agent_subshell_enter_command_with_shell_compatibility(
+        shell_path,
+        classification,
+        zsh_history_token,
+        None,
+    )
+}
+
+/// Renders an agent-mode subshell handoff with managed shell startup state.
+///
+/// The optional Bash receiver rcfile is retained only for a pane that owns the
+/// private receiver. Callers without that pane-scoped compatibility state keep
+/// the normal startup-suppressed Bash child behavior.
+pub fn agent_subshell_enter_command_with_shell_compatibility(
+    shell_path: &Path,
+    classification: ShellClassification,
+    zsh_history_token: Option<&MarkerToken>,
+    bash_receiver_rcfile: Option<&Path>,
+) -> AgentShellValidationResult<String> {
     if !shell_path.is_absolute() {
         return Err(AgentShellValidationError::invalid_args(
             "agent subshell requires an absolute resolved shell path",
@@ -2302,7 +2378,11 @@ __mez_agent_subshell_handoff; unset -f __mez_agent_subshell_handoff 2>/dev/null 
         )
     } else {
         let env_words = posix_agent_subshell_env_word_list().join(" \\\n  ");
-        let shell_invocation = posix_shell_interactive_invocation_words(&shell, classification);
+        let shell_invocation = posix_shell_interactive_invocation_words_with_bash_receiver(
+            &shell,
+            classification,
+            bash_receiver_rcfile,
+        );
         format!(
             "{history_start}__mez_agent_subshell_handoff() {{
 if [ -n \"$MEZ_SHELL_STTY_STATE\" ]; then stty \"$MEZ_SHELL_STTY_STATE\" 2>/dev/null || :; fi

@@ -3,6 +3,7 @@
 //! This module owns the runtime processes boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
+mod bash_compat;
 mod fish_compat;
 mod layout;
 pub(crate) mod output_filter;
@@ -414,6 +415,9 @@ pub(crate) struct RuntimeProcessComponent {
     /// Managed passive Fish integration state keyed by pane process.
     pane_fish_compatibility:
         std::collections::BTreeMap<String, fish_compat::ManagedFishCompatibility>,
+    /// Managed Bash private receiver state keyed by pane id.
+    pane_bash_compatibility:
+        std::collections::BTreeMap<String, bash_compat::ManagedBashCompatibility>,
     /// Managed zsh startup and history-authentication state keyed by pane id.
     pane_zsh_compatibility: std::collections::BTreeMap<String, zsh_compat::ManagedZshCompatibility>,
     /// Canonical path authority keyed by pane environment, config generation,
@@ -1502,7 +1506,7 @@ impl RuntimeSessionService {
 
     /// Adds pane-scoped shell compatibility state to one transaction.
     ///
-    /// Zsh panes receive the token installed by their managed startup shim.
+    /// Managed Bash and zsh panes receive their startup-authenticated tokens.
     /// Other classifications retain their existing renderer behavior.
     pub(super) fn configure_shell_transaction_for_pane(
         &self,
@@ -1516,6 +1520,13 @@ impl RuntimeSessionService {
             .map_or(transaction.clone(), |compatibility| {
                 transaction.with_zsh_history_token(compatibility.token().clone())
             });
+        let transaction = self
+            .process
+            .pane_bash_compatibility
+            .get(pane_id)
+            .map_or(transaction.clone(), |compatibility| {
+                transaction.with_bash_receiver_token(compatibility.token().clone())
+            });
         transaction.with_payload_receiver_acknowledgements(cfg!(target_os = "macos"))
     }
 
@@ -1528,6 +1539,14 @@ impl RuntimeSessionService {
             .pane_zsh_compatibility
             .get(pane_id)
             .map(zsh_compat::ManagedZshCompatibility::token)
+    }
+
+    /// Returns the managed Bash receiver rcfile for one pane when installed.
+    pub(super) fn bash_receiver_rcfile_for_pane(&self, pane_id: &str) -> Option<&Path> {
+        self.process
+            .pane_bash_compatibility
+            .get(pane_id)
+            .map(bash_compat::ManagedBashCompatibility::rcfile)
     }
 
     /// Runs the poll pane processes operation for this subsystem.
@@ -2126,6 +2145,27 @@ impl RuntimeSessionService {
             } else {
                 None
             };
+        let mut bash_compatibility_diagnostic = None;
+        let bash_compatibility =
+            if explicit_command.is_none() && classification == ShellClassification::Bash {
+                let token = runtime_random_marker_token(&format!(
+                    "bash-receiver\0{}\0{}",
+                    self.session.id, descriptor.pane_id
+                ))?;
+                match bash_compat::ManagedBashCompatibility::create(
+                    self.session.socket_path(),
+                    descriptor.pane_id.as_str(),
+                    token,
+                ) {
+                    Ok(compatibility) => Some(compatibility),
+                    Err(error) => {
+                        bash_compatibility_diagnostic = Some(error.to_string());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
         let mut zsh_compatibility_diagnostic = None;
         let zsh_compatibility =
             if explicit_command.is_none() && classification == ShellClassification::Zsh {
@@ -2153,6 +2193,9 @@ impl RuntimeSessionService {
         if let Some(compatibility) = fish_compatibility.as_ref() {
             launch = compatibility.configure_launch(launch);
         }
+        if let Some(compatibility) = bash_compatibility.as_ref() {
+            launch = compatibility.configure_launch(launch);
+        }
         if let Some(compatibility) = zsh_compatibility.as_ref() {
             launch = compatibility.configure_launch(launch);
         }
@@ -2172,10 +2215,25 @@ impl RuntimeSessionService {
                 .pane_fish_compatibility
                 .insert(descriptor.pane_id.to_string(), compatibility);
         }
+        if let Some(compatibility) = bash_compatibility {
+            self.process
+                .pane_bash_compatibility
+                .insert(descriptor.pane_id.to_string(), compatibility);
+        }
         if let Some(compatibility) = zsh_compatibility {
             self.process
                 .pane_zsh_compatibility
                 .insert(descriptor.pane_id.to_string(), compatibility);
+        }
+        if let Some(error) = bash_compatibility_diagnostic {
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","diagnostic":"Bash private receiver unavailable; starting without managed compatibility","error":"{}"}}"#,
+                    json_escape(descriptor.pane_id.as_str()),
+                    json_escape(&error)
+                ),
+            )?;
         }
         if let Some(error) = zsh_compatibility_diagnostic {
             self.append_lifecycle_event(
@@ -2699,6 +2757,7 @@ impl RuntimeSessionService {
             .pane_current_working_directories
             .remove(pane_id);
         self.process.pane_fish_compatibility.remove(pane_id);
+        self.process.pane_bash_compatibility.remove(pane_id);
         self.process.pane_zsh_compatibility.remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
