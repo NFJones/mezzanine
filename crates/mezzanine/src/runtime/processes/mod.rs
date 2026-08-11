@@ -1094,11 +1094,10 @@ impl RuntimeSessionService {
     /// Returns the presentation surface selected by pane-local agent visibility.
     #[allow(dead_code)]
     pub(crate) fn presented_pane_surface(&self, pane_id: &str) -> PaneSurfaceKind {
-        if self.agent_subshell_parent_return_is_pending(pane_id)
-            || self
-                .agent_shell_store()
-                .get(pane_id)
-                .is_some_and(|session| session.visibility != super::AgentShellVisibility::Hidden)
+        if self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| session.visibility != super::AgentShellVisibility::Hidden)
         {
             PaneSurfaceKind::Agent
         } else {
@@ -2281,7 +2280,6 @@ impl RuntimeSessionService {
         max_bytes_per_pane: usize,
     ) -> Result<Vec<PaneOutputUpdate>> {
         self.require_live()?;
-        let _ = self.tick_agent_subshell_parent_returns();
         let outputs = self
             .process
             .pane_processes

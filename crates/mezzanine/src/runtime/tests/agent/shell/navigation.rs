@@ -177,8 +177,8 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
 /// exits that subshell instead of sending redraw traffic to the user's original
 /// interactive shell. This protects prompt, option, and environment mutations
 /// made by agent commands from leaking back to the parent shell, and confirms
-/// that retained hidden-render suppression is cleared so the parent prompt
-/// repaint can advance the terminal cursor to the end of the prompt line.
+/// that hiding agent mode immediately restores unmediated process input without
+/// arming hidden bootstrap work.
 #[test]
 fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     let mut service = test_runtime_service();
@@ -237,6 +237,22 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     assert_eq!(exit_bytes.last(), Some(&b'\x04'));
     assert!(!service.agent_subshell_is_active(&pane_id));
     assert!(!service.hidden_shell_render_retention_timer_needed());
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&pane_id));
+    assert!(std::ptr::eq(
+        service.pane_screen(&pane_id).unwrap(),
+        service.process_pane_screen(&pane_id).unwrap(),
+    ));
+
+    let dispatch = service
+        .write_input_to_pane(&primary, Some(&pane_id), b"echo parent\n")
+        .unwrap();
+    assert_eq!(dispatch.bytes_written, b"echo parent\n".len());
+    let user_input_effects = service.drain_pane_io_transition().side_effects;
+    let user_inputs = pane_input_effects(&user_input_effects);
+    assert_eq!(user_inputs.len(), 1);
+    assert_eq!(user_inputs[0].pane_input_parts().0, pane_id);
+    assert_eq!(user_inputs[0].pane_input_parts().1, b"echo parent\n");
+
     let simple_prompt_repaint = service.visible_pane_output_bytes(&pane_id, b"\r$ ");
     assert_eq!(simple_prompt_repaint, b"\r$ ");
     let prompt_repaint = service.renderable_pane_output_bytes(&pane_id, b"user@host ~/repo $ ");
@@ -247,15 +263,10 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     assert!(
         std::ptr::eq(
             service.pane_screen(&pane_id).unwrap(),
-            service.agent_pane_screen(&pane_id).unwrap(),
+            service.process_pane_screen(&pane_id).unwrap(),
         ),
-        "markerless parent output must remain gated until its cursor is stable"
+        "parent output must remain on the process surface after agent exit"
     );
-    for _ in 0..=crate::runtime::agent::RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS {
-        service
-            .apply_idle_cleanup_timer_event_with_actor_progress(&std::collections::BTreeSet::new())
-            .unwrap();
-    }
     let view = service
         .render_client_view(
             ClientViewRole::Primary,
@@ -419,6 +430,76 @@ bootstrap\tcomplete\t1714500000\n";
         pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
         1,
         "successful parent bootstrap should enter exactly one agent subshell"
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
+/// Verifies a parent prompt observed while agent mode is hidden authorizes
+/// discovery only after explicit re-entry. Normal parent-shell output must not
+/// arm bootstrap work or inject a probe, while showing agent mode may consume
+/// the retained prompt readiness immediately.
+#[test]
+fn runtime_agent_shell_reentry_uses_hidden_parent_prompt_without_hidden_probe() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service.drain_pane_io_transition();
+
+    service
+        .apply_pane_output_bytes(
+            pane_id.clone(),
+            b"\x1b]133;A\x1b\\user@host ~/repo $ \x1b]133;B\x1b\\".to_vec(),
+        )
+        .unwrap();
+    assert_eq!(
+        service.pane_readiness_state(&pane_id),
+        PaneReadinessState::PromptCandidate
+    );
+    assert!(!service.pane_bootstrap_is_pending_for_tests(&pane_id));
+    assert!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty(),
+        "hidden parent-shell output must not trigger generated pane input"
+    );
+
+    let show_again = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(show_again.contains("visibility=visible"), "{show_again}");
+    assert!(service.pane_bootstrap_is_pending_for_tests(&pane_id));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .values()
+            .any(|transaction| matches!(
+                transaction.kind,
+                RunningShellTransactionKind::ShellIdentityProbe { .. }
+            )),
+        "explicit re-entry should consume retained prompt readiness"
+    );
+    assert_eq!(
+        pane_input_effects(&service.drain_pane_io_transition().side_effects).len(),
+        1,
+        "the identity probe may be written only after agent mode is shown"
     );
     let _ = process.terminate(Duration::from_millis(10));
 }

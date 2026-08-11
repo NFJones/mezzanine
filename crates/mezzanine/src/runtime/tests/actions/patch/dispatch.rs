@@ -1126,7 +1126,8 @@ fn runtime_shell_dispatch_recovers_for_certified_agent_subshell_group() {
 }
 
 /// Verifies a certified agent subshell remains recognized through worker-cached
-/// foreground metadata, then loses authority when agent mode restores the parent.
+/// foreground metadata, then loses authority without arming hidden parent-shell
+/// discovery when agent mode restores the parent.
 #[test]
 fn runtime_agent_subshell_exit_invalidates_cached_certified_group() {
     let mut service = test_runtime_service();
@@ -1158,7 +1159,7 @@ fn runtime_agent_subshell_exit_invalidates_cached_certified_group() {
         Some(false)
     );
     assert!(service.pane_environment_signature("%1").is_none());
-    assert!(service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
     assert_eq!(
         service.pane_readiness_state("%1"),
         PaneReadinessState::Unknown
@@ -1172,6 +1173,7 @@ fn runtime_agent_subshell_exit_invalidates_cached_certified_group() {
     service
         .apply_pane_foreground_process_event("%1", "sh", primary_pid, None)
         .unwrap();
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
     assert_eq!(
         service.pane_foreground_certified_shell_state("%1"),
         Some(true)

@@ -126,9 +126,9 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
     assert!(
         std::ptr::eq(
             service.pane_screen(&pane_id).unwrap(),
-            service.agent_pane_screen(&pane_id).unwrap(),
+            service.process_pane_screen(&pane_id).unwrap(),
         ),
-        "the retained agent surface must remain presented before the parent prompt repaint"
+        "Ctrl+D must restore the process surface immediately"
     );
     service
         .apply_pane_output_bytes(pane_id.clone(), b"\x1b]133;A\x1b\\user@host".to_vec())
@@ -136,21 +136,9 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
     assert!(
         std::ptr::eq(
             service.pane_screen(&pane_id).unwrap(),
-            service.agent_pane_screen(&pane_id).unwrap(),
+            service.process_pane_screen(&pane_id).unwrap(),
         ),
-        "a partial parent prompt must not expose its intermediate cursor"
-    );
-    for _ in 0..crate::runtime::agent::RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS {
-        service
-            .apply_idle_cleanup_timer_event_with_actor_progress(&std::collections::BTreeSet::new())
-            .unwrap();
-    }
-    assert!(
-        std::ptr::eq(
-            service.pane_screen(&pane_id).unwrap(),
-            service.agent_pane_screen(&pane_id).unwrap(),
-        ),
-        "an incomplete integrated prompt must not be released by the markerless fallback"
+        "parent prompt output must not switch back to the hidden agent surface"
     );
     service
         .apply_pane_output_bytes(pane_id.clone(), b" ~/repo $ \x1b]133;B\x1b\\".to_vec())

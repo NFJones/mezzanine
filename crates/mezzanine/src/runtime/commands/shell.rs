@@ -14,6 +14,7 @@ use super::{
     runtime_agent_shell_stop_response_json, runtime_mezzanine_error_code,
 };
 use crate::integrations::agent::slash::AgentShellPresentation;
+use crate::runtime::PaneReadinessState;
 use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::{
     ShellClassification, agent_subshell_enter_command_with_shell_compatibility,
@@ -1096,8 +1097,15 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
+        let _ = self.schedule_parent_shell_discovery_for_agent_entry(pane_id);
         if self.pane_bootstrap_awaits_shell_identity(pane_id) {
             self.defer_agent_subshell_entry(pane_id);
+            if matches!(
+                self.pane_readiness_state(pane_id),
+                PaneReadinessState::Ready | PaneReadinessState::PromptCandidate
+            ) {
+                let _ = self.maybe_bootstrap_ready_panes()?;
+            }
             return Ok(false);
         }
         let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
@@ -1224,8 +1232,7 @@ impl RuntimeSessionService {
         match self.write_runtime_pane_input(pane_id, &input) {
             Ok(()) => {
                 self.leave_agent_subshell(pane_id);
-                self.begin_agent_subshell_parent_return(pane_id);
-                self.schedule_parent_shell_rebootstrap_after_agent_subshell(pane_id);
+                self.invalidate_agent_subshell_environment_after_exit(pane_id);
                 Ok(true)
             }
             Err(error)

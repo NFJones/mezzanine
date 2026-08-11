@@ -155,31 +155,6 @@ use presentation::{
     runtime_agent_execution_prompt_display_lines, runtime_agent_provider_context_usage_display,
 };
 
-/// Number of stable cleanup observations required before a markerless parent
-/// shell may be presented after agent-subshell exit.
-pub(crate) const RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS: usize = 4;
-
-/// Maximum cleanup observations allowed before a return-to-parent transition
-/// falls back to the latest valid process terminal state.
-const RUNTIME_AGENT_PARENT_RETURN_FALLBACK_POLLS: usize = 32;
-
-/// Tracks one pane while the parent shell repaints after its agent child exits.
-#[derive(Debug, Clone)]
-struct RuntimeAgentParentReturnState {
-    /// Most recently observed process cursor while the parent surface is gated.
-    last_cursor: Option<(usize, usize)>,
-    /// Whether process output has arrived since child-shell exit was requested.
-    output_observed: bool,
-    /// Whether output arrived since the most recent cleanup observation.
-    output_since_last_poll: bool,
-    /// Whether shell integration has announced an incomplete parent prompt.
-    prompt_marker_observed: bool,
-    /// Consecutive cleanup observations with unchanged process cursor state.
-    stable_polls: usize,
-    /// Remaining observations before the bounded abnormal-exit fallback applies.
-    fallback_polls_remaining: usize,
-}
-
 /// Owns application-side agent execution state and lifecycle invariants.
 ///
 /// The component begins with visible agent-subshell lifecycle state and grows
@@ -197,8 +172,6 @@ pub(crate) struct RuntimeAgentComponent {
     deferred_agent_subshell_entry_panes: BTreeSet<String>,
     /// Interrupted subshells that must exit with a line-oriented command.
     agent_subshell_command_exit_panes: BTreeSet<String>,
-    /// Panes retaining agent presentation until the parent terminal state settles.
-    agent_subshell_parent_returns: BTreeMap<String, RuntimeAgentParentReturnState>,
     /// Bounded hidden diagnostic lines retained by pane.
     agent_pane_trace_logs: BTreeMap<String, Vec<String>>,
     /// Exact apply-patch attempts retained by agent session id.
@@ -2231,7 +2204,6 @@ impl RuntimeSessionService {
         self.agent
             .deferred_agent_subshell_entry_panes
             .remove(&pane_id);
-        self.agent.agent_subshell_parent_returns.remove(&pane_id);
         self.agent.agent_subshell_panes.insert(pane_id);
     }
 
@@ -2261,116 +2233,6 @@ impl RuntimeSessionService {
         self.agent.agent_subshell_panes.remove(pane_id)
     }
 
-    /// Retains the pane's agent presentation while its parent shell repaints.
-    pub(crate) fn begin_agent_subshell_parent_return(&mut self, pane_id: &str) {
-        let last_cursor = self
-            .process_pane_screen(pane_id)
-            .map(|screen| screen.cursor_state())
-            .map(|cursor| (cursor.row, cursor.column));
-        self.agent.agent_subshell_parent_returns.insert(
-            pane_id.to_string(),
-            RuntimeAgentParentReturnState {
-                last_cursor,
-                output_observed: false,
-                output_since_last_poll: false,
-                prompt_marker_observed: false,
-                stable_polls: 0,
-                fallback_polls_remaining: RUNTIME_AGENT_PARENT_RETURN_FALLBACK_POLLS,
-            },
-        );
-    }
-
-    /// Reports whether one pane is waiting to present its restored parent shell.
-    pub(crate) fn agent_subshell_parent_return_is_pending(&self, pane_id: &str) -> bool {
-        self.agent
-            .agent_subshell_parent_returns
-            .contains_key(pane_id)
-    }
-
-    /// Reports whether return-to-parent cleanup still requires timer progress.
-    pub(crate) fn agent_subshell_parent_return_timer_needed(&self) -> bool {
-        !self.agent.agent_subshell_parent_returns.is_empty()
-    }
-
-    /// Observes parent-shell output after the process terminal state was applied.
-    ///
-    /// A completed shell-integration prompt is authoritative and releases the
-    /// presentation gate immediately. Markerless shells instead wait for the
-    /// bounded stable-cursor fallback driven by cleanup observations.
-    pub(crate) fn observe_agent_subshell_parent_return_output(
-        &mut self,
-        pane_id: &str,
-        output_observed: bool,
-        prompt_started: bool,
-        prompt_complete: bool,
-    ) -> bool {
-        if prompt_complete {
-            return self
-                .agent
-                .agent_subshell_parent_returns
-                .remove(pane_id)
-                .is_some();
-        }
-        let current_cursor = self
-            .process_pane_screen(pane_id)
-            .map(|screen| screen.cursor_state())
-            .map(|cursor| (cursor.row, cursor.column));
-        let Some(state) = self.agent.agent_subshell_parent_returns.get_mut(pane_id) else {
-            return false;
-        };
-        if output_observed {
-            if state.last_cursor != current_cursor {
-                state.stable_polls = 0;
-            }
-            state.last_cursor = current_cursor;
-            state.output_observed = true;
-            state.output_since_last_poll = true;
-        }
-        state.prompt_marker_observed |= prompt_started;
-        false
-    }
-
-    /// Advances bounded markerless return-to-parent presentation fallbacks.
-    pub(crate) fn tick_agent_subshell_parent_returns(&mut self) -> usize {
-        let pane_ids = self
-            .agent
-            .agent_subshell_parent_returns
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut completed = 0usize;
-        for pane_id in pane_ids {
-            let current_cursor = self
-                .process_pane_screen(&pane_id)
-                .map(|screen| screen.cursor_state())
-                .map(|cursor| (cursor.row, cursor.column));
-            let mut release = false;
-            if let Some(state) = self.agent.agent_subshell_parent_returns.get_mut(&pane_id) {
-                state.fallback_polls_remaining = state.fallback_polls_remaining.saturating_sub(1);
-                if state.output_since_last_poll {
-                    state.output_since_last_poll = false;
-                    state.stable_polls = 0;
-                } else if state.output_observed {
-                    if state.last_cursor == current_cursor {
-                        state.stable_polls = state.stable_polls.saturating_add(1);
-                    } else {
-                        state.last_cursor = current_cursor;
-                        state.stable_polls = 0;
-                    }
-                }
-                let stable_markerless_prompt = !state.prompt_marker_observed
-                    && current_cursor.is_some_and(|(_, column)| column > 0)
-                    && state.stable_polls >= RUNTIME_AGENT_PARENT_RETURN_STABLE_POLLS;
-                release = stable_markerless_prompt || state.fallback_polls_remaining == 0;
-            }
-            if release {
-                self.agent.agent_subshell_parent_returns.remove(&pane_id);
-                completed = completed.saturating_add(1);
-            }
-        }
-        completed
-    }
-
     /// Marks an interrupted child shell for line-oriented exit.
     pub(crate) fn mark_agent_subshell_command_exit(&mut self, pane_id: impl Into<String>) {
         self.agent
@@ -2390,7 +2252,6 @@ impl RuntimeSessionService {
             .deferred_agent_subshell_entry_panes
             .remove(pane_id);
         self.agent.agent_subshell_command_exit_panes.remove(pane_id);
-        self.agent.agent_subshell_parent_returns.remove(pane_id);
     }
 }
 

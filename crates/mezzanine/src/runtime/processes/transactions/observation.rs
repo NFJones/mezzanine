@@ -1080,9 +1080,9 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Invalidates child-environment evidence and schedules discovery after
-    /// control returns to the original pane shell.
-    pub(crate) fn schedule_parent_shell_rebootstrap_after_agent_subshell(&mut self, pane_id: &str) {
+    /// Invalidates child-environment evidence when control returns to the
+    /// original pane shell without scheduling any hidden shell interaction.
+    pub(crate) fn invalidate_agent_subshell_environment_after_exit(&mut self, pane_id: &str) {
         self.process
             .pane_agent_subshell_certification_rejections
             .remove(pane_id);
@@ -1101,10 +1101,38 @@ impl RuntimeSessionService {
             .pane_bubblewrap_capabilities
             .retain(|key, _| key.pane_id != pane_id);
         self.clear_pane_agent_instruction_files(pane_id);
+        self.process.pane_bootstrap_pending.remove(pane_id);
+        self.set_pane_readiness(pane_id, super::PaneReadinessState::Unknown);
+    }
+
+    /// Arms parent-shell discovery only after agent mode is visible again.
+    ///
+    /// The restored user shell remains fully user-owned while agent mode is
+    /// hidden. Re-entry still fails closed by waiting for a fresh prompt and
+    /// identity probe before a new agent child shell can start.
+    pub(crate) fn schedule_parent_shell_discovery_for_agent_entry(
+        &mut self,
+        pane_id: &str,
+    ) -> bool {
+        if !self
+            .process
+            .pane_shell_interaction_generations
+            .contains_key(pane_id)
+            || self
+                .process
+                .pane_certified_shell_identities
+                .contains_key(pane_id)
+            || self
+                .process
+                .pane_probed_shell_identities
+                .contains_key(pane_id)
+        {
+            return false;
+        }
+        self.clear_pane_environment_authority_failure(pane_id);
         self.process
             .pane_bootstrap_pending
-            .insert(pane_id.to_string());
-        self.set_pane_readiness(pane_id, super::PaneReadinessState::Unknown);
+            .insert(pane_id.to_string())
     }
 
     /// Returns the latest actionable agent-subshell certification rejection.

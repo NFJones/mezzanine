@@ -3814,7 +3814,11 @@ Certification MUST be invalidated when the agent subshell exits, the pane
 closes, its primary process changes or is replaced, a bootstrap proof fails, or
 a new shell-interaction epoch begins. Restoring the original pane shell after
 an agent-subshell exit MUST invalidate child-environment path and sandbox
-caches and schedule fresh bootstrap discovery for the parent environment.
+caches without scheduling probes, bootstrap commands, presentation gates, or
+other hidden interaction with the user-owned shell. Fresh parent-environment
+discovery MAY be armed only after agent mode is explicitly shown again and MUST
+settle before Mezzanine starts a new agent child shell or dispatches agent-owned
+shell work.
 
 If the active interactive environment does not expose a usable shell, the
 harness MAY continue terminal observation, but it MUST treat agent shell command

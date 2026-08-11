@@ -194,18 +194,6 @@ impl RuntimeSessionService {
         }
         self.record_running_shell_transaction_output(output.pane_id.as_str(), &transaction_bytes);
         self.observe_agent_shell_transaction_events(output.pane_id.as_str(), &osc_events)?;
-        let parent_prompt_started = osc_events
-            .iter()
-            .any(|event| matches!(event, TerminalOscEvent::ShellPromptStart));
-        let parent_prompt_complete = osc_events
-            .iter()
-            .any(|event| matches!(event, TerminalOscEvent::ShellPromptEnd));
-        self.observe_agent_subshell_parent_return_output(
-            output.pane_id.as_str(),
-            !protocol_bytes.is_empty(),
-            parent_prompt_started,
-            parent_prompt_complete,
-        );
         self.write_active_pane_pipe(output.pane_id.as_str(), &render_bytes)?;
         let title_changed = if let Some(title) = terminal_title {
             let foreground_group = self
@@ -587,13 +575,10 @@ impl RuntimeSessionService {
             | RuntimeLifecycleState::Detached
             | RuntimeLifecycleState::Stopping => {
                 let hidden_shell_retention_aged = self.tick_hidden_shell_render_retention();
-                let parent_returns_completed = self.tick_agent_subshell_parent_returns();
                 let reconciled = self.reconcile_agent_runtime_progress_paths_with_actor_progress(
                     actor_progress_turn_ids,
                 )?;
-                Ok(hidden_shell_retention_aged
-                    .saturating_add(parent_returns_completed)
-                    .saturating_add(reconciled))
+                Ok(hidden_shell_retention_aged.saturating_add(reconciled))
             }
         }
     }
@@ -636,7 +621,6 @@ impl RuntimeSessionService {
     ) -> bool {
         self.missing_pane_agent_turn_cleanup_needed()
             || self.hidden_shell_render_retention_timer_needed()
-            || self.agent_subshell_parent_return_timer_needed()
             || self.stranded_agent_shell_dispatch_recovery_timer_needed()
             || self.unreachable_running_agent_turn_timer_needed_with_actor_progress(
                 actor_progress_turn_ids,
@@ -657,9 +641,7 @@ impl RuntimeSessionService {
         {
             return RuntimeTransition::default();
         }
-        let delay_ms = if self.hidden_shell_render_retention_timer_needed()
-            || self.agent_subshell_parent_return_timer_needed()
-        {
+        let delay_ms = if self.hidden_shell_render_retention_timer_needed() {
             retention_delay_ms
         } else {
             recovery_delay_ms
