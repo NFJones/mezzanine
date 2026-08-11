@@ -215,7 +215,7 @@ fn bash_wrapper_isolates_history_before_outer_transport() {
     );
     assert!(first_line.contains("set +o history"), "{first_line}");
     assert!(
-        first_line.contains("history -d $((HISTCMD+1))"),
+        first_line.contains("history -d $((HISTCMD-1))"),
         "{first_line}"
     );
     assert!(

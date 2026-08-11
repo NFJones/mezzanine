@@ -1867,7 +1867,7 @@ fn bash_history_transport_start(classification: ShellClassification) -> &'static
     if classification != ShellClassification::Bash {
         return "";
     }
-    "MEZ_BASH_HISTORY_OUTER_ACTIVE=1; MEZ_BASH_HISTORY_OUTER_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{print $2; exit}')\" in on) MEZ_BASH_HISTORY_OUTER_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD+1)) 2>/dev/null || :;; esac; printf '\\036'\n"
+    "MEZ_BASH_HISTORY_OUTER_ACTIVE=1; MEZ_BASH_HISTORY_OUTER_RESTORE=0; case \"$(set -o 2>/dev/null | command awk '$1==\"history\"{print $2; exit}')\" in on) MEZ_BASH_HISTORY_OUTER_RESTORE=1; set +o history 2>/dev/null || :; history -d $((HISTCMD-1)) 2>/dev/null || :;; esac; printf '\\036'\n"
 }
 
 /// Starts a zsh-private history frame before any generated transport record.
