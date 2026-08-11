@@ -21,6 +21,7 @@ use super::{
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api,
 };
+use crate::integrations::agent::context::assemble_model_request;
 use crate::integrations::agent::provider::{
     anthropic_provider_from_auth_store_with_provider_options,
     provider_error_retry_class_from_parts, provider_event_error_kind,
@@ -262,16 +263,37 @@ impl RuntimeSessionService {
             })?
             .session_id
             .clone();
-        let source_context = AgentContext::new_durable(plan.replacement_blocks().to_vec())
-            .map_err(|error| MezError::invalid_state(error.message()))?;
-        let request = runtime_model_compaction_request(
+        let mut current_blocks = plan.replacement_blocks().to_vec();
+        let mut pending_blocks = Vec::new();
+        let rejected_request_bytes = self.claimed_agent_provider_openai_request_bytes(turn_id);
+        let rejected_request_stream = self.claimed_agent_provider_openai_request_stream(turn_id);
+        let mut request = runtime_model_compaction_request_for_blocks(
             &model_profile,
             &turn.pane_id,
             &conversation_id,
-            0,
-            &[],
-            &source_context,
+            &current_blocks,
         )?;
+        if let (Some(rejected_bytes), Some(stream)) =
+            (rejected_request_bytes, rejected_request_stream)
+        {
+            while runtime_openai_compaction_request_bytes(&request, Some(stream))?
+                .is_some_and(|request_bytes| request_bytes >= rejected_bytes)
+            {
+                let Some((first, second)) = runtime_split_compaction_blocks(&current_blocks) else {
+                    return Err(MezError::invalid_state(format!(
+                        "context-limit recovery could not form a smaller compactor request: rejected_request_bytes={rejected_bytes}"
+                    )));
+                };
+                pending_blocks.push(second);
+                current_blocks = first;
+                request = runtime_model_compaction_request_for_blocks(
+                    &model_profile,
+                    &turn.pane_id,
+                    &conversation_id,
+                    &current_blocks,
+                )?;
+            }
+        }
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             pane_id: turn.pane_id.clone(),
             conversation_id,
@@ -287,6 +309,11 @@ impl RuntimeSessionService {
                 turn_id: turn.turn_id.clone(),
                 recovery_attempt,
                 compaction_backoff_attempt: 0,
+                rejected_request_bytes,
+                rejected_request_stream,
+                current_blocks,
+                pending_blocks,
+                completed_summaries: Vec::new(),
                 plan: Box::new(plan),
             },
         });
@@ -449,7 +476,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         response: ModelResponse,
     ) -> Result<bool> {
-        let Some(task) = self.finish_agent_compaction_task(pane_id) else {
+        let Some(mut task) = self.finish_agent_compaction_task(pane_id) else {
             return Ok(false);
         };
         self.record_agent_provider_token_usage_with_profile(
@@ -461,18 +488,72 @@ impl RuntimeSessionService {
         self.record_agent_provider_quota_usage(pane_id, &response.quota_usage);
         let application = (|| -> Result<()> {
             let summary = runtime_model_compaction_summary_from_response(&response)?;
-            if let RuntimeAgentCompactionTarget::ActiveTurn {
-                turn_id,
-                recovery_attempt,
-                compaction_backoff_attempt: _,
-                plan,
-            } = &task.target
-            {
+            if matches!(task.target, RuntimeAgentCompactionTarget::ActiveTurn { .. }) {
+                let (next_blocks, final_summary) = {
+                    let RuntimeAgentCompactionTarget::ActiveTurn {
+                        current_blocks: _,
+                        pending_blocks,
+                        completed_summaries,
+                        ..
+                    } = &mut task.target
+                    else {
+                        unreachable!("active-turn target was matched above");
+                    };
+                    completed_summaries.push(summary);
+                    if let Some(blocks) = pending_blocks.pop() {
+                        (Some(blocks), None)
+                    } else if completed_summaries.len() == 1 {
+                        (None, completed_summaries.pop())
+                    } else {
+                        let summaries = std::mem::take(completed_summaries);
+                        (Some(runtime_compaction_summary_blocks(summaries)), None)
+                    }
+                };
+                if let Some(blocks) = next_blocks {
+                    runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
+                    self.append_agent_trace_turn_event(
+                        pane_id,
+                        task.resume_turn_id.as_deref().unwrap_or("unknown"),
+                        "context_limit_recovery compactor_continuing recursive_summary=true",
+                    )?;
+                    self.queue_agent_compaction_task(task.clone());
+                    return Ok(());
+                }
+                let final_summary = final_summary.ok_or_else(|| {
+                    MezError::invalid_state(
+                        "recursive context compaction completed without a final summary",
+                    )
+                })?;
+                let (
+                    turn_id,
+                    recovery_attempt,
+                    rejected_request_bytes,
+                    rejected_request_stream,
+                    plan,
+                ) = match &task.target {
+                    RuntimeAgentCompactionTarget::ActiveTurn {
+                        turn_id,
+                        recovery_attempt,
+                        rejected_request_bytes,
+                        rejected_request_stream,
+                        plan,
+                        ..
+                    } => (
+                        turn_id.clone(),
+                        *recovery_attempt,
+                        *rejected_request_bytes,
+                        *rejected_request_stream,
+                        plan.clone(),
+                    ),
+                    RuntimeAgentCompactionTarget::Conversation => {
+                        unreachable!("active-turn target was matched above")
+                    }
+                };
                 let Some(turn) = self
                     .agent_turn_ledger()
                     .turns()
                     .iter()
-                    .find(|turn| turn.turn_id == *turn_id)
+                    .find(|turn| turn.turn_id == turn_id)
                     .cloned()
                 else {
                     return Err(MezError::invalid_state(
@@ -486,19 +567,73 @@ impl RuntimeSessionService {
                 }
                 let context = self
                     .agent_turn_contexts()
-                    .get(turn_id)
+                    .get(&turn_id)
                     .cloned()
                     .ok_or_else(|| {
                         MezError::invalid_state("active-turn compaction context is unavailable")
                     })?;
                 let (compacted, report) =
-                    apply_model_context_compaction_plan(context, plan.as_ref(), summary)
+                    apply_model_context_compaction_plan(context, plan.as_ref(), final_summary)
                         .map_err(|error| MezError::invalid_state(error.message()))?;
+                if let (Some(rejected_bytes), Some(stream)) =
+                    (rejected_request_bytes, rejected_request_stream)
+                {
+                    let model_profile = self
+                        .agent_turn_model_profile(&turn_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            MezError::invalid_state(
+                                "active-turn compaction model profile is unavailable",
+                            )
+                        })?;
+                    let mcp_summary = self.mcp_registry().prompt_summary();
+                    let (prepared, available_mcp_tools) = self.prepare_agent_turn_model_context(
+                        &turn,
+                        compacted.clone(),
+                        &mcp_summary,
+                        &model_profile,
+                    )?;
+                    let mut retry_request = assemble_model_request(
+                        &model_profile,
+                        &turn,
+                        &prepared.to_agent_context(),
+                    )?;
+                    let (allowed_actions, interaction_kind) =
+                        self.agent_provider_request_control_for_turn(&turn);
+                    mez_agent::apply_model_request_control(
+                        &mut retry_request,
+                        allowed_actions,
+                        interaction_kind,
+                    );
+                    mez_agent::apply_default_action_gates(
+                        &mut retry_request,
+                        &available_mcp_tools,
+                        self.runtime_persistent_memory_enabled(),
+                        super::runtime_issues_enabled(self),
+                    );
+                    let retry_bytes = mez_agent::openai_responses_request_body_with_stream(
+                        &retry_request,
+                        stream,
+                    )?
+                    .len();
+                    if retry_bytes >= rejected_bytes {
+                        return Err(MezError::invalid_state(format!(
+                            "context-limit recovery could not produce a smaller OpenAI Responses request: rejected_request_bytes={rejected_bytes} retry_request_bytes={retry_bytes}"
+                        )));
+                    }
+                    self.append_agent_trace_turn_event(
+                        pane_id,
+                        &turn_id,
+                        &format!(
+                            "context_limit_recovery request_shrunk rejected_request_bytes={rejected_bytes} retry_request_bytes={retry_bytes}"
+                        ),
+                    )?;
+                }
                 self.agent_turn_contexts_mut()
-                    .insert(turn_id.to_string(), compacted);
+                    .insert(turn_id.clone(), compacted);
                 self.queue_agent_provider_recovery_task_after_context_compaction(
-                    turn_id,
-                    *recovery_attempt,
+                    &turn_id,
+                    recovery_attempt,
                 )?;
                 self.append_agent_status_text_to_terminal_buffer(
                     pane_id,
@@ -509,7 +644,7 @@ impl RuntimeSessionService {
                 )?;
                 self.append_agent_trace_turn_event(
                     pane_id,
-                    turn_id,
+                    &turn_id,
                     "provider_request recovery_resuming reason=model_context_compaction_completed",
                 )?;
                 return Ok(());
@@ -598,35 +733,87 @@ impl RuntimeSessionService {
                 provider_failure_json,
             );
             if retry_class == ProviderErrorRetryClass::ContextLimit
-                && let RuntimeAgentCompactionTarget::ActiveTurn {
-                    compaction_backoff_attempt,
-                    plan,
-                    ..
-                } = &mut task.target
-                && *compaction_backoff_attempt < DEFAULT_PROVIDER_RETRY_POLICY.max_attempts
-                && plan.exclude_newest_replacement_group()
+                && matches!(task.target, RuntimeAgentCompactionTarget::ActiveTurn { .. })
             {
-                *compaction_backoff_attempt = compaction_backoff_attempt.saturating_add(1);
-                let source_context = AgentContext::new_durable(plan.replacement_blocks().to_vec())
-                    .map_err(|error| MezError::invalid_state(error.message()))?;
-                task.summarized_entries = plan.replacement_blocks().len();
-                task.request = runtime_model_compaction_request(
-                    &task.model_profile,
-                    &task.pane_id,
-                    &task.conversation_id,
-                    0,
-                    &[],
-                    &source_context,
-                )?;
-                self.append_agent_status_text_to_terminal_buffer(
+                let failed_request_bytes = {
+                    let RuntimeAgentCompactionTarget::ActiveTurn {
+                        rejected_request_stream,
+                        ..
+                    } = &task.target
+                    else {
+                        unreachable!("active-turn target was matched above");
+                    };
+                    runtime_openai_compaction_request_bytes(
+                        &task.request,
+                        *rejected_request_stream,
+                    )?
+                };
+                let mut blocks = {
+                    let RuntimeAgentCompactionTarget::ActiveTurn {
+                        compaction_backoff_attempt,
+                        current_blocks,
+                        ..
+                    } = &mut task.target
+                    else {
+                        unreachable!("active-turn target was matched above");
+                    };
+                    if *compaction_backoff_attempt >= DEFAULT_PROVIDER_RETRY_POLICY.max_attempts {
+                        Vec::new()
+                    } else {
+                        *compaction_backoff_attempt = compaction_backoff_attempt.saturating_add(1);
+                        current_blocks.clone()
+                    }
+                };
+                let mut queued_siblings = Vec::new();
+                let mut retry_ready = false;
+                while let Some((first, second)) = runtime_split_compaction_blocks(&blocks) {
+                    queued_siblings.push(second);
+                    runtime_rebuild_active_turn_compaction_request(&mut task, first.clone())?;
+                    let candidate_bytes = {
+                        let RuntimeAgentCompactionTarget::ActiveTurn {
+                            rejected_request_stream,
+                            ..
+                        } = &task.target
+                        else {
+                            unreachable!("active-turn target was matched above");
+                        };
+                        runtime_openai_compaction_request_bytes(
+                            &task.request,
+                            *rejected_request_stream,
+                        )?
+                    };
+                    if failed_request_bytes
+                        .zip(candidate_bytes)
+                        .is_none_or(|(failed, candidate)| candidate < failed)
+                    {
+                        retry_ready = true;
+                        break;
+                    }
+                    blocks = first;
+                }
+                if retry_ready {
+                    let RuntimeAgentCompactionTarget::ActiveTurn { pending_blocks, .. } =
+                        &mut task.target
+                    else {
+                        unreachable!("active-turn target was matched above");
+                    };
+                    pending_blocks.extend(queued_siblings);
+                    let attempt = match &task.target {
+                        RuntimeAgentCompactionTarget::ActiveTurn {
+                            compaction_backoff_attempt,
+                            ..
+                        } => *compaction_backoff_attempt,
+                        RuntimeAgentCompactionTarget::Conversation => 0,
+                    };
+                    self.append_agent_status_text_to_terminal_buffer(
                     pane_id,
                     &format!(
-                        "agent: compaction request exceeded provider context; retrying with a larger exact tail attempt={}",
-                        compaction_backoff_attempt
+                            "agent: compaction request exceeded provider context; retrying with smaller recursive input attempt={attempt}"
                     ),
                 )?;
-                self.queue_agent_compaction_task(task);
-                return Ok(true);
+                    self.queue_agent_compaction_task(task);
+                    return Ok(true);
+                }
             }
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
@@ -782,6 +969,97 @@ pub(super) fn runtime_model_compaction_request(
             },
         ],
     })
+}
+
+/// Returns the complete serialized OpenAI Responses size for one compactor request.
+fn runtime_openai_compaction_request_bytes(
+    request: &ModelRequest,
+    stream: Option<bool>,
+) -> Result<Option<usize>> {
+    stream
+        .map(|stream| {
+            mez_agent::openai_responses_request_body_with_stream(request, stream)
+                .map(|body| body.len())
+                .map_err(MezError::from)
+        })
+        .transpose()
+}
+
+/// Rebuilds one active-turn compactor request from temporary source blocks.
+fn runtime_rebuild_active_turn_compaction_request(
+    task: &mut RuntimeAgentCompactionTask,
+    blocks: Vec<ContextBlock>,
+) -> Result<()> {
+    task.summarized_entries = blocks.len();
+    task.request = runtime_model_compaction_request_for_blocks(
+        &task.model_profile,
+        &task.pane_id,
+        &task.conversation_id,
+        &blocks,
+    )?;
+    let RuntimeAgentCompactionTarget::ActiveTurn { current_blocks, .. } = &mut task.target else {
+        return Err(MezError::invalid_state(
+            "active-turn compaction request rebuild requires an active-turn target",
+        ));
+    };
+    *current_blocks = blocks;
+    Ok(())
+}
+
+/// Builds one compactor request from temporary active-turn source blocks.
+fn runtime_model_compaction_request_for_blocks(
+    profile: &ModelProfile,
+    pane_id: &str,
+    conversation_id: &str,
+    blocks: &[ContextBlock],
+) -> Result<ModelRequest> {
+    let source_context = AgentContext::new_durable(blocks.to_vec())
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+    runtime_model_compaction_request(profile, pane_id, conversation_id, 0, &[], &source_context)
+}
+
+/// Splits only temporary compactor input while leaving the atomic source plan unchanged.
+fn runtime_split_compaction_blocks(
+    blocks: &[ContextBlock],
+) -> Option<(Vec<ContextBlock>, Vec<ContextBlock>)> {
+    if blocks.len() > 1 {
+        let split_at = blocks.len().div_ceil(2);
+        return Some((blocks[..split_at].to_vec(), blocks[split_at..].to_vec()));
+    }
+    let block = blocks.first()?;
+    if block.content.len() < 2 {
+        return None;
+    }
+    let midpoint = block.content.len() / 2;
+    let split_at = block
+        .content
+        .char_indices()
+        .map(|(index, _)| index)
+        .find(|index| *index >= midpoint)
+        .unwrap_or(block.content.len());
+    if split_at == 0 || split_at >= block.content.len() {
+        return None;
+    }
+    let mut first = block.clone();
+    first.content = block.content[..split_at].to_string();
+    let mut second = block.clone();
+    second.content = block.content[split_at..].to_string();
+    Some((vec![first], vec![second]))
+}
+
+/// Converts completed temporary summaries into one new synthesis round.
+fn runtime_compaction_summary_blocks(summaries: Vec<String>) -> Vec<ContextBlock> {
+    summaries
+        .into_iter()
+        .enumerate()
+        .map(|(index, summary)| {
+            ContextBlock::reference_event(
+                ContextSourceKind::Memory,
+                format!("recursive compaction summary {}", index.saturating_add(1)),
+                summary,
+            )
+        })
+        .collect()
 }
 
 /// Formats bounded transcript source material for a model compaction request.

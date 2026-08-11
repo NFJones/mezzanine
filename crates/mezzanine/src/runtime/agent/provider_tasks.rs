@@ -13,6 +13,42 @@ use mez_agent::{
     ProviderRetryRecovery, ProviderRetryRecoveryResult, ProviderRetryTransition,
 };
 
+/// Returns the complete serialized OpenAI Responses body size for one dispatch.
+fn runtime_openai_dispatch_request_shape(
+    dispatch: &RuntimeAgentProviderDispatch,
+) -> Result<Option<(usize, bool)>> {
+    let RuntimeAgentProviderDispatchProvider::OpenAi(provider) = &dispatch.provider else {
+        return Ok(None);
+    };
+    let mut request = if let Some(request) = dispatch
+        .macro_judge_request
+        .as_ref()
+        .or(dispatch.sandbox_failure_assessment_request.as_ref())
+    {
+        request.clone()
+    } else {
+        assemble_model_request(
+            &dispatch.model_profile,
+            &dispatch.turn,
+            &dispatch.context.to_agent_context(),
+        )?
+    };
+    mez_agent::apply_model_request_control(
+        &mut request,
+        dispatch.allowed_actions.clone(),
+        dispatch.interaction_kind,
+    );
+    mez_agent::apply_default_action_gates(
+        &mut request,
+        &dispatch.available_mcp_tools,
+        dispatch.memory_actions_enabled,
+        dispatch.issue_actions_enabled,
+    );
+    let stream = provider.streams_responses();
+    let body = mez_agent::openai_responses_request_body_with_stream(&request, stream)?;
+    Ok(Some((body.len(), stream)))
+}
+
 #[cfg(test)]
 use super::AgentTurnExecution;
 use super::{
@@ -37,7 +73,7 @@ impl RuntimeSessionService {
     /// accepted execution owns the cumulative capability surface and
     /// interaction mode; the turn's initial capability is used only before an
     /// execution exists. Explicit exceptional interactions remain authoritative.
-    pub(super) fn agent_provider_request_control_for_turn(
+    pub(crate) fn agent_provider_request_control_for_turn(
         &self,
         turn: &AgentTurnRecord,
     ) -> (
@@ -91,6 +127,8 @@ impl RuntimeSessionService {
                 claimed_at_unix_ms: current_unix_millis(),
                 timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
                 context_event_high_water_mark,
+                openai_request_bytes: None,
+                openai_request_stream: None,
             },
         );
         self.agent.pending_agent_provider_tasks.remove(turn_id);
@@ -1315,6 +1353,7 @@ impl RuntimeSessionService {
         timeout_ms: u64,
     ) -> Result<RuntimeTransition> {
         let turn = &dispatch.turn;
+        let openai_request_shape = runtime_openai_dispatch_request_shape(dispatch)?;
         self.agent.claimed_agent_provider_tasks.insert(
             turn.turn_id.clone(),
             RuntimeAgentProviderClaim {
@@ -1328,6 +1367,8 @@ impl RuntimeSessionService {
                     .context
                     .durable()
                     .event_sequence_high_water_mark(),
+                openai_request_bytes: openai_request_shape.map(|shape| shape.0),
+                openai_request_stream: openai_request_shape.map(|shape| shape.1),
             },
         );
         self.append_agent_trace_turn_event(

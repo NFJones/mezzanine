@@ -1456,6 +1456,15 @@ impl RuntimeSessionService {
         self.agent.pending_agent_compaction_tasks.get(pane_id)
     }
 
+    /// Returns one queued compaction task for focused state-boundary tests.
+    #[cfg(test)]
+    pub(crate) fn pending_agent_compaction_task_mut_for_tests(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<&mut RuntimeAgentCompactionTask> {
+        self.agent.pending_agent_compaction_tasks.get_mut(pane_id)
+    }
+
     /// Reports whether one provider turn is queued for dispatch.
     pub(crate) fn agent_provider_task_is_pending(&self, turn_id: &str) -> bool {
         self.agent.pending_agent_provider_tasks.contains(turn_id)
@@ -1491,6 +1500,28 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Option<RuntimeAgentProviderClaim> {
         self.agent.claimed_agent_provider_tasks.remove(turn_id)
+    }
+
+    /// Returns the complete rejected OpenAI request size owned by one claim.
+    pub(crate) fn claimed_agent_provider_openai_request_bytes(
+        &self,
+        turn_id: &str,
+    ) -> Option<usize> {
+        self.agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .and_then(|claim| claim.openai_request_bytes)
+    }
+
+    /// Returns the OpenAI Responses streaming mode owned by one claimed request.
+    pub(crate) fn claimed_agent_provider_openai_request_stream(
+        &self,
+        turn_id: &str,
+    ) -> Option<bool> {
+        self.agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .and_then(|claim| claim.openai_request_stream)
     }
 
     /// Clears all queued and claimed provider work for session replacement.

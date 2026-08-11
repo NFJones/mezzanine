@@ -103,6 +103,13 @@ pub(crate) struct RuntimeAgentProviderClaim {
     pub timeout_ms: u64,
     /// Highest canonical event sequence consumed by the claimed request.
     pub context_event_high_water_mark: u64,
+    /// Canonical serialized OpenAI Responses body bytes for the claimed request.
+    ///
+    /// Non-Responses providers leave this unset. Context-limit recovery uses
+    /// the value as a strict upper bound for the next provider retry.
+    pub openai_request_bytes: Option<usize>,
+    /// Streaming mode used to serialize the claimed OpenAI Responses request.
+    pub openai_request_stream: Option<bool>,
 }
 
 /// Carries Runtime Agent Provider Dispatch Provider state for this subsystem.
@@ -396,6 +403,16 @@ pub enum RuntimeAgentCompactionTarget {
         recovery_attempt: u32,
         /// Number of provider context-limit backoff attempts already applied.
         compaction_backoff_attempt: u32,
+        /// Complete rejected OpenAI Responses body bytes, when applicable.
+        rejected_request_bytes: Option<usize>,
+        /// Streaming mode used by the rejected OpenAI Responses request.
+        rejected_request_stream: Option<bool>,
+        /// Temporary source blocks owned by the current compactor request.
+        current_blocks: Vec<super::ContextBlock>,
+        /// Remaining temporary chunks in the current recursive summary round.
+        pending_blocks: Vec<Vec<super::ContextBlock>>,
+        /// Completed chunk summaries awaiting one final synthesis request.
+        completed_summaries: Vec<String>,
         /// Deterministic selection and application contract.
         plan: Box<ModelContextCompactionPlan>,
     },

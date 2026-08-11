@@ -179,6 +179,11 @@ pub struct OpenAiResponsesProvider<T> {
 }
 
 impl<T> OpenAiResponsesProvider<T> {
+    /// Reports whether this Responses provider emits server-sent events.
+    pub fn streams_responses(&self) -> bool {
+        self.stream
+    }
+
     /// Runs the new operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

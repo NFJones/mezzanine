@@ -5554,15 +5554,20 @@ response with the same oversized context, and MUST queue asynchronous
 model-backed compaction before retrying within the bounded provider retry
 policy. A rejected turn MUST remain deferred until validated compactor output
 is applied or compaction fails terminally. A compaction request rejected for
-context length MUST progressively move exactly one newest selected complete
-execution group into the exact raw suffix and retry with smaller model input;
-non-context failures MUST remain terminal. If the reconstructed normal request
-is still rejected, recovery MUST model-compact the prior model-authored summary
-with further eligible complete groups into one visible summary epoch. This
-recovery MUST preserve every exact user, steering, active-task, progressively
-excluded, and post-boundary event in place. If protected exact content plus the
-minimum required request state cannot fit the provider context window,
-Mezzanine MUST report an explicit unrecoverable-context overflow and MUST NOT
+context length MUST recursively split only temporary compactor input and MUST
+prove that each replacement compactor request is smaller than the rejected
+request using the complete serialized provider request shape when available.
+The original selected execution groups MUST remain unchanged until validated
+chunk summaries are synthesized and atomically applied as one summary epoch;
+rejected source MUST NOT be moved into a verbatim final-request tail merely to
+shrink compactor input. Non-context failures MUST remain terminal. Before a
+normal OpenAI Responses retry is queued, its complete serialized request body,
+including instructions, input, tools, wrappers, request controls, and dynamic
+suffixes, MUST be strictly smaller than the rejected request. An unchanged or
+larger candidate MUST fail closed with bounded size diagnostics and MUST NOT be
+submitted or automatically replay the failed command. If protected exact
+content plus the minimum required request state cannot fit the provider context
+window, Mezzanine MUST report an explicit unrecoverable-context overflow and MUST NOT
 truncate or summarize the protected instructions. Recovery MUST stop when the
 bounded retry policy is exhausted or no eligible complete group remains, and
 MUST leave source context unchanged on terminal failure.
