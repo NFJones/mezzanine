@@ -88,6 +88,149 @@ fn runtime_subagent_spawn_logs_parent_prompt_in_child_pane() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies spawned subagents inherit the parent pane's plan-only mode and
+/// pane-local latency override before their first turn is created.
+///
+/// Both settings are session preferences rather than child-role inputs. Losing
+/// either at spawn time lets a child issue writes while the parent is planning
+/// or silently changes the provider-visible latency selected by the user.
+#[test]
+fn runtime_subagent_inherits_parent_plan_and_latency_preferences() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"default\"\n\n[providers.openai]\nkind = \"openai\"\nmodels = [\"gpt-5.5\"]\ndefault_model = \"gpt-5.5\"\n\n[model_profiles.default]\nprovider = \"openai\"\nmodel = \"gpt-5.5\"\nreasoning_profile = \"high\"\nlatency_preference = \"default\"\n\n[model_profiles.default.provider_options]\nreasoning_effort = \"high\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.cache_provider_model_catalog_for_tests(
+        "openai",
+        vec![mez_agent::ProviderModelInfo {
+            id: "gpt-5.5".to_string(),
+            display_name: None,
+            reasoning_levels: vec!["high".to_string()],
+            context_window_tokens: Some(1_050_000),
+            capabilities: Vec::new(),
+        }],
+        vec!["high".to_string()],
+    );
+    service
+        .execute_agent_shell_plan_command("%1", "/plan on")
+        .unwrap();
+    service
+        .execute_agent_shell_latency_command("%1", "/latency slow")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                task_prompt: "inspect the inherited preferences".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let child_pane_id =
+        serde_json::from_str::<serde_json::Value>(&spawned).unwrap()["pane"]["pane_id"]
+            .as_str()
+            .expect("spawned pane id")
+            .to_string();
+    let child_agent_id = format!("agent-{child_pane_id}");
+
+    assert!(service.agent_planning_enabled(&child_pane_id));
+    let (_profile_name, profile) = service
+        .active_model_profile_for_pane(&child_pane_id, &child_agent_id, None)
+        .unwrap();
+    assert_eq!(profile.latency_preference.as_deref(), Some("slow"));
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies spawning from default parent preferences leaves the child in the
+/// default plan mode and does not create an unnecessary model-profile override.
+///
+/// Inheritance snapshots explicit pane-local choices. Synthesizing a child
+/// override for defaults would detach it from later session configuration
+/// changes without preserving any user-selected preference.
+#[test]
+fn runtime_subagent_default_preferences_do_not_create_overrides() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let spawned = service
+        .spawn_runtime_subagent(
+            &primary,
+            SubagentSpawnRequest {
+                parent_agent_id: "agent-%1".to_string(),
+                requested_role: "explorer".to_string(),
+                placement: "new-pane".to_string(),
+                cooperation_mode: CooperationMode::ExploreOnly,
+                cooperation_mode_defaulted: false,
+                read_scopes: Vec::new(),
+                read_scopes_defaulted: false,
+                write_scopes: Vec::new(),
+                write_scopes_defaulted: false,
+                task_prompt: "inspect the inherited defaults".to_string(),
+                explicit_user_approval: false,
+                skip_initial_turn: true,
+            },
+            RuntimeSubagentPlacement::NewPane {
+                direction: SplitDirection::Vertical,
+                select: true,
+            },
+        )
+        .unwrap();
+    let child_pane_id =
+        serde_json::from_str::<serde_json::Value>(&spawned).unwrap()["pane"]["pane_id"]
+            .as_str()
+            .expect("spawned pane id")
+            .to_string();
+    let child_agent_id = format!("agent-{child_pane_id}");
+
+    assert!(!service.agent_planning_enabled(&child_pane_id));
+    assert!(
+        !service
+            .integration
+            .model_profile_overrides()
+            .agent_profiles
+            .contains_key(&child_agent_id)
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies spawned subagent conversations remain runtime-only and are excluded
 /// from `/resume` saved-session results.
 ///

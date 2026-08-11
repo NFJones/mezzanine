@@ -462,6 +462,15 @@ impl RuntimeSessionService {
             self.integration
                 .set_pane_sandbox_override(&started.pane_id, Some(sandbox_config));
         }
+        self.set_agent_planning_enabled(
+            &started.pane_id,
+            self.agent_planning_enabled(
+                spawn
+                    .parent_agent_id
+                    .strip_prefix("agent-")
+                    .unwrap_or(&spawn.parent_agent_id),
+            ),
+        );
         if let Err(error) = self.enter_agent_mode_for_pane(&started.pane_id) {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
@@ -481,6 +490,20 @@ impl RuntimeSessionService {
                 0,
                 None,
             )?;
+        if let Some(profile_name) = profile.model_profile.as_deref() {
+            self.provider_registry().resolve_profile(profile_name)?;
+            self.integration
+                .model_profile_overrides_mut()
+                .agent_profiles
+                .insert(child_agent_id.clone(), profile_name.to_string());
+        } else if let Some(parent_profile) =
+            self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id)
+        {
+            self.integration
+                .model_profile_overrides_mut()
+                .agent_profiles
+                .insert(child_agent_id.clone(), parent_profile);
+        }
         self.checkpoint_agent_session_metadata()?;
         if spawn.skip_initial_turn {
             let (window, pane) = match runtime_pane_by_id(&self.session, started.pane_id.as_str()) {
@@ -526,20 +549,6 @@ impl RuntimeSessionService {
             self.inherited_auto_sizing_for_child_agent(&spawn.parent_agent_id)
         {
             self.set_agent_auto_sizing_override(&started.pane_id, Some(auto_sizing));
-        }
-        if let Some(profile_name) = profile.model_profile.as_deref() {
-            self.provider_registry().resolve_profile(profile_name)?;
-            self.integration
-                .model_profile_overrides_mut()
-                .agent_profiles
-                .insert(child_agent_id.clone(), profile_name.to_string());
-        } else if let Some(parent_profile) =
-            self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id)
-        {
-            self.integration
-                .model_profile_overrides_mut()
-                .agent_profiles
-                .insert(child_agent_id.clone(), parent_profile);
         }
         let turn = match self.start_agent_prompt_turn_with_cooperation(
             &started.pane_id,
