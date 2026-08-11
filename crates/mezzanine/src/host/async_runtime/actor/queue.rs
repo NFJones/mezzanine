@@ -215,6 +215,17 @@ impl AsyncRuntimeSessionActor {
         Ok(queued)
     }
 
+    /// Reconciles shell lifecycle timers after a direct actor request mutates
+    /// transaction or agent-subshell state outside runtime-event ingress.
+    pub(super) fn queue_shell_lifecycle_timer_side_effects(&mut self) -> Result<usize> {
+        let mut side_effects = self.cancel_stale_shell_transaction_timer_side_effects();
+        side_effects.extend(self.shell_transaction_timer_side_effects());
+        side_effects.extend(self.idle_cleanup_timer_side_effects());
+        let queued = side_effects.len();
+        self.queue_runtime_side_effects(side_effects)?;
+        Ok(queued)
+    }
+
     /// Runs the ensure client render timers operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -129,6 +129,7 @@ impl AsyncRuntimeSessionActor {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_pending_provider_dispatch_side_effects()?;
+                        self.queue_shell_lifecycle_timer_side_effects()?;
                         Ok(AsyncControlInputResult {
                             output,
                             consumed,
@@ -237,6 +238,7 @@ impl AsyncRuntimeSessionActor {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_pending_provider_dispatch_side_effects()?;
+                        self.queue_shell_lifecycle_timer_side_effects()?;
                         Ok(consumed)
                     });
                 match result {
@@ -412,6 +414,7 @@ impl AsyncRuntimeSessionActor {
                         self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
+                        self.queue_shell_lifecycle_timer_side_effects()?;
                         for mut refresh in self
                             .service
                             .take_pending_agent_prompt_provider_info_refreshes()
@@ -475,6 +478,7 @@ impl AsyncRuntimeSessionActor {
                     .and_then(|output| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_command_pane_pipe_health_timer_side_effects()?;
+                        self.queue_shell_lifecycle_timer_side_effects()?;
                         Ok(output)
                     });
                 let should_notify = result.is_ok();
@@ -589,7 +593,7 @@ impl AsyncRuntimeSessionActor {
                     .await
                     .and_then(|output| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
-                        self.queue_shell_transaction_timer_side_effects()?;
+                        self.queue_shell_lifecycle_timer_side_effects()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
                         Ok(output)
                     });
@@ -617,7 +621,7 @@ impl AsyncRuntimeSessionActor {
                     })
                     .and_then(|output| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
-                        self.queue_shell_transaction_timer_side_effects()?;
+                        self.queue_shell_lifecycle_timer_side_effects()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
                         Ok(output)
                     });

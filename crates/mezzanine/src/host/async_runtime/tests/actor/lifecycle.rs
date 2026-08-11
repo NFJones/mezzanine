@@ -1280,6 +1280,65 @@ async fn async_actor_renders_delayed_unintegrated_restored_output() {
     assert!(exit.service.terminate_all_pane_processes().is_ok());
 }
 
+/// Verifies that an attached agent-shell exit schedules autonomous cleanup for
+/// the gated parent-shell return. Without this timer, a markerless parent can
+/// remain hidden until unrelated terminal input wakes another runtime event,
+/// leaving rapid re-entry to race the unsettled shell interaction epoch.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_agent_shell_exit_schedules_parent_return_cleanup() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.enter_agent_subshell("%1");
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let application = handle
+            .apply_attached_terminal_step_plan(
+                primary,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ExecuteMux(
+                        MuxAction::ToggleAgentShell,
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(application.mux_actions_applied, 1);
+
+        let timers = handle.drain_timer_side_effects(8).await.unwrap();
+        assert!(
+            timers.iter().any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::ScheduleTimer { key, delay_ms }
+                    if key.kind == RuntimeTimerKind::IdleCleanup && *delay_ms > 0
+            )),
+            "agent-shell exit must schedule parent-return cleanup: {timers:?}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert!(exit.service.agent_subshell_parent_return_is_pending("%1"));
+    assert!(exit.service.terminate_all_pane_processes().is_ok());
+}
+
 /// Verifies async actor rejects requests after shutdown.
 ///
 /// This regression scenario documents the behavior being protected so a
