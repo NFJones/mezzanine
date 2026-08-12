@@ -800,6 +800,29 @@ fn capability_probe_is_deterministic_and_environment_bound() {
     );
 }
 
+/// Capability probes use a fixed POSIX interpreter even when the pane's
+/// workload shell is Fish, while retaining that workload shell in probe
+/// identity so capabilities cannot alias across child interpreters.
+#[test]
+fn capability_probe_uses_posix_sh_for_fish_workload_shell() {
+    let config = config();
+    let fish_plan = bubblewrap_capability_probe_plan(&config, "/usr/bin/fish").unwrap();
+    let posix_plan = bubblewrap_capability_probe_plan(&config, "/bin/sh").unwrap();
+
+    assert_eq!(
+        fish_plan.arguments[fish_plan.arguments.len() - 3],
+        "/bin/sh"
+    );
+    assert_eq!(fish_plan.arguments[fish_plan.arguments.len() - 2], "-c");
+    assert!(
+        fish_plan
+            .arguments
+            .last()
+            .is_some_and(|script| script.contains("mez-bubblewrap-capability-v6"))
+    );
+    assert_ne!(fish_plan.probe_sha256, posix_plan.probe_sha256);
+}
+
 /// Complete effects never widen maximum authority, even when path evidence is
 /// otherwise trusted and canonical.
 #[test]

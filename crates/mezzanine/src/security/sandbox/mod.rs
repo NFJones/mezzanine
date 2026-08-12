@@ -478,6 +478,7 @@ pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
     let sandbox_home = sandbox_home_path(&identity.user_name);
     let executable_path = sandbox_command_path(environment_evidence);
     let expected_stdout = "mez-bubblewrap-capability-v6";
+    let probe_shell_path = "/bin/sh";
     let probe_script = format!(
         "test ! -e /etc/passwd && test \"$(id -u)\" = '{user_id}' && test \"$(id -g)\" = '{group_id}' && test -r /proc/self/status && test -c /dev/null && test -w /tmp && test -w \"$HOME\" && test -z \"${{SSH_AUTH_SOCK+x}}\" && printf '%s' '{expected_stdout}'"
     );
@@ -532,17 +533,19 @@ pub(crate) fn bubblewrap_capability_probe_plan_for_identity(
         "TMPDIR",
         "/tmp",
         "--",
-        child_shell_path,
+        probe_shell_path,
         "-c",
         probe_script.as_str(),
     ]
     .into_iter()
     .map(str::to_string)
     .collect::<Vec<_>>();
+    let mut probe_identity_arguments = bubblewrap_arguments.clone();
+    probe_identity_arguments.push(child_shell_path.to_string());
     let probe_sha256 = argument_plan_sha256(
-        b"mez-bubblewrap-capability-probe-v3\0",
+        b"mez-bubblewrap-capability-probe-v4\0",
         &config.executable,
-        &bubblewrap_arguments,
+        &probe_identity_arguments,
     );
     Ok(BubblewrapCapabilityProbePlan {
         executable: config.executable.clone(),

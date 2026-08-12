@@ -35,6 +35,37 @@ fn path_resolution_environment(working_directory: &Path) -> mez_agent::Environme
     .unwrap()
 }
 
+/// Builds a Fish pane identity for Bubblewrap probe interpreter regressions.
+fn path_resolution_fish_environment(working_directory: &Path) -> mez_agent::EnvironmentSignature {
+    mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "test-host",
+        "test-user",
+        None,
+        "/usr/bin/fish",
+        mez_agent::ShellClassification::Fish,
+        None,
+        Some("/usr/bin:/bin".to_string()),
+        working_directory.to_string_lossy(),
+        None,
+        false,
+        None,
+        Vec::new(),
+    )
+    .unwrap()
+    .with_process_identity(
+        1000,
+        1000,
+        vec![mez_agent::EnvironmentGroup {
+            id: 1000,
+            name: "test-user".to_string(),
+        }],
+    )
+    .unwrap()
+}
+
 /// Builds a running turn identity for action-specific path-resolution tests.
 fn path_resolution_turn() -> mez_agent::AgentTurnRecord {
     mez_agent::AgentTurnRecord {
@@ -2194,6 +2225,60 @@ fn runtime_bubblewrap_successful_probe_is_cached() {
                 RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
             ))
     );
+}
+
+/// Verifies a Fish pane runs the fixed internal capability script under POSIX
+/// sh and accepts the exact sentinel without changing Fish pane identity.
+#[test]
+fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
+    let root = temp_root("runtime-bubblewrap-fish-probe");
+    fs::create_dir_all(&root).unwrap();
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    configure_path_resolution_bubblewrap(&mut service);
+    service.set_pane_environment_signature_for_tests("%1", path_resolution_fish_environment(&root));
+    mark_test_pane_ready(&mut service, "%1");
+
+    let turn = path_resolution_turn();
+    assert!(
+        !service
+            .ensure_bubblewrap_capability_for_action(&turn, "fish-action-1")
+            .unwrap()
+    );
+    let (marker, mut transaction) = take_bubblewrap_probe_transaction(&mut service);
+    let RunningShellTransactionKind::BubblewrapCapabilityProbe { probe_plan, .. } =
+        &transaction.kind
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        probe_plan.arguments[probe_plan.arguments.len() - 3],
+        "/bin/sh"
+    );
+    transaction.observed_output_preview = "mez-bubblewrap-capability-v6".to_string();
+    service
+        .observe_bubblewrap_capability_probe_transaction_end(&marker, transaction, 0)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .pane_environment_signature("%1")
+            .map(|signature| signature.shell_path.as_str()),
+        Some("/usr/bin/fish")
+    );
+    assert!(
+        service
+            .ensure_bubblewrap_capability_for_action(&turn, "fish-action-2")
+            .unwrap()
+    );
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Verifies a non-zero capability probe retains the real child status and a
