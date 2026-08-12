@@ -193,6 +193,57 @@ fn render_window_completion_attention_respects_flashing_preference() {
     assert_eq!(flashing_disabled.2, Some(flashing_disabled.3));
 }
 
+/// Verifies approval attention uses its own semantic theme color rather than
+/// the completion-attention color while preserving pill text and geometry.
+#[test]
+fn render_window_approval_attention_uses_distinct_semantic_color() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "work", Size::new(40, 3).unwrap());
+    let config = TerminalClientLoopConfig {
+        frame_context: TerminalFrameContext {
+            animation_tick_ms: 0,
+            approval_attention_windows: std::collections::BTreeSet::from([window.id.to_string()]),
+            windows: vec![TerminalWindowFrameContext {
+                id: window.id.to_string(),
+                index: 0,
+                title: "work".to_string(),
+                active: true,
+                subagent: false,
+                completion_attention: false,
+            }],
+            ..TerminalFrameContext::default()
+        },
+        window_frames_enabled: true,
+        window_frame_template: DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
+        pane_frames_enabled: false,
+        ..TerminalClientLoopConfig::default()
+    };
+    let view = render_attached_client_view(
+        ClientViewRole::Primary,
+        &window,
+        &BTreeMap::new(),
+        &config,
+        window.size,
+    )
+    .unwrap()
+    .unwrap();
+    let title_span = view.line_style_spans[2]
+        .iter()
+        .rev()
+        .find(|span| span.start == 0 && span.length > 0)
+        .unwrap();
+
+    assert_eq!(view.lines[2].trim_end(), " 0 work");
+    assert_eq!(
+        title_span.rendition.background,
+        Some(config.ui_theme.colors.agent_approval_attention.background)
+    );
+    assert_ne!(
+        config.ui_theme.colors.agent_approval_attention,
+        config.ui_theme.colors.agent_status_blocked
+    );
+}
+
 /// Verifies that the window status bar renders single-cell action pills
 /// with mouse-addressable geometry, a distinct pressed style, and a trailing
 /// safety column. This protects the templated controls as clickable terminal

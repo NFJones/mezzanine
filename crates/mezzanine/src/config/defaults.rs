@@ -98,7 +98,7 @@ fn retain_named_tables(
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 59
+version = 60
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -237,6 +237,8 @@ agent_status_running_fg = "primary_text"
 agent_status_running_bg = "primary"
 agent_status_blocked_fg = "tertiary_text"
 agent_status_blocked_bg = "tertiary"
+agent_approval_attention_fg = "danger_text"
+agent_approval_attention_bg = "danger"
 agent_status_failed_fg = "danger_text"
 agent_status_failed_bg = "danger"
 display_overlay_fg = "secondary_foreground"

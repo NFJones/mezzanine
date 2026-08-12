@@ -276,6 +276,79 @@ fn runtime_background_completion_attention_projects_and_acknowledges_on_focus() 
     );
 }
 
+/// Verifies pending approvals project attention through the visible pane,
+/// window, and group title hierarchy and disappear after a decision.
+///
+/// Approval attention is derived from the live pending queue rather than turn
+/// completion state, so resolving the request must clear every projected pill.
+#[test]
+fn runtime_pending_approval_attention_projects_and_clears_on_decision() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let approval_pane = service.active_pane_id().unwrap();
+    service
+        .session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let approval_id = service
+        .queue_blocked_approval(BlockedApprovalRequest {
+            id: String::new(),
+            requesting_agent_id: format!("agent-{approval_pane}"),
+            pane_id: approval_pane.clone(),
+            parent_agent_chain: vec![format!("agent-{approval_pane}")],
+            action_kind: "shell_command".to_string(),
+            action_summary: "cargo test".to_string(),
+            declared_effects: vec!["process_control".to_string()],
+            matched_rules: vec!["default.prompt".to_string()],
+            read_scopes: Vec::new(),
+            write_scopes: Vec::new(),
+            cooperation_mode: None,
+            created_at_unix_seconds: None,
+            decided_at_unix_seconds: None,
+            decided_by_client_id: None,
+            state: mez_agent::permissions::BlockedApprovalState::Pending,
+            decision: None,
+            redirect_instruction: None,
+        })
+        .unwrap();
+
+    let pane_context = service.terminal_frame_context();
+    assert!(
+        pane_context
+            .approval_attention_panes
+            .contains(&approval_pane)
+    );
+    assert!(pane_context.animation_tick_ms > 0);
+
+    service.set_frame_visibility_for_tests(true, false);
+    let window_context = service.terminal_frame_context();
+    assert!(window_context.approval_attention_panes.is_empty());
+    assert_eq!(window_context.approval_attention_windows.len(), 1);
+
+    service.session.new_group(&primary, "other", true).unwrap();
+    let group_context = service.terminal_frame_context();
+    assert!(group_context.approval_attention_windows.is_empty());
+    assert_eq!(group_context.approval_attention_groups.len(), 1);
+
+    service
+        .integration
+        .blocked_approvals_mut()
+        .decide_at(
+            &approval_id,
+            mez_agent::permissions::ApprovalDecision::Approve,
+            None,
+            10,
+        )
+        .unwrap();
+    let decided_context = service.terminal_frame_context();
+    assert!(decided_context.approval_attention_panes.is_empty());
+    assert!(decided_context.approval_attention_windows.is_empty());
+    assert!(decided_context.approval_attention_groups.is_empty());
+    service.kill_session(&primary, true).unwrap();
+}
+
 /// Verifies a background subagent completion does not flash a pane title pill.
 ///
 /// Child turns report their result through their parent action, so highlighting

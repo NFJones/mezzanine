@@ -212,12 +212,16 @@ pub(in crate::host::terminal::render) fn write_styled_merged_pane_frames_on_divi
                     .panes
                     .get(pane.id.as_str())
                     .is_some_and(|context| context.completion_attention);
+                let approval_attention = frame_context
+                    .approval_attention_panes
+                    .contains(pane.id.as_str());
                 spans.push(TerminalStyleSpan {
                     start: placement.column_start,
                     length: layout.left_text_width,
                     rendition: pane_frame_rendition(
                         pane,
                         completion_attention,
+                        approval_attention,
                         frame_context,
                         pane_frame.style,
                         ui_theme,

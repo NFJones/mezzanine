@@ -67,6 +67,12 @@ pub struct TerminalFrameContext {
     pub reduced_motion: bool,
     /// Whether completion-attention title pills use their stable attention color.
     pub completion_attention_static: bool,
+    /// Pane title pills whose agent actions are waiting for approval.
+    pub approval_attention_panes: std::collections::BTreeSet<String>,
+    /// Window title pills whose pane agents are waiting for approval.
+    pub approval_attention_windows: std::collections::BTreeSet<String>,
+    /// Group title pills whose pane agents are waiting for approval.
+    pub approval_attention_groups: std::collections::BTreeSet<String>,
     /// Right-side status fields rendered into the active pane frame.
     pub window_status: Option<TerminalWindowStatusContext>,
     /// Per-pane runtime metadata keyed by stable pane id.

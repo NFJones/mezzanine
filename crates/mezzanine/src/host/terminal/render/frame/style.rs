@@ -57,6 +57,7 @@ pub(in crate::host::terminal::render) fn styled_group_frame_line(
                         segment.active,
                         segment.subagent,
                         segment.completion_attention,
+                        segment.approval_attention,
                         frame_context,
                         frame_style,
                         ui_theme,
@@ -136,6 +137,7 @@ pub(in crate::host::terminal::render) fn styled_window_pillbox_line(
                         segment.active,
                         segment.subagent,
                         segment.completion_attention,
+                        segment.approval_attention,
                         frame_context,
                         frame_style,
                         ui_theme,
@@ -152,6 +154,7 @@ pub(in crate::host::terminal::render) fn styled_window_pillbox_line(
                         WindowStatusSegmentKind::Action { pressed, .. } => {
                             window_pillbox_rendition(
                                 *pressed,
+                                false,
                                 false,
                                 false,
                                 frame_context,
@@ -188,16 +191,24 @@ pub(in crate::host::terminal::render) fn window_pillbox_rendition(
     active: bool,
     subagent: bool,
     completion_attention: bool,
+    approval_attention: bool,
     frame_context: &TerminalFrameContext,
     frame_style: TerminalFrameStyle,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
-    let attention_on = completion_attention
+    let flash_on = frame_context.reduced_motion
+        || frame_context.completion_attention_static
+        || (frame_context.animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS)
+            .is_multiple_of(2);
+    let approval_attention_on = approval_attention && flash_on;
+    let completion_attention_on = completion_attention
         && (frame_context.reduced_motion
             || frame_context.completion_attention_static
             || (frame_context.animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS)
                 .is_multiple_of(2));
-    let pair = if attention_on {
+    let pair = if approval_attention_on {
+        ui_theme.colors.agent_approval_attention
+    } else if completion_attention_on {
         ui_theme.colors.agent_status_blocked
     } else if active {
         ui_theme.colors.window_active
@@ -232,9 +243,13 @@ pub(in crate::host::terminal::render) fn styled_pane_frame_line(
         .panes
         .get(pane.id.as_str())
         .is_some_and(|context| context.completion_attention);
+    let approval_attention = frame_context
+        .approval_attention_panes
+        .contains(pane.id.as_str());
     let rendition = pane_frame_rendition(
         pane,
         completion_attention,
+        approval_attention,
         frame_context,
         frame_style,
         ui_theme,
@@ -536,16 +551,18 @@ pub(in crate::host::terminal::render) fn subtle_frame_fill_span(
 pub(in crate::host::terminal::render) fn pane_frame_rendition(
     pane: &mez_mux::layout::Pane,
     completion_attention: bool,
+    approval_attention: bool,
     frame_context: &TerminalFrameContext,
     frame_style: TerminalFrameStyle,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
-    let attention_on = completion_attention
-        && (frame_context.reduced_motion
-            || frame_context.completion_attention_static
-            || (frame_context.animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS)
-                .is_multiple_of(2));
-    let pair = if attention_on {
+    let flash_on = frame_context.reduced_motion
+        || frame_context.completion_attention_static
+        || (frame_context.animation_tick_ms / AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS)
+            .is_multiple_of(2);
+    let pair = if approval_attention && flash_on {
+        ui_theme.colors.agent_approval_attention
+    } else if completion_attention && flash_on {
         ui_theme.colors.agent_status_blocked
     } else if pane.active {
         ui_theme.colors.pane_frame_active

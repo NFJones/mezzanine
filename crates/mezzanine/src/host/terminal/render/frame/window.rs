@@ -309,6 +309,7 @@ pub(in crate::host::terminal::render) fn window_status_style_spans(
                     *pressed,
                     false,
                     false,
+                    false,
                     frame_context,
                     TerminalFrameStyle::Default,
                     ui_theme,

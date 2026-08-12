@@ -1828,6 +1828,44 @@ fn migrates_schema_58_maximum_input_limit_without_backfill() {
     }
 }
 
+/// Verifies schema v60 adds the approval-attention theme pair in every
+/// supported primary configuration format without changing unrelated colors.
+#[test]
+fn migrates_schema_59_with_approval_attention_colors() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 59\n[theme.colors]\nagent_status_blocked_bg = \"tertiary\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":59,"theme":{"colors":{"agent_status_blocked_bg":"tertiary"}}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 59\ntheme:\n  colors:\n    agent_status_blocked_bg: tertiary\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 59);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            values.get("theme.colors.agent_approval_attention_fg"),
+            Some(&"danger_text".to_string())
+        );
+        assert_eq!(
+            values.get("theme.colors.agent_approval_attention_bg"),
+            Some(&"danger".to_string())
+        );
+        assert_eq!(
+            values.get("theme.colors.agent_status_blocked_bg"),
+            Some(&"tertiary".to_string())
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

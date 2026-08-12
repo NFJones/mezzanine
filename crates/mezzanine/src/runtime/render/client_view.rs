@@ -1051,6 +1051,7 @@ impl RuntimeSessionService {
         if self.presentation.settings.terminal_reduced_motion
             || (!self.active_window_has_agent_animation()
                 && (!self.has_visible_completion_attention()
+                    && self.blocked_approvals().pending().is_empty()
                     || !self
                         .presentation
                         .settings
@@ -1239,6 +1240,44 @@ impl RuntimeSessionService {
                 attention_windows.insert(window.id.to_string());
             } else if group_title_attention {
                 attention_groups.insert(group.id.to_string());
+            }
+        }
+
+        let pending_approval_panes = self
+            .blocked_approvals()
+            .pending()
+            .into_iter()
+            .map(|approval| approval.pane_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for pane_id in pending_approval_panes {
+            let Some(window) = self.session.windows().iter().find(|window| {
+                window
+                    .panes()
+                    .iter()
+                    .any(|pane| pane.id.as_str() == pane_id)
+            }) else {
+                continue;
+            };
+            let Some(group) = self
+                .session
+                .window_groups()
+                .iter()
+                .find(|group| group.window_ids.contains(&window.id))
+            else {
+                continue;
+            };
+            if pane_title_attention && active_window_id.as_deref() == Some(window.id.as_str()) {
+                context.approval_attention_panes.insert(pane_id);
+            } else if window_title_attention
+                && active_group_id.as_deref() == Some(group.id.as_str())
+            {
+                context
+                    .approval_attention_windows
+                    .insert(window.id.to_string());
+            } else if group_title_attention {
+                context
+                    .approval_attention_groups
+                    .insert(group.id.to_string());
             }
         }
 

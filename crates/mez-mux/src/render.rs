@@ -557,6 +557,8 @@ pub struct FramePillboxEntry<K> {
     pub subagent: bool,
     /// Whether the pill requests transient completion attention.
     pub completion_attention: bool,
+    /// Whether the pill requests transient approval attention.
+    pub approval_attention: bool,
 }
 
 /// Display-column placement of one rendered frame pill.
@@ -574,6 +576,8 @@ pub struct FramePillboxSegment<K> {
     pub subagent: bool,
     /// Whether the pill requests transient completion attention.
     pub completion_attention: bool,
+    /// Whether the pill requests transient approval attention.
+    pub approval_attention: bool,
 }
 
 /// Joins frame pills with one separating terminal cell.
@@ -603,6 +607,7 @@ pub fn render_frame_pillbox_segments<K: Clone>(
             active: entry.active,
             subagent: entry.subagent,
             completion_attention: entry.completion_attention,
+            approval_attention: entry.approval_attention,
         });
         start = start.saturating_add(width);
     }
@@ -1371,6 +1376,7 @@ mod tests {
             active: true,
             subagent: false,
             completion_attention: false,
+            approval_attention: false,
         }];
         let pill_cells = frame_pillbox_hit_cells(&render_frame_pillbox_segments(&entries), 3, 4);
         let status = position_frame_status(
@@ -1580,6 +1586,7 @@ mod tests {
                 active: true,
                 subagent: false,
                 completion_attention: false,
+                approval_attention: false,
             },
             FramePillboxEntry {
                 target: "second",
@@ -1587,6 +1594,7 @@ mod tests {
                 active: false,
                 subagent: true,
                 completion_attention: false,
+                approval_attention: false,
             },
         ];
         let segments = render_frame_pillbox_segments(&entries);
@@ -1613,6 +1621,7 @@ mod tests {
             active: true,
             subagent: false,
             completion_attention: false,
+            approval_attention: false,
         }];
         let status = render_frame_status(&[FrameStatusValue {
             key: "status",

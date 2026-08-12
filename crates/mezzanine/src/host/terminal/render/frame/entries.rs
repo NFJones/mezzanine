@@ -85,6 +85,7 @@ pub(in crate::host::terminal::render) fn window_frame_action_entry(
         active,
         subagent: false,
         completion_attention: false,
+        approval_attention: false,
     }
 }
 
@@ -95,6 +96,7 @@ fn window_frame_entry(window: &TerminalWindowFrameContext) -> WindowFramePillbox
         active: window.active,
         subagent: window.subagent,
         completion_attention: window.completion_attention,
+        approval_attention: false,
     }
 }
 
@@ -105,6 +107,7 @@ fn window_group_frame_entry(group: &TerminalWindowGroupFrameContext) -> WindowFr
         active: group.active,
         subagent: false,
         completion_attention: group.completion_attention,
+        approval_attention: false,
     }
 }
 
@@ -128,12 +131,19 @@ pub(in crate::host::terminal::render) fn window_frame_pillbox_entries(
             active: true,
             subagent: false,
             completion_attention: false,
+            approval_attention: false,
         }];
     }
     frame_context
         .windows
         .iter()
-        .map(window_frame_entry)
+        .map(|window| {
+            let mut entry = window_frame_entry(window);
+            entry.approval_attention = frame_context
+                .approval_attention_windows
+                .contains(window.id.as_str());
+            entry
+        })
         .collect()
 }
 
@@ -144,7 +154,13 @@ pub(in crate::host::terminal::render) fn window_frame_pillbox_entries_from_conte
     frame_context
         .windows
         .iter()
-        .map(window_frame_entry)
+        .map(|window| {
+            let mut entry = window_frame_entry(window);
+            entry.approval_attention = frame_context
+                .approval_attention_windows
+                .contains(window.id.as_str());
+            entry
+        })
         .collect()
 }
 
@@ -165,7 +181,13 @@ pub(in crate::host::terminal::render) fn group_frame_pillbox_entries(
     frame_context
         .groups
         .iter()
-        .map(window_group_frame_entry)
+        .map(|group| {
+            let mut entry = window_group_frame_entry(group);
+            entry.approval_attention = frame_context
+                .approval_attention_groups
+                .contains(group.id.as_str());
+            entry
+        })
         .collect()
 }
 
