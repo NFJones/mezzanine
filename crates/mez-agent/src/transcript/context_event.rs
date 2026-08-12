@@ -16,6 +16,8 @@ pub const TRANSCRIPT_CONTEXT_EVENT_MARKER: &str = "[mez-transcript-context-event
 const TRANSCRIPT_CONTEXT_EVENT_VERSION: &str = "mez-transcript-context-event/v1";
 /// Event kind for a summarized routed-worker handoff.
 const ROUTED_HANDOFF_KIND: &str = "routed_handoff";
+/// Event kind for a user turn stopped before normal completion.
+const INTERRUPTED_TURN_KIND: &str = "interrupted_turn";
 
 /// Provider-independent context that is durable across conversation turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +26,15 @@ pub enum TranscriptContextEvent {
     RoutedHandoff {
         /// Serialized summarized handoff content.
         content: String,
+    },
+    /// Original intent and settled observations retained when a turn stops.
+    InterruptedTurn {
+        /// Original user prompt for the stopped turn.
+        prompt: String,
+        /// Runtime reason for the interruption.
+        reason: String,
+        /// Safely serializable action observations available at interruption.
+        evidence: Vec<String>,
     },
 }
 
@@ -35,6 +46,17 @@ impl TranscriptContextEvent {
                 "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
                 "kind": ROUTED_HANDOFF_KIND,
                 "content": content,
+            }),
+            Self::InterruptedTurn {
+                prompt,
+                reason,
+                evidence,
+            } => serde_json::json!({
+                "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
+                "kind": INTERRUPTED_TURN_KIND,
+                "prompt": prompt,
+                "reason": reason,
+                "evidence": evidence,
             }),
         };
         format!(
@@ -66,6 +88,24 @@ impl TranscriptContextEvent {
                     content: content.to_string(),
                 })
             }
+            INTERRUPTED_TURN_KIND => {
+                let prompt = value.get("prompt")?.as_str()?.trim();
+                let reason = value.get("reason")?.as_str()?.trim();
+                if prompt.is_empty() || reason.is_empty() {
+                    return None;
+                }
+                let evidence = value
+                    .get("evidence")?
+                    .as_array()?
+                    .iter()
+                    .map(|entry| entry.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Self::InterruptedTurn {
+                    prompt: prompt.to_string(),
+                    reason: reason.to_string(),
+                    evidence,
+                })
+            }
             _ => None,
         }
     }
@@ -86,6 +126,24 @@ mod tests {
         let encoded = event.to_transcript_content();
 
         assert!(encoded.starts_with(TRANSCRIPT_CONTEXT_EVENT_MARKER));
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&encoded),
+            Some(event)
+        );
+    }
+
+    /// Verifies an interrupted turn retains its original intent and only the
+    /// caller-provided safe action observations for subsequent continuation.
+    #[test]
+    fn interrupted_turn_transcript_context_event_round_trips() {
+        let event = TranscriptContextEvent::InterruptedTurn {
+            prompt: "repair the interrupted task".to_string(),
+            reason: "agent turn stopped".to_string(),
+            evidence: vec!["action_id=read-1 type=shell_command status=running".to_string()],
+        };
+
+        let encoded = event.to_transcript_content();
+
         assert_eq!(
             TranscriptContextEvent::from_transcript_content(&encoded),
             Some(event)

@@ -143,6 +143,9 @@ impl RuntimeSessionService {
             self.presentation
                 .register_completion_attention(pane_id, focused_pane_id.as_deref());
         }
+        if state == AgentTurnState::Interrupted {
+            self.persist_interrupted_agent_turn_transcript(&turn, "agent turn stopped")?;
+        }
         self.append_agent_trace_turn_transition(&turn, previous_state, state, "finish_agent_turn")?;
         self.clear_terminal_agent_turn_runtime_state(turn_id);
         let finished = self
@@ -274,6 +277,9 @@ impl RuntimeSessionService {
             state,
             "finish_agent_turn_without_shell_session",
         )?;
+        if state == AgentTurnState::Interrupted {
+            self.persist_interrupted_agent_turn_transcript(turn, "agent turn stopped")?;
+        }
         self.clear_terminal_agent_turn_runtime_state(&turn.turn_id);
         let session = if pane_present {
             Some(

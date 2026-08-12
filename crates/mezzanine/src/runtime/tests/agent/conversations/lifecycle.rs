@@ -682,3 +682,77 @@ fn runtime_agent_shell_status_pane_tokens_survive_conversation_switch() {
         "{response}"
     );
 }
+
+/// Verifies stopping an active turn durably records its prompt before cleanup,
+/// so a later continuation sees the interrupted task rather than only older
+/// completed conversation history.
+#[test]
+fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-interrupted-turn"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+
+    let interrupted = service
+        .start_agent_prompt_turn("%1", "repair the interrupted defect")
+        .unwrap();
+    service.stop_agent_turn_for_pane("%1").unwrap();
+
+    let entries = transcript_store.inspect(&conversation_id).unwrap();
+    assert_eq!(entries.len(), 1, "{entries:#?}");
+    assert_eq!(entries[0].role, TranscriptRole::System);
+    assert_eq!(entries[0].turn_id, interrupted.turn_id);
+    assert!(
+        entries[0].content.contains("interrupted_turn"),
+        "{entries:#?}"
+    );
+    assert!(entries[0].content.contains("repair the interrupted defect"));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == interrupted.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Interrupted)
+    );
+
+    let continuation = service.start_agent_prompt_turn("%1", "Continue").unwrap();
+    let context = service
+        .agent_turn_contexts()
+        .get(&continuation.turn_id)
+        .unwrap();
+    let interrupted_context = context
+        .blocks()
+        .iter()
+        .find(|block| block.label == "interrupted turn context")
+        .unwrap();
+    assert_eq!(interrupted_context.source, ContextSourceKind::RuntimeHint);
+    assert!(
+        interrupted_context
+            .content
+            .contains("repair the interrupted defect"),
+        "{}",
+        interrupted_context.content
+    );
+    assert!(
+        interrupted_context
+            .content
+            .contains("must not be resumed as active execution"),
+        "{}",
+        interrupted_context.content
+    );
+    service.terminate_all_pane_processes().unwrap();
+}

@@ -32,6 +32,28 @@ pub(super) fn runtime_agent_transcript_context_blocks(
             });
             continue;
         }
+        if entry.role == TranscriptRole::System
+            && let Some(TranscriptContextEvent::InterruptedTurn {
+                prompt,
+                reason,
+                evidence,
+            }) = TranscriptContextEvent::from_transcript_content(&entry.content)
+        {
+            let evidence = if evidence.is_empty() {
+                "no action result was available when the turn stopped".to_string()
+            } else {
+                evidence.join("\n")
+            };
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::RuntimeHint,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "interrupted turn context".to_string(),
+                content: format!(
+                    "The prior turn was interrupted and must not be resumed as active execution. Its original user intent was:\n{prompt}\n\nreason={reason}\nobserved action state:\n{evidence}"
+                ),
+            });
+            continue;
+        }
         let Some(content) = runtime_transcript_entry_context_content(entry) else {
             continue;
         };

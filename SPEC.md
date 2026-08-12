@@ -1789,7 +1789,11 @@ When no pane-local agent task is active, `Ctrl+C` MUST require a second
 `Ctrl+C` within three seconds before hiding the prompt. The first `Ctrl+C` MUST
 leave the prompt visible and display a pane-local status message that explains
 the confirmation requirement. While a pane-local agent task is active,
-`Ctrl+C` MUST still request interruption immediately.
+`Ctrl+C` MUST still request interruption immediately. Before an active turn is
+cleared after interruption, Mezzanine MUST durably retain its original user
+prompt, interruption reason, and safely serializable action observations for
+later conversation context. A subsequent `Continue` MUST receive that
+interrupted-task context, but MUST NOT resume cancelled execution.
 
 Using the agent shell toggle while the agent shell is visible MUST request
 `/stop` for any in-progress pane-local agent task before hiding the prompt and

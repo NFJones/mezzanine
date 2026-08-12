@@ -114,6 +114,125 @@ impl RuntimeSessionService {
         Ok(entries.len())
     }
 
+    /// Persists the originating prompt and available settled observations when
+    /// an active turn is interrupted before it can produce terminal execution.
+    pub(crate) fn persist_interrupted_agent_turn_transcript(
+        &mut self,
+        turn: &AgentTurnRecord,
+        reason: &str,
+    ) -> Result<usize> {
+        let Some((session_conversation_id, session_ephemeral)) = self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .map(|session| (session.session_id.clone(), session.ephemeral))
+        else {
+            return Ok(0);
+        };
+        if session_conversation_id != turn.conversation_id || session_ephemeral {
+            return Ok(0);
+        }
+        let Some(store) = self.persistence.cloned_transcript_store() else {
+            return Ok(0);
+        };
+        let persistence_key = (
+            turn.conversation_id.clone(),
+            format!("interrupted:{}", turn.turn_id),
+        );
+        if self
+            .agent
+            .agent_persisted_execution_transcripts
+            .contains(&persistence_key)
+        {
+            return Ok(0);
+        }
+        let Some(prompt) = self
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .and_then(|context| {
+                context.blocks().iter().rev().find_map(|block| {
+                    (block.source == ContextSourceKind::UserInstruction
+                        && block.label == "user prompt"
+                        && !block.content.trim().is_empty())
+                    .then(|| block.content.trim().to_string())
+                })
+            })
+        else {
+            return Ok(0);
+        };
+        let evidence = self
+            .agent_turn_executions()
+            .get(&turn.turn_id)
+            .map(|execution| {
+                execution
+                    .action_results
+                    .iter()
+                    .map(|result| {
+                        format!(
+                            "action_id={} type={} status={}",
+                            result.action_id,
+                            result.action_type,
+                            runtime_action_status_name(result.status),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let created_at_unix_seconds = current_unix_seconds().max(1);
+        let first_sequence = if self.persistence.transcript_uses_adapter() {
+            self.persistence
+                .deferred_transcript_next_sequence(&turn.conversation_id)
+                .map(Ok)
+                .unwrap_or_else(|| next_transcript_sequence(&store, &turn.conversation_id))?
+        } else {
+            next_transcript_sequence(&store, &turn.conversation_id)?
+        };
+        let entry = TranscriptEntry {
+            conversation_id: turn.conversation_id.clone(),
+            sequence: first_sequence,
+            created_at_unix_seconds,
+            role: TranscriptRole::System,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            pane_id: turn.pane_id.clone(),
+            content: TranscriptContextEvent::InterruptedTurn {
+                prompt,
+                reason: reason.to_string(),
+                evidence,
+            }
+            .to_transcript_content(),
+        };
+        entry.validate()?;
+        if self.persistence.transcript_uses_adapter() {
+            self.persistence.set_deferred_transcript_next_sequence(
+                turn.conversation_id.clone(),
+                first_sequence.saturating_add(1),
+            );
+            self.persistence
+                .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                    path: store.transcript_path(&turn.conversation_id)?,
+                    store,
+                    entries: vec![entry],
+                });
+        } else {
+            store.append_many(&[entry])?;
+        }
+        self.agent
+            .agent_persisted_execution_transcripts
+            .insert(persistence_key);
+        while self.agent.agent_persisted_execution_transcripts.len()
+            > RUNTIME_PERSISTED_EXECUTION_TRANSCRIPT_LIMIT
+        {
+            let _ = self.agent.agent_persisted_execution_transcripts.pop_first();
+        }
+        self.agent_shell_store_mut()
+            .record_transcript_entries(&turn.pane_id, 1)?;
+        self.record_pane_transcript_ref(
+            &turn.pane_id,
+            format!("transcript:{}:{}", turn.pane_id, turn.conversation_id),
+        )?;
+        Ok(1)
+    }
+
     /// Retains exact `apply_patch` payloads and observed outcomes for export.
     ///
     /// Durable transcript entries intentionally summarize patch actions so
