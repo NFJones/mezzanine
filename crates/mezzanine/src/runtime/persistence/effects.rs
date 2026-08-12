@@ -205,6 +205,24 @@ impl RuntimePersistenceComponent {
         self.queued_transcript_effects.push(effect);
     }
 
+    /// Returns queued transcript entries for one conversation without draining
+    /// the external persistence worker's ordered effect queue.
+    pub(crate) fn pending_transcript_entries(
+        &self,
+        conversation_id: &str,
+    ) -> Vec<mez_agent::transcript::TranscriptEntry> {
+        self.queued_transcript_effects
+            .iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => Some(entries),
+                _ => None,
+            })
+            .flatten()
+            .filter(|entry| entry.conversation_id == conversation_id)
+            .cloned()
+            .collect()
+    }
+
     /// Drains queued transcript and prompt-history effects.
     pub(crate) fn take_transcript_effects(&mut self) -> Vec<RuntimeSideEffect> {
         std::mem::take(&mut self.queued_transcript_effects)

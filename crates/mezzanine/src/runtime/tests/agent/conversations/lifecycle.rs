@@ -756,3 +756,64 @@ fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
     );
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Verifies immediate continuation context includes an interrupted prompt while
+/// adapter-owned transcript persistence is still queued.
+///
+/// Attached runtime commands can submit the next prompt before the persistence
+/// worker appends the interruption record, so history hydration must include
+/// canonical pending entries without treating cancelled work as completed.
+#[test]
+fn runtime_interrupted_turn_pending_transcript_is_visible_to_immediate_continuation() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-interrupted-turn-pending"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service.persistence.enable_transcript_adapter();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    service
+        .start_agent_prompt_turn("%1", "repair the interrupted deferred defect")
+        .unwrap();
+    service.stop_agent_turn_for_pane("%1").unwrap();
+
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    assert!(transcript_store.inspect(&conversation_id).is_err());
+
+    let continuation = service.start_agent_prompt_turn("%1", "Continue").unwrap();
+    let context = service
+        .agent_turn_contexts()
+        .get(&continuation.turn_id)
+        .unwrap();
+    let interrupted_context = context
+        .blocks()
+        .iter()
+        .find(|block| block.label == "interrupted turn context")
+        .unwrap();
+
+    assert!(
+        interrupted_context
+            .content
+            .contains("repair the interrupted deferred defect"),
+        "{}",
+        interrupted_context.content
+    );
+    assert!(
+        interrupted_context
+            .content
+            .contains("no action result was available when the turn stopped"),
+        "{}",
+        interrupted_context.content
+    );
+    service.terminate_all_pane_processes().unwrap();
+}

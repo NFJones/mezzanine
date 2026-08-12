@@ -405,20 +405,26 @@ impl RuntimeSessionService {
         if transcript_entries == 0 {
             return Ok(blocks);
         }
-        match store.inspect(transcript_conversation_id) {
-            Ok(mut entries) if !entries.is_empty() => {
-                if session.ephemeral {
-                    entries.retain(|entry| entry.sequence <= transcript_entries);
-                } else {
-                    let active_entries = usize::try_from(transcript_entries).unwrap_or(usize::MAX);
-                    let first_active = entries.len().saturating_sub(active_entries);
-                    entries.drain(..first_active);
-                }
-                blocks.extend(runtime_agent_transcript_context_blocks(pane_id, &entries));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
+        let mut entries = match store.inspect(transcript_conversation_id) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
             Err(error) => return Err(error),
+        };
+        entries.extend(
+            self.persistence
+                .pending_transcript_entries(transcript_conversation_id),
+        );
+        entries.sort_by_key(|entry| entry.sequence);
+        entries.dedup_by_key(|entry| entry.sequence);
+        if session.ephemeral {
+            entries.retain(|entry| entry.sequence <= transcript_entries);
+        } else {
+            let active_entries = usize::try_from(transcript_entries).unwrap_or(usize::MAX);
+            let first_active = entries.len().saturating_sub(active_entries);
+            entries.drain(..first_active);
+        }
+        if !entries.is_empty() {
+            blocks.extend(runtime_agent_transcript_context_blocks(pane_id, &entries));
         }
         Ok(blocks)
     }
