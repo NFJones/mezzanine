@@ -17,6 +17,79 @@ use crate::integrations::agent::provider::{ModelProvider, provider_error_retry_c
 use mez_agent::ProviderErrorRetryClass;
 
 impl RuntimeSessionService {
+    /// Completes queued context-limit compaction before a synchronous test
+    /// provider retries the original turn.
+    ///
+    /// Production provider workers dispatch compaction asynchronously and
+    /// resume through actor-owned completion events. These compatibility
+    /// helpers use the supplied test provider directly, but preserve the same
+    /// invariant: durable context must change before the rejected request is
+    /// rebuilt and sent again.
+    #[cfg(test)]
+    fn complete_synchronous_context_limit_compaction<P: ModelProvider>(
+        &mut self,
+        turn_id: &str,
+        provider: &P,
+    ) -> Result<()> {
+        let before = self
+            .agent_turn_contexts()
+            .get(turn_id)
+            .map(|context| context.blocks().to_vec())
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        loop {
+            let pane_id = self
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .find(|turn| turn.turn_id == turn_id)
+                .map(|turn| turn.pane_id.clone())
+                .ok_or_else(|| {
+                    MezError::invalid_state("compaction recovery turn is unavailable")
+                })?;
+            let task = self
+                .take_pending_agent_compaction_task(&pane_id)
+                .ok_or_else(|| {
+                    MezError::invalid_state("context-limit recovery queued no compaction task")
+                })?;
+            if task.resume_turn_id.as_deref() != Some(turn_id) {
+                return Err(MezError::invalid_state(
+                    "context-limit compaction does not resume the rejected turn",
+                ));
+            }
+            let request = task.request.clone();
+            self.claim_agent_compaction_task_state(&pane_id, task);
+            match provider.send_request(&request) {
+                Ok(response) => {
+                    self.apply_agent_compaction_completed_event(&pane_id, response)?;
+                }
+                Err(error) => {
+                    self.apply_agent_compaction_failed_event(
+                        &pane_id,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message(),
+                        error.provider_failure_json(),
+                    )?;
+                    return Err(error);
+                }
+            }
+            if !self.agent_is_compacting(&pane_id) {
+                break;
+            }
+        }
+        self.remove_pending_agent_provider_task(turn_id);
+        let after = self
+            .agent_turn_contexts()
+            .get(turn_id)
+            .map(|context| context.blocks())
+            .ok_or_else(|| MezError::invalid_state("compacted turn context is unavailable"))?;
+        if after == before.as_slice() {
+            return Err(MezError::invalid_state(
+                "context-limit compaction did not change durable context",
+            ));
+        }
+        Ok(())
+    }
+
     /// Applies provider output progress through the transport-neutral transition contract.
     pub(crate) fn apply_agent_provider_output_progress_transition(
         &mut self,
@@ -296,6 +369,7 @@ impl RuntimeSessionService {
                             &error,
                             context_limit_recovery_attempts,
                         )? {
+                            self.complete_synchronous_context_limit_compaction(turn_id, provider)?;
                             let durable = self
                                 .agent_turn_contexts()
                                 .get(turn_id)
@@ -610,6 +684,7 @@ impl RuntimeSessionService {
                             &error,
                             context_limit_recovery_attempts,
                         )? {
+                            self.complete_synchronous_context_limit_compaction(turn_id, provider)?;
                             let durable = self
                                 .agent_turn_contexts()
                                 .get(turn_id)
