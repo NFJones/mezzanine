@@ -338,6 +338,10 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
         start_marker < payload_receiver && payload_receiver < isolated_child,
         "{wrapper}"
     );
+    assert!(
+        wrapper[payload_receiver..isolated_child].contains("printf '\\n'"),
+        "ordinary Fish scripts need a line boundary after payload reception: {wrapper}"
+    );
     assert!(!wrapper.contains("'/opt/homebrew/bin/fish' -c"));
     assert!(!wrapper.contains("echo \\'hello fish\\'"));
     assert!(!wrapper.contains("echo 'hello fish'"));
@@ -1352,6 +1356,16 @@ fn typed_child_launch_quotes_arguments_without_shell_fragments() {
     assert!(
         fish.contains("'/usr/bin/sandbox helper' \\\n'--label'"),
         "{fish}"
+    );
+    let payload_receiver = fish
+        .find("while read -l MEZ_COMMAND_LINE")
+        .expect("typed Fish launch should receive its command payload");
+    let typed_child = fish
+        .find("'/usr/bin/sandbox helper'")
+        .expect("typed Fish launch should contain the resolved executable");
+    assert!(
+        !fish[payload_receiver..typed_child].contains("printf '\\n'"),
+        "typed Fish child output must begin without wrapper-added bytes: {fish}"
     );
     assert!(
         fish.contains(

@@ -118,6 +118,15 @@ impl RuntimeSessionService {
         let mut status_line_updates = Vec::new();
         for (marker, transaction) in self.process.running_shell_transactions.iter_mut() {
             if transaction.pane_id == pane_id {
+                // A managed-Bash inner end marker closes command output even
+                // though callback completion defers transaction settlement.
+                if self
+                    .process
+                    .shell_receiver_pending_ends
+                    .contains_key(marker)
+                {
+                    continue;
+                }
                 let acknowledged_bytes = if let Some(remaining) = self
                     .process
                     .shell_transaction_receiver_acknowledgements

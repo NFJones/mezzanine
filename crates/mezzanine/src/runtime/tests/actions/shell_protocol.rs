@@ -266,6 +266,55 @@ fn runtime_shell_transaction_capture_preserves_split_end_boundary() {
     );
 }
 
+/// Verifies a managed-Bash transaction permanently closes output capture at
+/// its inner end marker even though settlement waits for receiver completion.
+///
+/// Bash emits receiver completion after the evaluated wrapper returns, so the
+/// PTY may deliver that OSC in a later read. Those callback bytes are protocol
+/// traffic, not capability-probe output, and must not contaminate the exact
+/// newline-free sentinel retained from the already-closed transaction body.
+#[test]
+fn runtime_shell_transaction_capture_stays_closed_while_bash_completion_is_pending() {
+    let mut service = test_runtime_service();
+    register_required_start_capture(&mut service);
+    service.register_shell_receiver_payload(
+        "marker-1",
+        mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+            b"managed Bash source\n".to_vec(),
+            "marker-1",
+            true,
+        ),
+    );
+
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"\x1b]133;C;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\mez-bubblewrap-capability-v1\x1b]133;D;0;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\",
+    );
+    service
+        .observe_agent_shell_transaction_start("%1", "marker-1", "turn-1", "agent-%1", "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", "marker-1", "turn-1", "agent-%1", "%1", 0)
+        .unwrap();
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"\x1b]133;R;mez_receiver=complete;mez_token=receiver-token;mez_marker=marker-1;mez_status=0\x1b\\",
+    );
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .expect("managed-Bash transaction should await receiver completion");
+    assert_eq!(
+        transaction.observed_output_preview,
+        "mez-bubblewrap-capability-v1"
+    );
+    assert_eq!(
+        transaction.observed_output_bytes,
+        "mez-bubblewrap-capability-v1".len()
+    );
+}
+
 /// Verifies private receiver acknowledgements emitted before the mandatory
 /// transaction start boundary are consumed before transaction output is
 /// sliced. Identity probes use the same record-separator byte in their framed

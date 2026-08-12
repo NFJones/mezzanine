@@ -1277,6 +1277,11 @@ unset -f {function_name} 2>/dev/null || :\n\
                 .as_ref()
                 .and_then(|launch| launch.status_fd),
         );
+        let child_output_separator = if self.child_launch.is_some() {
+            ""
+        } else {
+            "printf '\\n'\n"
+        };
         let sidecar_frame_cleanup = if self.input_sidecar.is_some() {
             "if test -n \"$MEZ_SIDECAR_FRAME\"; command rm -f -- \"$MEZ_SIDECAR_FRAME\" >/dev/null 2>&1; or true; end\n\\
 set -e MEZ_SIDECAR_FRAME MEZ_SIDECAR_FRAME_SEQUENCE MEZ_SIDECAR_FRAME_LENGTH MEZ_SIDECAR_FRAME_DIGEST MEZ_SIDECAR_FRAME_COUNT MEZ_SIDECAR_FRAME_ACTUAL MEZ_SIDECAR_SHA256\n"
@@ -1292,7 +1297,7 @@ set -l MEZ_AGENT {agent}\n\
 set -l MEZ_PANE {pane}\n\
 {command_file_lines}\
 set -l MEZ_STATUS 0\n\
-printf '\\n'\n\
+{child_output_separator}\
 {child_invocation}\
 if test -n \"$MEZ_COMMAND_FILE\"; command rm -f -- \"$MEZ_COMMAND_FILE\" >/dev/null 2>&1; or true; end\n\
 if test -n \"$MEZ_COMMAND_B64\"; command rm -f -- \"$MEZ_COMMAND_B64\" >/dev/null 2>&1; or true; end\n\
@@ -1313,6 +1318,7 @@ end\n",
             agent = fish_quote(&self.agent_id),
             pane = fish_quote(&self.pane_id),
             command_file_lines = command_materialization.setup,
+            child_output_separator = child_output_separator,
             child_invocation = child_invocation,
         );
         ShellTransactionInput {
