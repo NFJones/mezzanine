@@ -920,6 +920,47 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
     }
 }
 
+/// Rejects one oversized request, summarizes its compaction input, and records
+/// the compacted retry used by synchronous provider recovery tests.
+struct RuntimeContextLimitThenCompactionProvider {
+    /// Requests observed by the test provider in dispatch order.
+    requests: RefCell<Vec<mez_agent::ModelRequest>>,
+}
+
+impl ModelProvider for RuntimeContextLimitThenCompactionProvider {
+    /// Returns the provider id used by the context-limit recovery test.
+    fn provider_id(&self) -> &str {
+        "runtime-batch"
+    }
+
+    /// Rejects the original request, completes compaction, then accepts retry.
+    fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
+        let mut requests = self.requests.borrow_mut();
+        requests.push(request.clone());
+        match requests.len() {
+            1 => Err(MezError::invalid_state(
+                "OpenAI Responses API returned status 400: context length exceeded",
+            )
+            .with_provider_failure_json(
+                r#"{"status_code":400,"error":{"message":"maximum context length exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
+            )),
+            2 => Ok(runtime_test_compaction_response(
+                "synchronous model-authored context summary",
+            )),
+            _ => Ok(mez_agent::ModelResponse {
+                provider: self.provider_id().to_string(),
+                model: request.model.clone(),
+                raw_text: "done after context compaction".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(runtime_complete_batch(request.turn_id.clone())),
+                provider_transcript_events: Vec::new(),
+            }),
+        }
+    }
+}
+
 /// Records auto-sizing and normal provider requests while returning distinct
 /// responses for the internal router and the user-facing turn.
 struct RuntimeAutoSizingProvider {

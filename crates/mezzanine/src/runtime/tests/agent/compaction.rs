@@ -398,6 +398,99 @@ context_window_tokens = 40000
     );
 }
 
+/// Verifies synchronous provider recovery completes model-backed compaction
+/// before rebuilding and retrying a request rejected for context length.
+///
+/// The compatibility worker must send the oversized context once, send the
+/// selected source to the compactor, and only then retry with durable context
+/// containing the model-authored summary instead of the rejected source.
+#[test]
+fn runtime_synchronous_context_limit_recovery_waits_for_compaction() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "synchronous-context-limit-recovery".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "synchronous-context-limit-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.synchronous-context-limit-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"synchronous-context-limit-recovery","input":"continue with the oversized evidence"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    insert_test_context_block(
+        service.agent_turn_contexts_mut().get_mut("turn-1").unwrap(),
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "synchronous rejected context".to_string(),
+            content: format!(
+                "synchronous-oversized-marker {}",
+                "oversized ".repeat(10_000)
+            ),
+        },
+    );
+    service.remove_pending_agent_provider_task("turn-1");
+    let provider = RuntimeContextLimitThenCompactionProvider {
+        requests: RefCell::new(Vec::new()),
+    };
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &provider,
+            service
+                .provider_registry()
+                .resolve_profile("synchronous-context-limit-test")
+                .unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    let requests = provider.requests.borrow();
+    assert_eq!(requests.len(), 3, "{requests:#?}");
+    let request_text = |index: usize| {
+        requests[index]
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let rejected = request_text(0);
+    let compaction = request_text(1);
+    let retry = request_text(2);
+    assert!(rejected.contains("synchronous-oversized-marker"));
+    assert!(compaction.contains("synchronous-oversized-marker"));
+    assert!(retry.contains("synchronous model-authored context summary"));
+    assert!(!retry.contains("synchronous-oversized-marker"));
+    assert!(service.pending_agent_compaction_tasks().is_empty());
+    assert!(!service.agent_is_compacting("%1"));
+}
+
 /// Verifies compactor backoff recursively summarizes smaller temporary chunks.
 ///
 /// The rejected compaction request must not mutate active-turn context or
