@@ -9,6 +9,8 @@ use super::{
 
 /// Maximum bytes retained while waiting for one mandatory OSC start boundary.
 const SHELL_TRANSACTION_START_BOUNDARY_LIMIT_BYTES: usize = 4096;
+/// Maximum bytes retained while waiting for one matching OSC end boundary.
+const SHELL_TRANSACTION_END_BOUNDARY_LIMIT_BYTES: usize = 4096;
 
 /// Returns bytes after a complete matching OSC start marker.
 ///
@@ -58,6 +60,44 @@ fn shell_transaction_bytes_after_start_marker(
         pending.clear();
     }
     None
+}
+
+/// Returns bytes before a complete matching OSC end marker while retaining a
+/// possible marker fragment across PTY reads.
+fn shell_transaction_bytes_before_end_marker(
+    pending: &mut Vec<u8>,
+    bytes: &[u8],
+    marker: &str,
+) -> Vec<u8> {
+    pending.extend_from_slice(bytes);
+    let before_end = agent_shell_transaction_bytes_before_end_marker(pending, marker);
+    if before_end.len() < pending.len() {
+        let transaction_bytes = before_end.to_vec();
+        pending.clear();
+        return transaction_bytes;
+    }
+
+    const END_PREFIX: &[u8] = b"\x1b]133;D;";
+    if let Some(start) = find_byte_subsequence(pending, END_PREFIX) {
+        let candidate = &pending[start..];
+        let complete_nonmatching =
+            candidate.contains(&0x07) || candidate.windows(2).any(|window| window == [0x1b, b'\\']);
+        if !complete_nonmatching && candidate.len() <= SHELL_TRANSACTION_END_BOUNDARY_LIMIT_BYTES {
+            let transaction_bytes = pending[..start].to_vec();
+            pending.drain(..start);
+            return transaction_bytes;
+        }
+        return std::mem::take(pending);
+    }
+
+    let partial_len = (1..END_PREFIX.len().min(pending.len() + 1))
+        .rev()
+        .find(|length| pending.ends_with(&END_PREFIX[..*length]))
+        .unwrap_or(0);
+    let transaction_end = pending.len().saturating_sub(partial_len);
+    let transaction_bytes = pending[..transaction_end].to_vec();
+    pending.drain(..transaction_end);
+    transaction_bytes
 }
 
 /// Returns complete UTF-8 bytes while retaining only an incomplete trailing scalar.
@@ -119,14 +159,20 @@ impl RuntimeSessionService {
                 } else {
                     acknowledged_bytes
                 };
-                let transaction_bytes =
-                    agent_shell_transaction_bytes_before_end_marker(&boundary_bytes, marker);
+                let transaction_bytes = shell_transaction_bytes_before_end_marker(
+                    self.process
+                        .shell_transaction_end_boundary_pending
+                        .entry(marker.clone())
+                        .or_default(),
+                    &boundary_bytes,
+                    marker,
+                );
                 let complete_bytes = complete_transaction_utf8_bytes(
                     self.process
                         .shell_transaction_output_utf8_pending
                         .entry(marker.clone())
                         .or_default(),
-                    transaction_bytes,
+                    &transaction_bytes,
                 );
                 let observed_bytes = match transaction.kind {
                     RunningShellTransactionKind::AgentAction { .. } => {

@@ -234,6 +234,38 @@ fn runtime_shell_transaction_capture_preserves_split_start_boundary() {
     assert_eq!(transaction.observed_output_bytes, 9);
 }
 
+/// Verifies a matching OSC end marker split across PTY reads remains framing
+/// state rather than contaminating the transaction body. Capability probes
+/// compare a newline-free sentinel byte-for-byte, so even the first escape
+/// fragment would otherwise reject a successful Bubblewrap process.
+#[test]
+fn runtime_shell_transaction_capture_preserves_split_end_boundary() {
+    let mut service = test_runtime_service();
+    register_required_start_capture(&mut service);
+
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"ignored\r\n\x1b]133;C;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\mez-bubblewrap-capability-v1\x1b]133;D;0;mez_",
+    );
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\prompt > ",
+    );
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
+    assert_eq!(
+        transaction.observed_output_preview,
+        "mez-bubblewrap-capability-v1"
+    );
+    assert_eq!(
+        transaction.observed_output_bytes,
+        "mez-bubblewrap-capability-v1".len()
+    );
+}
+
 /// Verifies private receiver acknowledgements emitted before the mandatory
 /// transaction start boundary are consumed before transaction output is
 /// sliced. Identity probes use the same record-separator byte in their framed

@@ -548,6 +548,8 @@ pub(crate) struct RuntimeProcessComponent {
     shell_transaction_started_markers: BTreeSet<String>,
     /// Incomplete mandatory start-marker bytes retained across PTY reads.
     shell_transaction_start_boundary_pending: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Incomplete transaction end-marker bytes retained across PTY reads.
+    shell_transaction_end_boundary_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Incomplete UTF-8 suffixes retained per shell transaction across PTY reads.
     shell_transaction_output_utf8_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Remaining receiver acknowledgements owned by each active transaction.
@@ -901,6 +903,9 @@ impl RuntimeSessionService {
         self.process
             .shell_transaction_start_boundary_pending
             .remove(marker);
+        self.process
+            .shell_transaction_end_boundary_pending
+            .remove(marker);
         self.process.running_shell_transactions.remove(marker)
     }
 
@@ -915,6 +920,7 @@ impl RuntimeSessionService {
         self.process
             .shell_transaction_start_boundary_pending
             .clear();
+        self.process.shell_transaction_end_boundary_pending.clear();
         self.process.shell_transaction_output_utf8_pending.clear();
         self.process
             .shell_transaction_receiver_acknowledgements
