@@ -406,6 +406,9 @@ impl RuntimeSessionService {
                 spawn.explicit_user_approval = true;
             }
         }
+        if spawn.cooperation_mode == mez_agent::CooperationMode::ExploreOnly {
+            spawn.write_scopes.clear();
+        }
         spawn.validate()?;
         let mut child_lineage = self.validate_subagent_spawn_capacity(&spawn.parent_agent_id)?;
         let child_display_name = self.allocate_subagent_display_name();

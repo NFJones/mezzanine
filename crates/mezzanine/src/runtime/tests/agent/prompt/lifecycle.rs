@@ -399,6 +399,39 @@ fn runtime_subagent_omitted_scopes_inherit_parent_bubblewrap_authority() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Verifies an explorer with omitted scopes inherits confined read authority
+/// without inheriting the writable parent's write authority.
+///
+/// Compact explorer actions omit scope arrays, so runtime normalization must
+/// clear inherited writes before validating the explore-only cooperation mode.
+#[test]
+fn runtime_explorer_omitted_scopes_clear_inherited_write_authority() {
+    let (mut service, primary, root, project_root) =
+        trusted_project_subagent_scope_service("runtime-explorer-inherit-bubblewrap");
+    let spawn = SubagentSpawnRequest {
+        parent_agent_id: "agent-%1".to_string(),
+        requested_role: "explorer".to_string(),
+        placement: "new-pane".to_string(),
+        cooperation_mode: CooperationMode::ExploreOnly,
+        cooperation_mode_defaulted: true,
+        read_scopes: Vec::new(),
+        read_scopes_defaulted: true,
+        write_scopes: Vec::new(),
+        write_scopes_defaulted: true,
+        task_prompt: "inspect the bounded change".to_string(),
+        explicit_user_approval: false,
+        skip_initial_turn: true,
+    };
+
+    let (_, scope) = spawn_idle_subagent_scope(&mut service, &primary, spawn);
+    let expected = project_root.to_string_lossy().into_owned();
+
+    assert_eq!(scope.read_scopes, vec![expected]);
+    assert!(scope.write_scopes.is_empty());
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies host access retains child coordination metadata without
 /// manufacturing inherited Bubblewrap authority.
 #[test]
