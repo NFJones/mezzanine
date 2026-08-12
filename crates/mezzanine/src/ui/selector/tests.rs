@@ -793,7 +793,10 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
     .unwrap();
     let plan_hint = shadow_hint(SelectorSurface::AgentCommand, "/plan ", "/plan ".len()).unwrap();
 
-    assert_eq!(loop_hint.text, " [--fork|--new] [--limit <int>] <prompt>");
+    assert_eq!(
+        loop_hint.text,
+        " [--fork|--new] [--limit <int>] [--goal <string>] <prompt>"
+    );
     assert_eq!(latency_hint.text, " <slow|default|fast>");
     assert_eq!(status_hint.text, " [--extended]");
     assert_eq!(plan_hint.text, " <on|off|toggle|status>");
@@ -808,9 +811,9 @@ fn selector_shadow_hint_covers_static_agent_first_slot_options() {
     );
 }
 
-/// Verifies `/loop` flag completions surface the documented iteration-mode
-/// and limit options as transient shadow text before users accept a
-/// selector candidate.
+/// Verifies `/loop` flag completions surface the documented iteration-mode,
+/// limit, and semantic-goal options as transient shadow text before users
+/// accept a selector candidate.
 #[test]
 fn selector_shadow_hint_completes_loop_flags() {
     let fork_hint = shadow_hint(
@@ -831,6 +834,12 @@ fn selector_shadow_hint_completes_loop_flags() {
         "/loop --l".len(),
     )
     .unwrap();
+    let goal_hint = shadow_hint(
+        SelectorSurface::AgentCommand,
+        "/loop --g",
+        "/loop --g".len(),
+    )
+    .unwrap();
 
     assert_eq!(fork_hint.insert_at, "/loop --f".len());
     assert_eq!(fork_hint.text, "ork");
@@ -841,6 +850,9 @@ fn selector_shadow_hint_completes_loop_flags() {
     assert_eq!(limit_hint.insert_at, "/loop --l".len());
     assert_eq!(limit_hint.text, "imit");
     assert_eq!(limit_hint.kind, SelectorCandidateKind::Flag);
+    assert_eq!(goal_hint.insert_at, "/loop --g".len());
+    assert_eq!(goal_hint.text, "oal");
+    assert_eq!(goal_hint.kind, SelectorCandidateKind::Flag);
 }
 
 /// Verifies `/status` exposes its extended-report option as a transient shadow

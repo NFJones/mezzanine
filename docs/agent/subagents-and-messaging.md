@@ -30,14 +30,18 @@ children are surfaced to the primary client and cannot be decided by observers.
 
 ## Use routed loops sparingly
 
-`/loop [--fork|--new] [--limit <count>] <prompt>` repeats a bounded task until
-an iteration emits no `apply_patch` action or its limit is reached. With routing
-enabled, Mez classifies the logical job once, pins one managed worker for its
-internal iterations, and presents the final result through the invoking
-conversation. By default iterations reuse the current conversation; `--fork`
-starts each from the same captured parent baseline, while `--new` starts each
-with an empty conversation. Cancel a loop with the usual agent stop controls
-when its work is no longer wanted.
+`/loop [--fork|--new] [--limit <count>] [--goal <string>] <prompt>` repeats a
+bounded task. Without `--goal`, it stops when an iteration emits no
+`apply_patch` action or its limit is reached. With `--goal`, each iteration
+evaluates its observable progress and side effects against that goal; the loop
+continues until the model explicitly reports the goal met or the limit is
+reached. Quote goals that contain spaces. With routing enabled, Mez classifies
+the logical job once, pins one managed worker for its internal iterations, and
+presents the final result through the invoking conversation. By default
+iterations reuse the current conversation; `--fork` starts each from the same
+captured parent baseline, while `--new` starts each with an empty conversation.
+Cancel a loop with the usual agent stop controls when its work is no longer
+wanted.
 
 ## Related pages
 

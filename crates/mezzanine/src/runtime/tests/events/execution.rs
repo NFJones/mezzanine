@@ -103,6 +103,94 @@ fn runtime_agent_loop_limit_option_rejects_zero() {
     assert!(!service.agent_loop_is_active("%1"));
 }
 
+/// Verifies a goal-mode `/loop` continues after a patch-free iteration whose
+/// model assessment says the semantic goal remains unmet.
+///
+/// Goal mode exists for workflows with non-patch side effects, so the default
+/// patch-free stopping heuristic must not terminate this iteration.
+#[test]
+fn runtime_agent_loop_goal_unmet_continues_without_apply_patch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-loop-goal","method":"agent/shell/command","params":{"idempotency_key":"agent-loop-goal","input":"/loop --limit 3 --goal 'three checks pass' run checks"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""kind":"mutated""#), "{start}");
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &RuntimeBatchProvider {
+                response: runtime_say_response(
+                    "turn-1",
+                    "Only two checks pass.\n[loop goal: unmet]",
+                    true,
+                ),
+            },
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert_eq!(service.agent_loop_state("%1").unwrap().iteration, 2);
+    assert_eq!(service.agent_loop_turn("turn-2").unwrap().iteration, 2);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a goal-mode `/loop` terminates after a patch-free iteration whose
+/// model assessment says the semantic goal is met.
+///
+/// The exact final marker is controller-owned so incidental prose cannot
+/// accidentally terminate a goal loop.
+#[test]
+fn runtime_agent_loop_goal_met_terminates_without_apply_patch() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    mark_test_pane_ready(&mut service, "%1");
+
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-loop-goal-met","method":"agent/shell/command","params":{"idempotency_key":"agent-loop-goal-met","input":"/loop --goal 'three checks pass' run checks"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""kind":"mutated""#), "{start}");
+
+    let execution = service
+        .execute_agent_turn_with_provider(
+            "turn-1",
+            &RuntimeBatchProvider {
+                response: runtime_say_response(
+                    "turn-1",
+                    "All three checks pass.\n[loop goal: met]",
+                    true,
+                ),
+            },
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    assert!(!service.agent_loop_is_active("%1"));
+    assert!(service.agent_loop_turn("turn-1").is_none());
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies stopping a `/loop`-owned turn clears the pane loop controller
 /// state before the turn finishes interrupted.
 ///

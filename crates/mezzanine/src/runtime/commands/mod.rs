@@ -110,20 +110,86 @@ use slash::{
 const AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS: usize = 16;
 /// Builds the provider-visible prompt for one `/loop` work iteration.
 fn runtime_agent_loop_work_prompt(state: &RuntimeAgentLoopState) -> String {
-    format!(
+    let mut prompt = format!(
         "{}\n\n[loop controller]\nInspect the problem again carefully and fulfill the original user prompt normally. Start from this prompt alone without assuming knowledge of any previous attempt.",
         state.original_prompt
-    )
+    );
+    if let Some(goal) = state.goal.as_deref() {
+        prompt.push_str(&format!(
+            "\nAt the end of this iteration, evaluate all observable progress and side effects against this goal: {goal}\nEnd your final say with exactly one of these lines:\n[loop goal: met]\n[loop goal: unmet]\nUse `met` only when the stated goal is fully satisfied; otherwise use `unmet` so the controller continues."
+        ));
+    }
+    prompt
 }
 
 /// Parsed `/loop` arguments.
+#[derive(Debug)]
 struct ParsedAgentLoopArgs<'a> {
     /// Conversation preparation mode for each loop iteration.
     mode: RuntimeAgentLoopMode,
     /// Optional per-command iteration limit override.
     max_iterations: Option<usize>,
+    /// Optional semantic completion goal evaluated after each iteration.
+    goal: Option<String>,
     /// Original user prompt to re-run.
     original_prompt: &'a str,
+}
+
+/// Parses one shell-like `/loop --goal` value while retaining a borrowed tail
+/// for the original prompt.
+fn parse_agent_loop_goal_value(input: &str) -> Result<(String, &str)> {
+    let input = input.trim_start();
+    if input.is_empty() {
+        return Err(MezError::invalid_args(
+            "/loop --goal requires a non-empty string",
+        ));
+    }
+    let mut value = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut value_end = input.len();
+    for (index, character) in input.char_indices() {
+        if escaped {
+            value.push(character);
+            escaped = false;
+            continue;
+        }
+        match quote {
+            Some('\'') => {
+                if character == '\'' {
+                    quote = None;
+                } else {
+                    value.push(character);
+                }
+            }
+            Some('"') => match character {
+                '"' => quote = None,
+                '\\' => escaped = true,
+                _ => value.push(character),
+            },
+            Some(_) => unreachable!("loop goal parser only stores supported quote characters"),
+            None => match character {
+                '\'' | '"' => quote = Some(character),
+                '\\' => escaped = true,
+                value_character if value_character.is_whitespace() => {
+                    value_end = index;
+                    break;
+                }
+                _ => value.push(character),
+            },
+        }
+    }
+    if quote.is_some() || escaped {
+        return Err(MezError::invalid_args(
+            "/loop --goal contains invalid quoting",
+        ));
+    }
+    if value.trim().is_empty() {
+        return Err(MezError::invalid_args(
+            "/loop --goal requires a non-empty string",
+        ));
+    }
+    Ok((value, &input[value_end..]))
 }
 
 /// Parses `/loop` arguments into conversation mode, optional limit override,
@@ -132,12 +198,14 @@ fn parse_agent_loop_args(args: &str) -> Result<ParsedAgentLoopArgs<'_>> {
     let mut remaining = args.trim();
     let mut mode = RuntimeAgentLoopMode::ReuseCurrentConversation;
     let mut max_iterations = None;
+    let mut goal = None;
 
     loop {
         if remaining.is_empty() {
             return Ok(ParsedAgentLoopArgs {
                 mode,
                 max_iterations,
+                goal,
                 original_prompt: remaining,
             });
         }
@@ -182,6 +250,7 @@ fn parse_agent_loop_args(args: &str) -> Result<ParsedAgentLoopArgs<'_>> {
                 return Ok(ParsedAgentLoopArgs {
                     mode,
                     max_iterations,
+                    goal,
                     original_prompt: remaining,
                 });
             };
@@ -212,9 +281,39 @@ fn parse_agent_loop_args(args: &str) -> Result<ParsedAgentLoopArgs<'_>> {
             continue;
         }
 
+        if let Some(rest) = remaining.strip_prefix("--goal") {
+            let Some(next) = rest.chars().next() else {
+                return Err(MezError::invalid_args(
+                    "/loop --goal requires a non-empty string",
+                ));
+            };
+            let value_tail = if next == '=' {
+                &rest[1..]
+            } else if next.is_whitespace() {
+                rest.trim_start()
+            } else {
+                return Ok(ParsedAgentLoopArgs {
+                    mode,
+                    max_iterations,
+                    goal,
+                    original_prompt: remaining,
+                });
+            };
+            if goal.is_some() {
+                return Err(MezError::invalid_args(
+                    "/loop --goal may only be provided once",
+                ));
+            }
+            let (parsed_goal, tail) = parse_agent_loop_goal_value(value_tail)?;
+            goal = Some(parsed_goal);
+            remaining = tail.trim_start();
+            continue;
+        }
+
         return Ok(ParsedAgentLoopArgs {
             mode,
             max_iterations,
+            goal,
             original_prompt: remaining,
         });
     }
@@ -826,6 +925,7 @@ impl RuntimeSessionService {
             invoking_pane_id: pane_id.to_string(),
             execution_pane_id: pane_id.to_string(),
             original_prompt: parsed.original_prompt.to_string(),
+            goal: parsed.goal,
             mode: parsed.mode,
             parent_conversation_id: parent_conversation_id.clone(),
             parent_transcript_entries,
@@ -1325,7 +1425,7 @@ mod tests {
     use super::{
         AgentContext, BTreeMap, ContextBlock, ContextSourceKind, ModelInteractionKind,
         ModelProfile, ModelResponse, RuntimeAgentLoopMode, RuntimeAgentLoopState, TranscriptEntry,
-        TranscriptRole, runtime_agent_loop_work_prompt,
+        TranscriptRole, parse_agent_loop_args, runtime_agent_loop_work_prompt,
         runtime_compact_forced_retained_transcript_entries,
         runtime_compact_retained_transcript_entries,
         runtime_compact_transcript_entries_for_summary, runtime_model_catalog_unavailable_reason,
@@ -1587,6 +1687,7 @@ mod tests {
             invoking_pane_id: "%1".to_string(),
             execution_pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
+            goal: None,
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_transcript_entries: 0,
@@ -1603,6 +1704,7 @@ mod tests {
             invoking_pane_id: "%1".to_string(),
             execution_pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
+            goal: None,
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
             parent_transcript_entries: 0,
@@ -1620,5 +1722,74 @@ mod tests {
         assert!(first.contains("Start from this prompt alone"), "{first}");
         assert!(!first.contains("work iteration 3/8"), "{first}");
         assert!(!first.contains("Previous loop assessment"), "{first}");
+    }
+
+    /// Verifies `/loop --goal` accepts a quoted semantic goal independently
+    /// of the work prompt that follows it.
+    ///
+    /// Goals commonly contain spaces, so parsing must retain the complete
+    /// quoted value while preserving the remaining prompt verbatim.
+    #[test]
+    fn runtime_agent_loop_goal_parses_quoted_value_and_prompt() {
+        let parsed = parse_agent_loop_args(
+            "--fork --limit 3 --goal 'all deployment checks pass' run release checks",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.mode, RuntimeAgentLoopMode::ForkEachIteration);
+        assert_eq!(parsed.max_iterations, Some(3));
+        assert_eq!(parsed.goal.as_deref(), Some("all deployment checks pass"));
+        assert_eq!(parsed.original_prompt, "run release checks");
+    }
+
+    /// Verifies `/loop --goal` rejects empty and malformed quoted values.
+    ///
+    /// Accepting either form would create a semantic loop whose completion
+    /// condition cannot be evaluated reliably.
+    #[test]
+    fn runtime_agent_loop_goal_rejects_invalid_values() {
+        let empty = parse_agent_loop_args("--goal='' run checks").unwrap_err();
+        assert!(
+            empty
+                .to_string()
+                .contains("/loop --goal requires a non-empty string"),
+            "{empty}"
+        );
+
+        let malformed = parse_agent_loop_args("--goal 'all checks pass run checks").unwrap_err();
+        assert!(
+            malformed
+                .to_string()
+                .contains("/loop --goal contains invalid quoting"),
+            "{malformed}"
+        );
+    }
+
+    /// Verifies goal-mode work prompts require an explicit conservative
+    /// met/unmet assessment without changing the original task text.
+    #[test]
+    fn runtime_agent_loop_goal_prompt_requests_completion_assessment() {
+        let prompt = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
+            loop_id: "loop-goal".to_string(),
+            invoking_pane_id: "%1".to_string(),
+            execution_pane_id: "%1".to_string(),
+            original_prompt: "run release checks".to_string(),
+            goal: Some("all checks pass".to_string()),
+            mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
+            parent_conversation_id: "parent-conversation".to_string(),
+            parent_transcript_entries: 0,
+            parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
+            iteration: 1,
+            emitted_apply_patch: false,
+            max_iterations: 8,
+            routed_parent_turn_id: None,
+            routed_worker_profile: None,
+            completion: None,
+        });
+
+        assert!(prompt.starts_with("run release checks"), "{prompt}");
+        assert!(prompt.contains("all checks pass"), "{prompt}");
+        assert!(prompt.contains("[loop goal: met]"), "{prompt}");
+        assert!(prompt.contains("[loop goal: unmet]"), "{prompt}");
     }
 }

@@ -52,7 +52,7 @@ pub(super) fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
 pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
     match command {
         "directive" => Some(" <status|show|clear|default|none|text>"),
-        "loop" => Some(" [--fork|--new] [--limit <int>] <prompt>"),
+        "loop" => Some(" [--fork|--new] [--limit <int>] [--goal <string>] <prompt>"),
         "status" => Some(" [--extended]"),
         "memory" => Some(" <on|off|toggle|status|show>"),
         "plan" => Some(" <on|off|toggle|status>"),

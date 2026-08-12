@@ -2872,18 +2872,30 @@ atomically with the parent conversation binding; ephemeral rows, viewport, and
 copy state MUST NOT replace or contaminate the retained parent projection.
 The `/loop` command MUST accept `--limit <int>` as a per-command positive
 integer override for `agents.loop_limit`.
-Mezzanine MUST continue running work iterations after any completed iteration
-that emitted an `apply_patch` action, and MUST terminate the loop after the
-first completed work iteration that emitted no `apply_patch` actions or when
-the configured loop limit is reached.
+The `/loop` command MUST accept `--goal <string>` as an optional non-empty
+semantic completion condition. Goal values containing whitespace MUST be
+accepted when quoted, while empty, malformed, or duplicate goal values MUST be
+rejected before loop state is created. When no goal is supplied, Mezzanine MUST
+continue running work iterations after any completed iteration that emitted an
+`apply_patch` action, and MUST terminate the loop after the first completed
+work iteration that emitted no `apply_patch` actions or when the configured
+loop limit is reached. When a goal is supplied, each work iteration MUST ask
+the model to evaluate observable progress and side effects against the goal.
+Mezzanine MUST continue unless the completed iteration explicitly declares the
+goal met using the controller-owned completion contract, and MUST terminate
+when that declaration is present or the configured loop limit is reached.
+Goal-based evaluation replaces the patch-emission continuation check only for
+that `/loop` invocation; it MUST NOT change the default no-goal behavior.
 When routing is enabled for the first work turn, the entire `/loop` invocation
 MUST be treated as one logical routed job. Mezzanine MUST classify the job once,
 transfer the work prompt and effective context to one managed worker without
 submitting a nested literal `/loop` command, and pin the selected worker model
 profile and reasoning effort across every internal iteration and handoff turn.
 Internal loop turns MUST NOT run another routing classification. The runtime,
-not either model, MUST evaluate `apply_patch`, patch-free, and iteration-limit
-exit conditions. A terminal routed loop MUST preserve the exact worker result,
+not either model, MUST evaluate `apply_patch`, patch-free, goal-declaration,
+and iteration-limit exit conditions. The model supplies the semantic goal
+assessment, but only the runtime-owned completion contract may terminate goal
+mode. A terminal routed loop MUST preserve the exact worker result,
 request at most one validated structured handoff (plus the bounded repair
 allowed by the routed handoff contract), and resume the invoking parent for one
 main-profile presentation.

@@ -6,6 +6,27 @@ use super::super::{
 };
 use mez_agent::outcome::runtime_execution_has_apply_patch_action;
 
+/// Returns whether the model's final response declared the configured loop
+/// goal satisfied using the controller-owned completion marker.
+fn runtime_agent_loop_goal_met(execution: &AgentTurnExecution) -> bool {
+    execution.response.action_batch.as_ref().and_then(|batch| {
+        batch.actions.iter().rev().find_map(|action| {
+            let mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Final,
+                text,
+                ..
+            } = &action.payload
+            else {
+                return None;
+            };
+            text.lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .map(str::trim)
+        })
+    }) == Some("[loop goal: met]")
+}
+
 impl RuntimeSessionService {
     /// Records that a loop-owned turn emitted an `apply_patch` action.
     ///
@@ -51,17 +72,27 @@ impl RuntimeSessionService {
                 };
                 let emitted_apply_patch = state.emitted_apply_patch
                     || runtime_execution_has_apply_patch_action(execution);
-                if !emitted_apply_patch {
+                let goal_met = state.goal.is_some() && runtime_agent_loop_goal_met(execution);
+                let iteration_requires_continuation = if state.goal.is_some() {
+                    !goal_met
+                } else {
+                    emitted_apply_patch
+                };
+                if !iteration_requires_continuation {
                     let state = self
                         .remove_agent_loop_state_by_id(&loop_turn.loop_id)
                         .expect("logical loop state was read immediately before removal");
                     self.restore_agent_loop_parent_conversation(&state.invoking_pane_id, &state)?;
+                    let completion_reason = if state.goal.is_some() {
+                        "goal met"
+                    } else {
+                        "patch-free"
+                    };
                     self.append_agent_status_text_to_terminal_buffer(
                         &state.invoking_pane_id,
                         &format!(
-                            "loop: completed after patch-free iteration {}/{}",
-                            loop_turn.iteration,
-                            self.agent.agent_loop_limit.max(1)
+                            "loop: completed after {completion_reason} iteration {}/{}",
+                            loop_turn.iteration, state.max_iterations
                         ),
                     )?;
                     return Ok(RuntimeAgentLoopSettlement::Terminal {
@@ -76,8 +107,14 @@ impl RuntimeSessionService {
                     self.append_agent_status_text_to_terminal_buffer(
                         &state.invoking_pane_id,
                         &format!(
-                            "loop: reached iteration limit {}/{} after apply_patch work",
-                            state.iteration, state.max_iterations
+                            "loop: reached iteration limit {}/{} after {}",
+                            state.iteration,
+                            state.max_iterations,
+                            if state.goal.is_some() {
+                                "goal remained unmet"
+                            } else {
+                                "apply_patch work"
+                            }
                         ),
                     )?;
                     return Ok(RuntimeAgentLoopSettlement::Terminal {

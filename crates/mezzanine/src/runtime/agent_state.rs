@@ -308,6 +308,9 @@ pub struct RuntimeAgentLoopState {
     pub execution_pane_id: String,
     /// Original user prompt supplied after `/loop`.
     pub original_prompt: String,
+    /// Optional semantic completion goal evaluated by the model after each
+    /// work iteration instead of using the default patch-emission heuristic.
+    pub goal: Option<String>,
     /// Conversation preparation mode for loop-owned work turns.
     pub mode: RuntimeAgentLoopMode,
     /// Parent conversation id restored after fresh loop iterations and used as

@@ -894,7 +894,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "personality" => "inspect or change response personality.",
         "list-personalities" => "browse and select configured response personalities.",
         "loop" => {
-            "iterate on a prompt until an iteration completes without apply_patch actions or the loop limit is reached; pass --fork to use fresh parent-conversation forks, --new to use fresh empty conversations, or --limit <int> to override the loop limit for this command."
+            "iterate on a prompt until an iteration completes without apply_patch actions or the loop limit is reached; pass --goal <string> to continue until the model reports that semantic goal met, --fork to use fresh parent-conversation forks, --new to use fresh empty conversations, or --limit <int> to override the loop limit for this command."
         }
         "resume" => "resume a saved conversation or browse saved conversations.",
         "fork" => "fork the current conversation into a new thread.",
