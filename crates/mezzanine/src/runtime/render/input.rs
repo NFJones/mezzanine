@@ -501,7 +501,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether a pane-local agent shell currently owns interruptible work.
-    fn agent_shell_pane_has_active_turn(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_shell_pane_has_active_turn(&self, pane_id: &str) -> bool {
         self.agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())

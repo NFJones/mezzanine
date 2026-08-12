@@ -887,8 +887,8 @@ fn configure_issue_record_browser(browser: &mut RecordBrowser) {
         ("Updated".to_string(), "updated_at_unix_seconds".to_string()),
     ]);
     browser.set_help(
-        Some("**Keys:** `↑`/`↓` focus issue ID · `Enter` open · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
-        Some("**Keys:** `Esc` back · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `↑`/`↓` focus issue ID · `Enter` open · `f` fix issue · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
+        Some("**Keys:** `Esc` back · `f` fix issue · `a` all/default scope · `r` closed/active · `k` kind · `p` project · `x` text · `d` delete · `s` save".to_string()),
     );
     browser.set_empty_message(Some("No issues found.".to_string()));
 }

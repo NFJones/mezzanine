@@ -425,6 +425,217 @@ fn runtime_record_browser_resize_reflows_rows_and_footer_counts_physical_lines()
     );
 }
 
+/// Builds an issue browser fixture for focused-fix hotkey tests.
+fn focused_issue_fix_browser_fixture(
+    name: &str,
+) -> (
+    RuntimeSessionService,
+    mez_core::ids::ClientId,
+    String,
+    PathBuf,
+    Vec<String>,
+) {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 12).unwrap(), 120)
+        .unwrap();
+    let root = temp_root(name);
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    service.set_config_root(config_root.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[issues]\nenabled = true\n".to_string(),
+        }])
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let project = crate::storage::issues::project_key_for_working_directory(
+        service
+            .pane_current_working_directory(&pane_id)
+            .unwrap_or_else(|| config_root.clone()),
+    );
+    let store = crate::storage::issues::IssueStore::under_config_root(config_root);
+    let older = store
+        .add_issue(
+            project.clone(),
+            mez_agent::issues::IssueKind::Defect,
+            "Older focused issue".to_string(),
+            Some("Older body".to_string()),
+            None,
+            1,
+        )
+        .unwrap();
+    let recent = store
+        .add_issue(
+            project,
+            mez_agent::issues::IssueKind::Task,
+            "Recent focused issue".to_string(),
+            Some("Recent body".to_string()),
+            None,
+            2,
+        )
+        .unwrap();
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-issues")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    (service, primary, pane_id, root, vec![recent.id, older.id])
+}
+
+/// Verifies `f` from the issue list dispatches `$fix-issues` for only the
+/// selected issue through the current pane agent.
+#[test]
+fn runtime_issue_browser_fix_hotkey_dispatches_only_selected_list_issue() {
+    let (mut service, primary, pane_id, root, issue_ids) =
+        focused_issue_fix_browser_fixture("runtime-issue-fix-list");
+    let selected_id = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .and_then(|record_browser| record_browser.browser.active_record_id())
+        .unwrap()
+        .to_string();
+
+    apply_record_browser_input(&mut service, &primary, b"f");
+
+    let turn_id = service
+        .agent_shell_store()
+        .get(&pane_id)
+        .and_then(|session| session.running_turn_id.as_deref())
+        .unwrap();
+    let prompt = service
+        .agent_turn_contexts()
+        .get(turn_id)
+        .unwrap()
+        .blocks()
+        .iter()
+        .find(|block| block.label == "user prompt")
+        .unwrap()
+        .content
+        .as_str();
+    assert!(prompt.contains("$fix-issues"), "{prompt}");
+    assert!(prompt.contains(&selected_id), "{prompt}");
+    assert!(
+        prompt.contains("Do not query, modify, or resolve any other issue"),
+        "{prompt}"
+    );
+    assert!(
+        issue_ids
+            .iter()
+            .filter(|issue_id| issue_id.as_str() != selected_id)
+            .all(|issue_id| !prompt.contains(issue_id)),
+        "{prompt}"
+    );
+    service.stop_agent_turn_for_pane(&pane_id).unwrap();
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies `f` from an open issue detail dispatches the same selected-only
+/// `$fix-issues` prompt as the list view.
+#[test]
+fn runtime_issue_browser_fix_hotkey_dispatches_from_detail_view() {
+    let (mut service, primary, pane_id, root, _) =
+        focused_issue_fix_browser_fixture("runtime-issue-fix-detail");
+    let selected_id = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .and_then(|record_browser| record_browser.browser.active_record_id())
+        .unwrap()
+        .to_string();
+    apply_record_browser_input(&mut service, &primary, b"\r");
+    assert_eq!(
+        service
+            .primary_display_overlay()
+            .and_then(|overlay| overlay.record_browser.as_ref())
+            .map(|record_browser| record_browser.browser.render_page().title),
+        Some("Recent focused issue".to_string())
+    );
+
+    apply_record_browser_input(&mut service, &primary, b"f");
+
+    let turn_id = service
+        .agent_shell_store()
+        .get(&pane_id)
+        .and_then(|session| session.running_turn_id.as_deref())
+        .unwrap();
+    let prompt = service
+        .agent_turn_contexts()
+        .get(turn_id)
+        .unwrap()
+        .blocks()
+        .iter()
+        .find(|block| block.label == "user prompt")
+        .unwrap()
+        .content
+        .as_str();
+    assert!(prompt.contains("$fix-issues"), "{prompt}");
+    assert!(prompt.contains(&selected_id), "{prompt}");
+    assert!(
+        prompt.contains("Do not query, modify, or resolve any other issue"),
+        "{prompt}"
+    );
+    service.stop_agent_turn_for_pane(&pane_id).unwrap();
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Verifies `f` rejects a busy pane agent while retaining the issue browser's
+/// selected record and presenting an inline error.
+#[test]
+fn runtime_issue_browser_fix_hotkey_rejects_busy_agent_without_losing_selection() {
+    let (mut service, primary, pane_id, root, _) =
+        focused_issue_fix_browser_fixture("runtime-issue-fix-busy");
+    let selected_id = service
+        .primary_display_overlay()
+        .and_then(|overlay| overlay.record_browser.as_ref())
+        .and_then(|record_browser| record_browser.browser.active_record_id())
+        .unwrap()
+        .to_string();
+    let busy = service
+        .start_agent_prompt_turn(&pane_id, "already working")
+        .unwrap();
+
+    apply_record_browser_input(&mut service, &primary, b"f");
+
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(&pane_id)
+            .and_then(|session| session.running_turn_id.as_deref()),
+        Some(busy.turn_id.as_str())
+    );
+    let browser = &service
+        .primary_display_overlay()
+        .unwrap()
+        .record_browser
+        .as_ref()
+        .unwrap()
+        .browser;
+    assert_eq!(browser.active_record_id(), Some(selected_id.as_str()));
+    assert!(
+        browser
+            .render_page()
+            .markdown
+            .contains("pane agent is busy"),
+        "{}",
+        browser.render_page().markdown
+    );
+    service.stop_agent_turn_for_pane(&pane_id).unwrap();
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Verifies `/show-issues` overlays expose record-browser footer help and keep
 /// Enter routed through the focused Markdown selection.
 ///

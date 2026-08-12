@@ -322,6 +322,56 @@ impl RuntimeSessionService {
                 prose_width,
             )));
         }
+        if input == b"f"
+            && matches!(
+                record_browser.source,
+                Some(RuntimeRecordBrowserOverlaySource::Issues { .. })
+            )
+        {
+            let active_index =
+                record_browser_active_index(overlay, record_browser.browser.active_index());
+            let pane_id = record_browser.pane_id.clone();
+            let mut selected = record_browser.browser.clone();
+            selected.set_active_index(active_index);
+            let Some(issue_id) = selected.active_record_id().map(str::to_string) else {
+                return Ok(Some(false));
+            };
+            let error = if self.agent_shell_pane_has_active_turn(&pane_id) {
+                Some("pane agent is busy; wait for its active turn to finish before fixing this issue".to_string())
+            } else {
+                let prompt = format!(
+                    "$fix-issues\n\nFix only issue `{issue_id}`. Do not query, modify, or resolve any other issue. Stop after this issue is either verified and resolved or concretely blocked."
+                );
+                match self.execute_agent_shell_command(primary_client_id, &prompt) {
+                    Ok(response) => serde_json::from_str::<serde_json::Value>(&response)
+                        .ok()
+                        .filter(|value| {
+                            value.get("kind").and_then(serde_json::Value::as_str) != Some("mutated")
+                        })
+                        .and_then(|value| {
+                            value
+                                .get("body")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string)
+                        }),
+                    Err(error) => Some(error.message().to_string()),
+                }
+            };
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(None);
+            };
+            record_browser.browser.set_active_index(active_index);
+            record_browser.browser.set_error(error);
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
+        }
         if input == b"c"
             && matches!(
                 record_browser.source,
