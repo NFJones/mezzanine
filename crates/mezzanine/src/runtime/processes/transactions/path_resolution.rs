@@ -12,6 +12,7 @@ use super::{
     runtime_pane_readiness_state_name, runtime_random_marker_token,
 };
 use crate::runtime::RuntimePathResolutionCacheKey;
+use mez_agent::ShellClassification;
 
 const RUNTIME_PATH_RESOLUTION_TIMEOUT_MS: u64 = 10_000;
 
@@ -176,6 +177,8 @@ impl RuntimeSessionService {
         if !wrapper.ends_with('\n') {
             wrapper.push('\n');
         }
+        let requires_payload_receiver_ready =
+            classification == ShellClassification::Fish && !transaction_input.payload.is_empty();
         self.remember_mez_wrapper_filter_command(pane_id, &command);
         let previous = self.pane_readiness_state(pane_id);
         self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
@@ -201,6 +204,9 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if requires_payload_receiver_ready {
+            self.require_shell_transaction_payload_receiver_ready(&marker_id);
+        }
         if let Some(receiver_payload) = receiver_payload {
             self.register_shell_receiver_payload(&marker_id, receiver_payload);
         }

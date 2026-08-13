@@ -1251,6 +1251,7 @@ unset -f {function_name} 2>/dev/null || :\n\
             self.input_sidecar.as_deref(),
             self.marker.as_str(),
             "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE",
+            "printf '\\033]133;R;mez_payload_receiver=ready;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE",
             self.payload_receiver_acknowledgements,
         );
         let shell_invocation = self.child_launch.as_ref().map_or_else(
@@ -1660,6 +1661,7 @@ fn fish_command_file_materialization(
     input_sidecar: Option<&str>,
     marker: &str,
     start_marker_line: &str,
+    receiver_ready_marker_line: &str,
     acknowledge_payload_records: bool,
 ) -> CommandMaterialization {
     let end_marker = command_payload_end_marker(marker);
@@ -1715,6 +1717,7 @@ fn fish_command_file_materialization(
         terminal_mode.to_string(),
         "end".to_string(),
         start_marker_line.to_string(),
+        receiver_ready_marker_line.to_string(),
         "while read -l MEZ_COMMAND_LINE".to_string(),
         "if test \"$MEZ_COMMAND_LINE\" = \"$MEZ_COMMAND_END\"".to_string(),
     ]);

@@ -23,6 +23,7 @@ use mez_agent::permissions::{
 };
 use mez_agent::{
     LocalProgramDialect, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, ShellChildArgument, ShellChildLaunch,
+    ShellClassification,
 };
 use std::path::{Path, PathBuf};
 
@@ -506,6 +507,9 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if shell_identity.classification() == ShellClassification::Fish && payload_len > 0 {
+            self.require_shell_transaction_payload_receiver_ready(&marker_id);
+        }
         if let Some(receiver_payload) = receiver_payload {
             self.register_shell_receiver_payload(&marker_id, receiver_payload);
         }

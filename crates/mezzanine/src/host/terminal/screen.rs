@@ -50,6 +50,14 @@ pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalO
         }
         "R" => {
             let values = parse_semicolon_key_values(fields);
+            if values.get("mez_payload_receiver").copied() == Some("ready") {
+                return Some(TerminalOscEvent::ShellTransactionPayloadReceiverReady {
+                    marker: required_marker_field(&values, "mez_marker")?,
+                    turn_id: required_marker_field(&values, "mez_turn")?,
+                    agent_id: required_marker_field(&values, "mez_agent")?,
+                    pane_id: required_marker_field(&values, "mez_pane")?,
+                });
+            }
             let token = required_marker_field(&values, "mez_token")?;
             let marker = required_marker_field(&values, "mez_marker")?;
             match values.get("mez_receiver").copied()? {
@@ -135,5 +143,29 @@ mod tests {
         ] {
             assert_eq!(parse_mez_shell_transaction_osc(payload), None, "{payload}");
         }
+    }
+
+    /// Verifies Fish payload admission records retain the same transaction
+    /// correlation fields as start and end boundaries. The runtime must never
+    /// release deferred bytes for an uncorrelated terminal OSC record.
+    #[test]
+    fn fish_payload_receiver_ready_event_parses_transaction_metadata() {
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_payload_receiver=ready;mez_marker=transaction-marker;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1"
+            ),
+            Some(TerminalOscEvent::ShellTransactionPayloadReceiverReady {
+                marker: "transaction-marker".to_string(),
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_payload_receiver=ready;mez_marker=transaction-marker;mez_turn=turn-1;mez_agent=agent-%1"
+            ),
+            None
+        );
     }
 }

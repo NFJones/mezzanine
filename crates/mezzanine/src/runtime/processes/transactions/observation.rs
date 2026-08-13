@@ -1266,6 +1266,22 @@ impl RuntimeSessionService {
                         *exit_code,
                     )?);
                 }
+                TerminalOscEvent::ShellTransactionPayloadReceiverReady {
+                    marker,
+                    turn_id,
+                    agent_id,
+                    pane_id,
+                } => {
+                    observed = observed.saturating_add(
+                        self.observe_shell_transaction_payload_receiver_ready(
+                            output_pane_id,
+                            marker,
+                            turn_id,
+                            agent_id,
+                            pane_id,
+                        )?,
+                    );
+                }
                 TerminalOscEvent::ShellTransactionStart {
                     marker,
                     turn_id,

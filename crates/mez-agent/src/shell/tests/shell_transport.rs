@@ -332,10 +332,15 @@ fn fish_wrapper_materializes_command_file_with_fish_syntax() {
     );
     assert!(wrapper.contains("'/opt/homebrew/bin/fish' --no-config \"$MEZ_COMMAND_FILE\""));
     let start_marker = wrapper.find("printf '\\033]133;C;").unwrap();
+    let receiver_ready_marker = wrapper
+        .find("printf '\\033]133;R;mez_payload_receiver=ready;")
+        .unwrap();
     let payload_receiver = wrapper.find("while read -l MEZ_COMMAND_LINE").unwrap();
     let isolated_child = wrapper.find("command setsid -w env").unwrap();
     assert!(
-        start_marker < payload_receiver && payload_receiver < isolated_child,
+        start_marker < receiver_ready_marker
+            && receiver_ready_marker < payload_receiver
+            && payload_receiver < isolated_child,
         "{wrapper}"
     );
     assert!(

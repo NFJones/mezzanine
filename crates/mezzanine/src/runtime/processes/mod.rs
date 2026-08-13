@@ -546,6 +546,8 @@ pub(crate) struct RuntimeProcessComponent {
     shell_transaction_require_start_markers: BTreeSet<String>,
     /// Markers whose mandatory wrapper start event has been observed.
     shell_transaction_started_markers: BTreeSet<String>,
+    /// Fish transaction markers awaiting their receiver-ready admission event.
+    shell_transaction_payload_receiver_ready_required: BTreeSet<String>,
     /// Incomplete mandatory start-marker bytes retained across PTY reads.
     shell_transaction_start_boundary_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Incomplete transaction end-marker bytes retained across PTY reads.
@@ -731,6 +733,13 @@ impl RuntimeSessionService {
                 .shell_transaction_require_start_markers
                 .insert(marker);
         }
+    }
+
+    /// Requires a correlated Fish receiver-ready event before payload delivery.
+    pub(crate) fn require_shell_transaction_payload_receiver_ready(&mut self, marker: &str) {
+        self.process
+            .shell_transaction_payload_receiver_ready_required
+            .insert(marker.to_string());
     }
 
     /// Retains managed Bash source frames until the private receiver admits them.

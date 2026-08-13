@@ -12,7 +12,7 @@ use super::{
     runtime_marker_for_action, runtime_pane_readiness_state_name,
 };
 use crate::runtime::SandboxConfig;
-use mez_agent::{ShellChildArgument, ShellChildLaunch};
+use mez_agent::{ShellChildArgument, ShellChildLaunch, ShellClassification};
 
 const RUNTIME_BUBBLEWRAP_CAPABILITY_PROBE_TIMEOUT_MS: u64 = 15_000;
 const RUNTIME_BUBBLEWRAP_CAPABILITY_PREVIEW_BYTES: usize = 512;
@@ -246,6 +246,8 @@ impl RuntimeSessionService {
         if !wrapper.ends_with('\n') {
             wrapper.push('\n');
         }
+        let requires_payload_receiver_ready =
+            classification == ShellClassification::Fish && !transaction_input.payload.is_empty();
         let previous = self.pane_readiness_state(&turn.pane_id);
         self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Busy);
         self.register_running_shell_transaction(
@@ -275,6 +277,9 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if requires_payload_receiver_ready {
+            self.require_shell_transaction_payload_receiver_ready(&marker_id);
+        }
         if let Some(receiver_payload) = receiver_payload {
             self.register_shell_receiver_payload(&marker_id, receiver_payload);
         }

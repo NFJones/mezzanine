@@ -1,6 +1,7 @@
 //! Passive shell readiness and readiness-probe transitions.
 
 use crate::runtime::processes::RuntimePaneEnvironmentAuthority;
+use mez_agent::ShellClassification;
 
 use super::{
     AgentTurnRecord, AgentTurnState, ClipboardAuthorization, ClipboardDecision, EventKind,
@@ -58,6 +59,7 @@ impl RuntimeSessionService {
                 | TerminalOscEvent::ShellReceiverReady { .. }
                 | TerminalOscEvent::ShellReceiverInstalled { .. }
                 | TerminalOscEvent::ShellReceiverComplete { .. }
+                | TerminalOscEvent::ShellTransactionPayloadReceiverReady { .. }
                 | TerminalOscEvent::ShellTransactionStart { .. }
                 | TerminalOscEvent::ShellTransactionEnd { .. } => {}
             }
@@ -257,6 +259,8 @@ impl RuntimeSessionService {
         if !wrapper.ends_with('\n') {
             wrapper.push('\n');
         }
+        let requires_payload_receiver_ready =
+            classification == ShellClassification::Fish && !transaction_input.payload.is_empty();
         self.remember_mez_wrapper_filter_command(&turn.pane_id, probe_command);
         self.process
             .pane_readiness_overrides
@@ -293,6 +297,9 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if requires_payload_receiver_ready {
+            self.require_shell_transaction_payload_receiver_ready(&marker_id);
+        }
         if let Some(receiver_payload) = receiver_payload {
             self.register_shell_receiver_payload(&marker_id, receiver_payload);
         }

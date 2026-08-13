@@ -158,6 +158,9 @@ impl RuntimeSessionService {
             .shell_transaction_started_markers
             .remove(marker);
         self.process
+            .shell_transaction_payload_receiver_ready_required
+            .remove(marker);
+        self.process
             .shell_transaction_start_boundary_pending
             .remove(marker);
         self.process

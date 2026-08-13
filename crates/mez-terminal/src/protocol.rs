@@ -142,6 +142,17 @@ pub enum TerminalOscEvent {
         /// Eval status returned by the private receiver.
         exit_code: i32,
     },
+    /// A Fish transaction receiver is armed for its deferred payload.
+    ShellTransactionPayloadReceiverReady {
+        /// Unpredictable transaction marker awaiting payload delivery.
+        marker: String,
+        /// Agent turn identifier associated with the transaction.
+        turn_id: String,
+        /// Agent identifier associated with the transaction.
+        agent_id: String,
+        /// Pane identifier associated with the transaction.
+        pane_id: String,
+    },
     /// A Mezzanine-owned OSC 133 marker started a shell transaction.
     ShellTransactionStart {
         /// Unpredictable transaction marker used to correlate boundaries.

@@ -108,6 +108,48 @@ impl RuntimeSessionService {
         {
             return Ok(1);
         }
+        if self
+            .process
+            .shell_transaction_payload_receiver_ready_required
+            .contains(marker)
+        {
+            return Ok(1);
+        }
+        self.release_agent_shell_transaction_payload_after_start(marker, pane_id)?;
+        Ok(1)
+    }
+
+    /// Releases a Fish payload only after its correlated start and receiver-ready events.
+    pub(crate) fn observe_shell_transaction_payload_receiver_ready(
+        &mut self,
+        output_pane_id: &str,
+        marker: &str,
+        turn_id: &str,
+        _agent_id: &str,
+        pane_id: &str,
+    ) -> Result<usize> {
+        let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
+            return Ok(0);
+        };
+        if transaction.turn_id != turn_id
+            || transaction.pane_id != pane_id
+            || output_pane_id != pane_id
+            || !self
+                .process
+                .shell_transaction_started_markers
+                .contains(marker)
+            || !self
+                .process
+                .shell_transaction_payload_receiver_ready_required
+                .remove(marker)
+        {
+            return self.fail_shell_transaction_protocol_violation(
+                marker,
+                transaction,
+                "payload-receiver-ready-metadata-mismatch",
+                "Fish payload receiver-ready event does not match runtime dispatch state",
+            );
+        }
         self.release_agent_shell_transaction_payload_after_start(marker, pane_id)?;
         Ok(1)
     }

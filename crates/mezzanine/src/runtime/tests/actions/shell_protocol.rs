@@ -1778,6 +1778,97 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies a Fish-classified deferred payload remains withheld after the
+/// transaction boundary and is sent exactly once after its correlated
+/// receiver-ready event. This prevents payload records from reaching Fish's
+/// interactive reader while its wrapper is still entering `read`.
+#[test]
+fn runtime_fish_transaction_waits_for_payload_receiver_ready() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let pane_id = "%1".to_string();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    service.register_running_shell_transaction(
+        "fish-marker".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "fish-action".to_string(),
+            },
+            pane_id: pane_id.clone(),
+            command: "printf fish".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: Some(60_000),
+            pending_input_payload: Some(
+                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    b"C ZmlzaA==\n__MEZ_COMMAND_PAYLOAD_END_fish-marker__\n".to_vec(),
+                    "fish-marker",
+                    true,
+                ),
+            ),
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+        true,
+    );
+    service.require_shell_transaction_payload_receiver_ready("fish-marker");
+    let _ = service.drain_pane_io_transition();
+
+    service
+        .observe_agent_shell_transaction_start(
+            &pane_id,
+            "fish-marker",
+            "turn-1",
+            "agent-%1",
+            &pane_id,
+        )
+        .unwrap();
+    assert!(service.drain_pane_io_transition().side_effects.is_empty());
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .get("fish-marker")
+            .unwrap()
+            .pending_input_payload
+            .is_some()
+    );
+
+    service
+        .observe_shell_transaction_payload_receiver_ready(
+            &pane_id,
+            "fish-marker",
+            "turn-1",
+            "agent-%1",
+            &pane_id,
+        )
+        .unwrap();
+    let payload = service.drain_pane_io_transition().side_effects;
+    assert!(matches!(
+        payload.as_slice(),
+        [RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+            ..
+        }] if delivery.delivery_id.as_deref() == Some("fish-marker")
+    ));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .get("fish-marker")
+            .unwrap()
+            .pending_input_payload
+            .is_none()
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies pending payload handoff uses a short start-marker deadline.
 ///
 /// Non-stateful shell actions wait for an OSC start marker before sending the
