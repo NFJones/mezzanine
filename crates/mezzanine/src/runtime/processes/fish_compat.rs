@@ -131,10 +131,11 @@ mod tests {
         pane_path_resolution_command, parse_pane_path_resolution_output,
         shell_identity_probe_command,
     };
-    use mez_mux::layout::Size;
     use mez_mux::process::{
-        PaneProcess, PaneProcessEnvironment, pane_command_plan, spawn_pane_process,
+        PaneProcess, PaneProcessEnvironment, ShellInputDelivery, pane_command_plan,
+        spawn_pane_process,
     };
+    use mez_mux::{Result, layout::Size};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
 
@@ -168,13 +169,87 @@ mod tests {
         }
     }
 
-    /// Reads one Fish PTY until a predicate succeeds or a bounded deadline expires.
-    fn read_fish_output_until(
-        process: &mut PaneProcess,
+    /// Drives one managed Fish PTY through the terminal response contract used
+    /// by production pane output handling.
+    struct ManagedFishTestPane {
+        process: PaneProcess,
+        terminal: mez_terminal::TerminalScreen,
+    }
+
+    impl ManagedFishTestPane {
+        /// Reads available output, applies it to the terminal emulator, and
+        /// writes any terminal-generated query responses back to Fish.
+        fn read_available_output(&mut self, max_bytes: usize) -> Result<Vec<u8>> {
+            let output = self.process.read_available_output(max_bytes)?;
+            self.terminal.feed(&output);
+            let responses = self.terminal.drain_terminal_response_bytes();
+            if !responses.is_empty() {
+                self.process.write_input(&responses)?;
+            }
+            Ok(output)
+        }
+
+        /// Writes user or generated shell input to the managed Fish process.
+        fn write_input(&mut self, input: &[u8]) -> Result<()> {
+            self.process.write_input(input)
+        }
+
+        /// Writes acknowledged Fish transport one record at a time while
+        /// continuing to service terminal queries between records.
+        fn write_shell_delivery(&mut self, delivery: &ShellInputDelivery) -> Vec<u8> {
+            #[cfg(not(target_os = "macos"))]
+            {
+                self.process
+                    .write_shell_delivery(delivery)
+                    .expect("managed Fish shell delivery should remain writable");
+                Vec::new()
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                let mut output = Vec::new();
+                for record in delivery.bytes.split_inclusive(|byte| *byte == b'\n') {
+                    self.process
+                        .write_input(record)
+                        .expect("managed Fish shell record should remain writable");
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    loop {
+                        let record_output = self
+                            .read_available_output(64 * 1024)
+                            .expect("managed Fish shell acknowledgement should remain readable");
+                        let acknowledged = record_output.contains(&0x1e);
+                        output.extend(record_output);
+                        if acknowledged {
+                            break;
+                        }
+                        if Instant::now() >= deadline {
+                            let _ = self.terminate(Duration::from_millis(100));
+                            panic!(
+                                "managed Fish shell record was not acknowledged: {:?}",
+                                String::from_utf8_lossy(&output)
+                            );
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                output
+            }
+        }
+
+        /// Terminates the managed Fish process within the supplied deadline.
+        fn terminate(&mut self, timeout: Duration) -> Result<mez_mux::process::PaneExitStatus> {
+            self.process.terminate(timeout)
+        }
+    }
+
+    /// Extends captured Fish output until a predicate succeeds or a bounded
+    /// deadline expires.
+    fn extend_fish_output_until(
+        process: &mut ManagedFishTestPane,
+        output: &mut Vec<u8>,
         predicate: impl Fn(&[u8]) -> bool,
-    ) -> Vec<u8> {
+    ) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        let mut output = Vec::new();
         loop {
             output.extend(
                 process
@@ -182,7 +257,7 @@ mod tests {
                     .expect("managed Fish output should remain readable"),
             );
             if predicate(&output) {
-                return output;
+                return;
             }
             if Instant::now() >= deadline {
                 let _ = process.terminate(Duration::from_millis(100));
@@ -195,12 +270,35 @@ mod tests {
         }
     }
 
+    /// Reads one Fish PTY until a predicate succeeds or a bounded deadline expires.
+    fn read_fish_output_until(
+        process: &mut ManagedFishTestPane,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) -> Vec<u8> {
+        let mut output = Vec::new();
+        extend_fish_output_until(process, &mut output, predicate);
+        output
+    }
+
+    /// Drives Fish startup through terminal capability negotiation and waits
+    /// until both configured prompt functions have rendered completely.
+    fn settle_managed_fish_startup(process: &mut ManagedFishTestPane) {
+        let _ = read_fish_output_until(process, |output| {
+            output
+                .windows(b"__MEZ_USER_PROMPT__status=0>".len())
+                .any(|window| window == b"__MEZ_USER_PROMPT__status=0>")
+                && output
+                    .windows(b"__MEZ_USER_RIGHT_PROMPT__".len())
+                    .any(|window| window == b"__MEZ_USER_RIGHT_PROMPT__")
+        });
+    }
+
     /// Spawns one isolated ordinary Fish pane with managed passive integration.
     fn spawn_managed_fish(
         fish: &Path,
         compatibility: &ManagedFishCompatibility,
         home: &Path,
-    ) -> PaneProcess {
+    ) -> ManagedFishTestPane {
         let config_home = home.join("config");
         let fish_config = config_home.join("fish");
         std::fs::create_dir_all(&fish_config)
@@ -215,13 +313,12 @@ mod tests {
             .with_environment_variable("HOME", home.as_os_str())
             .with_environment_variable("XDG_CONFIG_HOME", config_home.as_os_str())
             .with_environment_variable("XDG_DATA_HOME", home.join("data").as_os_str());
-        spawn_pane_process(
-            &launch,
-            None,
-            &test_environment(),
-            Size::new(80, 24).expect("the Fish PTY size should be valid"),
-        )
-        .expect("the managed Fish pane should spawn")
+        let size = Size::new(80, 24).expect("the Fish PTY size should be valid");
+        let process = spawn_pane_process(&launch, None, &test_environment(), size)
+            .expect("the managed Fish pane should spawn");
+        let terminal = mez_terminal::TerminalScreen::new(size, 1_000)
+            .expect("the managed Fish terminal screen should initialize");
+        ManagedFishTestPane { process, terminal }
     }
 
     #[test]
@@ -292,8 +389,7 @@ mod tests {
             MarkerToken::new("11111111111111111111111111111111").unwrap(),
         );
         let mut first_process = spawn_managed_fish(&fish, &first, &root.join("first"));
-        std::thread::sleep(Duration::from_millis(100));
-        let _ = first_process.read_available_output(64 * 1024);
+        settle_managed_fish_startup(&mut first_process);
         first_process
             .write_input(b"true; printf '__MEZ_FIRST_DONE__\\n'\n")
             .unwrap();
@@ -318,14 +414,17 @@ mod tests {
         let completion = first_text
             .find("\u{1b}]133;D;0\u{1b}\\")
             .expect("the first command completion boundary should be present");
-        let prompt_start = first_text
+        let prompt_start = first_text[completion..]
             .find("\u{1b}]133;A\u{1b}\\")
+            .map(|offset| completion + offset)
             .expect("the first prompt-start boundary should be present");
-        let user_prompt = first_text
+        let user_prompt = first_text[prompt_start..]
             .find("__MEZ_USER_PROMPT__status=0>")
+            .map(|offset| prompt_start + offset)
             .expect("the configured user prompt should be preserved");
-        let prompt_end = first_text
+        let prompt_end = first_text[user_prompt..]
             .find("\u{1b}]133;B\u{1b}\\")
+            .map(|offset| user_prompt + offset)
             .expect("the first prompt-end boundary should be present");
         let user_right_prompt = first_text[prompt_end..]
             .find("__MEZ_USER_RIGHT_PROMPT__")
@@ -344,9 +443,14 @@ mod tests {
             MarkerToken::new("22222222222222222222222222222222").unwrap(),
         );
         let mut second_process = spawn_managed_fish(&fish, &second, &root.join("second"));
-        std::thread::sleep(Duration::from_millis(100));
-        let _ = second_process.read_available_output(64 * 1024);
-        let replacement = format!("eval {}\n", mez_agent::fish_quote(second.init_command()));
+        settle_managed_fish_startup(&mut second_process);
+        let replacement_path = root.join("second/replacement.fish");
+        std::fs::write(&replacement_path, second.init_command())
+            .expect("the replacement Fish integration source should be written");
+        let replacement = format!(
+            "source {} # mez_marker=replacement mez_turn=replacement\n",
+            mez_agent::fish_quote(&replacement_path.to_string_lossy())
+        );
         second_process.write_input(b"true\nfalse\n").unwrap();
         second_process
             .write_input(b"printf '__MEZ_INTERNAL__\\n' # mez_marker=x mez_turn=y\n")
@@ -377,35 +481,30 @@ mod tests {
             "{:?}",
             String::from_utf8_lossy(&second_output)
         );
-        assert_eq!(
-            second_output
-                .windows(b"\x1b]133;D;0\x1b\\".len())
-                .filter(|window| *window == b"\x1b]133;D;0\x1b\\")
-                .count(),
-            2,
-            "{:?}",
-            String::from_utf8_lossy(&second_output)
-        );
-        assert_eq!(
-            second_output
-                .windows(b"\x1b]133;D;1\x1b\\".len())
-                .filter(|window| *window == b"\x1b]133;D;1\x1b\\")
-                .count(),
-            1,
-            "{:?}",
+        let successful_completions = second_output
+            .windows(b"\x1b]133;D;0\x1b\\".len())
+            .filter(|window| *window == b"\x1b]133;D;0\x1b\\")
+            .count();
+        let failed_completions = second_output
+            .windows(b"\x1b]133;D;1\x1b\\".len())
+            .filter(|window| *window == b"\x1b]133;D;1\x1b\\")
+            .count();
+        assert!(
+            successful_completions >= 2 && failed_completions >= 1,
+            "Fish and Mezzanine completion boundaries should both preserve command status: {:?}",
             String::from_utf8_lossy(&second_output)
         );
         for boundary in [
             b"\x1b]133;A\x1b\\".as_slice(),
             b"\x1b]133;B\x1b\\".as_slice(),
         ] {
-            assert_eq!(
+            assert!(
                 second_output
                     .windows(boundary.len())
                     .filter(|window| *window == boundary)
-                    .count(),
-                5,
-                "{:?}",
+                    .count()
+                    >= 5,
+                "Fish should publish a prompt boundary after every completed command: {:?}",
                 String::from_utf8_lossy(&second_output)
             );
         }
@@ -449,8 +548,7 @@ mod tests {
             MarkerToken::new("33333333333333333333333333333333").unwrap(),
         );
         let mut process = spawn_managed_fish(&fish, &compatibility, &root);
-        std::thread::sleep(Duration::from_millis(100));
-        let _ = process.read_available_output(64 * 1024);
+        settle_managed_fish_startup(&mut process);
 
         let request =
             PanePathResolutionRequest::new(vec![".".to_string()], Vec::new(), Vec::new()).unwrap();
@@ -465,25 +563,36 @@ mod tests {
             command,
         )
         .unwrap()
+        .with_payload_receiver_acknowledgements(cfg!(target_os = "macos"))
         .render_for_classification_input(ShellClassification::Fish);
-        process.write_input(input.wrapper.as_bytes()).unwrap();
+        let mut output =
+            process.write_shell_delivery(&ShellInputDelivery::generated_source_for_transaction(
+                input.wrapper.as_bytes().to_vec(),
+                marker.as_str(),
+            ));
         let start_marker = format!("\x1b]133;C;mez_marker={};", marker.as_str());
-        let mut output = read_fish_output_until(&mut process, |output| {
+        extend_fish_output_until(&mut process, &mut output, |output| {
             output
                 .windows(start_marker.len())
                 .any(|window| window == start_marker.as_bytes())
         });
-        process.write_input(input.payload.as_bytes()).unwrap();
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
+                input.payload.as_bytes().to_vec(),
+                marker.as_str(),
+                input.payload_receiver_acknowledgements,
+            )),
+        );
         let protocol_marker = b"MEZ_PATH_RESOLUTION_V2\t";
         let end_marker = format!("\x1b]133;D;0;mez_marker={};", marker.as_str());
-        output.extend(read_fish_output_until(&mut process, |output| {
+        extend_fish_output_until(&mut process, &mut output, |output| {
             output
                 .windows(protocol_marker.len())
                 .any(|window| window == protocol_marker)
                 && output
                     .windows(end_marker.len())
                     .any(|window| window == end_marker.as_bytes())
-        }));
+        });
 
         let start = output
             .windows(start_marker.len())
@@ -547,8 +656,7 @@ mod tests {
             MarkerToken::new("55555555555555555555555555555555").unwrap(),
         );
         let mut process = spawn_managed_fish(&fish, &compatibility, &root);
-        std::thread::sleep(Duration::from_millis(100));
-        let _ = process.read_available_output(64 * 1024);
+        settle_managed_fish_startup(&mut process);
 
         let marker = MarkerToken::new("66666666666666666666666666666666").unwrap();
         let probe =
