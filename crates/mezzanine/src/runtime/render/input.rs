@@ -237,6 +237,9 @@ impl RuntimeSessionService {
         if input.is_empty() {
             return Ok(false);
         }
+        if self.defer_agent_prompt_input_for_pending_clipboard(pane_id, input) {
+            return Ok(true);
+        }
         if input == b"\x1b" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
             if self.agent_shell_pane_has_active_turn(pane_id) {
@@ -269,19 +272,31 @@ impl RuntimeSessionService {
                 .or_insert_with(default_runtime_agent_prompt_input);
             state.decoder.decode(input)?
         };
-        let decoded_input = decoded_input
-            .into_iter()
-            .filter_map(|decoded| match decoded {
+        let mut clipboard_requested = false;
+        let mut deferred_clipboard_input = Vec::new();
+        let mut prompt_input = Vec::with_capacity(decoded_input.len());
+        for decoded in decoded_input {
+            if clipboard_requested {
+                append_deferred_readline_input(&mut deferred_clipboard_input, decoded);
+                continue;
+            }
+            match decoded {
                 ReadlineDecodedInput::Sequence(sequence) if readline_input_is_ctrl_v(&sequence) => {
-                    self.presentation
-                        .copy
-                        .host_clipboard
-                        .read()
-                        .map(ReadlineDecodedInput::BracketedPaste)
+                    self.queue_host_clipboard_paste(
+                        crate::runtime::HostClipboardPasteTarget::AgentPrompt {
+                            client_id: primary_client_id.clone(),
+                            pane_id: pane_id.to_string(),
+                            deferred_input: Vec::new(),
+                        },
+                    );
+                    clipboard_requested = true;
                 }
-                decoded => Some(decoded),
-            })
-            .collect::<Vec<_>>();
+                decoded => prompt_input.push(decoded),
+            }
+        }
+        if clipboard_requested && !deferred_clipboard_input.is_empty() {
+            self.defer_agent_prompt_input_for_pending_clipboard(pane_id, &deferred_clipboard_input);
+        }
         let outcomes = {
             let state = self
                 .presentation
@@ -296,7 +311,7 @@ impl RuntimeSessionService {
                 vec![state.prompt.apply_terminal_input(input)?]
             } else {
                 let mut outcomes = Vec::new();
-                for decoded in decoded_input {
+                for decoded in prompt_input {
                     outcomes.push(
                         crate::ui::readline::ReadlineInputDecoder::apply_decoded_to_prompt(
                             &mut state.prompt,
@@ -308,7 +323,7 @@ impl RuntimeSessionService {
             }
         };
 
-        let mut changed = false;
+        let mut changed = clipboard_requested;
         for outcome in outcomes {
             match outcome {
                 ReadlineOutcome::Submitted(command) => {
@@ -1095,5 +1110,16 @@ impl RuntimeSessionService {
             self.presentation.settings.terminal_agent_wrap_column_cap,
         )?;
         self.set_agent_prompt_display_output(pane_id, display_output)
+    }
+}
+
+/// Re-encodes one decoded prompt item for ordered replay after clipboard I/O.
+fn append_deferred_readline_input(output: &mut Vec<u8>, input: ReadlineDecodedInput) {
+    match input {
+        ReadlineDecodedInput::Sequence(sequence) => output.extend_from_slice(&sequence),
+        ReadlineDecodedInput::BracketedPaste(content) => {
+            output.extend_from_slice(&super::paste::runtime_readline_paste_bytes(&content));
+        }
+        ReadlineDecodedInput::BracketedPasteRejected(_) => {}
     }
 }

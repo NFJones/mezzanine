@@ -122,7 +122,7 @@ fn runtime_clipboard_paste_source_falls_back_after_host_read_failure() {
         .set_with_origin("recent", "fallback-text", Some("test".to_string()))
         .unwrap();
 
-    let source = service.clipboard_or_most_recent_paste_source().unwrap();
+    let source = service.clipboard_or_most_recent_paste_source(None).unwrap();
 
     assert_eq!(
         source.kind(),
@@ -131,6 +131,73 @@ fn runtime_clipboard_paste_source_falls_back_after_host_read_failure() {
         }
     );
     assert_eq!(source.content(), "fallback-text");
+}
+
+/// Verifies only the newest asynchronous clipboard completion can paste and a
+/// failed newest read selects the internal buffer retained at completion time.
+///
+/// Rapid paste requests can overlap in the external worker. An older result
+/// must not target stale prompt or pane state, while timeout and overflow are
+/// represented as unavailable host content and preserve deterministic fallback.
+#[test]
+fn runtime_clipboard_completion_rejects_stale_results_and_uses_fallback() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .paste_buffers_mut()
+        .set_with_origin("recent", "fallback-text", Some("test".to_string()))
+        .unwrap();
+    let descriptor = service.active_window_pane_descriptor(None).unwrap();
+    service.enter_primary_command_prompt("").unwrap();
+
+    service
+        .paste_clipboard_or_most_recent_buffer_to_text_entry_or_pane(&primary, &descriptor, false)
+        .unwrap();
+    let first = service.drain_host_clipboard_read_transition().side_effects;
+    let RuntimeSideEffect::ReadHostClipboard {
+        generation: first_generation,
+        ..
+    } = &first[0]
+    else {
+        panic!("expected first host clipboard read");
+    };
+    service
+        .paste_clipboard_or_most_recent_buffer_to_text_entry_or_pane(&primary, &descriptor, false)
+        .unwrap();
+    let second = service.drain_host_clipboard_read_transition().side_effects;
+    let RuntimeSideEffect::ReadHostClipboard {
+        generation: second_generation,
+        ..
+    } = &second[0]
+    else {
+        panic!("expected second host clipboard read");
+    };
+
+    let stale = service
+        .apply_host_clipboard_event(HostClipboardEvent::ReadCompleted {
+            generation: *first_generation,
+            content: Some("stale-host-text".to_string()),
+        })
+        .unwrap();
+    assert!(!stale.applied);
+    assert_eq!(
+        service.primary_prompt_input().unwrap().prompt.buffer.line(),
+        ""
+    );
+
+    let completed = service
+        .apply_host_clipboard_event(HostClipboardEvent::ReadCompleted {
+            generation: *second_generation,
+            content: None,
+        })
+        .unwrap();
+    assert!(completed.applied);
+    assert_eq!(
+        service.primary_prompt_input().unwrap().prompt.buffer.line(),
+        "fallback-text"
+    );
 }
 
 /// Verifies pane environment accepts explicit term selection.

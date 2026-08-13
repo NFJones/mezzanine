@@ -247,6 +247,7 @@ pub(super) fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) 
         | RuntimeEvent::PaneProcess { .. }
         | RuntimeEvent::Hook(_)
         | RuntimeEvent::Persistence(_)
+        | RuntimeEvent::HostClipboard(_)
         | RuntimeEvent::Timer(_) => false,
         RuntimeEvent::Client(_)
         | RuntimeEvent::Process(_)
@@ -394,6 +395,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::RenderClient { .. } => "render-client",
         RuntimeSideEffect::ScheduleTimer { .. } => "schedule-timer",
         RuntimeSideEffect::CancelTimer { .. } => "cancel-timer",
+        RuntimeSideEffect::ReadHostClipboard { .. } => "read-host-clipboard",
         RuntimeSideEffect::DispatchAgentProvider { .. } => "dispatch-agent-provider",
         RuntimeSideEffect::DispatchApprovedExternalAction { .. } => {
             "dispatch-approved-external-action"

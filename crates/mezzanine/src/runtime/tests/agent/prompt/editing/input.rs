@@ -572,6 +572,7 @@ fn runtime_agent_prompt_ctrl_v_preserves_multiline_clipboard_until_enter() {
                 },
             )
             .unwrap();
+        complete_agent_prompt_clipboard_read(&mut service);
 
         assert_eq!(pasted.forwarded_bytes, 0);
         assert_eq!(pasted.agent_prompt_inputs_applied, 1);
@@ -622,6 +623,7 @@ fn runtime_agent_prompt_ctrl_v_preserves_multiline_clipboard_until_enter() {
             },
         )
         .unwrap();
+    complete_agent_prompt_clipboard_read(&mut service);
 
     assert_eq!(submitted.agent_prompt_inputs_applied, 1);
     assert_eq!(
@@ -635,6 +637,26 @@ fn runtime_agent_prompt_ctrl_v_preserves_multiline_clipboard_until_enter() {
         std::slice::from_ref(&expected.to_string())
     );
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+}
+
+/// Executes the typed bounded clipboard completion used by synchronous runtime tests.
+fn complete_agent_prompt_clipboard_read(service: &mut RuntimeSessionService) {
+    let mut effects = service.drain_host_clipboard_read_transition().side_effects;
+    assert_eq!(effects.len(), 1);
+    let RuntimeSideEffect::ReadHostClipboard { generation, plan } = effects.remove(0) else {
+        panic!("expected one host clipboard read side effect");
+    };
+    let content = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(crate::host::terminal::read_host_clipboard_plan_async(plan));
+    service
+        .apply_host_clipboard_event(HostClipboardEvent::ReadCompleted {
+            generation,
+            content,
+        })
+        .unwrap();
 }
 
 /// Supplies multiline clipboard text for the Ctrl+V prompt regression.

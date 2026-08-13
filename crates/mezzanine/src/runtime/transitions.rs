@@ -130,6 +130,8 @@ pub enum RuntimeEvent {
     Hook(AsyncHookEvent),
     /// A persistence worker completed or failed a write outside the runtime actor.
     Persistence(PersistenceEvent),
+    /// A bounded host-clipboard worker completed outside the runtime actor.
+    HostClipboard(HostClipboardEvent),
     /// A runtime-owned timer fired.
     Timer(TimerEvent),
     /// The supervisor requested runtime shutdown.
@@ -153,6 +155,7 @@ impl RuntimeEvent {
             Self::AgentRemember(_) => "agent_remember",
             Self::Hook(_) => "hook",
             Self::Persistence(_) => "persistence",
+            Self::HostClipboard(_) => "host_clipboard",
             Self::Timer(_) => "timer",
             Self::Shutdown(_) => "shutdown",
         }
@@ -454,6 +457,48 @@ pub enum PersistenceEvent {
     },
 }
 
+/// Actor-owned destination retained while host clipboard acquisition runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostClipboardPasteTarget {
+    /// Paste directly into one pane PTY.
+    Pane {
+        /// Primary client authorizing the paste.
+        client_id: ClientId,
+        /// Pane selected when the request was created.
+        pane_id: String,
+    },
+    /// Paste into the visible text entry, or otherwise the selected pane.
+    TextEntryOrPane {
+        /// Primary client authorizing the paste.
+        client_id: ClientId,
+        /// Pane selected when the request was created.
+        pane_id: String,
+        /// Whether prompt persistence should be deferred to an adapter.
+        queue_for_adapter: bool,
+    },
+    /// Paste into one pane-local agent prompt.
+    AgentPrompt {
+        /// Primary client authorizing the paste.
+        client_id: ClientId,
+        /// Pane whose prompt was active when the request was created.
+        pane_id: String,
+        /// Input decoded after Ctrl-V or received while acquisition was pending.
+        deferred_input: Vec<u8>,
+    },
+}
+
+/// Event emitted by the bounded host-clipboard worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostClipboardEvent {
+    /// One acquisition completed, with `None` representing any unavailable result.
+    ReadCompleted {
+        /// Request generation copied from the originating side effect.
+        generation: u64,
+        /// Valid bounded UTF-8 clipboard content when acquisition succeeded.
+        content: Option<String>,
+    },
+}
+
 /// Runtime timer identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeTimerKey {
@@ -623,6 +668,13 @@ pub enum RuntimeSideEffect {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         key: RuntimeTimerKey,
+    },
+    /// Read the host clipboard on a bounded external worker.
+    ReadHostClipboard {
+        /// Monotonic request generation used to reject stale completion.
+        generation: u64,
+        /// Immutable command/function plan detached from actor-owned state.
+        plan: crate::host::terminal::HostClipboardReadPlan,
     },
     /// Start an agent provider request outside the actor.
     DispatchAgentProvider {
@@ -902,7 +954,8 @@ const fn runtime_event_application_priority(event: &RuntimeEvent) -> u8 {
         | RuntimeEvent::AgentCompaction(_)
         | RuntimeEvent::AgentRemember(_)
         | RuntimeEvent::Hook(_)
-        | RuntimeEvent::Persistence(_) => 2,
+        | RuntimeEvent::Persistence(_)
+        | RuntimeEvent::HostClipboard(_) => 2,
     }
 }
 

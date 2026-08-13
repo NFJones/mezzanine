@@ -420,11 +420,11 @@ use status_pills::{
 };
 pub use transitions::{
     AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent, ClientEvent,
-    PaneEvent, PaneForegroundProcessObservation, PaneProcessEvent, PaneProcessInstance,
-    PaneProcessIoEffect, PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
-    RenderInvalidationReason, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
-    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ShutdownEvent,
-    TimerEvent,
+    HostClipboardEvent, HostClipboardPasteTarget, PaneEvent, PaneForegroundProcessObservation,
+    PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect, PersistenceEvent,
+    PersistenceTarget, PersistenceWriteMode, ProcessEvent, RenderInvalidationReason, RuntimeEvent,
+    RuntimeEventBatch, RuntimeEventIngressReport, RuntimeSideEffect, RuntimeTimerKey,
+    RuntimeTimerKind, RuntimeTransition, ShutdownEvent, TimerEvent,
 };
 
 pub(crate) use auto_sizing::runtime_execute_auto_sizing_with_async_provider;

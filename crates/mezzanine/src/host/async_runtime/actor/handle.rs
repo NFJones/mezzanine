@@ -632,6 +632,15 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Drains bounded host-clipboard reads for the supervised external worker.
+    pub async fn drain_host_clipboard_side_effects(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        self.request(|reply| AsyncRuntimeRequest::DrainHostClipboardSideEffects { limit, reply })
+            .await?
+    }
+
     /// Runs the drain pane io side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

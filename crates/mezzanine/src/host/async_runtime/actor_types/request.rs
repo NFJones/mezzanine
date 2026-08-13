@@ -853,6 +853,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
     },
+    /// Drains bounded host-clipboard read requests for the external worker.
+    DrainHostClipboardSideEffects {
+        /// Maximum effects returned in one request.
+        limit: usize,
+        /// Completion channel for the drained effects.
+        reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
+    },
     /// Represents the Drain Pane Io Side Effects case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

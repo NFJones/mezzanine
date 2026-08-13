@@ -332,6 +332,32 @@ impl AsyncRuntimeSessionActor {
         Ok(drained)
     }
 
+    /// Drains bounded host-clipboard read work for the external worker.
+    pub(super) fn drain_host_clipboard_side_effects(
+        &mut self,
+        limit: usize,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        if limit == 0 {
+            return Err(MezError::invalid_args(
+                "async runtime host clipboard side-effect drain limit must be greater than zero",
+            ));
+        }
+        let mut drained = Vec::new();
+        let mut retained = VecDeque::with_capacity(self.side_effects.len());
+        while let Some(effect) = self.side_effects.pop_front() {
+            if drained.len() < limit
+                && matches!(effect, RuntimeSideEffect::ReadHostClipboard { .. })
+            {
+                drained.push(effect);
+            } else {
+                retained.push_back(effect);
+            }
+        }
+        self.side_effects = retained;
+        self.record_side_effect_drain(drained.len());
+        Ok(drained)
+    }
+
     /// Runs the drain pane io side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

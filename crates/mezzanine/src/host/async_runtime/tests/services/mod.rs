@@ -1,5 +1,6 @@
 //! Services-owned async-runtime behavior tests.
 
+mod clipboard;
 mod hooks;
 mod pane_driver;
 mod pane_io;

@@ -1866,6 +1866,44 @@ fn migrates_schema_59_with_approval_attention_colors() {
     }
 }
 
+/// Verifies schema v61 materializes finite host clipboard read bounds in all
+/// supported primary configuration formats.
+#[test]
+fn migrates_schema_60_with_host_clipboard_read_bounds() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 60\n[terminal]\nclipboard = \"external\"\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":60,"terminal":{"clipboard":"external"}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 60\nterminal:\n  clipboard: external\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 60);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            values.get("terminal.clipboard_read_timeout_ms"),
+            Some(&"250".to_string())
+        );
+        assert_eq!(
+            values.get("terminal.clipboard_read_max_bytes"),
+            Some(&"1048576".to_string())
+        );
+        assert_eq!(
+            values.get("terminal.clipboard"),
+            Some(&"external".to_string())
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

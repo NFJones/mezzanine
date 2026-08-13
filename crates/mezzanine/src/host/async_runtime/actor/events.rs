@@ -263,6 +263,9 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::Persistence(persistence_event) => {
                 self.apply_runtime_persistence_event(persistence_event)
             }
+            RuntimeEvent::HostClipboard(clipboard_event) => {
+                self.service.apply_host_clipboard_event(clipboard_event)
+            }
             RuntimeEvent::Shutdown(shutdown) => self.apply_runtime_shutdown_event(shutdown),
             RuntimeEvent::Timer(timer) => self.apply_runtime_timer_event(timer),
             RuntimeEvent::Process(process_event) => {

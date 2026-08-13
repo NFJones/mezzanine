@@ -142,7 +142,7 @@ fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
             scope: ConfigScope::Primary,
             trusted: true,
             text: format!(
-                "[terminal]\nclipboard_copy_command = [\"sh\", \"-c\", \"sleep 1; cat > '{}'\"]\nclipboard_paste_command = [\"sh\", \"-c\", \"printf configured-paste\"]\n",
+                "[terminal]\nclipboard_copy_command = [\"sh\", \"-c\", \"sleep 1; cat > '{}'\"]\nclipboard_paste_command = [\"sh\", \"-c\", \"printf configured-paste\"]\nclipboard_read_timeout_ms = 700\nclipboard_read_max_bytes = 64\n",
                 copy_path.display()
             ),
         }])
@@ -167,10 +167,17 @@ fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
         thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(copied, "configured-copy");
-    assert_eq!(
-        service.host_clipboard_for_tests().read(),
-        Some("configured-paste".to_string())
-    );
+    let read_plan = service.host_clipboard_for_tests().read_plan();
+    assert_eq!(read_plan.timeout(), Duration::from_millis(700));
+    assert_eq!(read_plan.max_bytes(), 64);
+    let clipboard_read = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(crate::host::terminal::read_host_clipboard_plan_async(
+            read_plan,
+        ));
+    assert_eq!(clipboard_read, Some("configured-paste".to_string()));
     let _ = fs::remove_dir_all(root);
 }
 

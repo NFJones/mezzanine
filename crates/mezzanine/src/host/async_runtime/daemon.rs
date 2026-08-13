@@ -9,8 +9,8 @@ use super::{
     AsyncRuntimeDaemonConfig, AsyncRuntimeDaemonListeners, AsyncRuntimeMessageConnectionConfig,
     AsyncRuntimeService, AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, MezError, Result,
     RuntimeLifecycleState, build_async_hook_side_effect_service,
-    build_async_pane_process_supervisor_service, build_async_persistence_side_effect_service,
-    build_async_runtime_timer_side_effect_service,
+    build_async_host_clipboard_side_effect_service, build_async_pane_process_supervisor_service,
+    build_async_persistence_side_effect_service, build_async_runtime_timer_side_effect_service,
     serve_async_runtime_control_listener_with_snapshots, serve_async_runtime_event_listener,
     serve_async_runtime_message_listener_concurrent,
 };
@@ -119,6 +119,11 @@ pub fn build_async_runtime_daemon_services(
     )?);
     services.push(build_async_hook_side_effect_service(
         "hook",
+        handle.clone(),
+        Default::default(),
+    )?);
+    services.push(build_async_host_clipboard_side_effect_service(
+        "host-clipboard",
         handle.clone(),
         Default::default(),
     )?);

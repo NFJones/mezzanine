@@ -98,7 +98,7 @@ fn retain_named_tables(
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 60
+version = 61
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -119,6 +119,8 @@ clipboard = "external"
 # stdin; paste commands return clipboard text on stdout.
 # clipboard_copy_command = "xclip -selection clipboard"
 # clipboard_paste_command = "xclip -selection clipboard -out"
+clipboard_read_timeout_ms = 250
+clipboard_read_max_bytes = 1048576
 alternate_screen = true
 focus_events = true
 nested_multiplexer = "auto"

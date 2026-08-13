@@ -7,10 +7,13 @@
 //! config domains.
 
 use serde_json::Value;
+use std::time::Duration;
 
 use crate::error::{MezError, Result};
-use crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP;
-use crate::host::terminal::{HostClipboard, HostClipboardCommand};
+use crate::host::terminal::{
+    DEFAULT_AGENT_WRAP_COLUMN_CAP, DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES,
+    DEFAULT_HOST_CLIPBOARD_READ_TIMEOUT, HostClipboard, HostClipboardCommand,
+};
 use crate::storage::transcript::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
 use mez_mux::clipboard::ClipboardPolicy;
 use mez_mux::presentation::TerminalCursorStyle;
@@ -450,10 +453,46 @@ pub(crate) fn runtime_host_clipboard_from_config(root: &Value) -> Result<HostCli
         terminal.get("clipboard_paste_command"),
         "terminal.clipboard_paste_command",
     )?;
-    if copy.is_none() && paste.is_none() {
-        return Ok(HostClipboard::system());
+    let timeout_ms = runtime_positive_clipboard_u64(
+        terminal.get("clipboard_read_timeout_ms"),
+        "terminal.clipboard_read_timeout_ms",
+        u64::try_from(DEFAULT_HOST_CLIPBOARD_READ_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+    )?;
+    let max_bytes = runtime_positive_clipboard_usize(
+        terminal.get("clipboard_read_max_bytes"),
+        "terminal.clipboard_read_max_bytes",
+        DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES,
+    )?;
+    let clipboard = if copy.is_none() && paste.is_none() {
+        HostClipboard::system()
+    } else {
+        HostClipboard::configured(copy, paste)
+    };
+    Ok(clipboard.with_read_limits(Duration::from_millis(timeout_ms), max_bytes))
+}
+
+/// Parses one optional positive host-clipboard integer setting.
+fn runtime_positive_clipboard_u64(value: Option<&Value>, name: &str, default: u64) -> Result<u64> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    match value.as_u64() {
+        Some(parsed) if parsed > 0 => Ok(parsed),
+        _ => Err(MezError::config(format!(
+            "{name} must be a positive integer"
+        ))),
     }
-    Ok(HostClipboard::configured(copy, paste))
+}
+
+/// Parses one optional positive host-clipboard byte-count setting.
+fn runtime_positive_clipboard_usize(
+    value: Option<&Value>,
+    name: &str,
+    default: usize,
+) -> Result<usize> {
+    let parsed = runtime_positive_clipboard_u64(value, name, default as u64)?;
+    usize::try_from(parsed)
+        .map_err(|_| MezError::config(format!("{name} exceeds the platform size limit")))
 }
 
 /// Parses one optional host clipboard command value.

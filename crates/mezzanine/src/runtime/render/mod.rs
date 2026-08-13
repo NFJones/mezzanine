@@ -210,6 +210,12 @@ struct RuntimeCopyPresentationState {
     active_paste_buffer: Option<String>,
     /// Configured desktop clipboard adapter.
     host_clipboard: HostClipboard,
+    /// Monotonic identity assigned to the newest host clipboard paste request.
+    host_clipboard_paste_generation: u64,
+    /// Newest destination awaiting a matching worker completion.
+    pending_host_clipboard_paste: Option<(u64, crate::runtime::HostClipboardPasteTarget)>,
+    /// Coalesced host clipboard work awaiting the external worker.
+    pending_host_clipboard_reads: Vec<crate::runtime::RuntimeSideEffect>,
     /// Interactive copy modes keyed by pane and independently retained surface.
     active_copy_modes: std::collections::BTreeMap<(String, PaneSurfaceKind), CopyMode>,
     /// Pane surfaces using copy mode only as transient mouse scrollback.
@@ -222,6 +228,9 @@ impl Default for RuntimeCopyPresentationState {
             paste_buffers: PasteBuffers::default_limit(),
             active_paste_buffer: None,
             host_clipboard: HostClipboard::system(),
+            host_clipboard_paste_generation: 0,
+            pending_host_clipboard_paste: None,
+            pending_host_clipboard_reads: Vec::new(),
             active_copy_modes: std::collections::BTreeMap::new(),
             scrollback_copy_mode_panes: std::collections::BTreeSet::new(),
         }

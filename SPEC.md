@@ -2742,6 +2742,16 @@ receive clipboard contents on stdin. The paste command MUST write clipboard
 contents to stdout. If either direction is omitted, Mezzanine MUST retain the
 default best-effort host clipboard command list for that direction.
 
+`terminal.clipboard_read_timeout_ms` and `terminal.clipboard_read_max_bytes`
+MUST be positive integers and default to 250 milliseconds and 1,048,576 bytes.
+Host clipboard reads MUST execute outside serialized runtime ownership under one
+total deadline shared by ordered command fallbacks. Readers MUST continue
+draining output after the byte ceiling, discard oversized or invalid UTF-8
+results, terminate and reap timed-out helper process groups on Linux and macOS,
+and then select the most recent non-empty internal paste buffer. The schema v60
+to v61 migration MUST materialize both defaults in all supported primary-config
+formats.
+
 The `keys` table MUST support `escape`, `split_vertical`, `split_horizontal`,
 `new_window`, `new_group`, `agent_shell`, `focus_up`, `focus_down`, `focus_left`,
 `focus_right`, `focus_previous_window`, `focus_next_window`,

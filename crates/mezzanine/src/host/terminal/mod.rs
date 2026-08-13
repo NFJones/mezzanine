@@ -83,7 +83,10 @@ pub use fd::{
     TerminalFdInterest, TerminalFrameContext, TerminalPaneFrameContext, TerminalRawModeGuard,
     read_attached_terminal_size,
 };
-pub use host_clipboard::{HostClipboard, HostClipboardCommand};
+pub use host_clipboard::{
+    DEFAULT_HOST_CLIPBOARD_READ_MAX_BYTES, DEFAULT_HOST_CLIPBOARD_READ_TIMEOUT, HostClipboard,
+    HostClipboardCommand, HostClipboardReadPlan, read_host_clipboard_plan_async,
+};
 pub use mouse::{
     MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
     PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,

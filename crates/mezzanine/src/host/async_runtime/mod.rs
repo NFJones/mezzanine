@@ -172,14 +172,15 @@ pub use pane_io::{
 };
 pub use side_effects::{
     AsyncClientOutputFlushServiceReport, AsyncRuntimeSideEffectServiceConfig,
-    build_async_hook_side_effect_service, build_async_persistence_side_effect_service,
-    build_async_runtime_timer_side_effect_service, run_async_client_output_flush_service,
+    build_async_hook_side_effect_service, build_async_host_clipboard_side_effect_service,
+    build_async_persistence_side_effect_service, build_async_runtime_timer_side_effect_service,
+    run_async_client_output_flush_service,
 };
 #[cfg(test)]
 pub use side_effects::{
-    run_async_hook_side_effect_service, run_async_persistence_side_effect_service,
-    run_async_render_side_effect_service, run_async_runtime_side_effect_service,
-    run_async_runtime_timer_side_effect_service,
+    run_async_hook_side_effect_service, run_async_host_clipboard_side_effect_service,
+    run_async_persistence_side_effect_service, run_async_render_side_effect_service,
+    run_async_runtime_side_effect_service, run_async_runtime_timer_side_effect_service,
 };
 #[cfg(test)]
 pub use supervisor::AsyncRuntimeSupervisionReport;

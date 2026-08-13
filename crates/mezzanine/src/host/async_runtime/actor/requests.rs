@@ -842,6 +842,10 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(self.drain_hook_side_effects(limit));
                 false
             }
+            AsyncRuntimeRequest::DrainHostClipboardSideEffects { limit, reply } => {
+                let _ = reply.send(self.drain_host_clipboard_side_effects(limit));
+                false
+            }
             AsyncRuntimeRequest::DrainPaneIoSideEffects {
                 pane_id,
                 limit,

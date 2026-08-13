@@ -431,6 +431,8 @@ pub(super) const TERMINAL_KEYS: &[&str] = &[
     "clipboard",
     "clipboard_copy_command",
     "clipboard_paste_command",
+    "clipboard_read_timeout_ms",
+    "clipboard_read_max_bytes",
     "alternate_screen",
     "focus_events",
     "nested_multiplexer",

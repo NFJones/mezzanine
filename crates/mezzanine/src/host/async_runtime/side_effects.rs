@@ -23,6 +23,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::host::terminal::attached_terminal_output_disconnected;
+use crate::host::terminal::read_host_clipboard_plan_async;
 use crate::integrations::hooks::{
     HookExecutionPlan, HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureKind,
     execute_program_hook_async_with_cancellation,
@@ -199,6 +200,21 @@ pub struct AsyncHookSideEffectServiceReport {
     /// Number of hook events accepted by actor ingress.
     pub submitted_events: usize,
     /// Number of hook events that applied a state transition.
+    pub applied_events: usize,
+    /// Runtime lifecycle state seen at service exit.
+    pub terminal_state: RuntimeLifecycleState,
+}
+
+/// Report returned by the bounded host-clipboard side-effect worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AsyncHostClipboardSideEffectServiceReport {
+    /// Number of actor drain polls attempted.
+    pub polls: u64,
+    /// Number of clipboard reads drained from the actor.
+    pub drained: u64,
+    /// Number of completion events submitted to actor ingress.
+    pub submitted_events: usize,
+    /// Number of completion events applied by the actor.
     pub applied_events: usize,
     /// Runtime lifecycle state seen at service exit.
     pub terminal_state: RuntimeLifecycleState,
@@ -528,6 +544,93 @@ pub fn build_async_hook_side_effect_service(
         Ok(AsyncRuntimeServiceExit::completed(
             report.completed.saturating_add(report.failed),
         ))
+    }))
+}
+
+/// Drains bounded host-clipboard reads and reports typed completions.
+pub async fn run_async_host_clipboard_side_effect_service<S>(
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncRuntimeSideEffectServiceConfig,
+    mut should_stop: S,
+) -> Result<AsyncHostClipboardSideEffectServiceReport>
+where
+    S: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    config.validate()?;
+    let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let mut report = AsyncHostClipboardSideEffectServiceReport {
+        polls: 0,
+        drained: 0,
+        submitted_events: 0,
+        applied_events: 0,
+        terminal_state: *lifecycle_watcher.borrow(),
+    };
+
+    while report.polls < config.max_polls {
+        let state = *lifecycle_watcher.borrow_and_update();
+        report.terminal_state = state;
+        if should_stop(report.polls, state) {
+            return Ok(report);
+        }
+
+        report.polls = report.polls.saturating_add(1);
+        let effects = handle
+            .drain_host_clipboard_side_effects(config.drain_limit)
+            .await?;
+        if effects.is_empty() {
+            if report.polls >= config.max_polls || should_stop(report.polls, state) {
+                return Ok(report);
+            }
+            wait_for_side_effects_or_bounded_idle(
+                &mut lifecycle_watcher,
+                &mut side_effect_watcher,
+                config,
+            )
+            .await;
+            continue;
+        }
+
+        report.drained = report
+            .drained
+            .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
+        let mut batch = RuntimeEventBatch::new();
+        for effect in effects {
+            let RuntimeSideEffect::ReadHostClipboard { generation, plan } = effect else {
+                continue;
+            };
+            let content = read_host_clipboard_plan_async(plan).await;
+            batch.push(RuntimeEvent::HostClipboard(
+                crate::runtime::HostClipboardEvent::ReadCompleted {
+                    generation,
+                    content,
+                },
+            ));
+        }
+        if !batch.events.is_empty() {
+            let ingress = handle.submit_runtime_events(batch).await?;
+            report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
+            report.applied_events = report.applied_events.saturating_add(ingress.applied);
+        }
+    }
+
+    report.terminal_state = *lifecycle_watcher.borrow();
+    Ok(report)
+}
+
+/// Builds the supervised bounded host-clipboard worker service.
+pub fn build_async_host_clipboard_side_effect_service(
+    name: impl Into<String>,
+    handle: AsyncRuntimeSessionHandle,
+    config: AsyncRuntimeSideEffectServiceConfig,
+) -> Result<AsyncRuntimeService> {
+    config.validate()?;
+    Ok(AsyncRuntimeService::new_auxiliary(name, async move {
+        let report = run_async_host_clipboard_side_effect_service(&handle, config, |_, state| {
+            is_terminal_runtime_lifecycle_state(state)
+        })
+        .await?;
+        Ok(AsyncRuntimeServiceExit::completed(report.drained))
     }))
 }
 
