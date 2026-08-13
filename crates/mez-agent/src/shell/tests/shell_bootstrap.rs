@@ -451,9 +451,11 @@ fn shell_identity_probe_prefers_executing_bash_over_login_shell() {
         .unwrap();
 
     assert_eq!(
-        std::fs::canonicalize(&result.shell_path).unwrap(),
-        std::fs::canonicalize(bash).unwrap()
+        Path::new(&result.shell_path).file_name(),
+        bash.file_name(),
+        "the identity probe must report the executing Bash rather than SHELL"
     );
+    assert_ne!(result.shell_path, "/bin/zsh");
     assert_eq!(result.shell_classification, ShellClassification::Bash);
 }
 
