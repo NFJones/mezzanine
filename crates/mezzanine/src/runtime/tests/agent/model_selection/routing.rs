@@ -1819,6 +1819,7 @@ fn runtime_routed_worker_provider_fails_after_unparsed_bootstrap() {
     transaction.observed_output_bytes = 49;
     transaction.observed_output_preview =
         "bootstrap output without an environment signature".to_string();
+    transaction.pending_input_payload = None;
     service
         .observe_agent_shell_transaction_start(
             &worker_turn.pane_id,
