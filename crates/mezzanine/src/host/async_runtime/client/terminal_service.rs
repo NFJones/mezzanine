@@ -53,6 +53,48 @@ impl Default for AsyncAttachedTerminalClientServiceConfig {
     }
 }
 
+/// Fixed-size counts of terminal actions processed during one client service.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AttachedTerminalClientActionCounts {
+    /// Input payloads forwarded to the focused pane.
+    pub forward_to_pane: u64,
+    /// Mouse payloads forwarded directly to a pane.
+    pub forward_mouse_to_pane: u64,
+    /// Multiplexer actions executed by the runtime.
+    pub execute_mux: u64,
+    /// Command strings executed by the runtime.
+    pub execute_command: u64,
+    /// Mouse actions handled by Mezzanine.
+    pub handle_mouse: u64,
+    /// Copy-mode key actions handled by Mezzanine.
+    pub handle_copy_mode: u64,
+    /// Prefix-key mode entries.
+    pub enter_prefix_key_mode: u64,
+    /// Unbound prefix keys reported to the user.
+    pub report_unbound_prefix: u64,
+}
+
+impl AttachedTerminalClientActionCounts {
+    /// Adds one batch without retaining payloads owned by its actions.
+    fn record(&mut self, actions: &[TerminalClientLoopAction]) {
+        for action in actions {
+            let count = match action {
+                TerminalClientLoopAction::ForwardToPane(_) => &mut self.forward_to_pane,
+                TerminalClientLoopAction::ForwardMouseToPane { .. } => {
+                    &mut self.forward_mouse_to_pane
+                }
+                TerminalClientLoopAction::ExecuteMux(_) => &mut self.execute_mux,
+                TerminalClientLoopAction::ExecuteCommand(_) => &mut self.execute_command,
+                TerminalClientLoopAction::HandleMouse(_) => &mut self.handle_mouse,
+                TerminalClientLoopAction::HandleCopyMode(_) => &mut self.handle_copy_mode,
+                TerminalClientLoopAction::EnterPrefixKeyMode => &mut self.enter_prefix_key_mode,
+                TerminalClientLoopAction::ReportUnboundPrefix(_) => &mut self.report_unbound_prefix,
+            };
+            *count = count.saturating_add(1);
+        }
+    }
+}
+
 /// Carries Async Attached Terminal Client Service Report state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -69,6 +111,8 @@ pub struct AsyncAttachedTerminalClientServiceReport {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub loop_report: AttachedTerminalClientLoopReport,
+    /// Fixed-size counts of processed actions, excluding their owned payloads.
+    pub action_counts: AttachedTerminalClientActionCounts,
     /// Stores the terminal state value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -109,6 +153,7 @@ where
     let mut report = AsyncAttachedTerminalClientServiceReport {
         batches: 0,
         loop_report: empty_attached_terminal_loop_report(),
+        action_counts: AttachedTerminalClientActionCounts::default(),
         terminal_state: *lifecycle_watcher.borrow(),
         stopped_by_lifecycle: false,
         terminal_resizes: 0,
@@ -208,7 +253,7 @@ where
 
         let iteration_offset = report.loop_report.iterations;
         let mut prepolled_io = PrepolledAttachedTerminalIo::new(io, readiness);
-        let batch = run_async_attached_terminal_client_loop(
+        let mut batch = run_async_attached_terminal_client_loop(
             handle,
             &mut prepolled_io,
             request.clone(),
@@ -219,12 +264,14 @@ where
         let batch_output_frames = batch.output_frames;
         let should_finish =
             batch.input_hangups > 0 || batch.output_hangups > 0 || !batch.error_roles.is_empty();
+        report.action_counts.record(&batch.actions);
         resized_this_batch |= attached_terminal_actions_include_resize(&batch.actions);
         request.terminal_config.host_bracketed_paste_active = batch.host_bracketed_paste_active;
         request.terminal_config.host_bracketed_paste_buffer =
             batch.host_bracketed_paste_buffer.clone();
         request.terminal_config.host_bracketed_paste_started_at =
             batch.host_bracketed_paste_started_at;
+        batch.actions.clear();
         merge_attached_terminal_loop_report(&mut report.loop_report, batch);
         if batch_output_frames > 0 {
             render_limiter.mark_flushed();

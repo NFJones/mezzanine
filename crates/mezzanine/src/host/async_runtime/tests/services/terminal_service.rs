@@ -55,20 +55,89 @@ async fn async_attached_terminal_service_can_defer_pane_input_to_worker() {
         .unwrap();
 
         assert_eq!(report.batches, 2);
-        assert!(
-            report
-                .loop_report
-                .actions
-                .contains(&TerminalClientLoopAction::ForwardToPane(
-                    b"service-input\n".to_vec()
-                ))
-        );
+        assert_eq!(report.action_counts.forward_to_pane, 1);
+        assert!(report.loop_report.actions.is_empty());
         assert_eq!(
             handle.drain_pane_io_side_effects("%1", 8).await.unwrap(),
             vec![RuntimeSideEffect::WritePaneInput {
                 pane_id: "%1".to_string(),
                 bytes: b"service-input\n".to_vec(),
             }]
+        );
+        let _ = handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+
+    exit.service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies the lifetime service report counts a large forwarded payload but
+/// does not retain any copy of its raw bytes after the owning batch completes.
+#[tokio::test(flavor = "current_thread")]
+async fn async_attached_terminal_service_does_not_retain_large_input_actions() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let large_input = vec![b'x'; 1024 * 1024];
+    let mut io = FakeAttachedTerminalLoopIo {
+        readiness_batches: vec![vec![AttachedTerminalFdReadiness {
+            role: AttachedTerminalFdRole::Input,
+            fd: 0,
+            interest: TerminalFdInterest::read(),
+            readable: true,
+            writable: false,
+            hangup: false,
+            error: false,
+        }]],
+        input_batches: vec![large_input.clone()],
+        written_batches: Vec::new(),
+        write_error_kinds: Vec::new(),
+    };
+
+    let client = async {
+        let report = run_async_attached_terminal_client_service(
+            &handle,
+            &mut io,
+            AsyncAttachedTerminalLoopRequest {
+                role: ClientViewRole::Primary,
+                client_id: primary.clone(),
+                primary_client_id: Some(primary.clone()),
+                client_size: Size::new(80, 24).unwrap(),
+                terminal_config: TerminalClientLoopConfig::default(),
+                loop_config: AttachedTerminalClientLoopConfig {
+                    max_iterations: 1,
+                    max_input_bytes: large_input.len(),
+                },
+            },
+            AsyncAttachedTerminalClientServiceConfig { max_batches: 2 },
+            |_| Ok(None),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.action_counts.forward_to_pane, 1);
+        assert!(report.loop_report.actions.is_empty());
+        assert_eq!(report.loop_report.actions.capacity(), 0);
+        assert_eq!(
+            handle
+                .drain_pane_io_side_effects("%1", 8)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|effect| match effect {
+                    RuntimeSideEffect::WritePaneInput { bytes, .. } => bytes.len(),
+                    other => panic!("unexpected side effect: {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            vec![large_input.len()]
         );
         let _ = handle.shutdown().await.unwrap();
     };
@@ -132,14 +201,8 @@ async fn async_attached_terminal_service_routes_input_while_output_is_pending() 
         assert_eq!(report.batches, 2);
         assert!(report.loop_report.partial_writes > 0);
         assert!(report.loop_report.pending_output_bytes > 0);
-        assert!(
-            report
-                .loop_report
-                .actions
-                .contains(&TerminalClientLoopAction::ForwardToPane(
-                    b"hello\n".to_vec()
-                ))
-        );
+        assert_eq!(report.action_counts.forward_to_pane, 1);
+        assert!(report.loop_report.actions.is_empty());
         assert_eq!(
             handle.drain_pane_io_side_effects("%1", 8).await.unwrap(),
             vec![RuntimeSideEffect::WritePaneInput {
