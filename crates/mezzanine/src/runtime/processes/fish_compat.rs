@@ -400,6 +400,12 @@ mod tests {
                 && output
                     .windows(b"\x1b]133;D;0\x1b\\".len())
                     .any(|window| window == b"\x1b]133;D;0\x1b\\")
+                && output
+                    .windows(b"__MEZ_USER_PROMPT__status=0>".len())
+                    .any(|window| window == b"__MEZ_USER_PROMPT__status=0>")
+                && output
+                    .windows(b"__MEZ_USER_RIGHT_PROMPT__".len())
+                    .any(|window| window == b"__MEZ_USER_RIGHT_PROMPT__")
         });
         assert_eq!(
             first_output
