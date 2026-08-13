@@ -4,7 +4,18 @@ use super::*;
 
 /// Builds the shared async runtime fixture with the minimal POSIX shell.
 pub(super) fn test_service() -> RuntimeSessionService {
-    test_service_with_shell("/bin/sh")
+    let shell = crate::host::shell::ResolvedShell::new(
+        PathBuf::from("/bin/sh"),
+        crate::host::shell::ShellSource::ShellEnv,
+    );
+    let size = Size::new(80, 24).unwrap();
+    let session = Session::new_default(shell, size);
+    RuntimeSessionService::new(
+        session,
+        PathBuf::from("/tmp/mez-async-runtime-test.sock"),
+        1,
+    )
+    .unwrap()
 }
 
 /// Builds the shared async runtime fixture with an explicit shell executable.
@@ -49,7 +60,10 @@ pub(super) fn test_pane_environment() -> mez_mux::process::PaneProcessEnvironmen
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn test_service_with_event_log() -> RuntimeSessionService {
-    let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
+    let shell = crate::host::shell::ResolvedShell::new(
+        PathBuf::from("/bin/sh"),
+        crate::host::shell::ShellSource::ShellEnv,
+    );
     let size = Size::new(80, 24).unwrap();
     let session = Session::new_default(shell, size);
     RuntimeSessionService::with_event_log(

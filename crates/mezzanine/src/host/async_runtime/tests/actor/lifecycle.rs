@@ -980,7 +980,10 @@ async fn async_actor_orders_mixed_snapshot_control_batches() {
 /// newly created panes, so tests retain the restarted process identity and an
 /// attached primary client for render-invalidation assertions.
 fn restored_pane_prompt_actor_fixture() -> (RuntimeSessionService, ClientId, String, u32) {
-    let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
+    let shell = crate::host::shell::ResolvedShell::new(
+        PathBuf::from("/bin/sh"),
+        crate::host::shell::ShellSource::ShellEnv,
+    );
     let original = Session::new_default(shell.clone(), Size::new(80, 24).unwrap());
     let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
     let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
