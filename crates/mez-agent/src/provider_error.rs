@@ -161,6 +161,7 @@ pub fn classify_provider_error_retry(
     if message.contains("provider HTTP request failed")
         || message.contains("provider HTTP response read failed")
         || message.contains("provider HTTP response read stalled")
+        || message.contains("provider HTTP timeout phase=")
         || provider_error_invites_retry(message, provider_failure_json)
     {
         ProviderErrorRetryClass::RetryableTransport
@@ -410,6 +411,14 @@ mod tests {
             classify_provider_error_retry(
                 ProviderErrorKind::InvalidState,
                 "provider HTTP response read stalled for 50ms while waiting for body chunk",
+                None,
+            ),
+            ProviderErrorRetryClass::RetryableTransport
+        );
+        assert_eq!(
+            classify_provider_error_retry(
+                ProviderErrorKind::InvalidState,
+                "provider HTTP timeout phase=total limit_ms=100 while waiting for provider response body progress",
                 None,
             ),
             ProviderErrorRetryClass::RetryableTransport

@@ -969,7 +969,7 @@ pub fn build_openai_responses_http_request_with_headers(
         url: endpoint.to_string(),
         headers,
         body,
-        timeout_ms,
+        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
         max_response_bytes: None,
     })
 }
@@ -1036,7 +1036,7 @@ pub fn build_openai_models_http_request_with_headers(
         url: openai_models_endpoint_for_responses_endpoint(responses_endpoint)?,
         headers,
         body: String::new(),
-        timeout_ms,
+        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
         max_response_bytes: None,
     })
 }

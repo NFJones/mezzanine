@@ -175,7 +175,7 @@ fn build_anthropic_messages_http_request(
         url: endpoint.to_string(),
         headers,
         body,
-        timeout_ms,
+        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
         max_response_bytes: None,
     })
 }

@@ -239,7 +239,7 @@ async fn send_network_get<T: AsyncProviderHttpTransport>(
         url: url.to_string(),
         headers,
         body: String::new(),
-        timeout_ms: NETWORK_ACTION_TIMEOUT_MS,
+        timeouts: mez_agent::ProviderHttpTimeouts::from_total(NETWORK_ACTION_TIMEOUT_MS),
         max_response_bytes: Some(max_response_bytes),
     };
     transport.send_async(&request).await

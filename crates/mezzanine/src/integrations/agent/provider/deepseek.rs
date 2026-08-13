@@ -201,7 +201,7 @@ pub(super) fn build_deepseek_chat_completions_http_request_with_strategy(
         url: endpoint.to_string(),
         headers,
         body,
-        timeout_ms,
+        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
         max_response_bytes: None,
     })
 }
@@ -253,7 +253,7 @@ pub(super) fn build_deepseek_models_http_request(
         url: models_endpoint,
         headers,
         body: String::new(),
-        timeout_ms,
+        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
         max_response_bytes: None,
     })
 }

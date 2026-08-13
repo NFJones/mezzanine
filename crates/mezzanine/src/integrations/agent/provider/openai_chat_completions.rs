@@ -149,7 +149,7 @@ fn build_openai_chat_completions_http_request(
         url: endpoint.to_string(),
         headers,
         body,
-        timeout_ms,
+        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
         max_response_bytes: None,
     })
 }
@@ -183,7 +183,7 @@ fn build_openai_chat_completions_models_http_request(
         url: models_endpoint,
         headers,
         body: String::new(),
-        timeout_ms,
+        timeouts: mez_agent::ProviderHttpTimeouts::from_total(timeout_ms),
         max_response_bytes: None,
     })
 }

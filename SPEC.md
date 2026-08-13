@@ -2109,6 +2109,15 @@ valid long-running model requests can report their own timeout or provider
 failure before the runtime watchdog can fail the turn. The runtime MUST ignore
 stale claim-timeout generations after a later claim, retry, completion,
 failure, or user interruption has already settled the worker's ownership.
+Provider HTTP exchanges MUST apply finite connect, first-response-byte,
+inter-chunk, and total-response deadlines. The configured provider timeout is
+the total exchange budget; shorter phase limits MAY be derived from it. Body
+progress MUST NOT extend the total deadline, and only non-empty body chunks may
+restart the inter-chunk deadline. Timeout failures MUST identify the expired
+phase so retry and user diagnostics can distinguish connection, first-byte,
+stream-stall, and total-budget failures. Cancelling or timing out an exchange
+MUST drop the in-flight request/body future so the provider slot can be
+released.
 At all times, a running agent turn MUST have at least one observable runtime
 progress path: pending provider dispatch, claimed provider worker, live shell
 transaction or readiness probe, focused-shell hook continuation, approval/user

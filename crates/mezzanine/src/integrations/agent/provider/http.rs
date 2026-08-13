@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use mez_agent::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, ProviderHttpError, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderHttpResult, ProviderSseTerminalDetector,
+    ProviderHttpResponse, ProviderHttpResult, ProviderHttpTimeoutPhase, ProviderHttpTimeouts,
+    ProviderSseTerminalDetector,
 };
 
 /// Defines the Provider Http Transport behavior contract for this subsystem.
@@ -46,8 +47,6 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>>;
 }
 
-/// Default provider TCP/TLS connection timeout.
-const DEFAULT_PROVIDER_CONNECT_TIMEOUT_MS: u64 = 30 * 1000;
 /// Carries Reqwest Provider Http Transport state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -63,17 +62,15 @@ pub struct ReqwestProviderHttpTransport;
 /// decompression. Plain HTTP does not need certificate roots, so disabling
 /// their discovery for that scheme keeps loopback and private plaintext
 /// providers usable on hosts without a CA bundle. HTTPS retains reqwest's
-/// verified platform-root behavior. The client also avoids reqwest's
-/// whole-request timeout because that deadline includes reading the entire
-/// model response body.
-fn provider_http_client_builder(timeout_ms: u64, scheme: &str) -> reqwest::ClientBuilder {
-    let timeout = Duration::from_millis(timeout_ms);
-    let connect_timeout =
-        Duration::from_millis(timeout_ms.clamp(1, DEFAULT_PROVIDER_CONNECT_TIMEOUT_MS));
-
+/// verified platform-root behavior. Mezzanine owns explicit first-byte,
+/// inter-chunk, and total deadlines around reqwest operations so timeout
+/// failures retain a stable phase classification.
+fn provider_http_client_builder(
+    timeouts: ProviderHttpTimeouts,
+    scheme: &str,
+) -> reqwest::ClientBuilder {
     let builder = reqwest::Client::builder()
-        .connect_timeout(connect_timeout)
-        .read_timeout(timeout)
+        .connect_timeout(Duration::from_millis(timeouts.connect_timeout_ms))
         .no_gzip()
         .no_brotli()
         .no_deflate()
@@ -133,28 +130,53 @@ fn provider_http_response_read_error(
     ))
 }
 
-/// Reads one provider response chunk with an explicit inactivity deadline.
-///
-/// Reqwest's client-level read timeout is advisory at the transport boundary,
-/// while this wrapper gives Mezzanine one deterministic stall classification for
-/// every streamed body read. The deadline is restarted for each successful
-/// chunk, so long responses can continue as long as bytes keep arriving.
-async fn provider_http_read_chunk_with_timeout(
-    response: &mut reqwest::Response,
-    timeout_ms: u64,
-) -> ProviderHttpResult<std::result::Result<Option<Vec<u8>>, reqwest::Error>> {
-    let timeout = Duration::from_millis(timeout_ms.max(1));
-    let chunk = tokio::time::timeout(timeout, response.chunk())
-        .await
-        .map_err(|_| provider_http_response_stalled_error(timeout_ms))?;
-    Ok(chunk.map(|chunk| chunk.map(|chunk| chunk.to_vec())))
+/// Returns the earlier of one phase deadline and the whole-request deadline.
+fn provider_http_bounded_deadline(
+    phase_deadline: tokio::time::Instant,
+    total_deadline: tokio::time::Instant,
+) -> (tokio::time::Instant, bool) {
+    if total_deadline <= phase_deadline {
+        (total_deadline, true)
+    } else {
+        (phase_deadline, false)
+    }
 }
 
-/// Builds the deterministic error used when provider response progress stalls.
-fn provider_http_response_stalled_error(timeout_ms: u64) -> ProviderHttpError {
-    ProviderHttpError::invalid_state(format!(
-        "provider HTTP response read stalled for {timeout_ms}ms while waiting for body chunk"
-    ))
+/// Builds a typed phase or total timeout after one bounded wait expires.
+fn provider_http_deadline_error(
+    phase: ProviderHttpTimeoutPhase,
+    phase_timeout_ms: u64,
+    total_timeout_ms: u64,
+    total_limited: bool,
+    operation: &str,
+) -> ProviderHttpError {
+    if total_limited {
+        ProviderHttpError::timeout(ProviderHttpTimeoutPhase::Total, total_timeout_ms, operation)
+    } else {
+        ProviderHttpError::timeout(phase, phase_timeout_ms, operation)
+    }
+}
+
+/// Classifies reqwest send failures without losing connect timeout identity.
+fn provider_http_request_error(
+    error: reqwest::Error,
+    timeouts: ProviderHttpTimeouts,
+) -> ProviderHttpError {
+    if error.is_timeout() && error.is_connect() {
+        return ProviderHttpError::timeout(
+            ProviderHttpTimeoutPhase::Connect,
+            timeouts.connect_timeout_ms,
+            "establishing the provider connection",
+        );
+    }
+    if error.is_timeout() {
+        return ProviderHttpError::timeout(
+            ProviderHttpTimeoutPhase::FirstByte,
+            timeouts.first_byte_timeout_ms,
+            "sending the request and waiting for response headers",
+        );
+    }
+    ProviderHttpError::invalid_state(format!("provider HTTP request failed: {error}"))
 }
 
 /// Returns the lower-level reqwest source chain for provider diagnostics.
@@ -183,6 +205,12 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
         request: &'a ProviderHttpRequest,
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
         Box::pin(async move {
+            request.timeouts.validate()?;
+            let started_at = tokio::time::Instant::now();
+            let first_byte_deadline =
+                started_at + Duration::from_millis(request.timeouts.first_byte_timeout_ms);
+            let total_deadline =
+                started_at + Duration::from_millis(request.timeouts.total_timeout_ms);
             let method = request.method.parse::<reqwest::Method>().map_err(|_| {
                 ProviderHttpError::invalid_args(format!(
                     "unsupported provider HTTP method {}",
@@ -206,24 +234,34 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
             }
             apply_provider_transport_default_headers(&mut headers);
 
-            let client = provider_http_client_builder(request.timeout_ms, url.scheme())
+            let client = provider_http_client_builder(request.timeouts, url.scheme())
                 .build()
                 .map_err(|error| {
                     ProviderHttpError::invalid_state(format!(
                         "provider HTTP client setup failed: {error}"
                     ))
                 })?;
-            let mut response = client
-                .request(method, url)
-                .headers(headers)
-                .body(request.body.clone())
-                .send()
-                .await
-                .map_err(|error| {
-                    ProviderHttpError::invalid_state(format!(
-                        "provider HTTP request failed: {error}"
-                    ))
-                })?;
+            let (send_deadline, total_limited) =
+                provider_http_bounded_deadline(first_byte_deadline, total_deadline);
+            let mut response = tokio::time::timeout_at(
+                send_deadline,
+                client
+                    .request(method, url)
+                    .headers(headers)
+                    .body(request.body.clone())
+                    .send(),
+            )
+            .await
+            .map_err(|_| {
+                provider_http_deadline_error(
+                    ProviderHttpTimeoutPhase::FirstByte,
+                    request.timeouts.first_byte_timeout_ms,
+                    request.timeouts.total_timeout_ms,
+                    total_limited,
+                    "sending the request and waiting for response headers",
+                )
+            })?
+            .map_err(|error| provider_http_request_error(error, request.timeouts))?;
             let status_code = response.status().as_u16();
             let mut response_headers = response
                 .headers()
@@ -248,29 +286,46 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
             let mut body_truncated = false;
             let mut body = Vec::new();
             let mut terminal_detector = ProviderSseTerminalDetector::default();
+            let mut progress_phase = ProviderHttpTimeoutPhase::FirstByte;
+            let mut progress_timeout_ms = request.timeouts.first_byte_timeout_ms;
+            let mut progress_deadline = first_byte_deadline;
             loop {
-                let chunk =
-                    match provider_http_read_chunk_with_timeout(&mut response, request.timeout_ms)
-                        .await?
-                    {
-                        Ok(Some(chunk)) => chunk,
-                        Ok(None) => break,
-                        Err(error) => {
-                            if expects_event_stream && terminal_detector.has_terminal_event(&body) {
-                                break;
-                            }
-                            if error.is_timeout() {
-                                return Err(provider_http_response_stalled_error(
-                                    request.timeout_ms,
-                                ));
-                            }
-                            return Err(provider_http_response_read_error(
-                                status_code,
-                                content_encoding,
-                                error,
+                let (read_deadline, total_limited) =
+                    provider_http_bounded_deadline(progress_deadline, total_deadline);
+                let chunk = match tokio::time::timeout_at(read_deadline, response.chunk())
+                    .await
+                    .map_err(|_| {
+                        provider_http_deadline_error(
+                            progress_phase,
+                            progress_timeout_ms,
+                            request.timeouts.total_timeout_ms,
+                            total_limited,
+                            "waiting for provider response body progress",
+                        )
+                    })? {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => break,
+                    Err(error) => {
+                        if expects_event_stream && terminal_detector.has_terminal_event(&body) {
+                            break;
+                        }
+                        if error.is_timeout() {
+                            return Err(ProviderHttpError::timeout(
+                                progress_phase,
+                                progress_timeout_ms,
+                                "waiting for provider response body progress",
                             ));
                         }
-                    };
+                        return Err(provider_http_response_read_error(
+                            status_code,
+                            content_encoding,
+                            error,
+                        ));
+                    }
+                };
+                if chunk.is_empty() {
+                    continue;
+                }
                 if body.len().saturating_add(chunk.len()) > response_limit {
                     if request.max_response_bytes.is_none() {
                         return Err(ProviderHttpError::invalid_state(
@@ -288,6 +343,10 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                 if expects_event_stream && terminal_detector.has_terminal_event(&body) {
                     break;
                 }
+                progress_phase = ProviderHttpTimeoutPhase::InterChunk;
+                progress_timeout_ms = request.timeouts.inter_chunk_timeout_ms;
+                progress_deadline = tokio::time::Instant::now()
+                    + Duration::from_millis(request.timeouts.inter_chunk_timeout_ms);
             }
             if body_truncated {
                 response_headers.insert("x-mez-body-truncated".to_string(), "true".to_string());
@@ -311,8 +370,9 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
 #[cfg(test)]
 mod provider_transport_tests {
     use super::{
-        AsyncProviderHttpTransport, ProviderHttpRequest, ProviderSseTerminalDetector,
-        ReqwestProviderHttpTransport, apply_provider_transport_default_headers,
+        AsyncProviderHttpTransport, ProviderHttpRequest, ProviderHttpTimeouts,
+        ProviderSseTerminalDetector, ReqwestProviderHttpTransport,
+        apply_provider_transport_default_headers,
     };
     use std::collections::BTreeMap;
     use std::time::Duration;
@@ -411,7 +471,7 @@ mod provider_transport_tests {
             url: format!("http://{address}/responses"),
             headers: BTreeMap::from([("Accept".to_string(), "text/event-stream".to_string())]),
             body: "{}".to_string(),
-            timeout_ms: 1_000,
+            timeouts: ProviderHttpTimeouts::from_total(1_000),
             max_response_bytes: None,
         };
 
@@ -473,7 +533,7 @@ mod provider_transport_tests {
             url: format!("http://{address}/large.txt"),
             headers: BTreeMap::new(),
             body: String::new(),
-            timeout_ms: 1_000,
+            timeouts: ProviderHttpTimeouts::from_total(1_000),
             max_response_bytes: Some(3),
         };
 
@@ -534,7 +594,12 @@ mod provider_transport_tests {
             url: format!("http://{address}/stall.txt"),
             headers: BTreeMap::new(),
             body: String::new(),
-            timeout_ms: 50,
+            timeouts: ProviderHttpTimeouts {
+                connect_timeout_ms: 50,
+                first_byte_timeout_ms: 50,
+                inter_chunk_timeout_ms: 50,
+                total_timeout_ms: 200,
+            },
             max_response_bytes: None,
         };
 
@@ -544,11 +609,177 @@ mod provider_transport_tests {
             .unwrap_err();
         server.abort();
 
-        assert!(
-            error
-                .to_string()
-                .contains("provider HTTP response read stalled")
+        assert_eq!(
+            error.kind(),
+            mez_agent::ProviderHttpErrorKind::Timeout(
+                mez_agent::ProviderHttpTimeoutPhase::FirstByte
+            )
         );
+    }
+
+    /// Verifies a response that emits one body chunk and then stalls is
+    /// classified as an inter-chunk timeout rather than a first-byte timeout.
+    #[tokio::test]
+    async fn provider_transport_classifies_inter_chunk_stalls() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+                if read == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\na",
+                )
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        let request = ProviderHttpRequest {
+            method: "GET".to_string(),
+            url: format!("http://{address}/inter-chunk"),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            timeouts: ProviderHttpTimeouts {
+                connect_timeout_ms: 100,
+                first_byte_timeout_ms: 200,
+                inter_chunk_timeout_ms: 40,
+                total_timeout_ms: 500,
+            },
+            max_response_bytes: None,
+        };
+
+        let error = ReqwestProviderHttpTransport
+            .send_async(&request)
+            .await
+            .unwrap_err();
+        server.abort();
+
+        assert_eq!(
+            error.kind(),
+            mez_agent::ProviderHttpErrorKind::Timeout(
+                mez_agent::ProviderHttpTimeoutPhase::InterChunk
+            )
+        );
+    }
+
+    /// Verifies frequent body progress cannot extend the monotonic total
+    /// deadline for a slow-drip response.
+    #[tokio::test]
+    async fn provider_transport_total_deadline_bounds_slow_drip_responses() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+                if read == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: keep-alive\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            for byte in b"abcdefgh" {
+                if stream.write_all(std::slice::from_ref(byte)).await.is_err() {
+                    break;
+                }
+                let _ = stream.flush().await;
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+        });
+        let request = ProviderHttpRequest {
+            method: "GET".to_string(),
+            url: format!("http://{address}/slow-drip"),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            timeouts: ProviderHttpTimeouts {
+                connect_timeout_ms: 50,
+                first_byte_timeout_ms: 80,
+                inter_chunk_timeout_ms: 60,
+                total_timeout_ms: 110,
+            },
+            max_response_bytes: None,
+        };
+
+        let error = ReqwestProviderHttpTransport
+            .send_async(&request)
+            .await
+            .unwrap_err();
+        server.abort();
+
+        assert_eq!(
+            error.kind(),
+            mez_agent::ProviderHttpErrorKind::Timeout(mez_agent::ProviderHttpTimeoutPhase::Total)
+        );
+    }
+
+    /// Verifies a multi-chunk response completes when each phase and the total
+    /// exchange stay within their configured budgets.
+    #[tokio::test]
+    async fn provider_transport_accepts_healthy_multi_chunk_progress() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+                if read == 0 || request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nab")
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            stream.write_all(b"cd").await.unwrap();
+        });
+        let request = ProviderHttpRequest {
+            method: "GET".to_string(),
+            url: format!("http://{address}/healthy"),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            timeouts: ProviderHttpTimeouts {
+                connect_timeout_ms: 100,
+                first_byte_timeout_ms: 200,
+                inter_chunk_timeout_ms: 100,
+                total_timeout_ms: 500,
+            },
+            max_response_bytes: None,
+        };
+
+        let response = ReqwestProviderHttpTransport
+            .send_async(&request)
+            .await
+            .unwrap();
+        server.abort();
+
+        assert_eq!(response.body, "abcd");
     }
 
     /// Verifies terminal SSE detection also lets buffered failure events survive

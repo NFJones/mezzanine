@@ -13,6 +13,33 @@ pub enum ProviderHttpErrorKind {
     InvalidArgs,
     /// The transport could not complete or decode the provider exchange.
     InvalidState,
+    /// The transport exceeded one explicit request or response phase deadline.
+    Timeout(ProviderHttpTimeoutPhase),
+}
+
+/// Stable provider HTTP phases that can expire independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderHttpTimeoutPhase {
+    /// TCP/TLS connection establishment.
+    Connect,
+    /// Request send and first response-body byte.
+    FirstByte,
+    /// Progress between non-empty response-body chunks.
+    InterChunk,
+    /// Complete request and response exchange.
+    Total,
+}
+
+impl ProviderHttpTimeoutPhase {
+    /// Returns the stable diagnostic name for this timeout phase.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::FirstByte => "first_byte",
+            Self::InterChunk => "inter_chunk",
+            Self::Total => "total",
+        }
+    }
 }
 
 /// Provider-neutral failure returned by an HTTP transport adapter.
@@ -36,6 +63,17 @@ impl ProviderHttpError {
         Self {
             kind: ProviderHttpErrorKind::InvalidState,
             message: message.into(),
+        }
+    }
+
+    /// Builds a typed provider HTTP phase-timeout failure.
+    pub fn timeout(phase: ProviderHttpTimeoutPhase, timeout_ms: u64, operation: &str) -> Self {
+        Self {
+            kind: ProviderHttpErrorKind::Timeout(phase),
+            message: format!(
+                "provider HTTP timeout phase={} limit_ms={timeout_ms} while {operation}",
+                phase.as_str()
+            ),
         }
     }
 
@@ -67,6 +105,73 @@ pub const DEFAULT_PROVIDER_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// Default per-read stall timeout for long-running provider responses.
 pub const DEFAULT_PROVIDER_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 
+/// Default upper bound for provider TCP/TLS connection establishment.
+pub const DEFAULT_PROVIDER_CONNECT_TIMEOUT_MS: u64 = 30 * 1000;
+
+/// Default upper bound for request send and the first response-body byte.
+pub const DEFAULT_PROVIDER_FIRST_BYTE_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+
+/// Default upper bound between non-empty provider response chunks.
+pub const DEFAULT_PROVIDER_INTER_CHUNK_TIMEOUT_MS: u64 = 2 * 60 * 1000;
+
+/// Explicit timeout policy for one provider HTTP exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderHttpTimeouts {
+    /// TCP/TLS connection timeout.
+    pub connect_timeout_ms: u64,
+    /// Request-send and first-response-byte timeout.
+    pub first_byte_timeout_ms: u64,
+    /// Maximum inactivity between non-empty body chunks.
+    pub inter_chunk_timeout_ms: u64,
+    /// Total request and response deadline.
+    pub total_timeout_ms: u64,
+}
+
+impl ProviderHttpTimeouts {
+    /// Derives safe phase deadlines from one configured total timeout.
+    pub const fn from_total(total_timeout_ms: u64) -> Self {
+        Self {
+            connect_timeout_ms: min_u64(total_timeout_ms, DEFAULT_PROVIDER_CONNECT_TIMEOUT_MS),
+            first_byte_timeout_ms: min_u64(
+                total_timeout_ms,
+                DEFAULT_PROVIDER_FIRST_BYTE_TIMEOUT_MS,
+            ),
+            inter_chunk_timeout_ms: min_u64(
+                total_timeout_ms,
+                DEFAULT_PROVIDER_INTER_CHUNK_TIMEOUT_MS,
+            ),
+            total_timeout_ms,
+        }
+    }
+
+    /// Validates that every phase is finite and bounded by the total deadline.
+    pub fn validate(self) -> ProviderHttpResult<()> {
+        if self.connect_timeout_ms == 0
+            || self.first_byte_timeout_ms == 0
+            || self.inter_chunk_timeout_ms == 0
+            || self.total_timeout_ms == 0
+        {
+            return Err(ProviderHttpError::invalid_args(
+                "provider HTTP timeout phases must be greater than zero",
+            ));
+        }
+        if self.connect_timeout_ms > self.first_byte_timeout_ms
+            || self.first_byte_timeout_ms > self.total_timeout_ms
+            || self.inter_chunk_timeout_ms > self.total_timeout_ms
+        {
+            return Err(ProviderHttpError::invalid_args(
+                "provider HTTP timeout phases must fit within the total deadline",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Const-compatible minimum helper for timeout derivation.
+const fn min_u64(left: u64, right: u64) -> u64 {
+    if left < right { left } else { right }
+}
+
 /// Provider-neutral HTTP request assembled by a model-provider adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderHttpRequest {
@@ -78,8 +183,8 @@ pub struct ProviderHttpRequest {
     pub headers: BTreeMap<String, String>,
     /// UTF-8 request body.
     pub body: String,
-    /// Per-read stall timeout in milliseconds.
-    pub timeout_ms: u64,
+    /// Connect, first-byte, inter-chunk, and total request deadlines.
+    pub timeouts: ProviderHttpTimeouts,
     /// Optional response-body bound requested by the caller.
     pub max_response_bytes: Option<usize>,
 }
@@ -332,8 +437,8 @@ fn sse_data_lines_equal(block: &str, target: &str) -> bool {
 mod tests {
     use super::{
         DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError,
-        ProviderHttpErrorKind, ProviderHttpRequest, ProviderHttpResponse,
-        ProviderSseTerminalDetector, parse_sse_events,
+        ProviderHttpErrorKind, ProviderHttpRequest, ProviderHttpResponse, ProviderHttpTimeoutPhase,
+        ProviderHttpTimeouts, ProviderSseTerminalDetector, parse_sse_events,
     };
     use std::collections::BTreeMap;
 
@@ -346,10 +451,14 @@ mod tests {
             url: "https://provider.invalid/v1/responses".to_string(),
             headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
             body: "{}".to_string(),
-            timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
+            timeouts: ProviderHttpTimeouts::from_total(DEFAULT_PROVIDER_TIMEOUT_MS),
             max_response_bytes: Some(DEFAULT_PROVIDER_MAX_RESPONSE_BYTES),
         };
-        assert_eq!(request.timeout_ms, 30 * 60 * 1000);
+        assert_eq!(request.timeouts.total_timeout_ms, 30 * 60 * 1000);
+        assert_eq!(request.timeouts.connect_timeout_ms, 30 * 1000);
+        assert_eq!(request.timeouts.first_byte_timeout_ms, 5 * 60 * 1000);
+        assert_eq!(request.timeouts.inter_chunk_timeout_ms, 2 * 60 * 1000);
+        request.timeouts.validate().unwrap();
         assert_eq!(request.max_response_bytes, Some(16 * 1024 * 1024));
 
         let response = ProviderHttpResponse {
@@ -367,11 +476,21 @@ mod tests {
     fn provider_http_errors_preserve_stable_categories() {
         let invalid_args = ProviderHttpError::invalid_args("bad method");
         let invalid_state = ProviderHttpError::invalid_state("read stalled");
+        let timeout = ProviderHttpError::timeout(
+            ProviderHttpTimeoutPhase::FirstByte,
+            50,
+            "waiting for the first response byte",
+        );
 
         assert_eq!(invalid_args.kind(), ProviderHttpErrorKind::InvalidArgs);
         assert_eq!(invalid_args.message(), "bad method");
         assert_eq!(invalid_state.kind(), ProviderHttpErrorKind::InvalidState);
         assert_eq!(invalid_state.message(), "read stalled");
+        assert_eq!(
+            timeout.kind(),
+            ProviderHttpErrorKind::Timeout(ProviderHttpTimeoutPhase::FirstByte)
+        );
+        assert!(timeout.message().contains("phase=first_byte"));
     }
 
     /// Verifies syntax-level parsing preserves event names and joins multiple

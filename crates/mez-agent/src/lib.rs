@@ -299,8 +299,10 @@ pub use harness::{
     AgentTurnResponseDecision,
 };
 pub use http::{
-    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError,
-    ProviderHttpErrorKind, ProviderHttpRequest, ProviderHttpResponse, ProviderHttpResult,
+    DEFAULT_PROVIDER_CONNECT_TIMEOUT_MS, DEFAULT_PROVIDER_FIRST_BYTE_TIMEOUT_MS,
+    DEFAULT_PROVIDER_INTER_CHUNK_TIMEOUT_MS, DEFAULT_PROVIDER_MAX_RESPONSE_BYTES,
+    DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError, ProviderHttpErrorKind, ProviderHttpRequest,
+    ProviderHttpResponse, ProviderHttpResult, ProviderHttpTimeoutPhase, ProviderHttpTimeouts,
     ProviderSseTerminalDetector, SseEvent, SseParseError, parse_sse_events, parse_sse_events_with,
 };
 pub use local_action::{
