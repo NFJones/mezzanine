@@ -575,6 +575,56 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Resumes one decided action after its turn fairly reacquires capacity.
+    ///
+    /// Returns `true` when a retained approved or redirected action was
+    /// executed. Dependency-waiting turns have no decided approval and continue
+    /// through the ordinary provider-resumption path.
+    pub(crate) fn resume_decided_agent_action_after_reacquisition(
+        &mut self,
+        turn_id: &str,
+    ) -> Result<bool> {
+        let approval_ids = self
+            .blocked_agent_approval_ids_by_turn()
+            .remove(turn_id)
+            .unwrap_or_default();
+        let decided = approval_ids.into_iter().find_map(|approval_id| {
+            let approval = self.blocked_approvals().get(&approval_id)?.clone();
+            matches!(
+                approval.decision,
+                Some(
+                    mez_agent::permissions::ApprovalDecision::Approve
+                        | mez_agent::permissions::ApprovalDecision::Redirect
+                )
+            )
+            .then_some((approval_id, approval))
+        });
+        let Some((approval_id, approval)) = decided else {
+            return Ok(false);
+        };
+        match approval.decision {
+            Some(mez_agent::permissions::ApprovalDecision::Approve) => {
+                let controller = approval
+                    .decided_by_client_id
+                    .as_deref()
+                    .and_then(mez_core::ids::ClientId::opaque)
+                    .or_else(|| self.session.primary_client_id().cloned())
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "approved action resumption requires an attached client identity",
+                        )
+                    })?;
+                Ok(self
+                    .resume_approved_blocked_agent_action(&approval_id, &approval, &controller)?
+                    .is_some())
+            }
+            Some(mez_agent::permissions::ApprovalDecision::Redirect) => Ok(self
+                .settle_decided_blocked_agent_action(&approval_id, &approval)?
+                .is_some()),
+            _ => Ok(false),
+        }
+    }
+
     /// Runs the resume approved blocked agent action operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -640,6 +690,16 @@ impl RuntimeSessionService {
         if execution.action_results[result_index].status != ActionStatus::Blocked {
             return Ok(None);
         }
+        if turn.state == AgentTurnState::Blocked {
+            self.agent.agent_scheduler.requeue_blocked(&turn.turn_id)?;
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                "scheduler blocked -> queued reason=approval_approved capacity=reacquire",
+            )?;
+            self.start_ready_agent_turns()?;
+            return Ok(Some(1));
+        }
         let retained_permission_evaluation = execution.action_results[result_index]
             .permission_evaluation
             .clone();
@@ -661,23 +721,6 @@ impl RuntimeSessionService {
                 approval_id, action.id, approval.action_kind
             ),
         )?;
-        let _ = self.agent.agent_scheduler.resume_blocked(&turn.turn_id);
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            "scheduler blocked -> running reason=approval_approved",
-        )?;
-        if turn.state == AgentTurnState::Blocked {
-            self.agent_turn_ledger_mut()
-                .resume_blocked_turn(&turn.turn_id)?;
-            self.reconcile_active_turn_sleep_inhibition();
-            self.append_agent_trace_turn_transition(
-                &turn,
-                AgentTurnState::Blocked,
-                AgentTurnState::Running,
-                "approval_approved",
-            )?;
-        }
         match &action.payload {
             _ if local_action_plan(&action)?.is_some() => {
                 let Some(plan) = local_action_plan(&action)? else {
@@ -992,6 +1035,19 @@ impl RuntimeSessionService {
             return Ok(None);
         }
 
+        if decision == mez_agent::permissions::ApprovalDecision::Redirect
+            && turn.state == AgentTurnState::Blocked
+        {
+            self.agent.agent_scheduler.requeue_blocked(&turn.turn_id)?;
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                "scheduler blocked -> queued reason=approval_redirected capacity=reacquire",
+            )?;
+            self.start_ready_agent_turns()?;
+            return Ok(Some(1));
+        }
+
         match decision {
             mez_agent::permissions::ApprovalDecision::Disapprove => {
                 self.append_agent_trace_turn_event(
@@ -1072,23 +1128,6 @@ impl RuntimeSessionService {
                         approval_id, action.id, approval.action_kind
                     ),
                 )?;
-                let _ = self.agent.agent_scheduler.resume_blocked(&turn.turn_id);
-                self.append_agent_trace_turn_event(
-                    &turn.pane_id,
-                    &turn.turn_id,
-                    "scheduler blocked -> running reason=approval_redirected",
-                )?;
-                if turn.state == AgentTurnState::Blocked {
-                    self.agent_turn_ledger_mut()
-                        .resume_blocked_turn(&turn.turn_id)?;
-                    self.reconcile_active_turn_sleep_inhibition();
-                    self.append_agent_trace_turn_transition(
-                        &turn,
-                        AgentTurnState::Blocked,
-                        AgentTurnState::Running,
-                        "approval_redirected",
-                    )?;
-                }
                 execution.action_results[result_index] = ActionResult::succeeded(
                     &turn,
                     &action,

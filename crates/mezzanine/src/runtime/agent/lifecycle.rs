@@ -426,9 +426,6 @@ impl RuntimeSessionService {
                     ));
                 }
             }
-            self.agent
-                .pending_agent_provider_tasks
-                .insert(running.turn_id.clone());
             self.append_agent_trace_turn_transition(
                 &turn,
                 previous_state,
@@ -437,15 +434,6 @@ impl RuntimeSessionService {
                     "scheduler_reacquire"
                 } else {
                     "scheduler_start"
-                },
-            )?;
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                &running.turn_id,
-                if previous_state == AgentTurnState::Blocked {
-                    "provider_task queued reason=scheduler_reacquire"
-                } else {
-                    "provider_task queued reason=scheduler_start"
                 },
             )?;
             if suppressed_turn_id != Some(running.turn_id.as_str()) {
@@ -459,6 +447,23 @@ impl RuntimeSessionService {
                 )?;
             }
             started = started.saturating_add(1);
+            if previous_state == AgentTurnState::Blocked
+                && self.resume_decided_agent_action_after_reacquisition(&running.turn_id)?
+            {
+                continue;
+            }
+            self.agent
+                .pending_agent_provider_tasks
+                .insert(running.turn_id.clone());
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &running.turn_id,
+                if previous_state == AgentTurnState::Blocked {
+                    "provider_task queued reason=scheduler_reacquire"
+                } else {
+                    "provider_task queued reason=scheduler_start"
+                },
+            )?;
         }
         if started > 0 {
             self.checkpoint_agent_session_metadata()?;

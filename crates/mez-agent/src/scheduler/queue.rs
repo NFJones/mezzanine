@@ -120,8 +120,7 @@ impl AgentScheduler {
         Ok(self.running.remove(index))
     }
 
-    /// Moves a running turn into blocked state while retaining its global
-    /// concurrency reservation.
+    /// Moves a running turn into blocked state and releases provider capacity.
     ///
     /// Blocked work still participates in agent and pane exclusivity checks so a
     /// waiting turn cannot be bypassed by another shell-capable turn that would
@@ -135,6 +134,29 @@ impl AgentScheduler {
         let work = self.running.remove(index);
         self.blocked.push(work.clone());
         Ok(work)
+    }
+
+    /// Queues an externally blocked turn for fair provider-capacity reacquisition.
+    ///
+    /// The turn re-enters the normal ready queue while a private claim keeps
+    /// its agent and pane exclusive until it starts or is cancelled.
+    pub fn requeue_blocked(&mut self, turn_id: &str) -> SchedulerResult<ScheduledWork> {
+        let index = self
+            .blocked
+            .iter()
+            .position(|blocked| blocked.turn_id == turn_id)
+            .ok_or_else(|| SchedulerError::new(SchedulerErrorKind::NotFound, "turn not found"))?;
+        let work = self.blocked.remove(index);
+        let scheduled = ScheduledWork {
+            turn_id: work.turn_id.clone(),
+            conversation_id: work.conversation_id.clone(),
+            agent_id: work.agent_id.clone(),
+            pane_id: work.pane_id.clone(),
+            kind: work.kind,
+        };
+        self.reacquiring.push(work);
+        self.queued.push_back(scheduled.clone());
+        Ok(scheduled)
     }
 
     /// Moves a running parent into dependency-waiting state and releases its
@@ -179,10 +201,15 @@ impl AgentScheduler {
 
     /// Moves a blocked turn back to running state.
     ///
-    /// Approved continuations are resumptions of already-started user work. The
-    /// scheduler reserves capacity while work is blocked so resuming cannot
-    /// exceed the configured concurrency limit.
+    /// Approved continuations should normally use [`Self::requeue_blocked`] so
+    /// they participate in fairness. This immediate path is retained for
+    /// callers that have already established available provider capacity.
     pub fn resume_blocked(&mut self, turn_id: &str) -> SchedulerResult<RunningWork> {
+        if self.active_capacity_used() >= self.max_concurrent_agents {
+            return Err(SchedulerError::invalid_state(
+                "provider capacity is unavailable for blocked turn resumption",
+            ));
+        }
         let index = self
             .blocked
             .iter()
@@ -259,7 +286,7 @@ impl AgentScheduler {
 
     /// Returns the number of turns that currently own provider capacity.
     pub fn active_capacity_used(&self) -> usize {
-        self.running.len().saturating_add(self.blocked.len())
+        self.running.len()
     }
 
     /// Iterates queued turns in their current fairness order.

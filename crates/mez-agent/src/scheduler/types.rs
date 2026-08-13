@@ -2,9 +2,9 @@
 //!
 //! These types define the public contract for queued, active, blocked, and
 //! dependency-waiting work while keeping mutable queue storage owned by the
-//! scheduler implementation. Provider capacity is owned only by running work
-//! and blocked work that explicitly retains its slot; dependency waits retain
-//! lifecycle and pane claims without consuming provider capacity.
+//! scheduler implementation. Provider capacity is owned only by running work;
+//! blocked and dependency-waiting turns retain lifecycle and pane claims
+//! without consuming provider capacity.
 
 use std::collections::VecDeque;
 
@@ -61,8 +61,8 @@ pub struct SchedulerSnapshot {
     pub queued: usize,
     /// Number of turns currently running.
     pub running: usize,
-    /// Number of turns blocked on external input while retaining provider
-    /// capacity and pane ownership.
+    /// Number of turns blocked on external input while retaining agent and
+    /// pane ownership without provider capacity.
     pub blocked: usize,
     /// Number of parent turns waiting for dependent work without provider
     /// capacity.
