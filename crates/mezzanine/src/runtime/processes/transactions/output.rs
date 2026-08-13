@@ -6,11 +6,15 @@ use super::{
     apply_patch_transaction_phase, find_byte_subsequence,
     latest_agent_shell_transaction_output_lines, runtime_shell_transaction_observation_limit,
 };
+use crate::host::terminal::parse_mez_shell_transaction_osc;
+use mez_terminal::TerminalOscEvent;
 
 /// Maximum bytes retained while waiting for one mandatory OSC start boundary.
 const SHELL_TRANSACTION_START_BOUNDARY_LIMIT_BYTES: usize = 4096;
 /// Maximum bytes retained while waiting for one matching OSC end boundary.
 const SHELL_TRANSACTION_END_BOUNDARY_LIMIT_BYTES: usize = 4096;
+/// Maximum bytes retained while waiting for one private control OSC terminator.
+const SHELL_TRANSACTION_CONTROL_OSC_LIMIT_BYTES: usize = 4096;
 
 /// Returns bytes after a complete matching OSC start marker.
 ///
@@ -111,6 +115,107 @@ fn complete_transaction_utf8_bytes(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<u
     pending.drain(..complete_len).collect()
 }
 
+/// Returns whether one complete OSC record is Mezzanine control framing for
+/// the active transaction marker.
+fn shell_transaction_control_osc_matches_marker(record: &[u8], marker: &str) -> bool {
+    let payload_end = if record.ends_with(b"\x07") {
+        record.len().saturating_sub(1)
+    } else if record.ends_with(b"\x1b\\") {
+        record.len().saturating_sub(2)
+    } else {
+        return false;
+    };
+    let Some(payload) = record
+        .get(2..payload_end)
+        .and_then(|payload| std::str::from_utf8(payload).ok())
+    else {
+        return false;
+    };
+    let Some(event) = parse_mez_shell_transaction_osc(payload) else {
+        return false;
+    };
+    match event {
+        TerminalOscEvent::ShellReceiverReady {
+            marker: event_marker,
+            ..
+        }
+        | TerminalOscEvent::ShellReceiverInstalled {
+            marker: event_marker,
+            ..
+        }
+        | TerminalOscEvent::ShellReceiverComplete {
+            marker: event_marker,
+            ..
+        }
+        | TerminalOscEvent::ShellTransactionPayloadReceiverReady {
+            marker: event_marker,
+            ..
+        }
+        | TerminalOscEvent::ShellTransactionStart {
+            marker: event_marker,
+            ..
+        }
+        | TerminalOscEvent::ShellTransactionEnd {
+            marker: event_marker,
+            ..
+        } => event_marker == marker,
+        _ => false,
+    }
+}
+
+/// Removes complete marker-correlated Mezzanine control OSC records while
+/// preserving child-owned OSC output and possible private-record fragments.
+fn shell_transaction_bytes_without_control_osc(
+    pending: &mut Vec<u8>,
+    bytes: &[u8],
+    marker: &str,
+) -> Vec<u8> {
+    const CONTROL_OSC_PREFIX: &[u8] = b"\x1b]133;";
+
+    pending.extend_from_slice(bytes);
+    let mut filtered = Vec::with_capacity(pending.len());
+    let mut cursor = 0usize;
+    loop {
+        let Some(relative_start) = find_byte_subsequence(&pending[cursor..], CONTROL_OSC_PREFIX)
+        else {
+            let partial_len = (1..CONTROL_OSC_PREFIX.len().min(pending.len() + 1))
+                .rev()
+                .find(|length| pending.ends_with(&CONTROL_OSC_PREFIX[..*length]))
+                .unwrap_or(0);
+            let emit_end = pending.len().saturating_sub(partial_len);
+            filtered.extend_from_slice(&pending[cursor..emit_end]);
+            pending.drain(..emit_end);
+            return filtered;
+        };
+        let start = cursor + relative_start;
+        filtered.extend_from_slice(&pending[cursor..start]);
+        let terminator_search_start = start + CONTROL_OSC_PREFIX.len();
+        let terminator = pending[terminator_search_start..]
+            .iter()
+            .enumerate()
+            .find_map(|(offset, byte)| match *byte {
+                0x07 => Some(terminator_search_start + offset + 1),
+                0x1b if pending.get(terminator_search_start + offset + 1) == Some(&b'\\') => {
+                    Some(terminator_search_start + offset + 2)
+                }
+                _ => None,
+            });
+        let Some(end) = terminator else {
+            if pending.len().saturating_sub(start) > SHELL_TRANSACTION_CONTROL_OSC_LIMIT_BYTES {
+                filtered.extend_from_slice(&pending[start..]);
+                pending.clear();
+            } else {
+                pending.drain(..start);
+            }
+            return filtered;
+        };
+        if !shell_transaction_control_osc_matches_marker(&pending[start..end], marker) {
+            filtered.extend_from_slice(&pending[start..end]);
+        }
+        cursor = end;
+    }
+}
+
 impl RuntimeSessionService {
     pub(crate) fn record_running_shell_transaction_output(&mut self, pane_id: &str, bytes: &[u8]) {
         let output_preview_lines = self.process.settings.terminal_shell_output_preview_lines;
@@ -176,12 +281,20 @@ impl RuntimeSessionService {
                     &boundary_bytes,
                     marker,
                 );
+                let output_bytes = shell_transaction_bytes_without_control_osc(
+                    self.process
+                        .shell_transaction_control_osc_pending
+                        .entry(marker.clone())
+                        .or_default(),
+                    &transaction_bytes,
+                    marker,
+                );
                 let complete_bytes = complete_transaction_utf8_bytes(
                     self.process
                         .shell_transaction_output_utf8_pending
                         .entry(marker.clone())
                         .or_default(),
-                    &transaction_bytes,
+                    &output_bytes,
                 );
                 let observed_bytes = match transaction.kind {
                     RunningShellTransactionKind::AgentAction { .. } => {

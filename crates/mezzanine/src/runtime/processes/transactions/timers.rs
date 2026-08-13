@@ -167,6 +167,9 @@ impl RuntimeSessionService {
             .shell_transaction_end_boundary_pending
             .remove(marker);
         self.process
+            .shell_transaction_control_osc_pending
+            .remove(marker);
+        self.process
             .shell_transaction_output_utf8_pending
             .remove(marker);
         self.process

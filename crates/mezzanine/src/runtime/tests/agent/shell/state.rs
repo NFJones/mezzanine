@@ -2228,7 +2228,8 @@ fn runtime_bubblewrap_successful_probe_is_cached() {
 }
 
 /// Verifies a Fish pane runs the fixed internal capability script under POSIX
-/// sh and accepts the exact sentinel without changing Fish pane identity.
+/// sh, excludes fragmented receiver framing from retained output, and accepts
+/// the exact sentinel without changing Fish pane identity.
 #[test]
 fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
     let root = temp_root("runtime-bubblewrap-fish-probe");
@@ -2250,7 +2251,40 @@ fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
             .ensure_bubblewrap_capability_for_action(&turn, "fish-action-1")
             .unwrap()
     );
-    let (marker, mut transaction) = take_bubblewrap_probe_transaction(&mut service);
+    let marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| {
+            matches!(
+                transaction.kind,
+                RunningShellTransactionKind::BubblewrapCapabilityProbe { .. }
+            )
+            .then(|| marker.clone())
+        })
+        .unwrap();
+    let receiver_head = format!(
+        "\x1b]133;C;mez_marker={marker};mez_turn={};mez_agent={};mez_pane=%1\x1b\\\x1b]133;R;mez_payload_receiver=ready;mez_marker={marker};mez_turn={};mez_agent={};mez_",
+        turn.turn_id, turn.agent_id, turn.turn_id, turn.agent_id
+    );
+    service.record_running_shell_transaction_output("%1", receiver_head.as_bytes());
+    service
+        .observe_agent_shell_transaction_events(
+            "%1",
+            &[TerminalOscEvent::ShellTransactionStart {
+                marker: marker.clone(),
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                pane_id: "%1".to_string(),
+            }],
+        )
+        .unwrap();
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"pane=%1\x1b\\mez-bubblewrap-capability-v6",
+    );
+
+    let (observed_marker, transaction) = take_bubblewrap_probe_transaction(&mut service);
+    assert_eq!(observed_marker, marker);
     let RunningShellTransactionKind::BubblewrapCapabilityProbe { probe_plan, .. } =
         &transaction.kind
     else {
@@ -2260,7 +2294,10 @@ fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
         probe_plan.arguments[probe_plan.arguments.len() - 3],
         "/bin/sh"
     );
-    transaction.observed_output_preview = "mez-bubblewrap-capability-v6".to_string();
+    assert_eq!(
+        transaction.observed_output_preview,
+        probe_plan.expected_stdout
+    );
     service
         .observe_bubblewrap_capability_probe_transaction_end(&marker, transaction, 0)
         .unwrap();

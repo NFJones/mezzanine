@@ -412,6 +412,56 @@ fn runtime_pane_input_written_traces_active_shell_transaction() {
     assert!(trace.contains("action: create-1"), "{trace}");
 }
 
+/// Verifies transaction retention removes a fragmented, marker-correlated Fish
+/// payload receiver record without hiding child-owned OSC output.
+///
+/// Fish emits receiver readiness between the transaction start boundary and
+/// child output. PTY reads may split that private control record arbitrarily;
+/// retaining any fragment contaminates strict internal probe output, while
+/// stripping unrelated OSC records would corrupt legitimate command output.
+#[test]
+fn runtime_shell_transaction_observation_excludes_fragmented_fish_control_osc() {
+    let mut service = test_runtime_service();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "marker-1".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::ReadinessProbe,
+            pane_id: "%1".to_string(),
+            command: String::new(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"\x1b]133;R;mez_payload_receiver=ready;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_",
+    );
+    service.record_running_shell_transaction_output(
+        "%1",
+        b"pane=%1\x1b\\mez-bubblewrap-capability-v6\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\",
+    );
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
+    assert_eq!(
+        transaction.observed_output_preview,
+        "mez-bubblewrap-capability-v6\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\"
+    );
+    assert_eq!(
+        transaction.observed_output_bytes,
+        transaction.observed_output_preview.len()
+    );
+    assert!(!transaction.observed_output_truncated);
+}
+
 /// Verifies model-visible shell transaction observation strips prompt styling
 /// and Mezzanine wrapper echo while preserving command output.
 ///
