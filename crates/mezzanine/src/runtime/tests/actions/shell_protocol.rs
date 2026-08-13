@@ -1869,6 +1869,103 @@ fn runtime_fish_transaction_waits_for_payload_receiver_ready() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies Fish bootstrap registration requires receiver readiness before
+/// releasing its deferred payload. Bootstrap uses the same Fish transport as
+/// ordinary actions, so omitting this gate turns the valid readiness event
+/// into a protocol violation and prevents environment certification.
+#[test]
+fn runtime_fish_bootstrap_waits_for_payload_receiver_ready() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    let pane_id = "%1".to_string();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+    let environment = mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "test-host",
+        "test-user",
+        None,
+        "/usr/bin/fish",
+        mez_agent::ShellClassification::Fish,
+        None,
+        Some("/usr/bin:/bin".to_string()),
+        "/tmp",
+        None,
+        false,
+        None,
+        Vec::new(),
+    )
+    .unwrap();
+    service.set_pane_environment_signature_for_tests(&pane_id, environment);
+
+    let (marker, _wrapper) = service
+        .prepare_bootstrap_to_pane(&pane_id)
+        .unwrap()
+        .expect("Fish bootstrap should register");
+    let turn_id = service
+        .running_shell_transactions_for_tests()
+        .get(&marker)
+        .unwrap()
+        .turn_id
+        .clone();
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .get(&marker)
+            .unwrap()
+            .pending_input_payload
+            .is_some()
+    );
+    let _ = service.drain_pane_io_transition();
+
+    service
+        .observe_agent_shell_transaction_start(&pane_id, &marker, &turn_id, "agent-%1", &pane_id)
+        .unwrap();
+    assert!(service.drain_pane_io_transition().side_effects.is_empty());
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .get(&marker)
+            .unwrap()
+            .pending_input_payload
+            .is_some()
+    );
+
+    assert_eq!(
+        service
+            .observe_shell_transaction_payload_receiver_ready(
+                &pane_id, &marker, &turn_id, "agent-%1", &pane_id,
+            )
+            .unwrap(),
+        1
+    );
+    let payload = service.drain_pane_io_transition().side_effects;
+    assert!(matches!(
+        payload.as_slice(),
+        [RuntimeSideEffect::PaneProcessIo {
+            effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+            ..
+        }] if delivery.delivery_id.as_deref() == Some(marker.as_str())
+    ));
+    assert!(
+        service
+            .running_shell_transactions_for_tests()
+            .get(&marker)
+            .unwrap()
+            .pending_input_payload
+            .is_none()
+    );
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies pending payload handoff uses a short start-marker deadline.
 ///
 /// Non-stateful shell actions wait for an OSC start marker before sending the

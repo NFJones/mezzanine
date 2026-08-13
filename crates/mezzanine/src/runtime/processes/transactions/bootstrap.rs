@@ -128,8 +128,8 @@ impl RuntimeSessionService {
     /// delivered after any preceding shell-handoff input.
     ///
     /// The encoded command payload remains on the registered transaction until
-    /// the runtime observes the wrapper's start marker and releases it through
-    /// the priority input path.
+    /// the runtime observes the wrapper's release boundary. Fish additionally
+    /// requires its correlated receiver-ready event after transaction start.
     pub(crate) fn prepare_bootstrap_to_pane(
         &mut self,
         pane_id: &str,
@@ -174,6 +174,8 @@ impl RuntimeSessionService {
         if !wrapper.ends_with('\n') {
             wrapper.push('\n');
         }
+        let requires_payload_receiver_ready =
+            classification == ShellClassification::Fish && !transaction_input.payload.is_empty();
         self.remember_mez_wrapper_filter_command(pane_id, &bootstrap_script);
         self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
         self.register_running_shell_transaction(
@@ -198,6 +200,9 @@ impl RuntimeSessionService {
             },
             true,
         );
+        if requires_payload_receiver_ready {
+            self.require_shell_transaction_payload_receiver_ready(&marker_id);
+        }
         if let Some(receiver_payload) = receiver_payload {
             self.register_shell_receiver_payload(&marker_id, receiver_payload);
         }
