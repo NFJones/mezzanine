@@ -486,7 +486,15 @@ impl RuntimeSessionService {
                     .get(pane_id)
                     .is_some_and(|session| session.visibility == AgentShellVisibility::Visible)
             {
-                let _ = self.enter_agent_subshell_if_needed(pane_id)?;
+                // A managed-Bash bootstrap settles from inside its private
+                // `bind -x` callback. Sending another receiver trigger from
+                // that same completion stack can place the control byte in
+                // Readline's callback teardown instead of its next input
+                // cycle. Keep the entry deferred until the restored parent
+                // publishes the prompt that follows callback completion.
+                if self.bash_receiver_token_for_pane(pane_id).is_none() {
+                    let _ = self.enter_agent_subshell_if_needed(pane_id)?;
+                }
             } else if !self.pane_bootstrap_is_pending(pane_id) {
                 self.clear_deferred_agent_subshell_entry(pane_id);
             }

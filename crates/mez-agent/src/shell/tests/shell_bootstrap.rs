@@ -426,6 +426,34 @@ fn shell_identity_probe_is_syntax_neutral_and_parses_renamed_fish() {
     assert_eq!(result.shell_version.as_deref(), Some("fish, version 3.7.1"));
 }
 
+/// Verifies the probe identifies the executing Bash process rather than an
+/// inherited login-shell path so managed transport survives pane re-entry.
+#[test]
+fn shell_identity_probe_prefers_executing_bash_over_login_shell() {
+    let bash = Path::new("/bin/bash");
+    if !bash.is_file() {
+        eprintln!("skipping Bash identity probe because /bin/bash is unavailable");
+        return;
+    }
+    let marker = marker();
+    let command =
+        shell_identity_probe_command(marker.as_str(), "turn-1", "agent-1", "pane-1").unwrap();
+    let bash_command = format!("{command}; :");
+    let output = std::process::Command::new(bash)
+        .args(["--noprofile", "--norc", "-c", bash_command.as_str()])
+        .env("SHELL", "/bin/zsh")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "status={:?}", output.status);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let result = parse_shell_identity_probe_output(&stdout, marker.as_str())
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(result.shell_path, "/bin/bash");
+    assert_eq!(result.shell_classification, ShellClassification::Bash);
+}
+
 #[test]
 /// Verifies that runtime wrapper selection and bootstrap helpers choose Fish
 /// native commands for Fish panes and POSIX commands for POSIX-like panes.

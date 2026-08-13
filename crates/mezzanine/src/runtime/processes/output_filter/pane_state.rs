@@ -194,6 +194,26 @@ impl RuntimeSessionService {
         }
         self.record_running_shell_transaction_output(output.pane_id.as_str(), &transaction_bytes);
         self.observe_agent_shell_transaction_events(output.pane_id.as_str(), &osc_events)?;
+        if self.pane_readiness_state(output.pane_id.as_str()) == PaneReadinessState::Ready
+            && self
+                .bash_receiver_token_for_pane(output.pane_id.as_str())
+                .is_some()
+            && self.agent_subshell_entry_is_deferred(output.pane_id.as_str())
+            && !self.agent_subshell_is_active(output.pane_id.as_str())
+            && self
+                .agent_shell_store()
+                .get(output.pane_id.as_str())
+                .is_some_and(|session| {
+                    session.visibility == mez_agent::AgentShellVisibility::Visible
+                })
+        {
+            // Process every event in the PTY batch before sending another
+            // private Bash trigger. Receiver completion and the restored
+            // prompt can share one read, so waiting for a later batch can
+            // strand re-entry while resuming inside the completion event can
+            // race the `bind -x` callback teardown.
+            let _ = self.enter_agent_subshell_if_needed(output.pane_id.as_str())?;
+        }
         self.write_active_pane_pipe(output.pane_id.as_str(), &render_bytes)?;
         let title_changed = if let Some(title) = terminal_title {
             let foreground_group = self
