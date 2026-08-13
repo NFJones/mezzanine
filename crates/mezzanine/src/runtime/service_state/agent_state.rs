@@ -485,6 +485,43 @@ pub(crate) struct PendingFocusedShellHookContinuation {
     pub(crate) phase_command_sha256: String,
 }
 
+/// One blocking program hook whose async result gates a stored shell action.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PendingProgramHookContinuation {
+    /// Turn that owns the shell action waiting on the hook result.
+    pub(crate) turn_id: String,
+    /// Action to resume or deny after the hook result is known.
+    pub(crate) action_id: String,
+    /// Digest of the exact concrete shell phase guarded by the hook.
+    pub(crate) phase_command_sha256: String,
+    /// Configured hook identity used to reject duplicate dispatches.
+    pub(crate) hook_id: String,
+}
+
+impl PendingProgramHookContinuation {
+    /// Builds a pending identity from the established shell continuation.
+    pub(crate) fn new(
+        continuation: &PendingFocusedShellHookContinuation,
+        hook_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            turn_id: continuation.turn_id.clone(),
+            action_id: continuation.action_id.clone(),
+            phase_command_sha256: continuation.phase_command_sha256.clone(),
+            hook_id: hook_id.into(),
+        }
+    }
+
+    /// Projects the pending identity back to shell-action continuation state.
+    pub(crate) fn shell_continuation(&self) -> PendingFocusedShellHookContinuation {
+        PendingFocusedShellHookContinuation {
+            turn_id: self.turn_id.clone(),
+            action_id: self.action_id.clone(),
+            phase_command_sha256: self.phase_command_sha256.clone(),
+        }
+    }
+}
+
 /// Completed pre-shell hook identity for a running action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct RuntimeAgentPreShellHookCompletion {

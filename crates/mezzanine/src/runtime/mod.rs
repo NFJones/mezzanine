@@ -521,11 +521,11 @@ use mez_agent::turn_state_from_action_results as runtime_agent_turn_state_from_a
 use service_state::{
     BlockedAgentApprovalRef, MouseResizeDragState, MouseSelectionDragState, PaneDescriptor,
     PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
-    RuntimeAgentPreShellHookCompletion, RuntimeEnvironmentEvidenceCacheKey,
-    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeHttpMcpTransportState,
-    RuntimeMcpRetryReport, RuntimeModelProfileOverrideScope, RuntimePathResolutionCacheKey,
-    RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
+    PendingProgramHookContinuation, RunningShellTransactionKind, RunningShellTransactionRef,
+    RuntimeAgentPersonalityProfile, RuntimeAgentPreShellHookCompletion,
+    RuntimeEnvironmentEvidenceCacheKey, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
+    RuntimeHttpMcpTransportState, RuntimeMcpRetryReport, RuntimeModelProfileOverrideScope,
+    RuntimePathResolutionCacheKey, RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
     RuntimeShellTransactionActionFailure,
 };
 pub(crate) use service_state::{RuntimeMcpTransport, RuntimeMcpTransportSet};

@@ -5,7 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AuditActor, AuditRecord, ClientId, EventKind, HookExecutionPlan, HookExecutionResult, Result,
+    AuditActor, AuditRecord, ClientId, EventKind, HookExecutionPlan, HookExecutionResult,
+    HookFailureDecision, PendingProgramHookContinuation, Result, RuntimeHookPipelineBlock,
     RuntimeSessionService, json_escape, runtime_hook_execution_status_name,
 };
 #[cfg(test)]
@@ -35,9 +36,13 @@ impl RuntimeSessionService {
                 plan,
                 result,
                 triggering_event_completed,
-            } => {
-                self.apply_async_program_hook_result(*plan, *result, triggering_event_completed)?
-            }
+                continuation,
+            } => self.apply_async_program_hook_result(
+                *plan,
+                *result,
+                triggering_event_completed,
+                continuation,
+            )?,
             AsyncHookEvent::Completed {
                 hook_id,
                 exit_code,
@@ -136,11 +141,13 @@ impl RuntimeSessionService {
         &mut self,
         plan: HookExecutionPlan,
         triggering_event_completed: bool,
+        continuation: Option<PendingProgramHookContinuation>,
     ) {
         self.persistence
             .queue_program_hook(RuntimeSideEffect::RunProgramHook {
                 plan: Box::new(plan),
                 triggering_event_completed,
+                continuation,
             });
     }
 
@@ -255,9 +262,30 @@ impl RuntimeSessionService {
         plan: HookExecutionPlan,
         result: HookExecutionResult,
         triggering_event_completed: bool,
+        continuation: Option<PendingProgramHookContinuation>,
     ) -> Result<bool> {
         self.append_program_hook_audit(&plan, &result)?;
-        let _ = self.record_hook_result(&plan, &result, triggering_event_completed)?;
+        if let Some(continuation) = continuation {
+            let pending = self
+                .integration
+                .pending_program_hook_continuations_mut()
+                .remove(&continuation);
+            if !pending {
+                return Ok(false);
+            }
+            let decision = self.record_hook_result(&plan, &result, triggering_event_completed)?;
+            let shell_continuation = continuation.shell_continuation();
+            if decision == HookFailureDecision::Block {
+                let block = RuntimeHookPipelineBlock::from_result(&result);
+                let _ =
+                    self.fail_pending_shell_action_for_hook_block(&shell_continuation, &block)?;
+            } else {
+                self.record_agent_pre_shell_hook_completed(&shell_continuation, &plan.hook_id);
+                let _ = self.dispatch_stored_running_shell_actions(&continuation.turn_id)?;
+            }
+        } else {
+            let _ = self.record_hook_result(&plan, &result, triggering_event_completed)?;
+        }
         Ok(true)
     }
 

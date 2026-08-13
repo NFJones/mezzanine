@@ -406,6 +406,8 @@ pub enum AsyncHookEvent {
         result: Box<HookExecutionResult>,
         /// Whether the hook was triggered by a completed lifecycle event.
         triggering_event_completed: bool,
+        /// Stored shell action to resume or deny after a blocking hook.
+        continuation: Option<crate::runtime::service_state::PendingProgramHookContinuation>,
     },
     /// Hook execution completed.
     #[allow(
@@ -652,12 +654,14 @@ pub enum RuntimeSideEffect {
         /// Pane whose active context should be memorized.
         pane_id: String,
     },
-    /// Execute a non-blocking program hook outside the actor.
+    /// Execute a standalone program hook outside the actor.
     RunProgramHook {
         /// Original hook plan to execute.
         plan: Box<HookExecutionPlan>,
         /// Whether the hook was triggered by a completed lifecycle event.
         triggering_event_completed: bool,
+        /// Stored shell action to resume or deny after a blocking hook.
+        continuation: Option<crate::runtime::service_state::PendingProgramHookContinuation>,
     },
     /// Write data through a persistence worker.
     Persist {

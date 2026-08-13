@@ -22,13 +22,14 @@ mod metrics;
 pub(crate) use agent_state::{
     BlockedAgentApprovalRef, JoinedSubagentDependency, PaneDescriptor,
     PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
-    RuntimeAgentPreShellHookCompletion, RuntimeApplyPatchBatchState, RuntimeDisplayOverlay,
-    RuntimeEnvironmentEvidenceCacheKey, RuntimeHookPipelineDecision,
-    RuntimeModelProfileOverrideScope, RuntimeModelProfileOverrideStore,
-    RuntimePaneAgentStatusSelector, RuntimePathResolutionCacheKey, RuntimePendingApplyPatchPhase,
-    RuntimeRecordBrowserOverlayFrame, RuntimeRecordBrowserOverlaySource,
-    RuntimeRecordBrowserOverlayState, RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
+    PendingProgramHookContinuation, RunningShellTransactionKind, RunningShellTransactionRef,
+    RuntimeAgentPersonalityProfile, RuntimeAgentPreShellHookCompletion,
+    RuntimeApplyPatchBatchState, RuntimeDisplayOverlay, RuntimeEnvironmentEvidenceCacheKey,
+    RuntimeHookPipelineDecision, RuntimeModelProfileOverrideScope,
+    RuntimeModelProfileOverrideStore, RuntimePaneAgentStatusSelector,
+    RuntimePathResolutionCacheKey, RuntimePendingApplyPatchPhase, RuntimeRecordBrowserOverlayFrame,
+    RuntimeRecordBrowserOverlaySource, RuntimeRecordBrowserOverlayState,
+    RuntimeSandboxFailureAssessment, RuntimeSandboxFallbackAudit,
     RuntimeShellTransactionActionFailure, RuntimeSubagentLineage,
 };
 pub use agent_state::{

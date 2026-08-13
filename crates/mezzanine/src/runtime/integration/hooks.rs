@@ -1,9 +1,11 @@
 //! Configured hook queues, transactions, and bounded results.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::integrations::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
-use crate::runtime::service_state::PendingFocusedShellHookTransaction;
+use crate::runtime::service_state::{
+    PendingFocusedShellHookTransaction, PendingProgramHookContinuation,
+};
 
 /// Owns configured hooks and focused-shell hook execution state.
 #[derive(Debug)]
@@ -12,6 +14,7 @@ pub(super) struct RuntimeHookState {
     focused_shell_queue: FocusedShellHookQueue,
     next_focused_shell_marker: u64,
     focused_shell_transactions: BTreeMap<String, PendingFocusedShellHookTransaction>,
+    pending_program_continuations: BTreeSet<PendingProgramHookContinuation>,
     focused_shell_results: Vec<HookExecutionResult>,
 }
 
@@ -22,6 +25,7 @@ impl Default for RuntimeHookState {
             focused_shell_queue: FocusedShellHookQueue::default(),
             next_focused_shell_marker: 1,
             focused_shell_transactions: BTreeMap::new(),
+            pending_program_continuations: BTreeSet::new(),
             focused_shell_results: Vec::new(),
         }
     }
@@ -70,6 +74,18 @@ impl RuntimeHookState {
         &mut self,
     ) -> &mut BTreeMap<String, PendingFocusedShellHookTransaction> {
         &mut self.focused_shell_transactions
+    }
+
+    pub(super) fn pending_program_continuations(
+        &self,
+    ) -> &BTreeSet<PendingProgramHookContinuation> {
+        &self.pending_program_continuations
+    }
+
+    pub(super) fn pending_program_continuations_mut(
+        &mut self,
+    ) -> &mut BTreeSet<PendingProgramHookContinuation> {
+        &mut self.pending_program_continuations
     }
 
     pub(super) fn focused_shell_results(&self) -> &[HookExecutionResult] {

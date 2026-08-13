@@ -25,7 +25,7 @@ use tokio::time::Instant;
 use crate::host::terminal::attached_terminal_output_disconnected;
 use crate::integrations::hooks::{
     HookExecutionPlan, HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureKind,
-    execute_program_hook_async,
+    execute_program_hook_async_with_cancellation,
 };
 use crate::runtime::apply_registry_update_async;
 use crate::security::audit::AuditRetentionPolicy;
@@ -472,21 +472,27 @@ where
             let RuntimeSideEffect::RunProgramHook {
                 plan,
                 triggering_event_completed,
+                continuation,
             } = effect
             else {
                 continue;
             };
             let plan = *plan;
             let hook_id = plan.hook_id.clone();
-            match execute_program_hook_on_async_worker(plan).await {
-                Ok((plan, result)) => {
+            let cancellation_turn_id = continuation
+                .as_ref()
+                .map(|continuation| continuation.turn_id.as_str());
+            match execute_program_hook_on_async_worker(handle, plan, cancellation_turn_id).await {
+                Ok(Some((plan, result))) => {
                     report.completed = report.completed.saturating_add(1);
                     batch.push(RuntimeEvent::Hook(AsyncHookEvent::ProgramCompleted {
                         plan: Box::new(plan),
                         result: Box::new(result),
                         triggering_event_completed,
+                        continuation,
                     }));
                 }
+                Ok(None) => {}
                 Err(error) => {
                     report.failed = report.failed.saturating_add(1);
                     batch.push(RuntimeEvent::Hook(AsyncHookEvent::Failed {
@@ -1422,13 +1428,29 @@ async fn set_private_persistence_file_permissions(path: &Path) -> Result<()> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 async fn execute_program_hook_on_async_worker(
+    handle: &AsyncRuntimeSessionHandle,
     plan: HookExecutionPlan,
-) -> std::result::Result<(HookExecutionPlan, HookExecutionResult), String> {
-    let result = match execute_program_hook_async(&plan).await {
-        Ok(result) => result,
+    cancellation_turn_id: Option<&str>,
+) -> std::result::Result<Option<(HookExecutionPlan, HookExecutionResult)>, String> {
+    let cancellation = async {
+        let Some(turn_id) = cancellation_turn_id else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        loop {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            match handle.agent_turn_is_running(turn_id).await {
+                Ok(true) => {}
+                Ok(false) | Err(_) => return,
+            }
+        }
+    };
+    let result = match execute_program_hook_async_with_cancellation(&plan, cancellation).await {
+        Ok(Some(result)) => result,
+        Ok(None) => return Ok(None),
         Err(error) => hook_spawn_failure_result(&plan, error.to_string()),
     };
-    Ok((plan, result))
+    Ok(Some((plan, result)))
 }
 
 /// Runs the hook spawn failure result operation for this subsystem.

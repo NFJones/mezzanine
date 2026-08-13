@@ -187,6 +187,13 @@ impl RuntimeSessionService {
                     continuation.turn_id == turn_id && continuation.action_id == action_id
                 })
             })
+            || self
+                .integration
+                .pending_program_hook_continuations()
+                .iter()
+                .any(|continuation| {
+                    continuation.turn_id == turn_id && continuation.action_id == action_id
+                })
     }
 
     /// Runs the turn has running readiness probe operation for this subsystem.

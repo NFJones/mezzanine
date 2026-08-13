@@ -734,9 +734,8 @@ async fn async_actor_applies_failed_shutdown_events() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies that actor-applied lifecycle events defer non-blocking configured
-/// program hooks as hook-worker side effects. Blocking pre-action hooks remain
-/// synchronous for now, but completed lifecycle hooks should no longer spawn
+/// Verifies that actor-applied lifecycle events defer configured program hooks
+/// as hook-worker side effects. Completed lifecycle hooks should never spawn
 /// hook processes inside the actor.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_defers_completed_program_hooks_to_hook_worker() {
@@ -784,7 +783,11 @@ async fn async_actor_defers_completed_program_hooks_to_hook_worker() {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            RuntimeSideEffect::RunProgramHook { plan, triggering_event_completed: true }
+            RuntimeSideEffect::RunProgramHook {
+                plan,
+                triggering_event_completed: true,
+                ..
+            }
                 if plan.hook_id == "detach"
         ));
         assert!(!payload_path.exists());

@@ -25,8 +25,9 @@ use mez_agent::{
 };
 
 use super::service_state::{
-    PendingFocusedShellHookTransaction, RuntimeAgentPersonalityProfile, RuntimeMcpTransportSet,
-    RuntimeMetricsSnapshot, RuntimeModelProfileOverrideStore,
+    PendingFocusedShellHookTransaction, PendingProgramHookContinuation,
+    RuntimeAgentPersonalityProfile, RuntimeMcpTransportSet, RuntimeMetricsSnapshot,
+    RuntimeModelProfileOverrideStore,
 };
 
 mod bindings;
@@ -485,6 +486,20 @@ impl RuntimeIntegrationComponent {
         &mut self,
     ) -> &mut BTreeMap<String, PendingFocusedShellHookTransaction> {
         self.hooks.focused_shell_transactions_mut()
+    }
+
+    /// Returns pending async program-hook continuations.
+    pub(crate) fn pending_program_hook_continuations(
+        &self,
+    ) -> &std::collections::BTreeSet<PendingProgramHookContinuation> {
+        self.hooks.pending_program_continuations()
+    }
+
+    /// Returns pending async program-hook continuations for mutation.
+    pub(crate) fn pending_program_hook_continuations_mut(
+        &mut self,
+    ) -> &mut std::collections::BTreeSet<PendingProgramHookContinuation> {
+        self.hooks.pending_program_continuations_mut()
     }
 
     /// Returns retained focused-shell hook results.

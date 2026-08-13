@@ -8972,6 +8972,16 @@ Agent hooks MUST NOT be exposed to the model as hidden local tools.
 Program hooks MUST receive structured event data through standard input or a
 documented environment variable.
 
+Program hooks in the asynchronous runtime MUST execute outside serialized
+actor ownership. Payload writes, stdout and stderr drains, process waiting,
+and pipe EOF MUST share one finite total deadline. Standard input MUST close
+after the payload, output retention MUST be bounded while both streams
+continue to drain, and timeout or cancellation MUST terminate the private
+process group and reap the direct child. A blocking pre-shell program hook
+MUST retain typed continuation ownership until its worker result either denies
+or resumes the guarded shell phase; stale results after turn settlement MUST
+NOT resume an action.
+
 Shell hooks MUST be visible in the focused pane when they run and MUST use the
 same command boundary and permission model as agent shell commands.
 When shell hooks receive event data through an environment variable, the

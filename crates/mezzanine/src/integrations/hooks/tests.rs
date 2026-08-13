@@ -6,8 +6,8 @@ use super::{
     HookFailure, HookFailureDecision, HookFailureKind, HookInvocation, HookMatcherGroup,
     HookMatcherOperator, HookMatcherPredicate, HookOnFailure, decide_hook_failure,
     execute_focused_shell_hook, execute_focused_shell_hook_with_audit, execute_program_hook,
-    execute_program_hook_async, execute_program_hook_with_audit, plan_event, plan_hook,
-    plan_hook_with_payload,
+    execute_program_hook_async, execute_program_hook_async_with_cancellation,
+    execute_program_hook_with_audit, plan_event, plan_hook, plan_hook_with_payload,
 };
 use crate::error::Result;
 use crate::security::audit::{AuditActor, AuditConfig, AuditLog};
@@ -178,6 +178,176 @@ async fn async_program_hook_execution_enforces_timeout() {
         result.failure.as_ref().unwrap().kind,
         HookFailureKind::Timeout
     );
+}
+
+/// Verifies a child that never reads stdin cannot keep the async hook worker
+/// blocked while it attempts to deliver a payload larger than a typical pipe.
+#[tokio::test(flavor = "current_thread")]
+async fn async_program_hook_timeout_bounds_unread_large_stdin() {
+    let hook = HookDefinition {
+        id: "unread-stdin".to_string(),
+        event: HookEvent::SessionDetach,
+        invocation: HookInvocation::Program {
+            command: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "sleep 30".to_string()],
+        },
+        enabled: true,
+        required: false,
+        agent_hook: false,
+        matcher_groups: Vec::new(),
+        timeout_ms: Some(50),
+        on_failure: None,
+    };
+    let payload = "x".repeat(2 * 1024 * 1024);
+    let plan = plan_hook_with_payload(&hook, &payload).unwrap().unwrap();
+
+    let result = execute_program_hook_async(&plan).await.unwrap();
+
+    assert_eq!(result.status, HookExecutionStatus::TimedOut);
+    assert_eq!(
+        result.failure.as_ref().unwrap().kind,
+        HookFailureKind::Timeout
+    );
+}
+
+/// Verifies stdout and stderr are drained concurrently and retained within
+/// independent fixed bounds even when both streams exceed pipe capacity.
+#[tokio::test(flavor = "current_thread")]
+async fn async_program_hook_drains_and_bounds_both_output_streams() {
+    let hook = HookDefinition {
+        id: "large-output".to_string(),
+        event: HookEvent::SessionDetach,
+        invocation: HookInvocation::Program {
+            command: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "i=0; while [ $i -lt 20000 ]; do printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; printf 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210' >&2; i=$((i + 1)); done".to_string(),
+            ],
+        },
+        enabled: true,
+        required: false,
+        agent_hook: false,
+        matcher_groups: Vec::new(),
+        timeout_ms: Some(5_000),
+        on_failure: None,
+    };
+    let plan = plan_hook(&hook).unwrap().unwrap();
+
+    let result = execute_program_hook_async(&plan).await.unwrap();
+
+    assert_eq!(result.status, HookExecutionStatus::Succeeded);
+    assert_eq!(result.stdout.len(), 1024 * 1024);
+    assert_eq!(result.stderr.len(), 1024 * 1024);
+}
+
+/// Verifies timeout termination reaches descendants in the hook's private
+/// process group and reaps the direct child before returning to the worker.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn async_program_hook_timeout_terminates_descendant_process_group() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-hook-process-group-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let pid_path = root.join("descendant.pid");
+    let hook = HookDefinition {
+        id: "descendant-timeout".to_string(),
+        event: HookEvent::SessionDetach,
+        invocation: HookInvocation::Program {
+            command: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait \"$child\"".to_string(),
+                "hook".to_string(),
+                pid_path.display().to_string(),
+            ],
+        },
+        enabled: true,
+        required: false,
+        agent_hook: false,
+        matcher_groups: Vec::new(),
+        timeout_ms: Some(200),
+        on_failure: None,
+    };
+    let plan = plan_hook(&hook).unwrap().unwrap();
+
+    let result = execute_program_hook_async(&plan).await.unwrap();
+    let descendant_pid = fs::read_to_string(&pid_path)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+
+    assert_eq!(result.status, HookExecutionStatus::TimedOut);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        // SAFETY: signal zero performs a process-existence check without
+        // delivering a signal. The pid was written by the test child.
+        let alive = unsafe { libc::kill(descendant_pid, 0) } == 0;
+        if !alive || std::time::Instant::now() >= deadline {
+            assert!(!alive, "hook descendant {descendant_pid} survived timeout");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies explicit cancellation terminates descendants and reaps the direct
+/// child instead of waiting for the hook's longer total timeout.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn async_program_hook_cancellation_terminates_descendant_process_group() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-hook-process-group-cancel-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let pid_path = root.join("descendant.pid");
+    let hook = HookDefinition {
+        id: "descendant-cancel".to_string(),
+        event: HookEvent::SessionDetach,
+        invocation: HookInvocation::Program {
+            command: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait \"$child\"".to_string(),
+                "hook".to_string(),
+                pid_path.display().to_string(),
+            ],
+        },
+        enabled: true,
+        required: false,
+        agent_hook: false,
+        matcher_groups: Vec::new(),
+        timeout_ms: Some(5_000),
+        on_failure: None,
+    };
+    let plan = plan_hook(&hook).unwrap().unwrap();
+    let cancellation_path = pid_path.clone();
+    let cancellation = async move {
+        while tokio::fs::metadata(&cancellation_path).await.is_err() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    };
+
+    let result = execute_program_hook_async_with_cancellation(&plan, cancellation)
+        .await
+        .unwrap();
+    let descendant_pid = fs::read_to_string(&pid_path)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+
+    assert!(result.is_none());
+    // SAFETY: signal zero performs a process-existence check without
+    // delivering a signal. The pid was written by the test child.
+    assert_ne!(unsafe { libc::kill(descendant_pid, 0) }, 0);
+    let _ = fs::remove_dir_all(root);
 }
 
 /// Verifies program hook execution reports non zero exit.

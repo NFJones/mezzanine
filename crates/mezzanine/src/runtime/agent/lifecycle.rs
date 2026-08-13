@@ -187,6 +187,9 @@ impl RuntimeSessionService {
             .remove(turn_id);
         self.clear_joined_subagent_dependencies_for_turn(turn_id);
         self.clear_agent_pre_shell_hook_completions_for_turn(turn_id);
+        self.integration
+            .pending_program_hook_continuations_mut()
+            .retain(|continuation| continuation.turn_id != turn_id);
         self.remove_agent_turn_model_profile(turn_id);
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.agent.claimed_agent_provider_tasks.remove(turn_id);

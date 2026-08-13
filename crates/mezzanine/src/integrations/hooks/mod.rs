@@ -33,7 +33,11 @@ mod types;
 pub use audit::hook_execution_audit_record;
 #[cfg(test)]
 pub use audit::{execute_focused_shell_hook_with_audit, execute_program_hook_with_audit};
-pub use execution::{execute_focused_shell_hook, execute_program_hook, execute_program_hook_async};
+#[cfg(test)]
+pub use execution::execute_program_hook_async;
+pub use execution::{
+    execute_focused_shell_hook, execute_program_hook, execute_program_hook_async_with_cancellation,
+};
 pub use planning::{decide_hook_failure, plan_event};
 #[cfg(test)]
 pub use planning::{plan_hook, plan_hook_with_payload};

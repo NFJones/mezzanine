@@ -88,6 +88,148 @@ fn runtime_config_parses_hook_matcher_groups() {
     assert!(filtered.plans.is_empty());
 }
 
+/// Verifies an adapter-owned blocking pre-shell program hook is queued for
+/// async execution and its successful completion authorizes the guarded phase.
+///
+/// The serialized runtime must return a pending decision without spawning the
+/// child itself. Applying the typed worker completion clears pending ownership
+/// and prevents the same hook from being dispatched a second time.
+#[test]
+fn runtime_async_program_hook_completion_resumes_pre_shell_pipeline() {
+    let mut service = test_runtime_service();
+    service.use_hook_effect_adapter();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[hooks.guard]\nevent = \"pre_shell_command\"\nprogram = \"/bin/sh\"\nargs = [\"-c\", \"true\"]\non_failure = \"block\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+    let continuation = crate::runtime::PendingFocusedShellHookContinuation {
+        turn_id: "turn-hook".to_string(),
+        action_id: "action-hook".to_string(),
+        phase_command_sha256: "phase-digest".to_string(),
+    };
+
+    let decision = service
+        .run_configured_pre_action_hooks_with_continuation(
+            HookEvent::PreShellCommand,
+            r#"{"command":"printf guarded"}"#,
+            Some(continuation.clone()),
+        )
+        .unwrap();
+
+    assert_eq!(
+        decision,
+        crate::runtime::RuntimeHookPipelineDecision::Pending
+    );
+    assert_eq!(
+        service
+            .integration
+            .pending_program_hook_continuations()
+            .len(),
+        1
+    );
+    let mut effects = service.drain_program_hook_transition().side_effects;
+    assert_eq!(effects.len(), 1);
+    let RuntimeSideEffect::RunProgramHook {
+        plan,
+        triggering_event_completed,
+        continuation: pending,
+    } = effects.pop().unwrap()
+    else {
+        panic!("blocking program hook should produce a hook-worker side effect");
+    };
+    assert!(!triggering_event_completed);
+    let pending = pending.expect("blocking program hook should retain its continuation");
+    let result = crate::integrations::hooks::HookExecutionResult {
+        hook_id: plan.hook_id.clone(),
+        event: plan.event,
+        status: crate::integrations::hooks::HookExecutionStatus::Succeeded,
+        exit_code: Some(0),
+        stdout: String::new(),
+        stderr: String::new(),
+        failure: None,
+    };
+
+    service
+        .apply_hook_transition(crate::runtime::AsyncHookEvent::ProgramCompleted {
+            plan,
+            result: Box::new(result),
+            triggering_event_completed: false,
+            continuation: Some(pending),
+        })
+        .unwrap();
+
+    assert!(
+        service
+            .integration
+            .pending_program_hook_continuations()
+            .is_empty()
+    );
+    assert_eq!(
+        service
+            .run_configured_pre_action_hooks_with_continuation(
+                HookEvent::PreShellCommand,
+                r#"{"command":"printf guarded"}"#,
+                Some(continuation),
+            )
+            .unwrap(),
+        crate::runtime::RuntimeHookPipelineDecision::Continue
+    );
+    assert!(
+        service
+            .drain_program_hook_transition()
+            .side_effects
+            .is_empty()
+    );
+}
+
+/// Verifies an adapter-owned blocking program hook never falls back to the
+/// synchronous compatibility executor when its event lacks a continuation.
+///
+/// Unsupported continuation ownership must fail closed immediately rather
+/// than spawn or wait for a subprocess while the serialized actor is held.
+#[test]
+fn runtime_adapter_rejects_blocking_program_hook_without_continuation() {
+    let mut service = test_runtime_service();
+    service.use_hook_effect_adapter();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[hooks.guard]\nevent = \"layout_load\"\nprogram = \"/bin/sh\"\nargs = [\"-c\", \"sleep 30\"]\non_failure = \"block\"\n"
+                .to_string(),
+        }])
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let error = service
+        .run_configured_pre_action_hooks(HookEvent::LayoutLoad, r#"{"session_id":"test"}"#)
+        .unwrap_err();
+
+    assert!(started.elapsed() < std::time::Duration::from_millis(100));
+    assert!(
+        error
+            .message()
+            .contains("has no async continuation for event layout_load"),
+        "{error}"
+    );
+    assert!(
+        service
+            .drain_program_hook_transition()
+            .side_effects
+            .is_empty()
+    );
+}
+
 /// Verifies that runtime configuration can initialize the audit writer from
 /// `[audit]` settings. The path is resolved under the configured Mezzanine
 /// config root when relative, and subsequent auditable runtime actions write

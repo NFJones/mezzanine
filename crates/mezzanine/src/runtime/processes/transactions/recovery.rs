@@ -363,13 +363,18 @@ impl RuntimeSessionService {
                 })
     }
 
-    /// Reports whether a focused-shell hook can still resume one of this turn's
-    /// shell actions.
+    /// Reports whether a focused-shell or program hook can still resume one of
+    /// this turn's shell actions.
     pub(super) fn turn_has_pending_focused_shell_hook_continuation(&self, turn_id: &str) -> bool {
         self.integration
             .focused_shell_hook_transactions()
             .values()
             .filter_map(|pending| pending.continuation.as_ref())
             .any(|continuation| continuation.turn_id == turn_id)
+            || self
+                .integration
+                .pending_program_hook_continuations()
+                .iter()
+                .any(|continuation| continuation.turn_id == turn_id)
     }
 }

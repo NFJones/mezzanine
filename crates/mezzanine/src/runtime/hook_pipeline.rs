@@ -8,9 +8,9 @@ use super::{
     AuditActor, BTreeSet, DEFAULT_PTY_READ_LIMIT_BYTES, Duration, EventKind, EventVisibility,
     HookEvent, HookExecutionPlan, HookExecutionResult, HookExecutionStatus, HookFailure,
     HookFailureDecision, HookFailureKind, HookOnFailure, Instant, MezError,
-    PendingFocusedShellHookContinuation, Result, RuntimeFocusedShellPaneExecutor,
-    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeSessionService,
-    decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
+    PendingFocusedShellHookContinuation, PendingProgramHookContinuation, Result,
+    RuntimeFocusedShellPaneExecutor, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
+    RuntimeSessionService, decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
     focused_shell_pre_action_failed_result, focused_shell_pre_action_timeout_result,
     hook_execution_audit_record, json_escape, plan_event, runtime_hook_event_for_lifecycle,
     runtime_hook_event_name, runtime_hook_target_pane_id,
@@ -72,7 +72,7 @@ impl RuntimeSessionService {
             }
             self.append_program_hook_start_audit(&plan)?;
             if self.persistence.hook_uses_adapter() {
-                self.defer_program_hook(plan, true);
+                self.defer_program_hook(plan, true, None);
                 continue;
             }
             let result = match execute_program_hook(&plan) {
@@ -178,9 +178,32 @@ impl RuntimeSessionService {
                 continue;
             }
             self.append_program_hook_start_audit(&plan)?;
-            if self.persistence.hook_uses_adapter() && plan.on_failure != HookOnFailure::Block {
-                self.defer_program_hook(plan, false);
-                continue;
+            if self.persistence.hook_uses_adapter() {
+                if plan.on_failure == HookOnFailure::Block
+                    && let Some(continuation) = continuation.as_ref()
+                {
+                    let pending =
+                        PendingProgramHookContinuation::new(continuation, plan.hook_id.clone());
+                    if self
+                        .integration
+                        .pending_program_hook_continuations_mut()
+                        .insert(pending.clone())
+                    {
+                        self.defer_program_hook(plan, false, Some(pending));
+                    }
+                    return Ok(RuntimeHookPipelineDecision::Pending);
+                }
+                if plan.on_failure == HookOnFailure::Block {
+                    return Err(MezError::invalid_state(format!(
+                        "blocking program hook `{}` has no async continuation for event {}",
+                        plan.hook_id,
+                        runtime_hook_event_name(plan.event)
+                    )));
+                }
+                if plan.on_failure != HookOnFailure::Block {
+                    self.defer_program_hook(plan, false, None);
+                    continue;
+                }
             }
             let result = match execute_program_hook(&plan) {
                 Ok(result) => result,
