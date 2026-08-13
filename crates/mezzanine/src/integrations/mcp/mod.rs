@@ -8,6 +8,41 @@
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::time::Duration;
+
+use crate::error::{MezError, Result};
+
+/// One deadline shared by every `tools/list` page in an MCP discovery.
+pub(crate) struct McpToolDiscoveryDeadline {
+    deadline: tokio::time::Instant,
+    timeout_ms: u64,
+}
+
+impl McpToolDiscoveryDeadline {
+    /// Starts an aggregate discovery deadline from the current Tokio clock.
+    pub(crate) fn new(timeout_ms: u64) -> Self {
+        Self {
+            deadline: tokio::time::Instant::now() + Duration::from_millis(timeout_ms),
+            timeout_ms,
+        }
+    }
+
+    /// Returns the remaining per-operation timeout without extending the deadline.
+    pub(crate) fn remaining_timeout_ms(&self, server_id: &str) -> Result<u64> {
+        let remaining = self
+            .deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .ok_or_else(|| {
+                MezError::invalid_state(format!(
+                    "MCP server `{server_id}` exceeded the aggregate tools/list discovery deadline of {} ms",
+                    self.timeout_ms
+                ))
+            })?;
+        let remaining_ms = remaining.as_millis().div_ceil(1).max(1);
+        Ok(u64::try_from(remaining_ms).unwrap_or(u64::MAX))
+    }
+}
+
 /// Exposes the audit module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

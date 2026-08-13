@@ -10,8 +10,9 @@ use crate::error::{MezError, Result};
 use mez_agent::mcp::{
     DEFAULT_MCP_MAX_MESSAGE_BYTES, DEFAULT_MCP_PROTOCOL_VERSION, McpInitializeResponse,
     McpStartupPlan, McpStartupTransportPlan, McpStreamableHttpDiscovery, McpStreamableHttpResponse,
-    McpToolListPagination, build_mcp_initialized_notification, json_id_matches,
-    mcp_initialize_operation, mcp_tools_list_operation, object_field, parse_mcp_json, string_field,
+    McpToolDiscoveryBudget, McpToolListPagination, build_mcp_initialized_notification,
+    json_id_matches, mcp_initialize_operation, mcp_tools_list_operation, object_field,
+    parse_mcp_json, string_field,
 };
 #[cfg(test)]
 use mez_agent::mcp::{McpRegistry, McpToolCallPlan, McpToolCallResponse, mcp_tools_call_operation};
@@ -215,33 +216,47 @@ pub async fn discover_streamable_http_mcp_server_with_auth_token(
 
     let mut tools = Vec::new();
     if initialize.supports_tools {
-        let mut cursor = None;
-        let mut request_id = 2;
-        let mut pagination = McpToolListPagination::default();
-        loop {
-            let operation =
-                mcp_tools_list_operation(request_id, cursor.as_deref(), plan.timeout_ms);
-            let response = execute_streamable_http_exchange(
-                plan,
-                environment,
-                operation.request_body(),
-                Some(operation.request_id()),
-                operation.timeout_ms(),
-                session_id.as_deref(),
-                oauth_bearer_token,
-            )
-            .await?;
-            if response.session_id.is_some() {
-                session_id = response.session_id.clone();
+        tools = tokio::time::timeout(Duration::from_millis(plan.timeout_ms), async {
+            let mut tools = Vec::new();
+            let mut cursor = None;
+            let mut request_id = 2;
+            let mut pagination = McpToolListPagination::default();
+            let mut budget = McpToolDiscoveryBudget::default();
+            loop {
+                let operation =
+                    mcp_tools_list_operation(request_id, cursor.as_deref(), plan.timeout_ms);
+                let response = execute_streamable_http_exchange(
+                    plan,
+                    environment,
+                    operation.request_body(),
+                    Some(operation.request_id()),
+                    operation.timeout_ms(),
+                    session_id.as_deref(),
+                    oauth_bearer_token,
+                )
+                .await?;
+                if response.session_id.is_some() {
+                    session_id = response.session_id.clone();
+                }
+                let listed = operation.parse_response(&response.protocol_body)?;
+                budget.accept_page(&plan.server_id, response.body_bytes, &listed.tools)?;
+                tools.extend(listed.tools);
+                let Some(next_cursor) = pagination.advance(&plan.server_id, listed.next_cursor)?
+                else {
+                    break;
+                };
+                cursor = Some(next_cursor);
+                request_id += 1;
             }
-            let listed = operation.parse_response(&response.protocol_body)?;
-            tools.extend(listed.tools);
-            let Some(next_cursor) = pagination.advance(&plan.server_id, listed.next_cursor)? else {
-                break;
-            };
-            cursor = Some(next_cursor);
-            request_id += 1;
-        }
+            Ok::<_, MezError>(tools)
+        })
+        .await
+        .map_err(|_| {
+            MezError::invalid_state(format!(
+                "MCP server `{}` exceeded the aggregate tools/list deadline of {} ms",
+                plan.server_id, plan.timeout_ms
+            ))
+        })??;
     }
 
     Ok(McpStreamableHttpDiscovery {
@@ -367,6 +382,7 @@ async fn execute_streamable_http_post(
         }
         body_bytes.extend_from_slice(&chunk);
     }
+    let response_bytes = body_bytes.len();
     let protocol_body = String::from_utf8(body_bytes)
         .map_err(|_| MezError::invalid_state("streamable HTTP MCP response body is not UTF-8"))?;
     let session_id = header_value(&headers, "mcp-session-id");
@@ -374,6 +390,7 @@ async fn execute_streamable_http_post(
         status_code,
         headers,
         protocol_body,
+        body_bytes: response_bytes,
         session_id,
     })
 }

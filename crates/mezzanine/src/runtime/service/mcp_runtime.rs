@@ -12,6 +12,7 @@ use super::{
     current_unix_seconds, discover_streamable_http_mcp_server_with_auth_token, json_escape,
     spawn_stdio_mcp_connection,
 };
+use crate::integrations::mcp::McpToolDiscoveryDeadline;
 use crate::runtime::{
     RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
     RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess, RuntimeMcpTransport,
@@ -50,10 +51,18 @@ impl RuntimeSessionService {
                         if initialize.supports_tools {
                             let mut cursor = None;
                             let mut pagination = mez_agent::mcp::McpToolListPagination::default();
+                            let mut budget = mez_agent::mcp::McpToolDiscoveryBudget::default();
+                            let deadline = McpToolDiscoveryDeadline::new(plan.timeout_ms);
                             loop {
-                                let response = connection
-                                    .list_tools(cursor.as_deref(), plan.timeout_ms)
+                                let timeout_ms = deadline.remaining_timeout_ms(&plan.server_id)?;
+                                let (response, response_bytes) = connection
+                                    .list_tools_page(cursor.as_deref(), timeout_ms)
                                     .await?;
+                                budget.accept_page(
+                                    &plan.server_id,
+                                    response_bytes,
+                                    &response.tools,
+                                )?;
                                 tools.extend(response.tools);
                                 let Some(next_cursor) =
                                     pagination.advance(&plan.server_id, response.next_cursor)?
@@ -548,10 +557,14 @@ impl RuntimeSessionService {
                 if initialize.supports_tools {
                     let mut cursor = None;
                     let mut pagination = mez_agent::mcp::McpToolListPagination::default();
+                    let mut budget = mez_agent::mcp::McpToolDiscoveryBudget::default();
+                    let deadline = McpToolDiscoveryDeadline::new(plan.timeout_ms);
                     loop {
-                        let response = connection
-                            .list_tools(cursor.as_deref(), plan.timeout_ms)
+                        let timeout_ms = deadline.remaining_timeout_ms(&plan.server_id)?;
+                        let (response, response_bytes) = connection
+                            .list_tools_page(cursor.as_deref(), timeout_ms)
                             .await?;
+                        budget.accept_page(&plan.server_id, response_bytes, &response.tools)?;
                         tools.extend(response.tools);
                         let Some(next_cursor) =
                             pagination.advance(&plan.server_id, response.next_cursor)?

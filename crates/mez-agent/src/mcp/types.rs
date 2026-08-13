@@ -33,6 +33,148 @@ pub const DEFAULT_MCP_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// even when an external server repeatedly returns a continuation cursor.
 pub const DEFAULT_MCP_MAX_TOOL_LIST_PAGES: usize = 128;
 
+/// Maximum cumulative response bytes accepted across MCP tool-list pages.
+pub const DEFAULT_MCP_MAX_TOOL_DISCOVERY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum number of tools retained from one MCP server discovery.
+pub const DEFAULT_MCP_MAX_DISCOVERED_TOOLS: usize = 256;
+/// Maximum cumulative tool-description bytes retained from one MCP server.
+pub const DEFAULT_MCP_MAX_TOOL_DESCRIPTION_BYTES: usize = 256 * 1024;
+/// Maximum cumulative tool-schema bytes retained from one MCP server.
+pub const DEFAULT_MCP_MAX_TOOL_SCHEMA_BYTES: usize = 4 * 1024 * 1024;
+
+/// Tracks aggregate MCP tool-discovery resource use before tools are retained.
+#[derive(Debug, Clone)]
+pub struct McpToolDiscoveryBudget {
+    response_bytes: usize,
+    tools: usize,
+    description_bytes: usize,
+    schema_bytes: usize,
+    seen_tool_names: BTreeSet<String>,
+    max_response_bytes: usize,
+    max_tools: usize,
+    max_description_bytes: usize,
+    max_schema_bytes: usize,
+}
+
+impl Default for McpToolDiscoveryBudget {
+    fn default() -> Self {
+        Self::with_limits(
+            DEFAULT_MCP_MAX_TOOL_DISCOVERY_RESPONSE_BYTES,
+            DEFAULT_MCP_MAX_DISCOVERED_TOOLS,
+            DEFAULT_MCP_MAX_TOOL_DESCRIPTION_BYTES,
+            DEFAULT_MCP_MAX_TOOL_SCHEMA_BYTES,
+        )
+    }
+}
+
+impl McpToolDiscoveryBudget {
+    /// Creates a budget with explicit cumulative response and metadata limits.
+    pub fn with_limits(
+        max_response_bytes: usize,
+        max_tools: usize,
+        max_description_bytes: usize,
+        max_schema_bytes: usize,
+    ) -> Self {
+        Self {
+            response_bytes: 0,
+            tools: 0,
+            description_bytes: 0,
+            schema_bytes: 0,
+            seen_tool_names: BTreeSet::new(),
+            max_response_bytes,
+            max_tools,
+            max_description_bytes,
+            max_schema_bytes,
+        }
+    }
+
+    /// Charges one parsed page atomically before its tools are retained.
+    ///
+    /// # Errors
+    /// Returns an invalid-state error when cumulative bytes, metadata, or tool
+    /// count exceed their limits, or when a tool identity is duplicated.
+    pub fn accept_page(
+        &mut self,
+        server_id: &str,
+        response_bytes: usize,
+        tools: &[McpDiscoveredTool],
+    ) -> Result<()> {
+        let next_response_bytes = self
+            .response_bytes
+            .checked_add(response_bytes)
+            .filter(|total| *total <= self.max_response_bytes)
+            .ok_or_else(|| {
+                MezError::invalid_state(format!(
+                    "MCP server `{server_id}` exceeded the cumulative response byte limit of {} during tools/list discovery",
+                    self.max_response_bytes
+                ))
+            })?;
+        let next_tools = self
+            .tools
+            .checked_add(tools.len())
+            .filter(|total| *total <= self.max_tools)
+            .ok_or_else(|| {
+                MezError::invalid_state(format!(
+                    "MCP server `{server_id}` exceeded the discovered tool limit of {}",
+                    self.max_tools
+                ))
+            })?;
+
+        let mut page_names = BTreeSet::new();
+        let mut added_description_bytes = 0usize;
+        let mut added_schema_bytes = 0usize;
+        for tool in tools {
+            if self.seen_tool_names.contains(&tool.name) || !page_names.insert(tool.name.clone()) {
+                return Err(MezError::invalid_state(format!(
+                    "MCP server `{server_id}` returned duplicate tool identity `{}`",
+                    tool.name
+                )));
+            }
+            added_description_bytes = added_description_bytes
+                .checked_add(tool.description.len())
+                .ok_or_else(|| {
+                    MezError::invalid_state(format!(
+                        "MCP server `{server_id}` exceeded the tool description byte limit"
+                    ))
+                })?;
+            added_schema_bytes = added_schema_bytes
+                .checked_add(tool.input_schema_json.len())
+                .ok_or_else(|| {
+                    MezError::invalid_state(format!(
+                        "MCP server `{server_id}` exceeded the tool schema byte limit"
+                    ))
+                })?;
+        }
+        let next_description_bytes = self
+            .description_bytes
+            .checked_add(added_description_bytes)
+            .filter(|total| *total <= self.max_description_bytes)
+            .ok_or_else(|| {
+                MezError::invalid_state(format!(
+                    "MCP server `{server_id}` exceeded the tool description byte limit of {}",
+                    self.max_description_bytes
+                ))
+            })?;
+        let next_schema_bytes = self
+            .schema_bytes
+            .checked_add(added_schema_bytes)
+            .filter(|total| *total <= self.max_schema_bytes)
+            .ok_or_else(|| {
+                MezError::invalid_state(format!(
+                    "MCP server `{server_id}` exceeded the tool schema byte limit of {}",
+                    self.max_schema_bytes
+                ))
+            })?;
+
+        self.response_bytes = next_response_bytes;
+        self.tools = next_tools;
+        self.description_bytes = next_description_bytes;
+        self.schema_bytes = next_schema_bytes;
+        self.seen_tool_names.extend(page_names);
+        Ok(())
+    }
+}
+
 /// Tracks MCP `tools/list` pagination progress and rejects non-terminating
 /// cursor streams.
 #[derive(Debug, Clone, Default)]
@@ -933,6 +1075,8 @@ pub struct McpStreamableHttpResponse {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub headers: BTreeMap<String, String>,
+    /// Number of raw response-body bytes received before protocol decoding.
+    pub body_bytes: usize,
     /// Stores the protocol body value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

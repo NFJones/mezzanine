@@ -3,10 +3,10 @@
 use serde_json::Value;
 
 use super::super::{
-    DEFAULT_MCP_MAX_TOOL_LIST_PAGES, McpErrorKind, McpRegistry, McpToolCallRequest,
-    McpToolListPagination, build_mcp_initialize_request, build_mcp_tools_call_request,
-    build_mcp_tools_list_request, parse_mcp_initialize_response, parse_mcp_tools_call_response,
-    parse_mcp_tools_list_response,
+    DEFAULT_MCP_MAX_TOOL_LIST_PAGES, McpDiscoveredTool, McpErrorKind, McpRegistry,
+    McpToolCallRequest, McpToolDiscoveryBudget, McpToolListPagination,
+    build_mcp_initialize_request, build_mcp_tools_call_request, build_mcp_tools_list_request,
+    parse_mcp_initialize_response, parse_mcp_tools_call_response, parse_mcp_tools_list_response,
 };
 use super::{config, tool};
 
@@ -105,6 +105,76 @@ fn mcp_tool_list_pagination_rejects_excessive_pages() {
         .unwrap_err();
     assert_eq!(error.kind(), McpErrorKind::InvalidState);
     assert!(error.message().contains("tools/list page limit"));
+}
+
+/// Verifies aggregate discovery accepts values exactly at every configured
+/// boundary before any discovered tool is retained by a transport adapter.
+#[test]
+fn mcp_tool_discovery_budget_accepts_exact_limits() {
+    let tool = McpDiscoveredTool {
+        name: "echo".to_string(),
+        title: Some("E".to_string()),
+        description: "abc".to_string(),
+        input_schema_json: "{}".to_string(),
+    };
+    let mut budget = McpToolDiscoveryBudget::with_limits(8, 1, 4, 2);
+
+    budget.accept_page("fixture", 8, &[tool]).unwrap();
+}
+
+/// Verifies aggregate discovery rejects cumulative response, tool-count,
+/// description, schema, and duplicate-identity amplification.
+#[test]
+fn mcp_tool_discovery_budget_rejects_all_aggregate_overflows() {
+    let tool = McpDiscoveredTool {
+        name: "echo".to_string(),
+        title: None,
+        description: "abc".to_string(),
+        input_schema_json: "{}".to_string(),
+    };
+
+    let mut response_budget = McpToolDiscoveryBudget::with_limits(7, 2, 8, 8);
+    response_budget
+        .accept_page("fixture", 4, std::slice::from_ref(&tool))
+        .unwrap();
+    let error = response_budget
+        .accept_page(
+            "fixture",
+            4,
+            &[McpDiscoveredTool {
+                name: "other".to_string(),
+                ..tool.clone()
+            }],
+        )
+        .unwrap_err();
+    assert!(error.message().contains("cumulative response byte limit"));
+
+    let mut tool_budget = McpToolDiscoveryBudget::with_limits(64, 1, 8, 8);
+    let error = tool_budget
+        .accept_page("fixture", 8, &[tool.clone(), tool.clone()])
+        .unwrap_err();
+    assert!(error.message().contains("discovered tool limit"));
+
+    let mut description_budget = McpToolDiscoveryBudget::with_limits(64, 2, 2, 8);
+    let error = description_budget
+        .accept_page("fixture", 8, std::slice::from_ref(&tool))
+        .unwrap_err();
+    assert!(error.message().contains("tool description byte limit"));
+
+    let mut schema_budget = McpToolDiscoveryBudget::with_limits(64, 2, 8, 1);
+    let error = schema_budget
+        .accept_page("fixture", 8, std::slice::from_ref(&tool))
+        .unwrap_err();
+    assert!(error.message().contains("tool schema byte limit"));
+
+    let mut duplicate_budget = McpToolDiscoveryBudget::with_limits(64, 2, 8, 8);
+    duplicate_budget
+        .accept_page("fixture", 8, std::slice::from_ref(&tool))
+        .unwrap();
+    let error = duplicate_budget
+        .accept_page("fixture", 8, std::slice::from_ref(&tool))
+        .unwrap_err();
+    assert!(error.message().contains("duplicate tool identity `echo`"));
 }
 
 /// Verifies tool-call responses preserve content, structured data, and error status.

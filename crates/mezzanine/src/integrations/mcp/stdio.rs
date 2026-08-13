@@ -21,7 +21,9 @@ use mez_agent::mcp::{
     json_id_matches, mcp_initialize_operation, mcp_tools_call_operation, mcp_tools_list_operation,
 };
 #[cfg(test)]
-use mez_agent::mcp::{McpRegistry, McpStdioDiscovery, McpToolListPagination};
+use mez_agent::mcp::{
+    McpRegistry, McpStdioDiscovery, McpToolDiscoveryBudget, McpToolListPagination,
+};
 
 /// Carries Mcp Stdio Read Event state for this subsystem.
 ///
@@ -126,11 +128,23 @@ impl McpStdioConnection {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn list_tools(
         &mut self,
         cursor: Option<&str>,
         timeout_ms: u64,
     ) -> Result<McpToolsListResponse> {
+        self.list_tools_page(cursor, timeout_ms)
+            .await
+            .map(|(response, _)| response)
+    }
+
+    /// Lists one tool page and returns its raw response byte count.
+    pub async fn list_tools_page(
+        &mut self,
+        cursor: Option<&str>,
+        timeout_ms: u64,
+    ) -> Result<(McpToolsListResponse, usize)> {
         let operation = mcp_tools_list_operation(self.allocate_id(), cursor, timeout_ms);
         let response = self
             .send_request(
@@ -139,7 +153,8 @@ impl McpStdioConnection {
                 operation.timeout_ms(),
             )
             .await?;
-        Ok(operation.parse_response(&response)?)
+        let response_bytes = response.len();
+        Ok((operation.parse_response(&response)?, response_bytes))
     }
 
     /// Runs the call tool operation for this subsystem.
@@ -336,19 +351,33 @@ pub async fn discover_stdio_mcp_server(
     connection.send_initialized_notification().await?;
     let mut tools = Vec::new();
     if initialize.supports_tools {
-        let mut cursor = None;
-        let mut pagination = McpToolListPagination::default();
-        loop {
-            let response = connection
-                .list_tools(cursor.as_deref(), plan.timeout_ms)
-                .await?;
-            tools.extend(response.tools);
-            let Some(next_cursor) = pagination.advance(&plan.server_id, response.next_cursor)?
-            else {
-                break;
-            };
-            cursor = Some(next_cursor);
-        }
+        tools = tokio::time::timeout(Duration::from_millis(plan.timeout_ms), async {
+            let mut tools = Vec::new();
+            let mut cursor = None;
+            let mut pagination = McpToolListPagination::default();
+            let mut budget = McpToolDiscoveryBudget::default();
+            loop {
+                let (response, response_bytes) = connection
+                    .list_tools_page(cursor.as_deref(), plan.timeout_ms)
+                    .await?;
+                budget.accept_page(&plan.server_id, response_bytes, &response.tools)?;
+                tools.extend(response.tools);
+                let Some(next_cursor) =
+                    pagination.advance(&plan.server_id, response.next_cursor)?
+                else {
+                    break;
+                };
+                cursor = Some(next_cursor);
+            }
+            Ok::<_, MezError>(tools)
+        })
+        .await
+        .map_err(|_| {
+            MezError::invalid_state(format!(
+                "MCP server `{}` exceeded the aggregate tools/list deadline of {} ms",
+                plan.server_id, plan.timeout_ms
+            ))
+        })??;
     }
     Ok(McpStdioDiscovery { initialize, tools })
 }

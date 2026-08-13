@@ -27,13 +27,16 @@ pub use protocol::{
 };
 pub use registry::McpRegistry;
 pub use types::{
-    DEFAULT_MCP_MAX_MESSAGE_BYTES, DEFAULT_MCP_MAX_TOOL_LIST_PAGES, DEFAULT_MCP_PROTOCOL_VERSION,
-    DEFAULT_MCP_STARTUP_TIMEOUT_MS, DEFAULT_MCP_TOOL_TIMEOUT_MS, McpApprovalSetting,
-    McpDiscoveredTool, McpEnvironmentPlan, McpExternalCapability, McpInitializeResponse,
-    McpServerConfig, McpServerKind, McpServerState, McpServerStatus, McpStartupPlan,
-    McpStartupTransportPlan, McpStdioDiscovery, McpStreamableHttpDiscovery,
+    DEFAULT_MCP_MAX_DISCOVERED_TOOLS, DEFAULT_MCP_MAX_MESSAGE_BYTES,
+    DEFAULT_MCP_MAX_TOOL_DESCRIPTION_BYTES, DEFAULT_MCP_MAX_TOOL_DISCOVERY_RESPONSE_BYTES,
+    DEFAULT_MCP_MAX_TOOL_LIST_PAGES, DEFAULT_MCP_MAX_TOOL_SCHEMA_BYTES,
+    DEFAULT_MCP_PROTOCOL_VERSION, DEFAULT_MCP_STARTUP_TIMEOUT_MS, DEFAULT_MCP_TOOL_TIMEOUT_MS,
+    McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan, McpExternalCapability,
+    McpInitializeResponse, McpServerConfig, McpServerKind, McpServerState, McpServerStatus,
+    McpStartupPlan, McpStartupTransportPlan, McpStdioDiscovery, McpStreamableHttpDiscovery,
     McpStreamableHttpResponse, McpToolCallPlan, McpToolCallRequest, McpToolCallResponse,
-    McpToolEffects, McpToolListPagination, McpToolState, McpToolsListResponse,
+    McpToolDiscoveryBudget, McpToolEffects, McpToolListPagination, McpToolState,
+    McpToolsListResponse,
 };
 
 /// Parses and validates one MCP tool argument schema before it becomes callable.
