@@ -2241,6 +2241,10 @@ payload to the command or agent backend while user-visible prompt echo MAY use
 the collapsed placeholder form. Bracketed-paste delimiters MUST be decoded by
 the prompt surface so embedded newlines in the pasted payload do not submit the
 prompt unless the user presses the normal submission key after the paste.
+Prompt surfaces MUST bound retained incomplete bracketed-paste payloads by byte
+count and age. An oversized or expired incomplete payload MUST be discarded,
+MUST NOT edit or submit the prompt, and MUST leave subsequent ordinary input
+decodable.
 
 The agent prompt MUST support Up/Down arrow navigation through submitted prompt
 history and `Ctrl+R` incremental reverse search through that history using the

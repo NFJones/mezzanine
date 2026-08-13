@@ -3,6 +3,7 @@
 use super::{
     ReadlineEdit, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind,
 };
+use mez_mux::readline::{ReadlineBracketedPasteRejection, ReadlineDecodedInput};
 
 /// Verifies large pasted text renders as one compact editable block while
 /// submission still recovers the exact original payload through the product
@@ -711,4 +712,32 @@ fn readline_decoder_collapses_split_bracketed_paste_payloads() {
     );
     assert_eq!(decoder.pending_len(), 0);
     assert_eq!(prompt.buffer.line(), "");
+}
+
+/// Verifies a rejected malformed paste is a prompt no-op and does not prevent
+/// the product adapter from applying the next ordinary decoded key.
+#[test]
+fn readline_decoder_rejected_bracketed_paste_leaves_prompt_usable() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Command);
+
+    assert_eq!(
+        ReadlineInputDecoder::apply_decoded_to_prompt(
+            &mut prompt,
+            ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 },
+            ),
+        )
+        .unwrap(),
+        ReadlineOutcome::Noop
+    );
+    assert_eq!(prompt.buffer.line(), "");
+    assert_eq!(
+        ReadlineInputDecoder::apply_decoded_to_prompt(
+            &mut prompt,
+            ReadlineDecodedInput::Sequence(b"z".to_vec()),
+        )
+        .unwrap(),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.buffer.line(), "z");
 }

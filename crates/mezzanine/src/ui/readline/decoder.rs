@@ -33,6 +33,7 @@ impl ReadlineInputDecoder {
                 prompt.selector = None;
                 Ok(prompt.buffer.apply(ReadlineEdit::InsertText(text)))
             }
+            ReadlineDecodedInput::BracketedPasteRejected(_) => Ok(ReadlineOutcome::Noop),
         }
     }
 

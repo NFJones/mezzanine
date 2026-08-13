@@ -4,11 +4,34 @@
 //! bracketed-paste assembly, and baseline readline key bindings. Product prompt
 //! policy applies the decoded input to selector-aware prompt state.
 
+use std::time::{Duration, Instant};
+
 use super::{ReadlineBuffer, ReadlineEdit, ReadlineOutcome};
 use crate::{MuxError, Result};
 
+/// Maximum retained bytes for one readline bracketed-paste payload.
+pub const READLINE_BRACKETED_PASTE_MAX_BYTES: usize = 1024 * 1024;
+
+/// Maximum age of an incomplete readline bracketed-paste payload.
+pub const READLINE_BRACKETED_PASTE_STALE_AFTER: Duration = Duration::from_millis(500);
+
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
+
+/// Reason an incomplete or oversized bracketed paste was discarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadlineBracketedPasteRejection {
+    /// The payload exceeded the configured retained-byte budget.
+    TooLarge {
+        /// Maximum payload bytes accepted by the decoder.
+        max_bytes: usize,
+    },
+    /// The payload remained incomplete beyond the configured age limit.
+    Expired {
+        /// Maximum age allowed for an incomplete payload.
+        stale_after: Duration,
+    },
+}
 
 /// One complete terminal input item decoded from a byte stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,14 +40,28 @@ pub enum ReadlineDecodedInput {
     Sequence(Vec<u8>),
     /// One complete bracketed-paste payload.
     BracketedPaste(String),
+    /// An incomplete or oversized bracketed paste was discarded.
+    BracketedPasteRejected(ReadlineBracketedPasteRejection),
 }
 
 /// Stateful terminal-input decoder for readline prompt surfaces.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadlineTerminalInputDecoder {
     pending: Vec<u8>,
     bracketed_paste_active: bool,
     bracketed_paste: Vec<u8>,
+    bracketed_paste_started_at: Option<Instant>,
+    bracketed_paste_max_bytes: usize,
+    bracketed_paste_stale_after: Duration,
+}
+
+impl Default for ReadlineTerminalInputDecoder {
+    fn default() -> Self {
+        Self::with_bracketed_paste_limits(
+            READLINE_BRACKETED_PASTE_MAX_BYTES,
+            READLINE_BRACKETED_PASTE_STALE_AFTER,
+        )
+    }
 }
 
 impl ReadlineTerminalInputDecoder {
@@ -33,30 +70,80 @@ impl ReadlineTerminalInputDecoder {
         Self::default()
     }
 
+    /// Creates a decoder with explicit retained-byte and incomplete-age limits.
+    pub fn with_bracketed_paste_limits(max_bytes: usize, stale_after: Duration) -> Self {
+        Self {
+            pending: Vec::new(),
+            bracketed_paste_active: false,
+            bracketed_paste: Vec::new(),
+            bracketed_paste_started_at: None,
+            bracketed_paste_max_bytes: max_bytes,
+            bracketed_paste_stale_after: stale_after,
+        }
+    }
+
     /// Returns bytes retained because they may complete on a later read.
     pub fn pending_len(&self) -> usize {
         self.pending.len()
     }
 
+    /// Returns all bytes currently retained for partial input or paste data.
+    pub fn buffered_len(&self) -> usize {
+        self.pending
+            .len()
+            .saturating_add(self.bracketed_paste.len())
+    }
+
     /// Decodes complete input items while preserving incomplete suffixes.
     pub fn decode(&mut self, input: &[u8]) -> Result<Vec<ReadlineDecodedInput>> {
+        self.decode_at(input, Instant::now())
+    }
+
+    /// Decodes input using `now` for deterministic incomplete-paste expiry.
+    pub fn decode_at(&mut self, input: &[u8], now: Instant) -> Result<Vec<ReadlineDecodedInput>> {
+        let mut decoded = Vec::new();
+        if self.bracketed_paste_active
+            && self.bracketed_paste_started_at.is_some_and(|started| {
+                now.saturating_duration_since(started) >= self.bracketed_paste_stale_after
+            })
+        {
+            self.reset_bracketed_paste();
+            self.pending.clear();
+            decoded.push(ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::Expired {
+                    stale_after: self.bracketed_paste_stale_after,
+                },
+            ));
+        }
         if input.is_empty() && self.pending.is_empty() {
-            return Ok(Vec::new());
+            return Ok(decoded);
         }
         let mut bytes = Vec::with_capacity(self.pending.len().saturating_add(input.len()));
         bytes.extend_from_slice(&self.pending);
         bytes.extend_from_slice(input);
         self.pending.clear();
 
-        let mut decoded = Vec::new();
         let mut cursor = 0;
         while cursor < bytes.len() {
             if self.bracketed_paste_active {
                 if let Some(end_offset) = find_bytes(&bytes[cursor..], BRACKETED_PASTE_END) {
+                    if !self.bracketed_paste_fits(end_offset) {
+                        self.reset_bracketed_paste();
+                        decoded.push(ReadlineDecodedInput::BracketedPasteRejected(
+                            ReadlineBracketedPasteRejection::TooLarge {
+                                max_bytes: self.bracketed_paste_max_bytes,
+                            },
+                        ));
+                        cursor = cursor
+                            .saturating_add(end_offset)
+                            .saturating_add(BRACKETED_PASTE_END.len());
+                        continue;
+                    }
                     self.bracketed_paste
                         .extend_from_slice(&bytes[cursor..cursor + end_offset]);
                     let payload = std::mem::take(&mut self.bracketed_paste);
                     self.bracketed_paste_active = false;
+                    self.bracketed_paste_started_at = None;
                     let text = String::from_utf8(payload).map_err(|_| {
                         MuxError::invalid_args("readline paste is not valid UTF-8 text")
                     })?;
@@ -70,6 +157,16 @@ impl ReadlineTerminalInputDecoder {
                 }
                 let tail = longest_suffix_that_prefixes(&bytes[cursor..], BRACKETED_PASTE_END);
                 let payload_end = bytes.len().saturating_sub(tail);
+                let payload_len = payload_end.saturating_sub(cursor);
+                if !self.bracketed_paste_fits(payload_len) {
+                    self.reset_bracketed_paste();
+                    decoded.push(ReadlineDecodedInput::BracketedPasteRejected(
+                        ReadlineBracketedPasteRejection::TooLarge {
+                            max_bytes: self.bracketed_paste_max_bytes,
+                        },
+                    ));
+                    break;
+                }
                 self.bracketed_paste
                     .extend_from_slice(&bytes[cursor..payload_end]);
                 if tail > 0 {
@@ -80,6 +177,7 @@ impl ReadlineTerminalInputDecoder {
             if bytes[cursor..].starts_with(BRACKETED_PASTE_START) {
                 self.bracketed_paste_active = true;
                 self.bracketed_paste.clear();
+                self.bracketed_paste_started_at = Some(now);
                 cursor = cursor.saturating_add(BRACKETED_PASTE_START.len());
                 continue;
             }
@@ -103,6 +201,21 @@ impl ReadlineTerminalInputDecoder {
             }
         }
         Ok(decoded)
+    }
+
+    /// Reports whether `additional_bytes` fit without overflowing the budget.
+    fn bracketed_paste_fits(&self, additional_bytes: usize) -> bool {
+        self.bracketed_paste
+            .len()
+            .checked_add(additional_bytes)
+            .is_some_and(|total| total <= self.bracketed_paste_max_bytes)
+    }
+
+    /// Clears all state owned by an active bracketed paste.
+    fn reset_bracketed_paste(&mut self) {
+        self.bracketed_paste_active = false;
+        self.bracketed_paste.clear();
+        self.bracketed_paste_started_at = None;
     }
 }
 
@@ -473,9 +586,11 @@ fn longest_suffix_that_prefixes(haystack: &[u8], needle: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        ReadlineDecodedInput, ReadlineTerminalInputDecoder, apply_readline_terminal_input,
+        ReadlineBracketedPasteRejection, ReadlineDecodedInput, ReadlineTerminalInputDecoder,
+        apply_readline_terminal_input,
     };
     use crate::readline::{ReadlineBuffer, ReadlineOutcome};
+    use std::time::{Duration, Instant};
 
     /// Verifies decoder framing preserves partial UTF-8 and escape sequences
     /// without depending on product prompt policy.
@@ -507,6 +622,88 @@ mod tests {
             decoder.decode(b"two\x1b[201~").unwrap(),
             vec![ReadlineDecodedInput::BracketedPaste("one\ntwo".into())]
         );
+    }
+
+    /// Verifies the configured paste limit includes the exact boundary rather
+    /// than rejecting a payload that fits within the retained-byte budget.
+    #[test]
+    fn readline_decoder_accepts_bracketed_paste_at_exact_limit() {
+        let now = Instant::now();
+        let mut decoder =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+
+        assert_eq!(
+            decoder.decode_at(b"\x1b[200~abc\x1b[201~", now).unwrap(),
+            vec![ReadlineDecodedInput::BracketedPaste("abc".into())]
+        );
+    }
+
+    /// Verifies fragmented paste overflow is reported explicitly, releases all
+    /// retained bytes, and leaves the next ordinary key decodable.
+    #[test]
+    fn readline_decoder_rejects_oversized_paste_and_recovers() {
+        let now = Instant::now();
+        let mut decoder =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+
+        assert!(decoder.decode_at(b"\x1b[200~abc", now).unwrap().is_empty());
+        assert_eq!(
+            decoder.decode_at(b"d", now).unwrap(),
+            vec![ReadlineDecodedInput::BracketedPasteRejected(
+                ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 }
+            )]
+        );
+        assert_eq!(decoder.buffered_len(), 0);
+        assert_eq!(
+            decoder.decode_at(b"z", now).unwrap(),
+            vec![ReadlineDecodedInput::Sequence(b"z".to_vec())]
+        );
+    }
+
+    /// Verifies a complete oversized frame is rejected without swallowing an
+    /// unambiguous ordinary suffix from the same terminal read.
+    #[test]
+    fn readline_decoder_preserves_suffix_after_complete_oversized_paste() {
+        let now = Instant::now();
+        let mut decoder =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(3, Duration::from_secs(1));
+
+        assert_eq!(
+            decoder.decode_at(b"\x1b[200~abcd\x1b[201~z", now).unwrap(),
+            vec![
+                ReadlineDecodedInput::BracketedPasteRejected(
+                    ReadlineBracketedPasteRejection::TooLarge { max_bytes: 3 }
+                ),
+                ReadlineDecodedInput::Sequence(b"z".to_vec()),
+            ]
+        );
+    }
+
+    /// Verifies stale unterminated paste state is reported and reset before
+    /// current input is decoded, so malformed input cannot capture later keys.
+    #[test]
+    fn readline_decoder_expires_unterminated_paste_and_recovers() {
+        let now = Instant::now();
+        let stale_after = Duration::from_millis(500);
+        let mut decoder =
+            ReadlineTerminalInputDecoder::with_bracketed_paste_limits(32, stale_after);
+
+        assert!(
+            decoder
+                .decode_at(b"\x1b[200~unterminated", now)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            decoder.decode_at(b"z", now + stale_after).unwrap(),
+            vec![
+                ReadlineDecodedInput::BracketedPasteRejected(
+                    ReadlineBracketedPasteRejection::Expired { stale_after }
+                ),
+                ReadlineDecodedInput::Sequence(b"z".to_vec()),
+            ]
+        );
+        assert_eq!(decoder.buffered_len(), 0);
     }
 
     /// Verifies enhanced Backspace preserves Alt and Control modifiers across
