@@ -89,6 +89,62 @@ pub enum BatchContinuationPlan {
     Execute,
 }
 
+/// Stable identity for one capability continuation and its resulting surface.
+///
+/// The signature intentionally excludes model-authored reasons and accumulated
+/// controller messages. Repeating the same requested capabilities with the
+/// same resulting interaction and action surface cannot make execution
+/// progress, even if prose changes between rounds.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CapabilityContinuationSignature {
+    capabilities: Vec<AgentCapability>,
+    interaction_kind: String,
+    allowed_actions: Vec<String>,
+}
+
+impl CapabilityContinuationSignature {
+    /// Returns a stable diagnostic without reproducing model-authored text.
+    pub(crate) fn diagnostic(&self) -> String {
+        format!(
+            "capabilities={} interaction={} allowed_actions={}",
+            self.capabilities
+                .iter()
+                .map(|capability| capability.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            self.interaction_kind,
+            self.allowed_actions.join(",")
+        )
+    }
+}
+
+/// Normalizes a capability batch and the continuation surface it produced.
+pub(crate) fn capability_continuation_signature(
+    batch: &MaapBatch,
+    continuation: &ModelRequest,
+) -> Option<CapabilityContinuationSignature> {
+    let (requests, _) = capability_requests_and_incompatible_actions(batch);
+    if requests.is_empty() {
+        return None;
+    }
+    let mut capabilities = requests
+        .into_iter()
+        .map(|request| request.capability)
+        .collect::<Vec<_>>();
+    capabilities.sort_unstable();
+    capabilities.dedup();
+    Some(CapabilityContinuationSignature {
+        capabilities,
+        interaction_kind: continuation.interaction_kind.as_str().to_string(),
+        allowed_actions: continuation
+            .allowed_actions
+            .action_type_names()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    })
+}
+
 /// Error retained when batch continuation cannot recover within its budget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BatchContinuationError<ProductError> {

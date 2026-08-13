@@ -478,3 +478,87 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
     );
     assert_eq!(provider.requests().len(), 1);
 }
+
+/// Provider fixture that never completes one model request, allowing paused
+/// Tokio time to exercise the whole-turn deadline deterministically.
+struct PendingProvider;
+
+impl AsyncModelProvider for PendingProvider {
+    /// Returns the stable provider identity used by the deadline regression.
+    fn provider_id(&self) -> &str {
+        "pending"
+    }
+
+    /// Keeps the provider request pending until the turn-wide timeout cancels it.
+    fn send_request_async<'a>(
+        &'a self,
+        _request: &'a ModelRequest,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ModelResponse>> + Send + 'a>>
+    {
+        Box::pin(std::future::pending())
+    }
+}
+
+/// Verifies the async product adapter applies one finite deadline to the
+/// complete canonical turn and leaves the ledger in a terminal failed state.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn async_turn_runner_enforces_total_turn_deadline() {
+    let turn = turn();
+    let turn_id = turn.turn_id.clone();
+    let provider = PendingProvider;
+    let policy = PermissionPolicy::default();
+    let approvals = SessionApprovalStore::default();
+    let mut ledger = AgentTurnLedger::new(false);
+    let runner = AgentTurnRunner {
+        provider: &provider,
+        model_profile: ModelProfile {
+            provider: "pending".to_string(),
+            model: "test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        permissions: &crate::security::permissions::ProductPermissionPlanning::new(
+            &policy, &approvals, None,
+        ),
+        subagent_scope: None,
+        subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+        available_mcp_servers: Vec::new(),
+        available_mcp_tools: &[],
+        memory_actions_enabled: false,
+        issue_actions_enabled: true,
+    };
+
+    let error = runner
+        .run_turn_async(
+            &mut ledger,
+            turn,
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "user".to_string(),
+                content: "wait forever".to_string(),
+            }])
+            .unwrap(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .message()
+            .contains("agent turn exceeded total deadline"),
+        "{}",
+        error.message()
+    );
+    assert_eq!(
+        ledger
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+}

@@ -6,8 +6,10 @@
 //! The orchestrator owns recovery budgets, durable request promotion, response
 //! accounting, terminal ledger transitions, and execution projection.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 
+use crate::action_recovery::capability_continuation_signature;
 use crate::{
     ActionResult, AgentAction, AgentContext, AgentTurnExecution, AgentTurnLedger,
     AgentTurnLedgerError, AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnRecord,
@@ -21,6 +23,27 @@ use crate::{
 
 /// Default number of ephemeral repairs accepted during one provider negotiation phase.
 pub const DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
+
+/// Maximum provider interactions accepted during one canonical agent turn.
+pub const DEFAULT_AGENT_TURN_INTERACTION_LIMIT: usize = 16;
+
+/// Turn-wide bounds independent of phase-local MAAP repair accounting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentTurnLimits {
+    /// Maximum provider requests sent during one turn.
+    pub max_provider_interactions: usize,
+    /// Maximum elapsed time for the complete turn, enforced by async adapters.
+    pub timeout_ms: u64,
+}
+
+impl Default for AgentTurnLimits {
+    fn default() -> Self {
+        Self {
+            max_provider_interactions: DEFAULT_AGENT_TURN_INTERACTION_LIMIT,
+            timeout_ms: crate::DEFAULT_AGENT_TURN_TIMEOUT_MS,
+        }
+    }
+}
 
 /// Normalized provider failure facts consumed by canonical recovery policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +148,39 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
     allowed_actions: Option<AllowedActionSet>,
     interaction_kind: Option<ModelInteractionKind>,
 ) -> Result<AgentTurnExecution, E::Error> {
+    run_agent_turn_async_with_limits(
+        environment,
+        ledger,
+        turn,
+        context,
+        allowed_actions,
+        interaction_kind,
+        AgentTurnLimits::default(),
+    )
+    .await
+}
+
+/// Executes one production agent turn with explicit turn-wide bounds.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_agent_turn_async_with_limits<E: AgentTurnEnvironment>(
+    environment: &E,
+    ledger: &mut AgentTurnLedger,
+    turn: AgentTurnRecord,
+    context: &AgentContext,
+    allowed_actions: Option<AllowedActionSet>,
+    interaction_kind: Option<ModelInteractionKind>,
+    limits: AgentTurnLimits,
+) -> Result<AgentTurnExecution, E::Error> {
+    if limits.max_provider_interactions == 0 {
+        return Err(environment.invalid_args(
+            "agent turn provider interaction limit must be greater than zero".to_string(),
+        ));
+    }
+    if limits.timeout_ms == 0 {
+        return Err(
+            environment.invalid_args("agent turn timeout must be greater than zero".to_string())
+        );
+    }
     project_ledger_result(ledger.start_turn(turn.clone()))?;
     let mut request = environment.assemble_request(&turn, context)?;
     apply_model_request_control(&mut request, allowed_actions, interaction_kind);
@@ -136,8 +192,18 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
     );
     let mut negotiation =
         AgentTurnNegotiation::new(request.clone(), DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT);
+    let mut provider_interactions = 0usize;
+    let mut continuation_signatures = BTreeSet::new();
 
     let mut response = loop {
+        if provider_interactions >= limits.max_provider_interactions {
+            project_ledger_result(ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed))?;
+            return Err(environment.invalid_state(format!(
+                "agent turn exceeded provider interaction limit of {}",
+                limits.max_provider_interactions
+            )));
+        }
+        provider_interactions = provider_interactions.saturating_add(1);
         let response_request = request.clone();
         let mut response = match environment.send_request(&request).await {
             Ok(response) => response,
@@ -276,6 +342,50 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
         );
         match continuation {
             Ok(BatchContinuationPlan::Continue(next_request)) => {
+                if let Some(signature) = capability_continuation_signature(batch, &next_request)
+                    && !continuation_signatures.insert(signature.clone())
+                {
+                    let error = environment.invalid_args(format!(
+                        "capability continuation made no progress: {}",
+                        signature.diagnostic()
+                    ));
+                    project_ledger_result(
+                        ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed),
+                    )?;
+                    response.usage = negotiation.cumulative_response_usage();
+                    response.quota_usage = negotiation.latest_quota_usage().to_vec();
+                    return Ok(failed_validation_execution_with_summary(
+                        environment,
+                        &turn,
+                        negotiation.durable_request().clone(),
+                        response,
+                        negotiation.latest_response_usage(),
+                        &error,
+                        "capability_no_progress",
+                    )
+                    .await);
+                }
+                if provider_interactions >= limits.max_provider_interactions {
+                    let error = environment.invalid_state(format!(
+                        "agent turn exceeded provider interaction limit of {}",
+                        limits.max_provider_interactions
+                    ));
+                    project_ledger_result(
+                        ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed),
+                    )?;
+                    response.usage = negotiation.cumulative_response_usage();
+                    response.quota_usage = negotiation.latest_quota_usage().to_vec();
+                    return Ok(failed_validation_execution_with_summary(
+                        environment,
+                        &turn,
+                        negotiation.durable_request().clone(),
+                        response,
+                        negotiation.latest_response_usage(),
+                        &error,
+                        "turn_interaction_limit",
+                    )
+                    .await);
+                }
                 request = *next_request;
                 continue;
             }
@@ -428,8 +538,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        AgentActionPayload, AgentTurnTrigger, ContextBlock, ContextSourceKind, ModelMessage,
-        ModelMessageRole, ModelTokenUsage, SayStatus,
+        AgentActionPayload, AgentCapability, AgentTurnTrigger, ContextBlock, ContextSourceKind,
+        ModelMessage, ModelMessageRole, ModelTokenUsage, SayStatus,
     };
 
     /// Product-shaped test error used by every fake environment boundary.
@@ -589,6 +699,297 @@ mod tests {
             Poll::Ready(output) => output,
             Poll::Pending => panic!("fake turn environment unexpectedly returned pending"),
         }
+    }
+
+    /// Builds the stable turn identity shared by canonical runner regressions.
+    fn test_turn() -> AgentTurnRecord {
+        AgentTurnRecord {
+            turn_id: "turn-1".to_string(),
+            conversation_id: "conversation-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            pane_id: "pane-1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Queued,
+            cooperation_mode: None,
+            initial_capability: None,
+        }
+    }
+
+    /// Builds the minimal user context shared by canonical runner regressions.
+    fn test_context() -> AgentContext {
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            label: "request".to_string(),
+            content: "finish the task".to_string(),
+        }])
+        .expect("test context should be valid")
+    }
+
+    /// Builds one provider response containing a single capability request.
+    fn capability_response(
+        turn: &AgentTurnRecord,
+        action_id: &str,
+        capability: AgentCapability,
+        reason: &str,
+    ) -> ModelResponse {
+        ModelResponse {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            raw_text: format!("request {}", capability.as_str()),
+            usage: ModelTokenUsage::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "request capability".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![AgentAction {
+                    id: action_id.to_string(),
+                    rationale: "request capability".to_string(),
+                    payload: AgentActionPayload::RequestCapability {
+                        capability,
+                        reason: reason.to_string(),
+                    },
+                }],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        }
+    }
+
+    /// Builds one final response-only action for a successfully bounded turn.
+    fn final_response(turn: &AgentTurnRecord) -> ModelResponse {
+        ModelResponse {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            raw_text: "done".to_string(),
+            usage: ModelTokenUsage::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "finish the task".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![AgentAction {
+                    id: "say-final".to_string(),
+                    rationale: "finish the turn".to_string(),
+                    payload: AgentActionPayload::Say {
+                        status: SayStatus::Final,
+                        text: "Done.".to_string(),
+                        content_type: "text/plain".to_string(),
+                    },
+                }],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        }
+    }
+
+    /// Verifies repeated capability requests terminate once their normalized
+    /// request and resulting controller surface repeat without progress.
+    #[test]
+    fn repeated_capability_continuation_terminates_without_progress() {
+        let turn = test_turn();
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([
+                capability_response(
+                    &turn,
+                    "shell-1",
+                    AgentCapability::Shell,
+                    "inspect repository state",
+                ),
+                capability_response(
+                    &turn,
+                    "shell-2",
+                    AgentCapability::Shell,
+                    "different prose cannot create progress",
+                ),
+            ])),
+            requests: RefCell::new(Vec::new()),
+        };
+        let mut ledger = AgentTurnLedger::new(false);
+
+        let execution = run_ready(run_agent_turn_async(
+            &environment,
+            &mut ledger,
+            turn,
+            &test_context(),
+            Some(AllowedActionSet::capability_decision()),
+            Some(ModelInteractionKind::CapabilityDecision),
+        ))
+        .expect("no-progress continuation should return a failed execution");
+
+        assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+        assert!(
+            execution
+                .response
+                .raw_text
+                .contains("capability continuation made no progress")
+        );
+        assert_eq!(environment.requests.borrow().len(), 2);
+    }
+
+    /// Verifies a repair round cannot reset continuation progress and permit
+    /// the same capability request to repeat after the action surface stopped
+    /// changing.
+    #[test]
+    fn alternating_repair_and_capability_rounds_terminate_without_progress() {
+        let turn = test_turn();
+        let missing_batch = ModelResponse {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            raw_text: "missing action batch".to_string(),
+            usage: ModelTokenUsage::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        };
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([
+                capability_response(
+                    &turn,
+                    "shell-1",
+                    AgentCapability::Shell,
+                    "inspect repository state",
+                ),
+                missing_batch,
+                capability_response(
+                    &turn,
+                    "shell-2",
+                    AgentCapability::Shell,
+                    "retry the same capability after repair",
+                ),
+            ])),
+            requests: RefCell::new(Vec::new()),
+        };
+        let mut ledger = AgentTurnLedger::new(false);
+
+        let execution = run_ready(run_agent_turn_async(
+            &environment,
+            &mut ledger,
+            turn,
+            &test_context(),
+            Some(AllowedActionSet::capability_decision()),
+            Some(ModelInteractionKind::CapabilityDecision),
+        ))
+        .expect("alternating no-progress rounds should return a failed execution");
+
+        assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+        assert!(
+            execution
+                .response
+                .raw_text
+                .contains("capability continuation made no progress")
+        );
+        assert_eq!(environment.requests.borrow().len(), 3);
+    }
+
+    /// Verifies the turn-wide interaction budget terminates alternating valid
+    /// continuations independently of phase-local MAAP repair resets.
+    #[test]
+    fn turn_wide_interaction_limit_bounds_distinct_continuations() {
+        let turn = test_turn();
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([
+                capability_response(
+                    &turn,
+                    "shell",
+                    AgentCapability::Shell,
+                    "inspect repository state",
+                ),
+                capability_response(
+                    &turn,
+                    "network",
+                    AgentCapability::NetworkSearch,
+                    "check current documentation",
+                ),
+            ])),
+            requests: RefCell::new(Vec::new()),
+        };
+        let mut ledger = AgentTurnLedger::new(false);
+
+        let execution = run_ready(run_agent_turn_async_with_limits(
+            &environment,
+            &mut ledger,
+            turn,
+            &test_context(),
+            Some(AllowedActionSet::capability_decision()),
+            Some(ModelInteractionKind::CapabilityDecision),
+            AgentTurnLimits {
+                max_provider_interactions: 2,
+                timeout_ms: 1_000,
+            },
+        ))
+        .expect("interaction exhaustion should return a failed execution");
+
+        assert_eq!(execution.terminal_state, AgentTurnState::Failed);
+        assert!(
+            execution
+                .response
+                .raw_text
+                .contains("agent turn exceeded provider interaction limit of 2")
+        );
+        assert_eq!(environment.requests.borrow().len(), 2);
+    }
+
+    /// Verifies distinct capability grants accumulate and execute normally
+    /// when every continuation changes the controller-owned action surface.
+    #[test]
+    fn distinct_capability_continuations_make_progress_and_complete() {
+        let turn = test_turn();
+        let environment = FakeEnvironment {
+            responses: RefCell::new(VecDeque::from([
+                capability_response(
+                    &turn,
+                    "shell",
+                    AgentCapability::Shell,
+                    "inspect repository state",
+                ),
+                capability_response(
+                    &turn,
+                    "network",
+                    AgentCapability::NetworkSearch,
+                    "check current documentation",
+                ),
+                final_response(&turn),
+            ])),
+            requests: RefCell::new(Vec::new()),
+        };
+        let mut ledger = AgentTurnLedger::new(false);
+
+        let execution = run_ready(run_agent_turn_async(
+            &environment,
+            &mut ledger,
+            turn,
+            &test_context(),
+            Some(AllowedActionSet::capability_decision()),
+            Some(ModelInteractionKind::CapabilityDecision),
+        ))
+        .expect("distinct capability progression should complete");
+
+        assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+        let requests = environment.requests.borrow();
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests[2]
+                .allowed_actions
+                .contains(crate::AllowedAction::ShellCommand)
+        );
+        assert!(
+            requests[2]
+                .allowed_actions
+                .contains(crate::AllowedAction::WebSearch)
+        );
     }
 
     /// Verifies fake provider and product ports execute the same canonical

@@ -31,7 +31,8 @@ use crate::integrations::agent::provider::ModelProvider;
 #[cfg(test)]
 use mez_agent::turn_state_from_action_results;
 use mez_agent::{
-    AgentTurnEnvironment, AgentTurnExecution, AgentTurnProviderFailure, SubagentScopeDeclaration,
+    AgentTurnEnvironment, AgentTurnExecution, AgentTurnLimits, AgentTurnProviderFailure,
+    SubagentScopeDeclaration,
 };
 #[cfg(test)]
 use mez_agent::{LocalActionExecutor, McpActionExecutor, PaneShellExecutor};
@@ -529,14 +530,30 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         interaction_kind: Option<mez_agent::ModelInteractionKind>,
     ) -> Result<AgentTurnExecution> {
         let environment = ProductAgentTurnEnvironment { runner: self };
-        mez_agent::run_agent_turn_async(
-            &environment,
-            ledger,
-            turn,
-            context,
-            allowed_actions,
-            interaction_kind,
+        let limits = AgentTurnLimits::default();
+        let turn_id = turn.turn_id.clone();
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(limits.timeout_ms),
+            mez_agent::run_agent_turn_async_with_limits(
+                &environment,
+                ledger,
+                turn,
+                context,
+                allowed_actions,
+                interaction_kind,
+                limits,
+            ),
         )
         .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                ledger.finish_turn(&turn_id, mez_agent::AgentTurnState::Failed)?;
+                Err(MezError::invalid_state(format!(
+                    "agent turn exceeded total deadline of {} ms",
+                    limits.timeout_ms
+                )))
+            }
+        }
     }
 }
