@@ -2228,8 +2228,8 @@ fn runtime_bubblewrap_successful_probe_is_cached() {
 }
 
 /// Verifies a Fish pane runs the fixed internal capability script under POSIX
-/// sh, excludes fragmented receiver framing from retained output, and accepts
-/// the exact sentinel without changing Fish pane identity.
+/// sh without an unused command-payload receiver, accepts the exact sentinel,
+/// and preserves Fish pane identity.
 #[test]
 fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
     let root = temp_root("runtime-bubblewrap-fish-probe");
@@ -2262,11 +2262,16 @@ fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
             .then(|| marker.clone())
         })
         .unwrap();
-    let receiver_head = format!(
-        "\x1b]133;C;mez_marker={marker};mez_turn={};mez_agent={};mez_pane=%1\x1b\\\x1b]133;R;mez_payload_receiver=ready;mez_marker={marker};mez_turn={};mez_agent={};mez_",
-        turn.turn_id, turn.agent_id, turn.turn_id, turn.agent_id
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get(&marker)
+        .unwrap();
+    assert!(transaction.pending_input_payload.is_none());
+    let start = format!(
+        "\x1b]133;C;mez_marker={marker};mez_turn={};mez_agent={};mez_pane=%1\x1b\\",
+        turn.turn_id, turn.agent_id
     );
-    service.record_running_shell_transaction_output("%1", receiver_head.as_bytes());
+    service.record_running_shell_transaction_output("%1", start.as_bytes());
     service
         .observe_agent_shell_transaction_events(
             "%1",
@@ -2278,10 +2283,7 @@ fn runtime_bubblewrap_fish_pane_probe_uses_posix_sh_and_caches_success() {
             }],
         )
         .unwrap();
-    service.record_running_shell_transaction_output(
-        "%1",
-        b"pane=%1\x1b\\mez-bubblewrap-capability-v6",
-    );
+    service.record_running_shell_transaction_output("%1", b"mez-bubblewrap-capability-v6");
 
     let (observed_marker, transaction) = take_bubblewrap_probe_transaction(&mut service);
     assert_eq!(observed_marker, marker);

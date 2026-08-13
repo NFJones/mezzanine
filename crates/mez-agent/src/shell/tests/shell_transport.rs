@@ -1383,6 +1383,32 @@ fn typed_child_launch_quotes_arguments_without_shell_fragments() {
 }
 
 #[test]
+/// Verifies a literal-only typed Fish child launch starts directly without an
+/// unused command-file receiver or synthetic empty-command payload.
+fn typed_fish_child_launch_without_command_file_skips_payload_receiver() {
+    let launch = ShellChildLaunch::new(
+        "/bin/sh",
+        vec![
+            ShellChildArgument::Literal("-c".to_string()),
+            ShellChildArgument::Literal("printf mez-bubblewrap-capability-v6".to_string()),
+        ],
+    )
+    .unwrap();
+    let input = ShellTransaction::new(marker(), "t1", "a1", "p1", Path::new("/usr/bin/fish"), "")
+        .unwrap()
+        .with_child_launch(launch)
+        .render_for_classification_input(ShellClassification::Fish);
+    let fish = decoded_fish_wrapper_source(&input.wrapper);
+
+    assert!(input.payload.is_empty(), "{input:?}");
+    assert!(!fish.contains("while read -l MEZ_COMMAND_LINE"), "{fish}");
+    assert!(!fish.contains("mez_payload_receiver=ready"), "{fish}");
+    let start_marker = fish.find("printf '\\033]133;C;").unwrap();
+    let typed_child = fish.find("'/bin/sh' \\\n'-c'").unwrap();
+    assert!(start_marker < typed_child, "{fish}");
+}
+
+#[test]
 /// Verifies a long typed POSIX child argument is split across bounded physical
 /// wrapper lines while preserving its one-argument argv boundary at execution.
 /// Forwarded sandbox environment values can exceed terminal line-discipline

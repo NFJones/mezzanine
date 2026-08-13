@@ -1246,14 +1246,38 @@ unset -f {function_name} 2>/dev/null || :\n\
 
     /// Renders a Fish shell transaction as a wrapper plus streamed payload.
     pub fn render_fish_input(&self) -> ShellTransactionInput {
-        let command_materialization = fish_command_file_materialization(
-            &self.command,
-            self.input_sidecar.as_deref(),
-            self.marker.as_str(),
-            "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE",
-            "printf '\\033]133;R;mez_payload_receiver=ready;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE",
-            self.payload_receiver_acknowledgements,
-        );
+        let start_marker_line = "printf '\\033]133;C;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE";
+        let typed_child_uses_command_file = self.child_launch.as_ref().is_some_and(|launch| {
+            launch
+                .arguments
+                .iter()
+                .any(|argument| matches!(argument, ShellChildArgument::MaterializedCommandFile))
+        });
+        let command_materialization = if self.child_launch.is_some()
+            && !typed_child_uses_command_file
+            && self.input_sidecar.is_none()
+        {
+            CommandMaterialization {
+                setup: format!(
+                    "set -l MEZ_COMMAND_FILE ''\n\
+set -l MEZ_COMMAND_B64 ''\n\
+set -l MEZ_SIDECAR_DATA ''\n\
+set -l MEZ_STTY_STATE ''\n\
+set -l MEZ_WRITE_STATUS 0\n\
+{start_marker_line}\n"
+                ),
+                payload: String::new(),
+            }
+        } else {
+            fish_command_file_materialization(
+                &self.command,
+                self.input_sidecar.as_deref(),
+                self.marker.as_str(),
+                start_marker_line,
+                "printf '\\033]133;R;mez_payload_receiver=ready;mez_marker=%s;mez_turn=%s;mez_agent=%s;mez_pane=%s\\033\\\\' $MEZ_MARKER_TOKEN $MEZ_TURN $MEZ_AGENT $MEZ_PANE",
+                self.payload_receiver_acknowledgements,
+            )
+        };
         let shell_invocation = self.child_launch.as_ref().map_or_else(
             || {
                 fish_shell_script_invocation_words(
