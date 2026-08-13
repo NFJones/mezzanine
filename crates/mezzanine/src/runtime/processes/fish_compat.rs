@@ -256,14 +256,14 @@ mod tests {
                     .read_available_output(64 * 1024)
                     .expect("managed Fish output should remain readable"),
             );
-            if predicate(&output) {
+            if predicate(output) {
                 return;
             }
             if Instant::now() >= deadline {
                 let _ = process.terminate(Duration::from_millis(100));
                 panic!(
                     "managed Fish output did not reach its expected boundary: {:?}",
-                    String::from_utf8_lossy(&output)
+                    String::from_utf8_lossy(output)
                 );
             }
             std::thread::sleep(Duration::from_millis(10));
