@@ -1132,7 +1132,7 @@ async fn async_routed_subagent_settles_with_real_bubblewrap() {
         denied_write_path.to_string_lossy().replace('\'', "'\"'\"'")
     );
     let payload = format!(
-        "if : > {quoted_path}; then rm -f {quoted_path}; printf '%s%s\\n' 'ROUTED_SANDBOX_' 'ESCAPE'; exit 97; fi; printf '%s%s\\n' 'ROUTED_SANDBOX_' 'ACTION'"
+        "if ( : > {quoted_path} ) 2>/dev/null; then rm -f {quoted_path}; printf '%s%s\\n' 'ROUTED_SANDBOX_' 'ESCAPE'; exit 97; fi; printf '%s%s\\n' 'ROUTED_SANDBOX_' 'ACTION'"
     );
     let command = format!("sh -c '{}'", payload.replace('\'', "'\"'\"'"));
     let effects = mez_agent::permissions::classify_shell_command(&command, None).unwrap();

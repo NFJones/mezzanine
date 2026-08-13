@@ -450,7 +450,10 @@ fn shell_identity_probe_prefers_executing_bash_over_login_shell() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(result.shell_path, "/bin/bash");
+    assert_eq!(
+        std::fs::canonicalize(&result.shell_path).unwrap(),
+        std::fs::canonicalize(bash).unwrap()
+    );
     assert_eq!(result.shell_classification, ShellClassification::Bash);
 }
 
