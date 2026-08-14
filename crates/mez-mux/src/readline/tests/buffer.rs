@@ -461,6 +461,36 @@ fn readline_history_search_backward_requires_contiguous_substrings() {
     assert_eq!(buffer.line(), "show /loop status");
 }
 
+/// Verifies reverse search preserves Unicode lowercase matching while showing
+/// the original retained history text rather than its normalized cache entry.
+#[test]
+fn readline_history_search_backward_preserves_unicode_case_matching() {
+    let mut buffer = ReadlineBuffer::new();
+    buffer.insert_text("ÄPFEL prüfen");
+    assert_eq!(buffer.submit(), "ÄPFEL prüfen");
+    buffer.insert_text("äpfel");
+
+    assert!(buffer.history_search_backward());
+    assert_eq!(buffer.line(), "ÄPFEL prüfen");
+}
+
+/// Verifies normalized reverse-search history stays aligned when loaded
+/// history is replaced and bounded submissions evict the oldest entry.
+#[test]
+fn readline_reverse_search_normalization_tracks_replacement_and_eviction() {
+    let mut buffer = ReadlineBuffer::with_history_limit(2);
+    buffer.set_history([String::from("STALE"), String::from("ALPHA")]);
+    buffer.set_history([String::from("BETA")]);
+    buffer.insert_text("GAMMA");
+    assert_eq!(buffer.submit(), "GAMMA");
+    buffer.insert_text("DELTA");
+    assert_eq!(buffer.submit(), "DELTA");
+
+    assert_eq!(buffer.history_substring_match_before("beta", 2), None);
+    assert_eq!(buffer.history_substring_match_before("gamma", 2), Some(0));
+    assert_eq!(buffer.history_substring_match_after("delta", 0), Some(1));
+}
+
 /// Verifies readline editing history entry exits history navigation.
 ///
 /// This regression scenario documents the behavior being protected so a

@@ -99,6 +99,8 @@ pub struct ReadlineBuffer {
     line: String,
     cursor: usize,
     history: Vec<String>,
+    /// Lowercased history entries kept index-aligned for reverse search.
+    normalized_history: Vec<String>,
     history_limit: usize,
     history_cursor: Option<usize>,
     history_entry_cursor_navigation: bool,
@@ -178,6 +180,7 @@ impl ReadlineBuffer {
             line: String::new(),
             cursor: 0,
             history: Vec::new(),
+            normalized_history: Vec::new(),
             history_limit,
             history_cursor: None,
             history_entry_cursor_navigation: false,
@@ -209,6 +212,7 @@ impl ReadlineBuffer {
     /// Replace retained submission history while preserving the active edit line.
     pub fn set_history(&mut self, history: impl IntoIterator<Item = String>) {
         self.history.clear();
+        self.normalized_history.clear();
         for entry in history {
             self.remember_submission(entry);
         }
@@ -719,10 +723,14 @@ impl ReadlineBuffer {
         if query.is_empty() {
             return self.history_previous();
         }
+        let normalized_query = query.to_lowercase();
         let mut index = self.history_cursor.unwrap_or(self.history.len());
         while index > 0 {
             index -= 1;
-            if history_entry_contains_query_substring(&self.history[index], &query) {
+            if normalized_history_entry_contains_query_substring(
+                &self.normalized_history[index],
+                &normalized_query,
+            ) {
                 self.load_history_index(index);
                 return true;
             }
@@ -737,10 +745,14 @@ impl ReadlineBuffer {
     /// - `query`: Search text to match. Empty queries match any history entry.
     /// - `before`: Exclusive upper-bound index for the search.
     pub fn history_substring_match_before(&self, query: &str, before: usize) -> Option<usize> {
+        let normalized_query = query.to_lowercase();
         let mut index = before.min(self.history.len());
         while index > 0 {
             index -= 1;
-            if history_entry_contains_query_substring(&self.history[index], query) {
+            if normalized_history_entry_contains_query_substring(
+                &self.normalized_history[index],
+                &normalized_query,
+            ) {
                 return Some(index);
             }
         }
@@ -754,9 +766,14 @@ impl ReadlineBuffer {
     /// - `query`: Search text to match. Empty queries match any history entry.
     /// - `after`: Exclusive lower-bound index for the search.
     pub fn history_substring_match_after(&self, query: &str, after: usize) -> Option<usize> {
+        let normalized_query = query.to_lowercase();
         let start = after.saturating_add(1);
-        (start..self.history.len())
-            .find(|index| history_entry_contains_query_substring(&self.history[*index], query))
+        (start..self.history.len()).find(|index| {
+            normalized_history_entry_contains_query_substring(
+                &self.normalized_history[*index],
+                &normalized_query,
+            )
+        })
     }
 
     /// Loads one history entry as an incremental search match.
@@ -820,9 +837,11 @@ impl ReadlineBuffer {
         if self.history.last() == Some(&submitted) {
             return;
         }
+        self.normalized_history.push(submitted.to_lowercase());
         self.history.push(submitted);
         while self.history.len() > self.history_limit {
             self.history.remove(0);
+            self.normalized_history.remove(0);
         }
     }
 
@@ -934,11 +953,11 @@ impl ReadlineBuffer {
 ///
 /// Reverse search keeps readline's recency-oriented traversal and requires a
 /// case-insensitive substring match anywhere in the history entry.
-fn history_entry_contains_query_substring(entry: &str, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    entry.to_lowercase().contains(&query.to_lowercase())
+fn normalized_history_entry_contains_query_substring(
+    normalized_entry: &str,
+    normalized_query: &str,
+) -> bool {
+    normalized_entry.contains(normalized_query)
 }
 
 /// Selects whether pasted block markers render as labels or exact content.
