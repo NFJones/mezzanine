@@ -1,6 +1,7 @@
 //! Runtime tests for agent presentation terminal ui behavior.
 
 use super::*;
+use crate::runtime::RenderInvalidationReason;
 
 /// Verifies that terminal cursor presentation settings are parsed from runtime
 /// configuration layers and applied to attached-terminal render configuration.
@@ -1204,8 +1205,8 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
         border.column.saturating_add(2),
         border.column.saturating_add(4),
     ] {
-        service
-            .apply_attached_terminal_step_plan(
+        let (_, transition) = service
+            .apply_attached_terminal_step_transition(
                 &primary,
                 &AttachedTerminalClientStepPlan {
                     actions: vec![TerminalClientLoopAction::HandleMouse(
@@ -1222,6 +1223,13 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
                 },
             )
             .unwrap();
+        assert!(transition.side_effects.iter().any(|effect| matches!(
+            effect,
+            RuntimeSideEffect::RenderClient {
+                reason: RenderInvalidationReason::ResizeDrag,
+                ..
+            }
+        )));
     }
 
     assert!(
@@ -1259,8 +1267,8 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
         "{still_deferred}"
     );
 
-    let release = service
-        .apply_attached_terminal_step_plan(
+    let (release, release_transition) = service
+        .apply_attached_terminal_step_transition(
             &primary,
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::HandleMouse(
@@ -1277,6 +1285,18 @@ fn runtime_agent_divider_drag_debounces_source_backed_presentation_replay() {
 
     assert!(release.view_refresh_required);
     assert!(release.full_redraw_required);
+    assert!(
+        release_transition
+            .side_effects
+            .iter()
+            .any(|effect| matches!(
+                effect,
+                RuntimeSideEffect::RenderClient {
+                    reason: RenderInvalidationReason::FullRedraw,
+                    ..
+                }
+            ))
+    );
     assert!(
         !service
             .presentation

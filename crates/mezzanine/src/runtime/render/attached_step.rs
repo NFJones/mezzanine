@@ -174,7 +174,17 @@ impl RuntimeSessionService {
     ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
         let (application, mut side_effects) =
             self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true, true)?;
-        let render_reason = if application.full_redraw_required {
+        let active_resize_drag = application.full_redraw_required
+            && self.presentation.mouse_resize_drag_active()
+            && step.actions.iter().any(|action| {
+                matches!(
+                    action,
+                    TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. })
+                )
+            });
+        let render_reason = if active_resize_drag {
+            Some(RenderInvalidationReason::ResizeDrag)
+        } else if application.full_redraw_required {
             Some(RenderInvalidationReason::FullRedraw)
         } else if application.agent_prompt_inputs_applied > 0 {
             Some(RenderInvalidationReason::AgentPrompt)

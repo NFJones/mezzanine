@@ -839,6 +839,11 @@ pub enum RuntimeSideEffect {
 pub enum RenderInvalidationReason {
     /// Pane output changed visible content.
     PaneOutput,
+    /// An active mouse-divider drag changed pane geometry.
+    ///
+    /// Drag updates invalidate retained frame geometry but remain paced at the
+    /// configured foreground frame cadence until the final release.
+    ResizeDrag,
     /// Layout geometry changed.
     Layout,
     /// Client size changed.

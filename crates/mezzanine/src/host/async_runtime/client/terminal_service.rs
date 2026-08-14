@@ -351,6 +351,8 @@ struct AttachedTerminalRenderRateLimiter {
     last_flush_at: Option<Instant>,
     /// Whether a render invalidation is waiting for the next allowed frame.
     pending_render: bool,
+    /// Whether the pending render must discard retained differential state.
+    pending_frame_invalidation: bool,
 }
 
 impl AttachedTerminalRenderRateLimiter {
@@ -360,6 +362,7 @@ impl AttachedTerminalRenderRateLimiter {
             min_interval: render_rate_limit_interval(rate_limit_fps),
             last_flush_at: None,
             pending_render: false,
+            pending_frame_invalidation: false,
         }
     }
 
@@ -368,38 +371,42 @@ impl AttachedTerminalRenderRateLimiter {
         self.min_interval = render_rate_limit_interval(rate_limit_fps);
         if self.min_interval.is_none() {
             self.pending_render = false;
+            self.pending_frame_invalidation = false;
         }
     }
 
     /// Records that a render invalidation arrived.
-    fn request_render(&mut self) {
+    fn request_render(&mut self, invalidate_output_frame: bool) {
         self.pending_render = true;
+        self.pending_frame_invalidation |= invalidate_output_frame;
     }
 
     /// Clears a queued render invalidation after an immediate render is chosen.
     fn clear_pending(&mut self) {
         self.pending_render = false;
+        self.pending_frame_invalidation = false;
     }
 
     /// Records a completed frame flush.
     fn mark_flushed(&mut self) {
         self.last_flush_at = Some(Instant::now());
         self.pending_render = false;
+        self.pending_frame_invalidation = false;
     }
 
     /// Consumes a pending render when the rate gate permits it.
-    fn consume_ready_render(&mut self) -> bool {
+    fn consume_ready_render(&mut self) -> Option<bool> {
         if !self.pending_render {
-            return false;
+            return None;
         }
         if self
             .pending_render_delay()
             .is_some_and(|delay| !delay.is_zero())
         {
-            return false;
+            return None;
         }
         self.pending_render = false;
-        true
+        Some(std::mem::take(&mut self.pending_frame_invalidation))
     }
 
     /// Returns the remaining delay before a pending render may flush.
@@ -533,10 +540,10 @@ where
                     }
                 }
                 _ = sleep(render_delay) => {
-                    if render_limiter.consume_ready_render() {
+                    if let Some(invalidate_output_frame) = render_limiter.consume_ready_render() {
                         return Ok(AttachedTerminalBatchWake::Readiness {
                             readiness: vec![synthetic_output_readiness()],
-                            invalidate_output_frame: false,
+                            invalidate_output_frame,
                         });
                     }
                 }
@@ -645,10 +652,11 @@ async fn drain_render_request_for_client(
             invalidate_output_frame: render_invalidation_reason_invalidates_frame(reason),
         });
     }
-    render_limiter.request_render();
+    render_limiter.request_render(render_invalidation_reason_invalidates_frame(reason));
+    let ready = render_limiter.consume_ready_render();
     Ok(AttachedTerminalRenderDrain {
-        ready: render_limiter.consume_ready_render(),
-        invalidate_output_frame: false,
+        ready: ready.is_some(),
+        invalidate_output_frame: ready.unwrap_or(false),
     })
 }
 
@@ -706,9 +714,10 @@ fn client_render_invalidation_priority(reason: RenderInvalidationReason) -> u8 {
         RenderInvalidationReason::AgentPrompt => 3,
         RenderInvalidationReason::Overlay => 4,
         RenderInvalidationReason::Configuration => 5,
-        RenderInvalidationReason::Resize => 6,
-        RenderInvalidationReason::Layout => 7,
-        RenderInvalidationReason::FullRedraw => 8,
+        RenderInvalidationReason::ResizeDrag => 6,
+        RenderInvalidationReason::Resize => 7,
+        RenderInvalidationReason::Layout => 8,
+        RenderInvalidationReason::FullRedraw => 9,
     }
 }
 
@@ -726,7 +735,8 @@ fn render_invalidation_reason_bypasses_rate_limit(reason: RenderInvalidationReas
 fn render_invalidation_reason_invalidates_frame(reason: RenderInvalidationReason) -> bool {
     matches!(
         reason,
-        RenderInvalidationReason::Resize
+        RenderInvalidationReason::ResizeDrag
+            | RenderInvalidationReason::Resize
             | RenderInvalidationReason::Layout
             | RenderInvalidationReason::FullRedraw
     )
