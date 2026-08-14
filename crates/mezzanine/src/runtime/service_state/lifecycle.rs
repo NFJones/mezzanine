@@ -116,7 +116,7 @@ impl RuntimeSnapshotOwnedCreationContext {
     }
 }
 
-/// Snapshot control operation that can perform repository I/O off the actor.
+/// Control operation that can perform blocking or repository work off the actor.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeSnapshotControlAsyncWork {
     /// Parsed JSON-RPC request.
@@ -130,6 +130,19 @@ pub(crate) struct RuntimeSnapshotControlAsyncWork {
 /// Repository work shape for actor-deferred snapshot control operations.
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
+    /// Configuration reload whose disk layers are prepared off actor ownership.
+    ConfigReload {
+        /// Configuration generation captured before preparation began.
+        config_generation: u64,
+        /// Active layers whose path-backed contents must be refreshed.
+        layers: Vec<crate::config::ConfigLayer>,
+        /// Test-only signal set when asynchronous preparation starts.
+        #[cfg(test)]
+        preparation_started: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        /// Test-only delay that keeps preparation observably in flight.
+        #[cfg(test)]
+        preparation_delay_ms: u64,
+    },
     /// Snapshot list/create/delete or plan-only resume dispatch.
     Dispatch {
         /// Session snapshot captured before the repository operation.
@@ -147,6 +160,8 @@ pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
 /// Repository result returned to the actor after async snapshot control work.
 #[derive(Debug)]
 pub(crate) enum RuntimeSnapshotControlAsyncOutcome {
+    /// Prepared and validated configuration reload candidate.
+    ConfigReload(Result<RuntimePreparedConfigReload>),
     /// JSON result body produced by the snapshot dispatcher.
     Dispatch(Result<String>),
     /// Live resume payload plus restored session state.
@@ -158,4 +173,17 @@ pub(crate) enum RuntimeSnapshotControlAsyncOutcome {
             )>,
         >,
     ),
+}
+
+/// Immutable configuration reload candidate prepared outside actor ownership.
+#[derive(Debug)]
+pub(crate) struct RuntimePreparedConfigReload {
+    /// Refreshed and validated layers to install atomically.
+    pub layers: Vec<crate::config::ConfigLayer>,
+    /// Composed configuration whose layer diagnostics were resolved off actor ownership.
+    pub effective: crate::config::EffectiveConfig,
+    /// Structured configuration prepared for runtime subsystem projection.
+    pub structured: serde_json::Value,
+    /// JSON result payload produced from the refreshed layers.
+    pub result: String,
 }

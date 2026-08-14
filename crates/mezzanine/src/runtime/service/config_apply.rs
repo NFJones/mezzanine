@@ -30,6 +30,7 @@ use super::{
     runtime_terminal_emoji_width_from_config,
     runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
 };
+use crate::runtime::RuntimePreparedConfigReload;
 use crate::runtime::config::{
     PaneSpawnPolicy, runtime_pane_spawn_directory_policy_from_config,
     runtime_pane_spawn_view_policy_from_config,
@@ -82,6 +83,59 @@ impl RuntimeSessionService {
     ) -> Result<RuntimeConfigApplyReport> {
         self.integration.replace_config_layers(layers);
         self.apply_runtime_config_layers_async().await
+    }
+
+    /// Installs startup configuration and hydrates persistent session memory.
+    ///
+    /// Persistent memory is independent of ordinary live configuration
+    /// changes, so only daemon initialization should scan its on-disk store.
+    /// Later config mutations apply their affected runtime state without
+    /// reloading every durable memory record.
+    pub async fn initialize_config_layers_async(
+        &mut self,
+        layers: Vec<ConfigLayer>,
+    ) -> Result<RuntimeConfigApplyReport> {
+        let report = self.replace_config_layers_async(layers).await?;
+        self.load_persistent_memory_into_session()?;
+        Ok(report)
+    }
+
+    /// Injects a deterministic preparation delay for actor responsiveness tests.
+    #[cfg(test)]
+    pub(crate) fn set_config_reload_preparation_probe_for_tests(
+        &mut self,
+        started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        delay_ms: u64,
+    ) {
+        self.integration
+            .set_config_reload_preparation_probe(started, delay_ms);
+    }
+
+    /// Reads and validates a reload candidate outside serialized actor ownership.
+    ///
+    /// Path-backed layers use Tokio filesystem work, while composition and the
+    /// protocol result are computed before the actor receives the immutable
+    /// candidate. Actor settlement therefore performs no configuration file I/O.
+    pub(crate) async fn prepare_runtime_config_reload_async(
+        request: &crate::control::JsonRpcRequest,
+        mut layers: Vec<ConfigLayer>,
+    ) -> Result<RuntimePreparedConfigReload> {
+        for layer in &mut layers {
+            let Some(path) = layer.path.as_ref() else {
+                continue;
+            };
+            layer.format = ConfigFormat::from_path(path)?;
+            layer.text = tokio::fs::read_to_string(path).await?;
+        }
+        let effective = compose_effective_config(&layers)?;
+        let structured = runtime_effective_config_value(&layers)?;
+        let result = crate::control::dispatch_config_parsed_request(request, &layers)?;
+        Ok(RuntimePreparedConfigReload {
+            layers,
+            effective,
+            structured,
+            result,
+        })
     }
 
     /// Refreshes trusted or pending project overlay layers for a pane cwd.
@@ -277,6 +331,19 @@ impl RuntimeSessionService {
     pub fn apply_runtime_config_layers(&mut self) -> Result<RuntimeConfigApplyReport> {
         let effective = compose_effective_config(self.integration.config_layers())?;
         let structured = runtime_effective_config_value(self.integration.config_layers())?;
+        self.apply_prepared_runtime_config(effective, structured)
+    }
+
+    /// Applies configuration state that was parsed and composed before actor settlement.
+    ///
+    /// The actor remains the sole owner of mutable runtime subsystems, but it
+    /// does not repeat layer parsing, schema validation, or effective-config
+    /// composition already completed by an asynchronous preparation worker.
+    pub(crate) fn apply_prepared_runtime_config(
+        &mut self,
+        effective: crate::config::EffectiveConfig,
+        structured: serde_json::Value,
+    ) -> Result<RuntimeConfigApplyReport> {
         let terminal_history_limit = runtime_history_limit_from_config(&structured)?;
         let terminal_history_rotate_lines = runtime_history_rotate_lines_from_config(&structured)?;
         let saved_agent_session_limit = runtime_saved_agent_session_limit_from_config(&structured)?;
@@ -460,7 +527,6 @@ impl RuntimeSessionService {
         *self.integration.mcp_registry_mut() = registry;
         let trust_prompts_announced =
             self.append_project_trust_prompt_events_for_pending_layers()?;
-        let _ = self.load_persistent_memory_into_session();
         Ok(RuntimeConfigApplyReport {
             applied_layers: effective.applied_layers().to_vec(),
             skipped_layers: effective.skipped_layers().to_vec(),

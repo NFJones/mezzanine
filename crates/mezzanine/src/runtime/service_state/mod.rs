@@ -46,8 +46,9 @@ pub use interaction::{
 pub(crate) use lifecycle::RuntimeAgentPatchRecord;
 pub use lifecycle::{RuntimeLifecycleState, RuntimeRegistryUpdatePlan};
 pub(crate) use lifecycle::{
-    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
+    RuntimePreparedConfigReload, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
+    RuntimeSnapshotOwnedCreationContext,
 };
 pub(crate) use mcp_transport::{
     RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,

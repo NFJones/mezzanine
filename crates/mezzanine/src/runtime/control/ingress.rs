@@ -184,8 +184,7 @@ impl RuntimeSessionService {
         Ok((output, consumed, self.registry_persistence_transition()))
     }
 
-    /// Prepares a single snapshot control request for repository I/O outside
-    /// the actor turn.
+    /// Prepares one control request for blocking work outside the actor turn.
     ///
     /// Non-snapshot requests, initialization requests, and unauthenticated
     /// connections return `None` so the caller can use the ordinary control
@@ -207,9 +206,11 @@ impl RuntimeSessionService {
                 )));
             }
         };
+        let is_snapshot = request.method.starts_with("snapshot/");
+        let is_config_reload = request.method == "config/reload";
         if !connection.initialized()
             || request.method == "control/initialize"
-            || !request.method.starts_with("snapshot/")
+            || (!is_snapshot && !is_config_reload)
         {
             return None;
         }
@@ -234,7 +235,19 @@ impl RuntimeSessionService {
                 error.message(),
             )));
         }
-        let kind = if request.method == "snapshot/resume" {
+        let kind = if is_config_reload {
+            #[cfg(test)]
+            let (preparation_started, preparation_delay_ms) =
+                self.integration.config_reload_preparation_probe();
+            RuntimeSnapshotControlAsyncWorkKind::ConfigReload {
+                config_generation: self.session.config_generation,
+                layers: self.integration.config_layers().to_vec(),
+                #[cfg(test)]
+                preparation_started,
+                #[cfg(test)]
+                preparation_delay_ms,
+            }
+        } else if request.method == "snapshot/resume" {
             RuntimeSnapshotControlAsyncWorkKind::Resume {
                 shell: self.session.shell.clone().into(),
             }
@@ -269,7 +282,30 @@ impl RuntimeSessionService {
         connection: &mut ControlConnectionState,
     ) -> String {
         let _ = connection;
+        if let RuntimeSnapshotControlAsyncWorkKind::ConfigReload {
+            config_generation, ..
+        } = &work.kind
+        {
+            let RuntimeSnapshotControlAsyncOutcome::ConfigReload(outcome) = outcome else {
+                return runtime_json_rpc_error(
+                    &work.request.id,
+                    crate::error::MezErrorKind::InvalidState,
+                    "configuration reload worker returned an incompatible outcome",
+                );
+            };
+            return self.complete_runtime_config_reload_async_work(
+                &work.request,
+                &work.caller_client_id,
+                *config_generation,
+                outcome,
+            );
+        }
         let result = match outcome {
+            RuntimeSnapshotControlAsyncOutcome::ConfigReload(_) => {
+                Err(crate::error::MezError::invalid_state(
+                    "snapshot worker returned a configuration reload outcome",
+                ))
+            }
             RuntimeSnapshotControlAsyncOutcome::Dispatch(result) => result,
             RuntimeSnapshotControlAsyncOutcome::Resume(result) => {
                 result.and_then(|(payload, _restored)| {

@@ -951,7 +951,9 @@ pub(super) async fn run_foreground_control_daemon(
     );
     let snapshot_repository = SnapshotRepository::new(config.root.join("layouts"));
     service.set_snapshot_repository(snapshot_repository.clone());
-    service.replace_config_layers_async(config.layers).await?;
+    service
+        .initialize_config_layers_async(config.layers)
+        .await?;
     if let Some(auth_store) = service.auth_store().cloned() {
         spawn_openai_auth_refresh_if_needed(
             auth_store,

@@ -799,6 +799,175 @@ async fn async_actor_defers_completed_program_hooks_to_hook_worker() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies slow configuration preparation does not monopolize the actor and
+/// that a concurrent mutation makes the prepared candidate stale.
+///
+/// The lifecycle request must complete while the reload worker remains
+/// deliberately delayed. A live override then advances the generation before
+/// settlement, so the stale disk candidate must fail without overwriting the
+/// newer history limit.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_rejects_stale_config_reload_without_blocking_lifecycle() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use crate::storage::snapshot::SnapshotRepository;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-config-reload-stale-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    std::fs::write(&path, "[history]\nlines = 4\n").unwrap();
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let preparation_started = StdArc::new(AtomicBool::new(false));
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: std::fs::read_to_string(&path).unwrap(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 10)
+        .unwrap();
+    service.set_config_reload_preparation_probe_for_tests(preparation_started.clone(), 500);
+    std::fs::write(&path, "[history]\nlines = 2\n").unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let reload_handle = handle.clone();
+        let reload_primary = primary.clone();
+        let reload = tokio::spawn(async move {
+            reload_handle
+                .handle_control_input_for_connection_with_snapshots(
+                    encode_control_body(
+                        r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"slow-reload"}}"#,
+                    ),
+                    4096,
+                    ControlConnectionState::trusted_existing_client(reload_primary),
+                    snapshots,
+                )
+                .await
+                .unwrap()
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !preparation_started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("config reload preparation should enter the delayed worker");
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(100), handle.lifecycle_state())
+                .await
+                .expect("lifecycle request should not wait for config preparation")
+                .unwrap(),
+            RuntimeLifecycleState::Running
+        );
+
+        let mutation = handle
+            .handle_control_input_for_connection(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"set","method":"config/set","params":{"path":"history.lines","value":9,"idempotency_key":"newer-live-override"}}"#,
+                ),
+                4096,
+                ControlConnectionState::trusted_existing_client(primary),
+            )
+            .await
+            .unwrap();
+        let (mutation_body, _) = decode_control_frame(&mutation.output, 4096).unwrap();
+        assert!(
+            mutation_body.contains(r#""applied":true"#),
+            "{mutation_body}"
+        );
+
+        let reload = reload.await.unwrap();
+        let (reload_body, _) = decode_control_frame(&reload.output, 4096).unwrap();
+        assert!(
+            reload_body.contains("prepared configuration reload is stale"),
+            "{reload_body}"
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.service.terminal_history_limit(), 9);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies an invalid asynchronously prepared candidate leaves live state unchanged.
+///
+/// Invalid disk text must fail before actor settlement, preserving both the
+/// currently installed layers and the runtime history projection.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_invalid_config_reload_preserves_live_state() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use crate::storage::snapshot::SnapshotRepository;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-config-reload-invalid-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    std::fs::write(&path, "[history]\nlines = 4\n").unwrap();
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: std::fs::read_to_string(&path).unwrap(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 10)
+        .unwrap();
+    std::fs::write(&path, "[history\nlines = not-valid\n").unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let reload = handle
+            .handle_control_input_for_connection_with_snapshots(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"invalid-reload"}}"#,
+                ),
+                4096,
+                ControlConnectionState::trusted_existing_client(primary),
+                snapshots,
+            )
+            .await
+            .unwrap();
+        let (body, _) = decode_control_frame(&reload.output, 4096).unwrap();
+        assert!(body.contains(r#""error""#), "{body}");
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.service.terminal_history_limit(), 4);
+    assert_eq!(
+        exit.service.config_layers()[0].text,
+        "[history]\nlines = 4\n"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that actor-owned control dispatch can route snapshot requests
 /// through a configured repository. The async daemon control service uses this
 /// path when serving live `mez snapshot` requests, so `snapshot/list` must not

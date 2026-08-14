@@ -17,6 +17,30 @@ pub(super) async fn execute_snapshot_control_async_work(
     work: &RuntimeSnapshotControlAsyncWork,
 ) -> RuntimeSnapshotControlAsyncOutcome {
     match &work.kind {
+        RuntimeSnapshotControlAsyncWorkKind::ConfigReload { layers, .. } => {
+            #[cfg(test)]
+            if let RuntimeSnapshotControlAsyncWorkKind::ConfigReload {
+                preparation_started,
+                preparation_delay_ms,
+                ..
+            } = &work.kind
+            {
+                if let Some(started) = preparation_started {
+                    started.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                if *preparation_delay_ms > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(*preparation_delay_ms))
+                        .await;
+                }
+            }
+            RuntimeSnapshotControlAsyncOutcome::ConfigReload(
+                RuntimeSessionService::prepare_runtime_config_reload_async(
+                    &work.request,
+                    layers.clone(),
+                )
+                .await,
+            )
+        }
         RuntimeSnapshotControlAsyncWorkKind::Dispatch { session, context } => {
             RuntimeSnapshotControlAsyncOutcome::Dispatch(
                 crate::control::dispatch_snapshot_request_with_context_async(

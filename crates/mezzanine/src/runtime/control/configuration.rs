@@ -23,9 +23,124 @@ use super::{
     runtime_trust_decision_name, runtime_trust_decision_param,
     validate_control_method_params_schema,
 };
+use crate::runtime::RuntimePreparedConfigReload;
 use std::fs;
 
 impl RuntimeSessionService {
+    /// Settles an off-actor configuration reload candidate transactionally.
+    ///
+    /// A candidate is accepted only when no intervening configuration change
+    /// advanced the captured generation. Stale work fails closed instead of
+    /// overwriting newer state, and application failures restore the previous
+    /// layers before the response is cached.
+    pub(super) fn complete_runtime_config_reload_async_work(
+        &mut self,
+        request: &crate::control::JsonRpcRequest,
+        caller_client_id: &mez_core::ids::ClientId,
+        prepared_generation: u64,
+        outcome: Result<RuntimePreparedConfigReload>,
+    ) -> String {
+        let Some(cache_key) = config_request_cache_key(request, caller_client_id) else {
+            return runtime_json_rpc_error(
+                &request.id,
+                crate::error::MezErrorKind::InvalidArgs,
+                "mutating control method requires idempotency_key",
+            );
+        };
+        let audit_plan = config_audit_plan(&self.session, caller_client_id, request);
+        if let Some(mut record) = audit_plan.clone() {
+            record.outcome = "started".to_string();
+            if let Err(error) = self.append_runtime_config_audit_record(record) {
+                return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+            }
+        }
+        match self.control.idempotency_mut().cached_response(
+            &cache_key,
+            &request.method,
+            &request.params,
+        ) {
+            Ok(Some(response)) => {
+                if let Some(mut record) = audit_plan {
+                    record.outcome = config_audit_outcome(&response).to_string();
+                    if let Err(error) = self.append_runtime_config_audit_record(record) {
+                        return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+                    }
+                }
+                return response;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let response = runtime_json_rpc_error(&request.id, error.kind(), error.message());
+                if let Some(mut record) = audit_plan {
+                    record.outcome = config_audit_outcome(&response).to_string();
+                    if let Err(error) = self.append_runtime_config_audit_record(record) {
+                        return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+                    }
+                }
+                return response;
+            }
+        }
+
+        let result = outcome.and_then(|prepared| {
+            if self.session.config_generation != prepared_generation {
+                return Err(MezError::conflict(format!(
+                    "prepared configuration reload is stale: generation advanced from {prepared_generation} to {}",
+                    self.session.config_generation
+                )));
+            }
+            let RuntimePreparedConfigReload {
+                layers,
+                effective,
+                structured,
+                result,
+            } = prepared;
+            let previous_layers = self.integration.config_layers().to_vec();
+            let previous_permission_policy = self.permission_policy().clone();
+            self.integration.replace_config_layers(layers);
+            let report = match self.apply_prepared_runtime_config(effective, structured) {
+                Ok(report) => report,
+                Err(error) => {
+                    self.integration.replace_config_layers(previous_layers);
+                    let _ = self.apply_runtime_config_layers();
+                    return Err(error);
+                }
+            };
+            self.session.advance_config_generation();
+            let payload = runtime_config_apply_event_payload(&request.method, &report);
+            self.append_lifecycle_event(EventKind::ConfigChanged, payload)?;
+            self.append_config_reload_permission_audits(
+                caller_client_id,
+                &previous_permission_policy,
+            )?;
+            self.reconcile_pending_agent_approvals_after_permission_change(
+                Some(caller_client_id),
+                &previous_permission_policy,
+                &request.method,
+            )?;
+            Ok(result)
+        });
+        let response = match result {
+            Ok(result) => format!(
+                r#"{{"jsonrpc":"2.0","id":{},"result":{result}}}"#,
+                request.id
+            ),
+            Err(error) => runtime_json_rpc_error(&request.id, error.kind(), error.message()),
+        };
+        if let Some(mut record) = audit_plan {
+            record.outcome = config_audit_outcome(&response).to_string();
+            if let Err(error) = self.append_runtime_config_audit_record(record) {
+                return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+            }
+        }
+        self.control.idempotency_mut().remember_response(
+            cache_key,
+            request.method.clone(),
+            request.params.clone(),
+            response.clone(),
+        );
+        response
+    }
+
     /// Runs the dispatch runtime config request operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

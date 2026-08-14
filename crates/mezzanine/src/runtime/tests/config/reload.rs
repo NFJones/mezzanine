@@ -134,6 +134,65 @@ fn runtime_config_reload_applies_history_limit_to_live_screens() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies an unrelated live reload does not rescan persistent memory.
+///
+/// Persistent records are hydrated during daemon startup. A later history
+/// setting change must not pull records written by another process into the
+/// running session, because doing so adds unrelated filesystem work to the
+/// serialized runtime control path.
+#[test]
+fn runtime_config_reload_does_not_reload_persistent_memory() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    let root = temp_root("runtime-config-reload-memory");
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    service.set_config_root(config_root.clone());
+    let path = config_root.join("config.toml");
+    fs::write(&path, "[history]\nlines = 4\n").unwrap();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: fs::read_to_string(&path).unwrap(),
+        }])
+        .unwrap();
+
+    let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
+    store
+        .upsert(mez_agent::memory::MemoryRecord::new_with_defaults(
+            "external-memory",
+            mez_agent::memory::MemoryScope::Global,
+            120,
+            120,
+            mez_agent::memory::MemorySource::User,
+            20,
+            "written after runtime startup",
+        ))
+        .unwrap();
+    fs::write(&path, "[history]\nlines = 2\n").unwrap();
+
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"reload-without-memory"}}"#,
+        &primary,
+    );
+
+    assert!(response.contains(r#""operation":"reload""#), "{response}");
+    assert_eq!(service.terminal_history_limit(), 2);
+    assert!(
+        service
+            .memory_records()
+            .iter()
+            .all(|record| record.content != "written after runtime startup")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies runtime config reload applies the model-correction retry budget.
 ///
 /// Action-failure recovery is intentionally bounded so a repeated bad action

@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{Arc, atomic::AtomicBool};
 
 use crate::config::ConfigLayer;
 use crate::host::async_runtime::AsyncRuntimeActorMetrics;
@@ -45,6 +47,10 @@ use security::{PanePermissionOverride, RuntimeSecurityState};
 pub(crate) struct RuntimeIntegrationComponent {
     config_layers: Vec<ConfigLayer>,
     config_root: Option<PathBuf>,
+    #[cfg(test)]
+    config_reload_preparation_started: Option<Arc<AtomicBool>>,
+    #[cfg(test)]
+    config_reload_preparation_delay_ms: u64,
     async_runtime_metrics: Option<AsyncRuntimeActorMetrics>,
     runtime_metrics: RuntimeMetricsSnapshot,
     security: RuntimeSecurityState,
@@ -62,6 +68,10 @@ impl RuntimeIntegrationComponent {
         Self {
             config_layers: Vec::new(),
             config_root: None,
+            #[cfg(test)]
+            config_reload_preparation_started: None,
+            #[cfg(test)]
+            config_reload_preparation_delay_ms: 0,
             async_runtime_metrics: None,
             runtime_metrics: RuntimeMetricsSnapshot::default(),
             security: RuntimeSecurityState::default(),
@@ -84,6 +94,26 @@ impl RuntimeIntegrationComponent {
     /// Replaces every active configuration layer atomically.
     pub(crate) fn replace_config_layers(&mut self, layers: Vec<ConfigLayer>) {
         self.config_layers = layers;
+    }
+
+    /// Installs a deterministic asynchronous reload probe for actor tests.
+    #[cfg(test)]
+    pub(crate) fn set_config_reload_preparation_probe(
+        &mut self,
+        started: Arc<AtomicBool>,
+        delay_ms: u64,
+    ) {
+        self.config_reload_preparation_started = Some(started);
+        self.config_reload_preparation_delay_ms = delay_ms;
+    }
+
+    /// Clones the active asynchronous reload probe for worker handoff.
+    #[cfg(test)]
+    pub(crate) fn config_reload_preparation_probe(&self) -> (Option<Arc<AtomicBool>>, u64) {
+        (
+            self.config_reload_preparation_started.clone(),
+            self.config_reload_preparation_delay_ms,
+        )
     }
 
     /// Returns the optional project configuration root.
