@@ -42,7 +42,7 @@ use super::{
     TerminalFrameContext, TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count,
     current_unix_millis, current_unix_seconds, json_escape, mouse_action_name,
     mux_action_command_prompt_prefill, mux_action_name, pane_navigation_direction,
-    parse_command_sequence, render_attached_client_view_with_screen_resolvers,
+    parse_command_sequence, render_attached_client_view_with_screen_and_row_resolvers,
     runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
     runtime_fit_status_line, runtime_paste_bytes, select_clipboard_paste_source,
@@ -246,6 +246,8 @@ impl Default for RuntimeCopyPresentationState {
 pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
     settings: RuntimePresentationSettings,
+    /// Generation-keyed immutable visible rows for pane composition.
+    pane_styled_row_cache: std::cell::RefCell<RuntimePaneStyledRowCache>,
     /// Cached output for command-backed window status pills.
     window_status_pill_cache: std::cell::RefCell<RuntimeStatusPillCache>,
     /// Copy, paste-buffer, and host-clipboard state.
@@ -304,6 +306,17 @@ pub(crate) struct RuntimePresentationComponent {
     pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
     /// Unacknowledged background agent completions keyed by stable pane id.
     completion_attention_panes: std::collections::BTreeSet<String>,
+}
+
+/// Bounded pane-row projection cache owned by the active presentation window.
+#[derive(Debug, Default)]
+struct RuntimePaneStyledRowCache {
+    rows: std::collections::BTreeMap<
+        String,
+        (u64, std::sync::Arc<[mez_terminal::TerminalStyledLine]>),
+    >,
+    hits: u64,
+    misses: u64,
 }
 
 /// One in-flight pane-local selector candidate discovery.
@@ -1155,6 +1168,13 @@ impl RuntimeSessionService {
     /// Returns the active pane-agent selector for product integration tests.
     pub(crate) fn pane_agent_status_selector(&self) -> Option<&RuntimePaneAgentStatusSelector> {
         self.presentation.pane_agent_status_selector.as_ref()
+    }
+
+    /// Returns pane styled-row cache hit, miss, and entry counts for tests.
+    #[cfg(test)]
+    pub(crate) fn pane_styled_row_cache_stats_for_tests(&self) -> (u64, u64, usize) {
+        let cache = self.presentation.pane_styled_row_cache.borrow();
+        (cache.hits, cache.misses, cache.rows.len())
     }
 
     /// Returns deferred copied-word cleanup state for product integration tests.

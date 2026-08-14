@@ -9,6 +9,7 @@
 use mez_terminal::{
     GraphicRendition, TerminalColor, TerminalStyleSpan, terminal_emoji_width, terminal_graphemes,
 };
+use std::collections::BTreeSet;
 
 #[cfg(test)]
 use crate::layout::Size;
@@ -116,6 +117,26 @@ impl AttachedTerminalOutputFrameState {
             alternate_screen: modes.alternate_screen,
             host_mouse_reporting: modes.host_mouse_reporting,
             cursor_presentation: cursor_presentation_sequence(lines, modes),
+        }
+    }
+
+    /// Builds retained frame state by taking ownership of rendered rows.
+    pub fn from_owned_with_modes(
+        lines: Vec<String>,
+        mut line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+        modes: AttachedTerminalOutputModes,
+    ) -> Self {
+        line_style_spans.truncate(lines.len());
+        line_style_spans.resize_with(lines.len(), Vec::new);
+        let cursor_presentation = cursor_presentation_sequence(&lines, modes);
+        Self {
+            lines,
+            line_style_spans,
+            bracketed_paste: modes.bracketed_paste,
+            focus_events: modes.focus_events,
+            alternate_screen: modes.alternate_screen,
+            host_mouse_reporting: modes.host_mouse_reporting,
+            cursor_presentation,
         }
     }
 }
@@ -268,40 +289,32 @@ pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
             modes.host_mouse_reporting,
         ));
     }
-    let changed_row_count = lines
+    let changed_rows = lines
         .iter()
         .enumerate()
-        .filter(|(index, line)| {
-            let previous_line = previous.lines.get(*index).map(String::as_str).unwrap_or("");
+        .filter_map(|(index, line)| {
+            let previous_line = previous.lines.get(index).map(String::as_str).unwrap_or("");
             let previous_spans = previous
                 .line_style_spans
-                .get(*index)
+                .get(index)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
             let spans = line_style_spans
-                .get(*index)
+                .get(index)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            line.as_str() != previous_line || spans != previous_spans
+            (line.as_str() != previous_line || spans != previous_spans).then_some((
+                index,
+                line.as_str(),
+                spans,
+                previous_line,
+                previous_spans,
+            ))
         })
-        .count();
-    let allow_segment_updates = changed_row_count <= 3;
-    let mut changed_rows = 0usize;
+        .collect::<Vec<_>>();
+    let allow_segment_updates = changed_rows.len() <= 3;
     let mut presentation_reset_emitted = false;
-    for (index, line) in lines.iter().enumerate() {
-        let previous_line = previous.lines.get(index).map(String::as_str).unwrap_or("");
-        let previous_spans = previous
-            .line_style_spans
-            .get(index)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let spans = line_style_spans
-            .get(index)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        if line.as_str() == previous_line && spans == previous_spans {
-            continue;
-        }
+    for (index, line, spans, previous_line, previous_spans) in &changed_rows {
         if !presentation_reset_emitted {
             frame.extend_from_slice(attached_terminal_enter_presentation_frame());
             frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
@@ -326,10 +339,9 @@ pub fn encode_attached_terminal_output_update_frame_with_styles_and_transitions(
             }
             frame.extend_from_slice(encode_styled_terminal_line(line, spans).as_bytes());
         }
-        changed_rows = changed_rows.saturating_add(1);
     }
     let cursor_presentation = cursor_presentation_sequence(lines, modes);
-    if changed_rows > 0 || cursor_presentation != previous.cursor_presentation {
+    if !changed_rows.is_empty() || cursor_presentation != previous.cursor_presentation {
         if !presentation_reset_emitted {
             frame.extend_from_slice(attached_terminal_enter_presentation_frame());
             frame.extend_from_slice(attached_terminal_mouse_reporting_frame(
@@ -726,6 +738,7 @@ fn terminal_row_cells<'a>(line: &'a str, spans: &[TerminalStyleSpan]) -> Vec<Ter
     let mut cells = Vec::new();
     let mut search_offset = 0usize;
     let mut column = 0usize;
+    let mut styles = TerminalStyleCursor::new(spans);
     for grapheme in terminal_graphemes(line) {
         let Some(relative_start) = line[search_offset..].find(grapheme) else {
             debug_assert!(
@@ -743,7 +756,7 @@ fn terminal_row_cells<'a>(line: &'a str, spans: &[TerminalStyleSpan]) -> Vec<Ter
             byte_end,
             column_start: column,
             column_end: column.saturating_add(width),
-            rendition: rendition_at_column(spans, column),
+            rendition: styles.rendition_at(column),
         });
         search_offset = byte_end;
         column = column.saturating_add(width);
@@ -903,12 +916,13 @@ fn encode_styled_terminal_line(line: &str, style_spans: &[TerminalStyleSpan]) ->
     let mut encoded = String::new();
     let mut active = GraphicRendition::default();
     let mut column = 0usize;
+    let mut styles = TerminalStyleCursor::new(style_spans);
     for grapheme in terminal_graphemes(line) {
         let sanitized = sanitize_terminal_output_grapheme(grapheme);
         if sanitized.is_empty() {
             continue;
         }
-        let rendition = rendition_at_column(style_spans, column);
+        let rendition = styles.rendition_at(column);
         if rendition != active {
             encoded.push_str(&sgr_sequence(rendition));
             active = rendition;
@@ -928,46 +942,139 @@ fn sanitize_terminal_output_grapheme(grapheme: &str) -> String {
     grapheme.chars().filter(|ch| !ch.is_control()).collect()
 }
 
-/// Returns the active rendition at a display column.
-///
-/// Spans must be in composition order so later spans can augment earlier ones.
-/// This function folds every covering span in that order, preserving earlier
-/// attributes when a later overlay leaves them unspecified. Callers must ensure
-/// spans are either from [`terminal_styled_lines_from_canvas`] or from
-/// canvas-composed sources where later spans represent later composition
-/// layers.
-fn rendition_at_column(style_spans: &[TerminalStyleSpan], column: usize) -> GraphicRendition {
-    style_spans
-        .iter()
-        .filter(|span| column >= span.start && column < span.start.saturating_add(span.length))
-        .fold(GraphicRendition::default(), |active, span| {
-            merge_graphic_renditions(active, span.rendition)
-        })
+/// Resolves ordered style overlays by processing each span boundary once.
+struct TerminalStyleCursor<'a> {
+    spans: &'a [TerminalStyleSpan],
+    boundaries: Vec<(usize, usize, bool)>,
+    next_boundary: usize,
+    bold: usize,
+    dim: usize,
+    italic: usize,
+    underline: usize,
+    double_underline: usize,
+    strikethrough: usize,
+    inverse: usize,
+    hidden: usize,
+    foreground: BTreeSet<usize>,
+    background: BTreeSet<usize>,
 }
 
-/// Merges one later style layer into the accumulated active rendition.
-///
-/// Terminal style spans act as partial overlays rather than full terminal-state
-/// snapshots. Later overlays such as copy-selection highlights should keep an
-/// earlier diff or syntax foreground unless they explicitly replace that color.
-fn merge_graphic_renditions(
-    active: GraphicRendition,
-    overlay: GraphicRendition,
-) -> GraphicRendition {
-    GraphicRendition {
-        bold: active.bold || overlay.bold,
-        dim: active.dim || overlay.dim,
-        italic: active.italic || overlay.italic,
-        underline: active.underline
-            || overlay.underline
-            || active.double_underline
-            || overlay.double_underline,
-        double_underline: active.double_underline || overlay.double_underline,
-        strikethrough: active.strikethrough || overlay.strikethrough,
-        inverse: active.inverse || overlay.inverse,
-        hidden: active.hidden || overlay.hidden,
-        foreground: overlay.foreground.or(active.foreground),
-        background: overlay.background.or(active.background),
+impl<'a> TerminalStyleCursor<'a> {
+    /// Builds one cursor whose boundaries preserve source-span overlay order.
+    fn new(spans: &'a [TerminalStyleSpan]) -> Self {
+        let mut boundaries = spans
+            .iter()
+            .enumerate()
+            .filter(|(_, span)| span.length > 0)
+            .flat_map(|(index, span)| {
+                [
+                    (span.start, index, true),
+                    (span.start.saturating_add(span.length), index, false),
+                ]
+            })
+            .collect::<Vec<_>>();
+        boundaries.sort_unstable_by_key(|(column, _, entering)| (*column, *entering));
+        Self {
+            spans,
+            boundaries,
+            next_boundary: 0,
+            bold: 0,
+            dim: 0,
+            italic: 0,
+            underline: 0,
+            double_underline: 0,
+            strikethrough: 0,
+            inverse: 0,
+            hidden: 0,
+            foreground: BTreeSet::new(),
+            background: BTreeSet::new(),
+        }
+    }
+
+    /// Returns the active rendition after applying boundaries through `column`.
+    fn rendition_at(&mut self, column: usize) -> GraphicRendition {
+        while let Some(&(boundary, index, entering)) = self.boundaries.get(self.next_boundary) {
+            if boundary > column {
+                break;
+            }
+            self.next_boundary = self.next_boundary.saturating_add(1);
+            self.apply(index, entering);
+        }
+        GraphicRendition {
+            bold: self.bold > 0,
+            dim: self.dim > 0,
+            italic: self.italic > 0,
+            underline: self.underline > 0,
+            double_underline: self.double_underline > 0,
+            strikethrough: self.strikethrough > 0,
+            inverse: self.inverse > 0,
+            hidden: self.hidden > 0,
+            foreground: self
+                .foreground
+                .last()
+                .and_then(|index| self.spans[*index].rendition.foreground),
+            background: self
+                .background
+                .last()
+                .and_then(|index| self.spans[*index].rendition.background),
+        }
+    }
+
+    /// Applies or removes one span from the active aggregate.
+    fn apply(&mut self, index: usize, entering: bool) {
+        let rendition = self.spans[index].rendition;
+        update_style_count(&mut self.bold, rendition.bold, entering);
+        update_style_count(&mut self.dim, rendition.dim, entering);
+        update_style_count(&mut self.italic, rendition.italic, entering);
+        update_style_count(
+            &mut self.underline,
+            rendition.underline || rendition.double_underline,
+            entering,
+        );
+        update_style_count(
+            &mut self.double_underline,
+            rendition.double_underline,
+            entering,
+        );
+        update_style_count(&mut self.strikethrough, rendition.strikethrough, entering);
+        update_style_count(&mut self.inverse, rendition.inverse, entering);
+        update_style_count(&mut self.hidden, rendition.hidden, entering);
+        update_style_index(
+            &mut self.foreground,
+            index,
+            rendition.foreground.is_some(),
+            entering,
+        );
+        update_style_index(
+            &mut self.background,
+            index,
+            rendition.background.is_some(),
+            entering,
+        );
+    }
+}
+
+/// Updates one active boolean style count without underflowing malformed input.
+fn update_style_count(count: &mut usize, enabled: bool, entering: bool) {
+    if !enabled {
+        return;
+    }
+    if entering {
+        *count = count.saturating_add(1);
+    } else {
+        *count = count.saturating_sub(1);
+    }
+}
+
+/// Updates one ordered active color-style index.
+fn update_style_index(active: &mut BTreeSet<usize>, index: usize, enabled: bool, entering: bool) {
+    if !enabled {
+        return;
+    }
+    if entering {
+        active.insert(index);
+    } else {
+        active.remove(&index);
     }
 }
 

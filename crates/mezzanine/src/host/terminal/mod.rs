@@ -96,9 +96,9 @@ pub use render::{
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE,
     DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS, agent_prompt_reserved_line_count,
     compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
-    pane_frame_agent_status_pillbox_cells, render_attached_client_view_with_screen_resolvers,
-    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
-    window_group_frame_pillbox_cells,
+    pane_frame_agent_status_pillbox_cells,
+    render_attached_client_view_with_screen_and_row_resolvers, window_frame_action_pillbox_cells,
+    window_frame_pillbox_cells, window_group_frame_pillbox_cells,
 };
 #[cfg(test)]
 pub use render::{

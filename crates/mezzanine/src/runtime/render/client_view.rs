@@ -21,7 +21,7 @@ use super::{
     overlay_render_lines, overlay_rendered_line_style_spans, overlay_rendered_selection_start,
     overlay_selection_rendition, overlay_styled_lines, overlay_text_at,
     pane_frame_agent_status_pillbox_cells, plan_window_presentation,
-    render_attached_client_view_with_screen_resolvers, runtime_agent_turn_duration_display,
+    render_attached_client_view_with_screen_and_row_resolvers, runtime_agent_turn_duration_display,
     runtime_agent_turn_state_name, runtime_fit_status_line, runtime_human_system_uptime,
     runtime_local_datetime_seconds_string, runtime_pane_agent_selector_rendition,
     runtime_pane_agent_status_selector_layout, runtime_selector_line, terminal_text_width,
@@ -153,11 +153,42 @@ impl RuntimeSessionService {
                 Err(MezError::invalid_state("session has no active window"))
             };
         };
-        let mut view = render_attached_client_view_with_screen_resolvers(
+        let active_pane_ids = window
+            .panes()
+            .iter()
+            .map(|pane| pane.id.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        self.presentation
+            .pane_styled_row_cache
+            .borrow_mut()
+            .rows
+            .retain(|pane_id, _| active_pane_ids.contains(pane_id));
+        let pane_styled_row_cache = &self.presentation.pane_styled_row_cache;
+        let mut view = render_attached_client_view_with_screen_and_row_resolvers(
             role,
             window,
             |pane_id| self.presented_pane_screen(pane_id),
             |pane_id| self.process_pane_screen(pane_id),
+            |pane_id, screen| {
+                let generation = screen.render_generation();
+                let mut cache = pane_styled_row_cache.borrow_mut();
+                if let Some(rows) = cache
+                    .rows
+                    .get(pane_id)
+                    .filter(|(cached_generation, _)| *cached_generation == generation)
+                    .map(|(_, rows)| rows.clone())
+                {
+                    cache.hits = cache.hits.saturating_add(1);
+                    return rows;
+                }
+                let rows: std::sync::Arc<[TerminalStyledLine]> =
+                    std::sync::Arc::from(screen.visible_styled_lines());
+                cache.misses = cache.misses.saturating_add(1);
+                cache
+                    .rows
+                    .insert(pane_id.to_string(), (generation, rows.clone()));
+                rows
+            },
             config,
             client_size,
         )?;

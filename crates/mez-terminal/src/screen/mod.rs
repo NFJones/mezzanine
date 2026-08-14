@@ -7,6 +7,7 @@
 //! contract. The engine remains independent of product runtime and host I/O.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
     DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, TerminalEmojiWidth, TerminalSize as Size,
@@ -14,6 +15,34 @@ use crate::{
     terminal_grapheme_width as terminal_grapheme_width_for_policy, terminal_graphemes,
     terminal_text_width as terminal_text_width_for_policy,
 };
+
+/// Process-local source for render generations that survive screen replacement.
+static NEXT_RENDER_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Returns a fresh process-local render generation.
+pub(super) fn next_render_generation() -> RenderGeneration {
+    RenderGeneration(
+        NEXT_RENDER_GENERATION
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1),
+    )
+}
+
+/// Cache identity excluded from semantic terminal-screen equality.
+///
+/// Two screens with equivalent terminal state remain equal even when they were
+/// constructed independently, while render caches can still distinguish their
+/// ownership lifetimes through the wrapped value.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct RenderGeneration(pub(super) u64);
+
+impl PartialEq for RenderGeneration {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for RenderGeneration {}
 
 pub use crate::{
     GraphicRendition, MAX_OSC_STRING_BYTES, TerminalColor, TerminalCursorState, TerminalModeState,
@@ -755,6 +784,11 @@ pub struct TerminalScreen {
     /// Whether the normal-screen viewport was detached from scrollback by a
     /// full-screen clear such as shell `Ctrl+L`.
     pub(super) normal_viewport_detached_from_history: bool,
+    /// Monotonic generation advanced whenever rendered rows may have changed.
+    ///
+    /// Pane compositors use this conservative signal to reuse immutable row
+    /// projections only while the owning screen remains unchanged.
+    pub(super) render_generation: RenderGeneration,
     /// Stores the activity events value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

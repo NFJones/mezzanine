@@ -63,35 +63,39 @@ pub use style::{
 pub use wrap::{wrap_lines, wrap_text};
 
 /// One display-cell slot in a mux-owned render canvas.
+///
+/// Ordinary blank, frame, and divider cells retain a character inline so a
+/// screen-sized canvas does not allocate one `String` per cell. Only complete
+/// multi-scalar grapheme clusters require owned string storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TerminalRenderCell {
-    text: String,
-    continuation: bool,
+pub enum TerminalRenderCell {
+    /// One ordinary single-scalar display cell.
+    Character(char),
+    /// One complete multi-scalar grapheme cluster in its leading cell.
+    Grapheme(Box<str>),
+    /// Continuation sentinel for a preceding multi-column grapheme.
+    Continuation,
 }
 
 impl TerminalRenderCell {
     /// Builds one leading render cell containing a single glyph.
     pub fn from_char(ch: char) -> Self {
-        Self {
-            text: ch.to_string(),
-            continuation: false,
-        }
+        Self::Character(ch)
     }
 
     /// Builds one leading render cell containing a complete grapheme cluster.
     pub fn from_grapheme(grapheme: &str) -> Self {
-        Self {
-            text: grapheme.to_string(),
-            continuation: false,
+        let mut chars = grapheme.chars();
+        if let (Some(ch), None) = (chars.next(), chars.next()) {
+            Self::Character(ch)
+        } else {
+            Self::Grapheme(grapheme.into())
         }
     }
 
     /// Builds one continuation cell for a multi-column grapheme cluster.
     pub fn continuation() -> Self {
-        Self {
-            text: String::new(),
-            continuation: true,
-        }
+        Self::Continuation
     }
 }
 
@@ -200,16 +204,16 @@ pub fn write_single_width_cell(row: &mut [TerminalRenderCell], column: usize, gl
     if column >= row.len() {
         return;
     }
-    if row[column].continuation {
+    if matches!(row[column], TerminalRenderCell::Continuation) {
         let mut left = column;
-        while left > 0 && row[left].continuation {
+        while left > 0 && matches!(row[left], TerminalRenderCell::Continuation) {
             row[left] = TerminalRenderCell::from_char(' ');
             left = left.saturating_sub(1);
         }
         row[left] = TerminalRenderCell::from_char(' ');
     }
     let mut right = column.saturating_add(1);
-    while right < row.len() && row[right].continuation {
+    while right < row.len() && matches!(row[right], TerminalRenderCell::Continuation) {
         row[right] = TerminalRenderCell::from_char(' ');
         right = right.saturating_add(1);
     }
@@ -357,8 +361,10 @@ pub fn write_text_cells(
 pub fn collect_text_cells(row: Vec<TerminalRenderCell>) -> String {
     let mut output = String::new();
     for cell in row {
-        if !cell.continuation {
-            output.push_str(&cell.text);
+        match cell {
+            TerminalRenderCell::Character(ch) => output.push(ch),
+            TerminalRenderCell::Grapheme(grapheme) => output.push_str(&grapheme),
+            TerminalRenderCell::Continuation => {}
         }
     }
     output

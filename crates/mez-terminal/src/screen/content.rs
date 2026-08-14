@@ -87,7 +87,9 @@ impl TerminalScreen {
         copy_texts: &[String],
         continuation_copy_text: &str,
     ) {
-        let _ = self.set_recent_normal_copy_texts_inner(copy_texts, continuation_copy_text);
+        if self.set_recent_normal_copy_texts_inner(copy_texts, continuation_copy_text) > 0 {
+            self.mark_render_changed();
+        }
     }
 
     /// Assigns recent copy text and returns inspected physical-row count for tests.
@@ -203,6 +205,7 @@ impl TerminalScreen {
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.normal_viewport_detached_from_history = false;
+        self.mark_render_changed();
     }
 
     /// Scrolls the used normal-screen viewport into history and blanks it.
@@ -212,6 +215,7 @@ impl TerminalScreen {
     /// from copyable pane logs. Alternate-screen contents are intentionally not
     /// recorded to normal history.
     pub fn clear_visible_into_history(&mut self) {
+        self.mark_render_changed();
         if self.alternate.active() {
             self.clear_screen();
             return;
@@ -264,6 +268,7 @@ impl TerminalScreen {
         history_lines: &[TerminalStyledLine],
         visible_lines: &[TerminalStyledLine],
     ) {
+        self.mark_render_changed();
         self.history.clear();
         for line in history_lines {
             self.history.push_styled_line(line.clone());

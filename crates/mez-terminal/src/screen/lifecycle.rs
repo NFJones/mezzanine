@@ -266,6 +266,7 @@ impl TerminalScreen {
             alternate_screen_generation: 0,
             history: HistoryBuffer::new_with_rotation(history_limit, history_rotate_lines)?,
             normal_viewport_detached_from_history: false,
+            render_generation: next_render_generation(),
             activity_events: 0,
             bell_events: 0,
             g0_charset: TerminalCharset::Ascii,
@@ -282,7 +283,11 @@ impl TerminalScreen {
     /// screen to recognize it.
     pub fn set_wrap_continuation_prefix(&mut self, prefix: impl Into<String>) {
         let prefix = prefix.into();
-        self.wrap_continuation_prefix = (!prefix.is_empty()).then_some(prefix);
+        let next = (!prefix.is_empty()).then_some(prefix);
+        if self.wrap_continuation_prefix != next {
+            self.wrap_continuation_prefix = next;
+            self.mark_render_changed();
+        }
     }
 
     /// Runs the feed operation for this subsystem.
@@ -293,6 +298,7 @@ impl TerminalScreen {
     pub fn feed(&mut self, input: &[u8]) {
         if !input.is_empty() {
             self.activity_events = self.activity_events.saturating_add(1);
+            self.mark_render_changed();
         }
         let mut bytes = Vec::with_capacity(self.utf8_tail.len().saturating_add(input.len()));
         if !self.utf8_tail.is_empty() {
@@ -415,6 +421,7 @@ impl TerminalScreen {
         if self.size == size {
             return;
         }
+        self.mark_render_changed();
 
         // DECSTBM margins describe coordinates in the current grid. Reset
         // them before choosing a resize strategy so stale bounds cannot drive
@@ -448,6 +455,7 @@ impl TerminalScreen {
     /// reflows the live buffer at its current dimensions so later writes,
     /// cursor reports, and resizes all use one consistent footprint model.
     pub fn rebuild_for_width_policy_change(&mut self, emoji_width: TerminalEmojiWidth) {
+        self.mark_render_changed();
         self.emoji_width = emoji_width;
         let size = self.size;
         // A delayed wrap records that the previous width policy filled the

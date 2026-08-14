@@ -97,6 +97,41 @@ fn runtime_frame_context_disables_animation_without_live_agent_footer() {
     assert_eq!(config.frame_context.animation_tick_ms, 0);
 }
 
+/// Verifies unchanged pane screens reuse immutable styled row projections and
+/// any subsequent terminal mutation invalidates the generation-keyed entry.
+#[test]
+fn runtime_render_reuses_unchanged_pane_styled_rows_by_generation() {
+    let mut service = test_runtime_service();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let size = Size::new(80, 24).unwrap();
+    let mut screen = TerminalScreen::new(size, 120).unwrap();
+    screen.feed(b"cached rows");
+    service.set_pane_screen(pane_id.clone(), screen);
+    let config = TerminalClientLoopConfig::default();
+
+    service
+        .render_client_view(ClientViewRole::Primary, size, &config)
+        .unwrap();
+    assert_eq!(service.pane_styled_row_cache_stats_for_tests(), (0, 1, 1));
+
+    service
+        .render_client_view(ClientViewRole::Primary, size, &config)
+        .unwrap();
+    assert_eq!(service.pane_styled_row_cache_stats_for_tests(), (1, 1, 1));
+
+    service.pane_screen_mut(&pane_id).unwrap().feed(b" changed");
+    service
+        .render_client_view(ClientViewRole::Primary, size, &config)
+        .unwrap();
+    assert_eq!(service.pane_styled_row_cache_stats_for_tests(), (1, 2, 1));
+}
+
 /// Verifies that a live agent footer re-enables animated frame ticks so active
 /// agent progress indicators keep their motion while work is still running.
 #[test]

@@ -1234,9 +1234,9 @@ where
                 continue;
             };
             match io
-                .write_styled_output_with_modes_bounded(
-                    &lines,
-                    &line_style_spans,
+                .write_owned_styled_output_with_modes_bounded(
+                    lines,
+                    line_style_spans,
                     modes,
                     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
                 )

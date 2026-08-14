@@ -7,6 +7,7 @@
 
 #[cfg(test)]
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[cfg(test)]
 use super::{
@@ -72,11 +73,12 @@ pub fn draw_window_from_screens(
     })
 }
 
-/// Renders a window from borrowed pane screens selected by the product runtime.
-pub fn draw_styled_window_from_screen_resolver<'a>(
+/// Renders a window while allowing unchanged screen rows to use shared projections.
+pub fn draw_styled_window_from_screen_and_row_resolvers<'a>(
     window: &Window,
     config: &TerminalClientLoopConfig,
     screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen>,
+    styled_rows_for_pane: impl Fn(&str, &TerminalScreen) -> Arc<[TerminalStyledLine]>,
 ) -> Result<Vec<TerminalStyledLine>> {
     let render_window = window_with_group_frame_space(window, config)?;
     let pane_inputs = window
@@ -87,8 +89,8 @@ pub fn draw_styled_window_from_screen_resolver<'a>(
             StyledPaneRenderInput {
                 pane_id: pane_id.clone(),
                 lines: screen_for_pane(&pane_id)
-                    .map(TerminalScreen::visible_styled_lines)
-                    .unwrap_or_default(),
+                    .map(|screen| styled_rows_for_pane(&pane_id, screen))
+                    .unwrap_or_else(|| Arc::from([])),
             }
         })
         .collect::<Vec<_>>();
@@ -245,7 +247,7 @@ pub(super) struct StyledPaneRenderInput {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    lines: Vec<TerminalStyledLine>,
+    lines: Arc<[TerminalStyledLine]>,
 }
 
 /// Runs the render styled window with pane frame template operation for this subsystem.
@@ -291,7 +293,7 @@ pub(super) fn render_styled_window_with_pane_frame_template(
             let lines = pane_inputs
                 .iter()
                 .find(|input| input.pane_id == pane.id.to_string())
-                .map(|input| input.lines.as_slice())
+                .map(|input| input.lines.as_ref())
                 .unwrap_or(&[]);
             let mut display_pane = pane.clone();
             display_pane.size = render_plan.render_region_size;

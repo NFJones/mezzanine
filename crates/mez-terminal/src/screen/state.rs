@@ -210,6 +210,16 @@ impl TerminalScreen {
         self.activity_events
     }
 
+    /// Returns the conservative generation of visible row projection state.
+    pub fn render_generation(&self) -> u64 {
+        self.render_generation.0
+    }
+
+    /// Advances the visible-row projection generation after a mutation.
+    pub(super) fn mark_render_changed(&mut self) {
+        self.render_generation = next_render_generation();
+    }
+
     /// Runs the bell events operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

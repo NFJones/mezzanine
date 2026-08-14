@@ -143,6 +143,21 @@ pub trait AsyncAttachedTerminalIo: Send {
         })
     }
 
+    /// Writes an owned styled frame, allowing retaining implementations to
+    /// move rendered rows into differential state instead of cloning them.
+    fn write_owned_styled_output_with_modes_bounded<'a>(
+        &'a mut self,
+        lines: Vec<String>,
+        line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+        modes: AttachedTerminalOutputModes,
+        max_bytes: usize,
+    ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async move {
+            self.write_styled_output_with_modes_bounded(&lines, &line_style_spans, modes, max_bytes)
+                .await
+        })
+    }
+
     /// Reads the current terminal size when available.
     fn terminal_size<'a>(&'a mut self) -> AsyncTerminalIoFuture<'a, Option<Size>> {
         Box::pin(async { Ok(None) })
@@ -428,6 +443,45 @@ impl AsyncAttachedTerminalFdLoopIo {
         });
     }
 
+    /// Queues an owned rendered frame and moves it into retained state.
+    fn queue_owned_pending_output_frame(
+        &mut self,
+        lines: Vec<String>,
+        line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+        modes: AttachedTerminalOutputModes,
+    ) {
+        let keypad_transition = if modes.application_keypad != self.application_keypad_mode {
+            Some(modes.application_keypad)
+        } else {
+            None
+        };
+        let enhanced_keyboard_transition = (modes.enhanced_keyboard_reporting
+            != self.enhanced_keyboard_reporting_committed)
+            .then_some(modes.enhanced_keyboard_reporting);
+        let transitions = AttachedTerminalModeTransitions {
+            enhanced_keyboard_reporting: enhanced_keyboard_transition,
+        };
+        let transition_end = transitions.encoded_len();
+        let bytes = encode_attached_terminal_output_update_frame_with_styles_and_transitions(
+            &lines,
+            &line_style_spans,
+            keypad_transition,
+            modes,
+            self.previous_output_frame.as_ref(),
+            transitions,
+        );
+        let next_state =
+            AttachedTerminalOutputFrameState::from_owned_with_modes(lines, line_style_spans, modes);
+        self.pending_output_frame = Some(PendingAttachedTerminalOutputFrame {
+            bytes,
+            written: 0,
+            transition_end,
+            pending_enhanced_keyboard_transition: enhanced_keyboard_transition,
+            next_state,
+            next_application_keypad_mode: modes.application_keypad,
+        });
+    }
+
     /// Queues a new frame or retains it behind an already-started frame.
     fn queue_or_defer_output_frame(
         &mut self,
@@ -578,9 +632,9 @@ impl AsyncAttachedTerminalFdLoopIo {
             self.previous_output_frame = Some(pending.next_state);
         }
         if let Some(deferred) = self.deferred_output_frame.take() {
-            self.queue_pending_output_frame(
-                &deferred.lines,
-                &deferred.line_style_spans,
+            self.queue_owned_pending_output_frame(
+                deferred.lines,
+                deferred.line_style_spans,
                 deferred.modes,
             );
         }
@@ -922,6 +976,33 @@ impl AsyncAttachedTerminalIo for AsyncAttachedTerminalFdLoopIo {
     ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
         Box::pin(async move {
             self.queue_or_defer_output_frame(lines, line_style_spans, modes);
+            self.flush_pending_output_bounded(max_bytes).await
+        })
+    }
+
+    fn write_owned_styled_output_with_modes_bounded<'a>(
+        &'a mut self,
+        lines: Vec<String>,
+        line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+        modes: AttachedTerminalOutputModes,
+        max_bytes: usize,
+    ) -> AsyncTerminalIoFuture<'a, AsyncTerminalOutputWriteReport> {
+        Box::pin(async move {
+            if self
+                .pending_output_frame
+                .as_ref()
+                .is_some_and(|pending| pending.written > 0)
+            {
+                self.deferred_output_frame = Some(DeferredAttachedTerminalOutputFrame {
+                    lines,
+                    line_style_spans,
+                    modes,
+                });
+            } else {
+                self.pending_output_frame = None;
+                self.deferred_output_frame = None;
+                self.queue_owned_pending_output_frame(lines, line_style_spans, modes);
+            }
             self.flush_pending_output_bounded(max_bytes).await
         })
     }

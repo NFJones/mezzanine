@@ -77,7 +77,6 @@ pub use overlay::compose_modal_display_overlay_lines;
 pub use overlay::{
     compose_display_overlay_line_style_spans, compose_modal_display_overlay_line_style_spans,
 };
-pub use panes::draw_styled_window_from_screen_resolver;
 #[cfg(test)]
 pub use panes::{draw_window_from_screens, render_window, render_window_with_pane_frame_template};
 #[cfg(test)]
@@ -237,6 +236,7 @@ pub fn render_attached_client_view(
 }
 
 /// Renders selected pane surfaces while retaining process screens separately.
+#[cfg(test)]
 pub fn render_attached_client_view_with_screen_resolvers<'a>(
     role: ClientViewRole,
     window: &Window,
@@ -245,11 +245,36 @@ pub fn render_attached_client_view_with_screen_resolvers<'a>(
     config: &TerminalClientLoopConfig,
     client_size: Size,
 ) -> Result<Option<RenderedClientView>> {
+    render_attached_client_view_with_screen_and_row_resolvers(
+        role,
+        window,
+        visual_screen_for_pane,
+        _process_screen_for_pane,
+        |_pane_id, screen| std::sync::Arc::from(screen.visible_styled_lines()),
+        config,
+        client_size,
+    )
+}
+
+/// Renders selected pane surfaces with caller-owned shared row projections.
+pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
+    role: ClientViewRole,
+    window: &Window,
+    visual_screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen> + Copy,
+    _process_screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen> + Copy,
+    styled_rows_for_pane: impl Fn(&str, &TerminalScreen) -> std::sync::Arc<[TerminalStyledLine]>,
+    config: &TerminalClientLoopConfig,
+    client_size: Size,
+) -> Result<Option<RenderedClientView>> {
     if role == ClientViewRole::PendingObserver {
         return Ok(None);
     }
-    let styled_lines =
-        draw_styled_window_from_screen_resolver(window, config, visual_screen_for_pane)?;
+    let styled_lines = panes::draw_styled_window_from_screen_and_row_resolvers(
+        window,
+        config,
+        visual_screen_for_pane,
+        styled_rows_for_pane,
+    )?;
     let mut lines = Vec::with_capacity(styled_lines.len());
     let mut line_style_spans = Vec::with_capacity(styled_lines.len());
     for line in styled_lines {
