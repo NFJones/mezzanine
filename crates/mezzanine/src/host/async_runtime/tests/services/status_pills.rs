@@ -14,7 +14,7 @@ async fn async_status_pill_worker_does_not_block_actor_heartbeats() {
         crate::runtime::RuntimeStatusPillRefreshPlan::for_tests(
             name,
             1,
-            "sleep 0.2; printf ready",
+            "sleep 0.5; printf ready",
             1_000,
             32,
         )
@@ -59,7 +59,7 @@ async fn async_status_pill_worker_does_not_block_actor_heartbeats() {
         assert_eq!(report.drained, 2);
         assert_eq!(report.submitted_events, 2);
         assert_eq!(report.applied_events, 0);
-        assert!(started.elapsed() < Duration::from_millis(350));
+        assert!(started.elapsed() < Duration::from_millis(750));
         handle.shutdown().await.unwrap();
     };
 

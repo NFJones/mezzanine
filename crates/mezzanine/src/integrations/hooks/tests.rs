@@ -13,6 +13,23 @@ use crate::error::Result;
 use crate::security::audit::{AuditActor, AuditConfig, AuditLog};
 use std::fs;
 
+/// Waits for a test hook descendant to disappear after its process group is
+/// terminated, allowing the platform reaper a bounded interval to collect it.
+#[cfg(unix)]
+async fn wait_for_process_exit(pid: i32, context: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        // SAFETY: signal zero performs a process-existence check without
+        // delivering a signal. The pid was written by the test child.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        if !alive || std::time::Instant::now() >= deadline {
+            assert!(!alive, "hook descendant {pid} survived {context}");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 /// Carries Fake Focused Shell state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -362,17 +379,7 @@ async fn async_program_hook_timeout_terminates_descendant_process_group() {
         .unwrap();
 
     assert_eq!(result.status, HookExecutionStatus::TimedOut);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-    loop {
-        // SAFETY: signal zero performs a process-existence check without
-        // delivering a signal. The pid was written by the test child.
-        let alive = unsafe { libc::kill(descendant_pid, 0) } == 0;
-        if !alive || std::time::Instant::now() >= deadline {
-            assert!(!alive, "hook descendant {descendant_pid} survived timeout");
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    wait_for_process_exit(descendant_pid, "timeout").await;
     let _ = fs::remove_dir_all(root);
 }
 
@@ -411,7 +418,12 @@ async fn async_program_hook_cancellation_terminates_descendant_process_group() {
     let plan = plan_hook(&hook).unwrap().unwrap();
     let cancellation_path = pid_path.clone();
     let cancellation = async move {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
         while tokio::fs::metadata(&cancellation_path).await.is_err() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "hook did not write descendant pid before cancellation"
+            );
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
     };
@@ -425,9 +437,7 @@ async fn async_program_hook_cancellation_terminates_descendant_process_group() {
         .unwrap();
 
     assert!(result.is_none());
-    // SAFETY: signal zero performs a process-existence check without
-    // delivering a signal. The pid was written by the test child.
-    assert_ne!(unsafe { libc::kill(descendant_pid, 0) }, 0);
+    wait_for_process_exit(descendant_pid, "cancellation").await;
     let _ = fs::remove_dir_all(root);
 }
 
