@@ -284,6 +284,93 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies a rapid agent-shell enter and exit releases the bootstrap input
+/// lease before delivering EOF to the child shell. The async pane actor blocks
+/// ordinary user input while a transaction lease is retained, so omitting this
+/// release strands both the exit byte and every later parent-shell keystroke.
+#[test]
+fn runtime_agent_shell_rapid_toggle_releases_bootstrap_input_lease() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = service
+        .session()
+        .active_window()
+        .unwrap()
+        .active_pane()
+        .id
+        .to_string();
+    let mut process = service
+        .take_running_pane_process_for_adapter(&pane_id)
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+
+    let effects = service.drain_pane_io_transition().side_effects;
+    let (lease_index, owner_id) = effects
+        .iter()
+        .enumerate()
+        .find_map(|(index, effect)| match effect {
+            RuntimeSideEffect::PaneProcessIo {
+                effect: crate::runtime::PaneProcessIoEffect::AcquireShellInputLease { owner_id },
+                ..
+            } => Some((index, owner_id.as_str())),
+            _ => None,
+        })
+        .expect("agent subshell entry should acquire a bootstrap input lease");
+    let handoff_index = effects
+        .iter()
+        .position(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: crate::runtime::PaneProcessIoEffect::WriteShellInput { delivery },
+                    ..
+                } if delivery.delivery_id.as_deref() == Some(owner_id)
+            )
+        })
+        .expect("agent subshell entry should queue its leased shell handoff");
+    let release_index = effects
+        .iter()
+        .position(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect:
+                        crate::runtime::PaneProcessIoEffect::ReleaseShellInputLease {
+                            owner_id: released_owner,
+                        },
+                    ..
+                } if released_owner == owner_id
+            )
+        })
+        .expect("rapid agent-shell exit should release the bootstrap input lease");
+    let exit_index = effects
+        .iter()
+        .position(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::PaneProcessIo {
+                    effect: crate::runtime::PaneProcessIoEffect::WriteInput { bytes },
+                    ..
+                } if bytes.last() == Some(&b'\x04')
+            )
+        })
+        .expect("rapid agent-shell exit should queue EOF for the child shell");
+
+    assert!(lease_index < handoff_index, "{effects:?}");
+    assert!(handoff_index < release_index, "{effects:?}");
+    assert!(release_index < exit_index, "{effects:?}");
+    let _ = process.terminate(Duration::from_millis(10));
+}
+
 /// Verifies an immediate agent-shell re-entry waits for the restored parent
 /// shell's current interaction epoch to be probed and bootstrapped. This
 /// protects the fail-closed identity boundary while ensuring a rapid toggle is

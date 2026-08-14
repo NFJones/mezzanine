@@ -1061,9 +1061,7 @@ impl RuntimeSessionService {
             return None;
         }
         let payload = self
-            .process
-            .running_shell_transactions
-            .remove(&marker)
+            .remove_running_shell_transaction(&marker)
             .and_then(|transaction| transaction.pending_input_payload);
         self.clear_shell_transaction_protocol_state(&marker);
         self.process
