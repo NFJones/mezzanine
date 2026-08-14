@@ -1160,6 +1160,13 @@ clients MUST NOT clear and redraw the entire viewport on every stable-size
 frame. They SHOULD update stable-size frames with row or cell diffs. A full clear
 or full redraw remains valid after attach, detach, terminal resize,
 frame-size change, or another invalidation that makes differential output unsafe.
+Readable foreground input that can be routed from current interaction state
+MUST be classified and applied before composing a presentation frame. Ordinary
+pane input MUST NOT require a full client view merely to forward bytes to the
+active pane. Prompt, overlay, prefix, copy-mode, paste, and mouse ownership MUST
+be resolved from actor-owned interaction state, while an independent render
+invalidation or an input action that changes visible state MUST still schedule
+the required fresh frame.
 While otherwise idle, attached foreground clients SHOULD continue polling the
 local terminal size often enough to notice host-terminal resizes without
 waiting for user input or daemon-side runtime events. They SHOULD trigger a

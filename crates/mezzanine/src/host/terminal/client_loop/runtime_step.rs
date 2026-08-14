@@ -66,7 +66,7 @@ pub(crate) fn plan_attached_terminal_client_step_with_host_paste_buffer(
         && let Some(input) = input
         && !input.is_empty()
     {
-        if view.is_some_and(|view| view.primary_prompt_active) {
+        if config.primary_prompt_active || view.is_some_and(|view| view.primary_prompt_active) {
             actions.push(TerminalClientLoopAction::ForwardToPane(input.to_vec()));
         } else {
             actions.extend(route_client_input_actions_with_host_paste_buffer_state(

@@ -363,6 +363,11 @@ async fn async_attached_terminal_loop_can_defer_pane_input_to_worker() {
                 bytes: b"hello\n".to_vec(),
             }]
         );
+        assert_eq!(
+            handle.metrics().await.unwrap().render_client_frame_requests,
+            0,
+            "ordinary pane input must not compose a client frame",
+        );
         let _ = handle.shutdown().await.unwrap();
     };
 

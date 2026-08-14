@@ -501,7 +501,7 @@ where
                 biased;
                 readiness = io.poll_input_readiness() => {
                     let mut readiness = readiness?;
-                    if readiness.iter().any(attached_terminal_readiness_is_readable_input_or_control) {
+                    if readiness.iter().any(attached_terminal_readiness_is_readable_control) {
                         ensure_output_readiness(&mut readiness);
                     }
                     return Ok(AttachedTerminalBatchWake::Readiness {
@@ -549,11 +549,19 @@ where
 
         if io.pending_output_bytes() > 0 {
             let mut readiness = io.poll_readiness().await?;
-            if readiness
-                .iter()
-                .any(attached_terminal_readiness_is_readable_input_or_control)
-            {
-                ensure_output_readiness(&mut readiness);
+            if readiness.iter().any(|ready| {
+                ready.readable
+                    && matches!(
+                        ready.role,
+                        AttachedTerminalFdRole::Input | AttachedTerminalFdRole::Control
+                    )
+            }) {
+                if readiness
+                    .iter()
+                    .any(attached_terminal_readiness_is_readable_control)
+                {
+                    ensure_output_readiness(&mut readiness);
+                }
                 return Ok(AttachedTerminalBatchWake::Readiness {
                     readiness,
                     invalidate_output_frame: false,
@@ -579,7 +587,7 @@ where
             biased;
             readiness = io.poll_input_readiness() => {
                 let mut readiness = readiness?;
-                if readiness.iter().any(attached_terminal_readiness_is_readable_input_or_control) {
+                if readiness.iter().any(attached_terminal_readiness_is_readable_control) {
                     ensure_output_readiness(&mut readiness);
                 }
                 return Ok(AttachedTerminalBatchWake::Readiness {
@@ -729,14 +737,10 @@ fn render_invalidation_reason_invalidates_frame(reason: RenderInvalidationReason
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn attached_terminal_readiness_is_readable_input_or_control(
+fn attached_terminal_readiness_is_readable_control(
     readiness: &AttachedTerminalFdReadiness,
 ) -> bool {
-    readiness.readable
-        && matches!(
-            readiness.role,
-            AttachedTerminalFdRole::Input | AttachedTerminalFdRole::Control
-        )
+    readiness.readable && readiness.role == AttachedTerminalFdRole::Control
 }
 
 /// Runs the ensure output readiness operation for this subsystem.

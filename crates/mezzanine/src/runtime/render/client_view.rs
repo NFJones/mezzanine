@@ -749,6 +749,8 @@ impl RuntimeSessionService {
             .settings
             .terminal_enhanced_keyboard_reporting;
         config.primary_display_overlay_active = self.presentation.primary_display_overlay.is_some();
+        config.primary_prompt_active = self.presentation.primary_prompt_input.is_some()
+            && self.presentation.primary_display_overlay.is_none();
         let frame_context = self.terminal_frame_context();
         config.mouse_border_cells = self.active_window_mouse_border_cells();
         config.mouse_window_frame_cells = self.active_window_mouse_frame_cells(&frame_context);

@@ -355,7 +355,7 @@ where
         let output_writable = readiness
             .iter()
             .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.writable);
-        let frame = if input_readable || output_writable {
+        let frame = if output_writable {
             await_attached_terminal_step(
                 "client frame render",
                 handle.render_client_frame(
