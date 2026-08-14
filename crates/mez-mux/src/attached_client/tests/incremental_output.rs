@@ -544,6 +544,44 @@ fn attached_terminal_output_update_uses_cursor_only_frame_for_cursor_moves() {
     );
 }
 
+/// Verifies a cursor-only blink-off update preserves the physical cursor
+/// position while hiding it. The presentation prologue resets DEC scroll
+/// margins, which also homes the terminal cursor, so the hidden-cursor suffix
+/// must restore the modeled location instead of leaving the host at column zero.
+#[test]
+fn attached_terminal_output_blink_off_update_preserves_cursor_position() {
+    let lines = vec!["parent$         ".to_string()];
+    let visible_modes = AttachedTerminalOutputModes {
+        cursor_visible: true,
+        cursor_blink: true,
+        cursor_blink_interval_ms: 500,
+        cursor_blink_elapsed_ms: 0,
+        cursor_row: 0,
+        cursor_column: 8,
+        ..AttachedTerminalOutputModes::default()
+    };
+    let previous = AttachedTerminalOutputFrameState::new_with_modes(&lines, &[], visible_modes);
+    let hidden_modes = AttachedTerminalOutputModes {
+        cursor_blink_elapsed_ms: 250,
+        ..visible_modes
+    };
+
+    let frame = encode_attached_terminal_output_update_frame_with_styles(
+        &lines,
+        &[],
+        None,
+        hidden_modes,
+        Some(&previous),
+    );
+    let mut screen = TerminalScreen::new(Size::new(16, 2).unwrap(), 10).unwrap();
+    screen.feed(b"parent$ ");
+    screen.feed(&frame);
+
+    assert!(!screen.cursor_visible());
+    assert_eq!(screen.cursor_state().row, 0);
+    assert_eq!(screen.cursor_state().column, 8);
+}
+
 /// Verifies stable-size attached-terminal updates emit bracketed-paste mode
 /// changes without resending the rest of the static presentation prologue.
 #[test]

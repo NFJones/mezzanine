@@ -870,9 +870,6 @@ pub const fn attached_terminal_restore_presentation_frame() -> &'static [u8] {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn cursor_presentation_sequence(lines: &[String], modes: AttachedTerminalOutputModes) -> String {
-    if !cursor_phase_visible(modes) {
-        return "\x1b[?25l\x1b[0m".to_string();
-    }
     let row = modes
         .cursor_row
         .min(lines.len().saturating_sub(1))
@@ -887,6 +884,9 @@ fn cursor_presentation_sequence(lines: &[String], modes: AttachedTerminalOutputM
         .cursor_column
         .min(frame_width.saturating_sub(1))
         .saturating_add(1);
+    if !cursor_phase_visible(modes) {
+        return format!("\x1b[?25l\x1b[0m\x1b[{row};{column}H");
+    }
     let style = modes.cursor_style.decscusr_parameter(false);
     format!("\x1b[?25l\x1b[0m\x1b[{style} q\x1b[{row};{column}H\x1b[?25h")
 }
