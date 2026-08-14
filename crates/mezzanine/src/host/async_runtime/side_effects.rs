@@ -175,6 +175,10 @@ pub struct AsyncPersistenceSideEffectServiceReport {
     pub polls: u64,
     /// Number of persistence side effects drained from the actor.
     pub drained: u64,
+    /// Number of compatible audit append batches durably persisted.
+    pub audit_batches: u64,
+    /// Number of audit retention scans completed after a durable append.
+    pub audit_retention_runs: u64,
     /// Number of writes that completed successfully.
     pub completed: u64,
     /// Number of writes that failed and were reported through typed events.
@@ -772,6 +776,8 @@ where
     let mut report = AsyncPersistenceSideEffectServiceReport {
         polls: 0,
         drained: 0,
+        audit_batches: 0,
+        audit_retention_runs: 0,
         completed: 0,
         failed: 0,
         bytes_written: 0,
@@ -779,6 +785,7 @@ where
         applied_events: 0,
         terminal_state: *lifecycle_watcher.borrow(),
     };
+    let mut audit_retention_schedule = BTreeMap::<PathBuf, AuditRetentionSchedule>::new();
 
     while report.polls < config.max_polls {
         let state = *lifecycle_watcher.borrow_and_update();
@@ -811,7 +818,8 @@ where
             .drained
             .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
         let mut batch = RuntimeEventBatch::new();
-        for effect in effects {
+        let mut effects = effects.into_iter().peekable();
+        while let Some(effect) = effects.next() {
             match effect {
                 RuntimeSideEffect::Persist {
                     target,
@@ -842,27 +850,73 @@ where
                 }
                 RuntimeSideEffect::PersistAuditLog {
                     path,
-                    bytes,
+                    mut bytes,
                     retention,
                 } => {
+                    let mut byte_counts = vec![bytes.len()];
+                    while matches!(
+                        effects.peek(),
+                        Some(RuntimeSideEffect::PersistAuditLog {
+                            path: next_path,
+                            retention: next_retention,
+                            ..
+                        }) if next_path == &path && next_retention == &retention
+                    ) {
+                        let Some(RuntimeSideEffect::PersistAuditLog {
+                            bytes: next_bytes, ..
+                        }) = effects.next()
+                        else {
+                            unreachable!(
+                                "peeked audit side effect must remain an audit side effect"
+                            );
+                        };
+                        byte_counts.push(next_bytes.len());
+                        bytes.extend_from_slice(&next_bytes);
+                    }
+                    let effect_count = u64::try_from(byte_counts.len()).unwrap_or(u64::MAX);
                     let byte_count = bytes.len();
-                    match persist_audit_log_side_effect(path.clone(), &bytes, retention).await {
-                        Ok(()) => {
-                            report.completed = report.completed.saturating_add(1);
+                    let enforce_retention = audit_retention_schedule
+                        .entry(path.clone())
+                        .or_default()
+                        .observe(&retention, effect_count, byte_count);
+                    match persist_audit_log_side_effect(
+                        path.clone(),
+                        &bytes,
+                        retention,
+                        enforce_retention,
+                    )
+                    .await
+                    {
+                        Ok(retention_enforced) => {
+                            report.audit_batches = report.audit_batches.saturating_add(1);
+                            if retention_enforced {
+                                report.audit_retention_runs =
+                                    report.audit_retention_runs.saturating_add(1);
+                                if let Some(schedule) = audit_retention_schedule.get_mut(&path) {
+                                    schedule.mark_enforced();
+                                }
+                            }
+                            report.completed = report.completed.saturating_add(effect_count);
                             report.bytes_written = report.bytes_written.saturating_add(byte_count);
-                            batch.push(RuntimeEvent::Persistence(PersistenceEvent::Completed {
-                                target: PersistenceTarget::AuditLog,
-                                path,
-                                bytes: byte_count,
-                            }));
+                            for bytes in byte_counts {
+                                batch.push(RuntimeEvent::Persistence(
+                                    PersistenceEvent::Completed {
+                                        target: PersistenceTarget::AuditLog,
+                                        path: path.clone(),
+                                        bytes,
+                                    },
+                                ));
+                            }
                         }
                         Err(error) => {
-                            report.failed = report.failed.saturating_add(1);
-                            batch.push(RuntimeEvent::Persistence(PersistenceEvent::Failed {
-                                target: PersistenceTarget::AuditLog,
-                                path,
-                                error: error.message().to_string(),
-                            }));
+                            report.failed = report.failed.saturating_add(effect_count);
+                            for _ in byte_counts {
+                                batch.push(RuntimeEvent::Persistence(PersistenceEvent::Failed {
+                                    target: PersistenceTarget::AuditLog,
+                                    path: path.clone(),
+                                    error: error.message().to_string(),
+                                }));
+                            }
                         }
                     }
                 }
@@ -1546,12 +1600,74 @@ async fn sync_persistence_parent(path: &Path) {
     }
 }
 
-/// Appends an audit JSONL record and enforces its retention policy off actor state.
+/// Maximum audit records accepted between bounded retention scans.
+const AUDIT_RETENTION_RECORD_INTERVAL: u64 = 64;
+/// Maximum audit payload bytes accepted between bounded retention scans.
+const AUDIT_RETENTION_BYTE_INTERVAL: usize = 64 * 1024;
+/// Maximum elapsed time between retention scans while audit writes continue.
+const AUDIT_RETENTION_TIME_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Cross-drain scheduling state for one audit destination.
+#[derive(Debug, Default)]
+struct AuditRetentionSchedule {
+    /// Policy used by the most recently observed audit append.
+    policy: Option<AuditRetentionPolicy>,
+    /// Records appended since the most recent successful retention scan.
+    pending_records: u64,
+    /// Bytes appended since the most recent successful retention scan.
+    pending_bytes: usize,
+    /// Time at which retention last completed successfully.
+    last_enforced: Option<Instant>,
+}
+
+impl AuditRetentionSchedule {
+    /// Records one durable batch candidate and reports whether retention is due.
+    fn observe(&mut self, policy: &AuditRetentionPolicy, records: u64, bytes: usize) -> bool {
+        if self.policy.as_ref() != Some(policy) {
+            self.policy = Some(policy.clone());
+            self.pending_records = 0;
+            self.pending_bytes = 0;
+            self.last_enforced = None;
+        }
+        if audit_retention_policy_disabled(policy) {
+            return false;
+        }
+
+        self.pending_records = self.pending_records.saturating_add(records);
+        self.pending_bytes = self.pending_bytes.saturating_add(bytes);
+        let record_interval = policy
+            .max_records
+            .and_then(|limit| u64::try_from(limit).ok())
+            .unwrap_or(AUDIT_RETENTION_RECORD_INTERVAL)
+            .clamp(1, AUDIT_RETENTION_RECORD_INTERVAL);
+        let byte_interval = policy
+            .max_bytes
+            .and_then(|limit| usize::try_from(limit).ok())
+            .unwrap_or(AUDIT_RETENTION_BYTE_INTERVAL)
+            .clamp(1, AUDIT_RETENTION_BYTE_INTERVAL);
+        self.last_enforced.is_none()
+            || self.pending_records >= record_interval
+            || self.pending_bytes >= byte_interval
+            || self
+                .last_enforced
+                .is_some_and(|last| last.elapsed() >= AUDIT_RETENTION_TIME_INTERVAL)
+    }
+
+    /// Resets pending thresholds after retention completes successfully.
+    fn mark_enforced(&mut self) {
+        self.pending_records = 0;
+        self.pending_bytes = 0;
+        self.last_enforced = Some(Instant::now());
+    }
+}
+
+/// Appends an audit JSONL batch and optionally enforces retention off actor state.
 async fn persist_audit_log_side_effect(
     path: PathBuf,
     bytes: &[u8],
     retention: AuditRetentionPolicy,
-) -> Result<()> {
+    enforce_retention: bool,
+) -> Result<bool> {
     persist_side_effect_bytes(
         PersistenceTarget::AuditLog,
         path.as_path(),
@@ -1559,11 +1675,11 @@ async fn persist_audit_log_side_effect(
         PersistenceWriteMode::Append,
     )
     .await?;
-    if audit_retention_policy_disabled(&retention) {
-        return Ok(());
+    if !enforce_retention || audit_retention_policy_disabled(&retention) {
+        return Ok(false);
     }
     retention.enforce_jsonl_async(path.as_path()).await?;
-    Ok(())
+    Ok(true)
 }
 
 /// Returns whether an audit retention policy has no active pruning rules.

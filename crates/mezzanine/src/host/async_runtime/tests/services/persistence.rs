@@ -76,6 +76,124 @@ async fn async_persistence_side_effect_service_writes_bytes_and_reports_completi
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies adjacent audit appends with one destination and retention policy
+/// share a single durability and retention batch without losing per-record
+/// completion accounting or chronological JSONL order.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_side_effect_service_batches_compatible_audit_appends() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-persistence-audit-batch-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let path = root.join("audit.jsonl");
+    let retention = crate::security::audit::AuditRetentionPolicy {
+        max_age_days: None,
+        max_records: Some(2),
+        max_bytes: None,
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+
+    let client = async {
+        let effects = (1..=3)
+            .map(|event_id| RuntimeSideEffect::PersistAuditLog {
+                path: path.clone(),
+                bytes: format!("{{\"event_id\":{event_id}}}\n").into_bytes(),
+                retention: retention.clone(),
+            })
+            .collect();
+        assert_eq!(handle.queue_runtime_side_effects(effects).await.unwrap(), 3);
+
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.drained, 3);
+        assert_eq!(report.audit_batches, 1);
+        assert_eq!(report.completed, 3);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.submitted_events, 3);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"event_id\":2}\n{\"event_id\":3}\n"
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 4);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies retention scheduling survives separate drain polls and only scans
+/// initially and after the configured record threshold is crossed.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_side_effect_service_schedules_retention_across_drains() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-persistence-audit-schedule-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let path = root.join("audit.jsonl");
+    let retention = crate::security::audit::AuditRetentionPolicy {
+        max_age_days: None,
+        max_records: Some(2),
+        max_bytes: None,
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+
+    let client = async {
+        let effects = (1..=3)
+            .map(|event_id| RuntimeSideEffect::PersistAuditLog {
+                path: path.clone(),
+                bytes: format!("{{\"event_id\":{event_id}}}\n").into_bytes(),
+                retention: retention.clone(),
+            })
+            .collect();
+        assert_eq!(handle.queue_runtime_side_effects(effects).await.unwrap(), 3);
+
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 4,
+                drain_limit: 1,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 4,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.drained, 3);
+        assert_eq!(report.audit_batches, 3);
+        assert_eq!(report.audit_retention_runs, 2);
+        assert_eq!(report.completed, 3);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"event_id\":2}\n{\"event_id\":3}\n"
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed >= 4);
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies durable provider usage is appended by the persistence worker and
 /// reported through typed actor ingress instead of touching SQLite in actor
 /// settlement.

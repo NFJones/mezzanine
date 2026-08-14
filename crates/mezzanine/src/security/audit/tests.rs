@@ -300,6 +300,51 @@ async fn async_retention_policy_prunes_jsonl_by_age_and_record_count() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies large audit logs are compacted through the streamed replacement
+/// path while preserving the newest bounded suffix and cleaning temporary files.
+#[test]
+fn retention_policy_streams_large_jsonl_compaction() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-audit-retention-large-test-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("audit.jsonl");
+    let mut file = fs::File::create(&path).unwrap();
+    for event_id in 1..=20_000 {
+        use std::io::Write as _;
+        writeln!(file, "{}", audit_line(event_id, 300, "large")).unwrap();
+    }
+    file.sync_all().unwrap();
+
+    let report = AuditRetentionPolicy {
+        max_age_days: None,
+        max_records: Some(64),
+        max_bytes: None,
+    }
+    .enforce_jsonl(&path)
+    .unwrap();
+    let data = fs::read_to_string(&path).unwrap();
+
+    assert_eq!(report.original_records, 20_000);
+    assert_eq!(report.retained_records, 64);
+    assert_eq!(report.pruned_records, 19_936);
+    assert_eq!(data.lines().count(), 64);
+    assert!(data.contains(r#""event_id":19937"#));
+    assert!(data.contains(r#""event_id":20000"#));
+    assert!(!data.contains(r#""event_id":19936"#));
+    assert!(fs::read_dir(&root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".mez-retention-")
+    }));
+
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies retention policy preserves surviving hash chain records.
 ///
 /// This regression scenario documents the behavior being protected so a

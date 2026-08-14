@@ -3,15 +3,13 @@
 //! Retention operates on complete records by line and preserves private file
 //! permissions after compaction. Malformed timestamps are retained.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-use std::time::SystemTime;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::io::AsyncWriteExt;
-
-use crate::error::Result;
+use crate::error::{MezError, Result};
 
 use super::json::insert_hash_field;
 use super::log::chained_hash;
@@ -68,31 +66,19 @@ impl AuditRetentionPolicy {
         if self.max_age_days.is_none() && self.max_records.is_none() && self.max_bytes.is_none() {
             return Ok(AuditRetentionReport::default());
         }
-        if !path.exists() {
-            return Ok(AuditRetentionReport::default());
+        let plan = match plan_audit_retention(self, path, now) {
+            Ok(plan) => plan,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(AuditRetentionReport::default());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if !plan.should_rewrite() {
+            return Ok(plan.report(plan.original_bytes));
         }
 
-        let data = fs::read_to_string(path)?;
-        let retained = self.retained_jsonl_lines(data.as_str(), now);
-        let mut retained_data = retained.retained_data();
-        let should_rewrite = retained.should_rewrite(retained_data.len() as u64);
-        if should_rewrite {
-            retained_data = rehash_retained_hash_chain_lines(&retained_data);
-        }
-        let report = retained.report(retained_data.len() as u64);
-
-        if should_rewrite {
-            let mut file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(path)?;
-            file.write_all(retained_data.as_bytes())?;
-            file.sync_all()?;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        }
-
-        Ok(report)
+        let retained_bytes = compact_audit_jsonl(path, self, now, &plan)?;
+        Ok(plan.report(retained_bytes))
     }
 
     /// Runs the enforce jsonl at async operation for this subsystem.
@@ -108,164 +94,234 @@ impl AuditRetentionPolicy {
         if self.max_age_days.is_none() && self.max_records.is_none() && self.max_bytes.is_none() {
             return Ok(AuditRetentionReport::default());
         }
-
-        let data = match tokio::fs::read_to_string(path).await {
-            Ok(data) => data,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(AuditRetentionReport::default());
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let retained = self.retained_jsonl_lines(data.as_str(), now);
-        let mut retained_data = retained.retained_data();
-        let should_rewrite = retained.should_rewrite(retained_data.len() as u64);
-        if should_rewrite {
-            retained_data = rehash_retained_hash_chain_lines(&retained_data);
-        }
-        let report = retained.report(retained_data.len() as u64);
-
-        if should_rewrite {
-            let mut file = tokio::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(path)
-                .await?;
-            file.write_all(retained_data.as_bytes()).await?;
-            file.sync_all().await?;
-            tokio::fs::set_permissions(path, fs::Permissions::from_mode(0o600)).await?;
-        }
-
-        Ok(report)
-    }
-
-    /// Runs the retained jsonl lines operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn retained_jsonl_lines(&self, data: &str, now: SystemTime) -> RetainedAuditJsonl {
-        let original_bytes = data.len() as u64;
-        let mut retained = data.lines().map(str::to_string).collect::<Vec<_>>();
-        let original_records = retained.len();
-
-        if let Some(max_age_days) = self.max_age_days {
-            let now_seconds = unix_seconds(now);
-            let max_age_seconds = max_age_days.saturating_mul(24 * 60 * 60);
-            retained.retain(|line| {
-                record_timestamp_seconds(line).is_none_or(|timestamp| {
-                    timestamp >= now_seconds || now_seconds - timestamp <= max_age_seconds
-                })
-            });
-        }
-
-        if let Some(max_records) = self.max_records
-            && retained.len() > max_records
-        {
-            retained = retained.split_off(retained.len() - max_records);
-        }
-
-        if let Some(max_bytes) = self.max_bytes {
-            let mut newest_within_limit = Vec::new();
-            let mut retained_bytes = 0_u64;
-            for line in retained.into_iter().rev() {
-                let line_bytes = line.len() as u64 + 1;
-                if retained_bytes + line_bytes > max_bytes {
-                    break;
-                }
-                retained_bytes += line_bytes;
-                newest_within_limit.push(line);
-            }
-            newest_within_limit.reverse();
-            retained = newest_within_limit;
-        }
-
-        RetainedAuditJsonl {
-            original_records,
-            original_bytes,
-            lines: retained,
-        }
+        let policy = self.clone();
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || policy.enforce_jsonl_at(path.as_path(), now))
+            .await
+            .map_err(|error| {
+                MezError::invalid_state(format!("audit retention blocking worker failed: {error}"))
+            })?
     }
 }
 
-/// Carries Retained Audit Jsonl state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-struct RetainedAuditJsonl {
-    /// Stores the original records value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+/// Bounded multi-pass selection state for one audit retention operation.
+struct AuditRetentionPlan {
+    /// Number of records observed before applying retention.
     original_records: usize,
-    /// Stores the original bytes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Exact byte length observed before applying retention.
     original_bytes: u64,
-    /// Stores the lines value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    lines: Vec<String>,
+    /// Number of age-eligible records skipped from the front of the file.
+    retained_start: usize,
+    /// Number of records selected after all retention limits.
+    retained_records: usize,
+    /// Normalized selected bytes before optional hash-chain rebuilding.
+    retained_unhashed_bytes: u64,
 }
 
-impl RetainedAuditJsonl {
-    /// Runs the retained data operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn retained_data(&self) -> String {
-        if self.lines.is_empty() {
-            String::new()
-        } else {
-            format!("{}\n", self.lines.join("\n"))
-        }
-    }
-
+impl AuditRetentionPlan {
     /// Returns whether the retained data differs from the original file.
-    fn should_rewrite(&self, retained_bytes: u64) -> bool {
-        self.original_records.saturating_sub(self.lines.len()) > 0
-            || retained_bytes != self.original_bytes
+    fn should_rewrite(&self) -> bool {
+        self.original_records.saturating_sub(self.retained_records) > 0
+            || self.retained_unhashed_bytes != self.original_bytes
     }
 
-    /// Runs the report operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Builds the public retention report after optional hash rebuilding.
     fn report(&self, retained_bytes: u64) -> AuditRetentionReport {
         AuditRetentionReport {
             original_records: self.original_records,
-            retained_records: self.lines.len(),
-            pruned_records: self.original_records.saturating_sub(self.lines.len()),
+            retained_records: self.retained_records,
+            pruned_records: self.original_records.saturating_sub(self.retained_records),
             original_bytes: self.original_bytes,
             retained_bytes,
         }
     }
 }
 
-/// Rebuilds retained hash chains from the first retained record.
-fn rehash_retained_hash_chain_lines(data: &str) -> String {
-    let mut previous_hash = None;
-    let mut lines = Vec::new();
+/// Selects the retained suffix using bounded repeated scans of the source file.
+fn plan_audit_retention(
+    policy: &AuditRetentionPolicy,
+    path: &Path,
+    now: SystemTime,
+) -> std::io::Result<AuditRetentionPlan> {
+    let now_seconds = unix_seconds(now);
+    let mut original_records = 0_usize;
+    let mut original_bytes = 0_u64;
+    let mut age_eligible_records = 0_usize;
+    visit_audit_jsonl(path, |line, source_bytes| {
+        original_records = original_records.saturating_add(1);
+        original_bytes = original_bytes.saturating_add(source_bytes);
+        if audit_line_is_age_eligible(policy, line, now_seconds) {
+            age_eligible_records = age_eligible_records.saturating_add(1);
+        }
+        Ok(())
+    })?;
 
-    for line in data.lines() {
-        let Some(base_line) = audit_line_without_trailing_hash(line) else {
-            previous_hash = None;
-            lines.push(line.to_string());
-            continue;
-        };
-        let hash = chained_hash(previous_hash.as_deref(), &base_line);
-        lines.push(insert_hash_field(base_line, &hash));
-        previous_hash = Some(hash);
+    let mut retained_start = policy
+        .max_records
+        .map_or(0, |limit| age_eligible_records.saturating_sub(limit));
+    let mut retained_unhashed_bytes = 0_u64;
+    let mut eligible_index = 0_usize;
+    visit_audit_jsonl(path, |line, _| {
+        if audit_line_is_age_eligible(policy, line, now_seconds) {
+            if eligible_index >= retained_start {
+                retained_unhashed_bytes =
+                    retained_unhashed_bytes.saturating_add(normalized_audit_line_bytes(line));
+            }
+            eligible_index = eligible_index.saturating_add(1);
+        }
+        Ok(())
+    })?;
+
+    if let Some(max_bytes) = policy.max_bytes
+        && retained_unhashed_bytes > max_bytes
+    {
+        let mut eligible_index = 0_usize;
+        visit_audit_jsonl(path, |line, _| {
+            if audit_line_is_age_eligible(policy, line, now_seconds) {
+                if eligible_index >= retained_start && retained_unhashed_bytes > max_bytes {
+                    retained_unhashed_bytes =
+                        retained_unhashed_bytes.saturating_sub(normalized_audit_line_bytes(line));
+                    retained_start = eligible_index.saturating_add(1);
+                }
+                eligible_index = eligible_index.saturating_add(1);
+            }
+            Ok(())
+        })?;
     }
 
-    if lines.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", lines.join("\n"))
+    Ok(AuditRetentionPlan {
+        original_records,
+        original_bytes,
+        retained_start,
+        retained_records: age_eligible_records.saturating_sub(retained_start),
+        retained_unhashed_bytes,
+    })
+}
+
+/// Atomically streams selected records into a private sibling replacement.
+fn compact_audit_jsonl(
+    path: &Path,
+    policy: &AuditRetentionPolicy,
+    now: SystemTime,
+    plan: &AuditRetentionPlan,
+) -> Result<u64> {
+    let temp_path = audit_retention_temp_path(path);
+    let temp_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)?;
+    let mut writer = BufWriter::new(temp_file);
+    let now_seconds = unix_seconds(now);
+    let mut eligible_index = 0_usize;
+    let mut retained_bytes = 0_u64;
+    let mut previous_hash = None;
+
+    let result = (|| -> Result<()> {
+        visit_audit_jsonl(path, |line, _| {
+            if !audit_line_is_age_eligible(policy, line, now_seconds) {
+                return Ok(());
+            }
+            let should_write = eligible_index >= plan.retained_start;
+            eligible_index = eligible_index.saturating_add(1);
+            if !should_write {
+                return Ok(());
+            }
+
+            let output = if let Some(base_line) = audit_line_without_trailing_hash(line) {
+                let hash = chained_hash(previous_hash.as_deref(), &base_line);
+                previous_hash = Some(hash.clone());
+                insert_hash_field(base_line, &hash)
+            } else {
+                previous_hash = None;
+                line.to_string()
+            };
+            writer.write_all(output.as_bytes())?;
+            writer.write_all(b"\n")?;
+            retained_bytes = retained_bytes.saturating_add(
+                u64::try_from(output.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            );
+            Ok(())
+        })?;
+        writer.flush()?;
+        writer.get_ref().sync_all()?;
+        fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600))?;
+        fs::rename(&temp_path, path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        sync_audit_retention_parent(path);
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result.map(|()| retained_bytes)
+}
+
+/// Visits normalized JSONL records without retaining the complete file.
+fn visit_audit_jsonl(
+    path: &Path,
+    mut visit: impl FnMut(&str, u64) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut line = String::new();
+    loop {
+        let source_bytes = reader.read_line(&mut line)?;
+        if source_bytes == 0 {
+            break;
+        }
+        let normalized = line
+            .strip_suffix('\n')
+            .unwrap_or(line.as_str())
+            .strip_suffix('\r')
+            .unwrap_or_else(|| line.strip_suffix('\n').unwrap_or(line.as_str()));
+        visit(normalized, u64::try_from(source_bytes).unwrap_or(u64::MAX))?;
+        line.clear();
+    }
+    Ok(())
+}
+
+/// Returns whether one record survives the configured age window.
+fn audit_line_is_age_eligible(policy: &AuditRetentionPolicy, line: &str, now_seconds: u64) -> bool {
+    let Some(max_age_days) = policy.max_age_days else {
+        return true;
+    };
+    let max_age_seconds = max_age_days.saturating_mul(24 * 60 * 60);
+    record_timestamp_seconds(line).is_none_or(|timestamp| {
+        timestamp >= now_seconds || now_seconds - timestamp <= max_age_seconds
+    })
+}
+
+/// Returns the normalized on-disk size for one retained JSONL record.
+fn normalized_audit_line_bytes(line: &str) -> u64 {
+    u64::try_from(line.len())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1)
+}
+
+/// Builds a unique sibling path for a crash-safe audit replacement.
+fn audit_retention_temp_path(path: &Path) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("audit.jsonl");
+    path.with_file_name(format!(
+        ".{file_name}.mez-retention-{}-{nonce}",
+        std::process::id()
+    ))
+}
+
+/// Best-effort directory synchronization after replacing the audit log.
+fn sync_audit_retention_parent(path: &Path) {
+    if let Some(parent) = path.parent()
+        && let Ok(directory) = File::open(parent)
+    {
+        let _ = directory.sync_all();
     }
 }
 
