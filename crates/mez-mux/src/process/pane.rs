@@ -139,6 +139,11 @@ pub struct PaneProcess {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) output_backlog: VecDeque<u8>,
+    /// Reusable initialized storage for nonblocking PTY reads.
+    ///
+    /// The fixed-size allocation avoids allocating and zeroing a fresh buffer
+    /// for every readiness cycle.
+    pub(super) output_read_buffer: Vec<u8>,
     /// Stores the output backlog limit bytes value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -445,13 +450,7 @@ impl PaneProcess {
         self.buffer_available_output(max_bytes)?;
 
         let read_len = max_bytes.min(self.output_backlog.len());
-        let mut output = Vec::with_capacity(read_len);
-        for _ in 0..read_len {
-            if let Some(byte) = self.output_backlog.pop_front() {
-                output.push(byte);
-            }
-        }
-        Ok(output)
+        Ok(drain_output_backlog(&mut self.output_backlog, read_len))
     }
 
     /// Returns the monotonic blocking output-activity sequence.
@@ -504,15 +503,14 @@ impl PaneProcess {
                 .saturating_sub(self.output_backlog.len())
                 .min(available_backlog)
                 .clamp(1, PTY_IO_CHUNK_BYTES);
-            match read_pty_fd_nonblocking(self.master_fd()?, read_limit)? {
-                PtyRead::Bytes(bytes) => {
-                    if append_output_chunk_to_backlog(
+            let master_fd = self.master_fd()?;
+            match read_pty_fd_nonblocking(master_fd, &mut self.output_read_buffer[..read_limit])? {
+                PtyRead::Bytes(count) => {
+                    if !append_output_chunk_to_backlog(
                         &mut self.output_backlog,
-                        bytes,
+                        &self.output_read_buffer[..count],
                         self.output_backlog_limit_bytes,
-                    )
-                    .is_some()
-                    {
+                    ) {
                         break;
                     }
                     self.output_activity_sequence = self.output_activity_sequence.saturating_add(1);
@@ -684,7 +682,7 @@ pub(super) enum PtyRead {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    Bytes(Vec<u8>),
+    Bytes(usize),
     /// Represents the Would Block case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -702,15 +700,16 @@ pub(super) enum PtyRead {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn read_pty_fd_nonblocking(fd: RawFd, max_bytes: usize) -> Result<PtyRead> {
-    let mut buffer = vec![0u8; max_bytes];
+pub(super) fn read_pty_fd_nonblocking(fd: RawFd, buffer: &mut [u8]) -> Result<PtyRead> {
+    if buffer.is_empty() {
+        return Err(MezError::invalid_args(
+            "pane PTY read buffer must not be empty",
+        ));
+    }
     loop {
-        match rustix_read(borrow_raw_pty_fd(fd), buffer.as_mut_slice()) {
+        match rustix_read(borrow_raw_pty_fd(fd), &mut *buffer) {
             Ok(0) => return Ok(PtyRead::Closed),
-            Ok(count) => {
-                buffer.truncate(count);
-                return Ok(PtyRead::Bytes(buffer));
-            }
+            Ok(count) => return Ok(PtyRead::Bytes(count)),
             Err(Errno::INTR) => continue,
             Err(Errno::IO) => return Ok(PtyRead::Closed),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -821,20 +820,33 @@ fn borrow_raw_pty_fd(fd: RawFd) -> BorrowedFd<'static> {
 /// on duplicated control-flow logic.
 pub(super) fn append_output_chunk_to_backlog(
     backlog: &mut VecDeque<u8>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     limit_bytes: usize,
-) -> Option<Vec<u8>> {
+) -> bool {
     if bytes.is_empty() {
-        return None;
+        return true;
     }
     if limit_bytes == 0 || bytes.len() > limit_bytes {
-        return Some(bytes);
+        return false;
     }
     if backlog.len().saturating_add(bytes.len()) > limit_bytes {
-        return Some(bytes);
+        return false;
     }
-    backlog.extend(bytes);
-    None
+    backlog.extend(bytes.iter().copied());
+    true
+}
+
+/// Removes up to `max_bytes` from a possibly wrapped output backlog in order.
+pub(super) fn drain_output_backlog(backlog: &mut VecDeque<u8>, max_bytes: usize) -> Vec<u8> {
+    let read_len = max_bytes.min(backlog.len());
+    let mut output = Vec::with_capacity(read_len);
+    let (front, wrapped) = backlog.as_slices();
+    let front_len = read_len.min(front.len());
+    output.extend_from_slice(&front[..front_len]);
+    let wrapped_len = read_len.saturating_sub(front_len);
+    output.extend_from_slice(&wrapped[..wrapped_len]);
+    backlog.drain(..read_len);
+    output
 }
 
 /// Runs the foreground process group id operation for this subsystem.

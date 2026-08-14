@@ -136,6 +136,7 @@ pub fn spawn_pane_process_with_start_directory(
         child,
         master: pair.master,
         output_backlog: std::collections::VecDeque::new(),
+        output_read_buffer: vec![0; super::pty::PTY_IO_CHUNK_BYTES],
         output_backlog_limit_bytes: super::pane::DEFAULT_OUTPUT_BACKLOG_LIMIT_BYTES,
         output_activity_sequence: 0,
         output_closed: false,

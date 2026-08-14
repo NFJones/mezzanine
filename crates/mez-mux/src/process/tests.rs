@@ -1,6 +1,6 @@
 //! Unit tests for pane process command planning and PTY lifecycle behavior.
 
-use super::pane::append_output_chunk_to_backlog;
+use super::pane::{append_output_chunk_to_backlog, drain_output_backlog};
 use super::{
     PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
     shell_command_from_argv, spawn_pane_process, spawn_pane_process_with_start_directory,
@@ -133,13 +133,26 @@ fn explicit_command_must_not_be_empty() {
 fn output_backlog_keeps_over_limit_chunks_pending() {
     let mut backlog = VecDeque::from(vec![b'a', b'b', b'c']);
 
-    let pending = append_output_chunk_to_backlog(&mut backlog, vec![b'd', b'e'], 4);
+    let appended = append_output_chunk_to_backlog(&mut backlog, b"de", 4);
 
-    assert_eq!(pending, Some(vec![b'd', b'e']));
+    assert!(!appended);
     assert_eq!(
         backlog.into_iter().collect::<Vec<_>>(),
         vec![b'a', b'b', b'c']
     );
+}
+
+/// Verifies bulk output draining preserves order across the two contiguous
+/// slices of a wrapped deque and leaves the unread suffix buffered.
+#[test]
+fn output_backlog_bulk_drain_preserves_wraparound_order() {
+    let mut backlog = VecDeque::with_capacity(5);
+    backlog.extend(*b"abcd");
+    assert_eq!(drain_output_backlog(&mut backlog, 3), b"abc");
+    backlog.extend(*b"efg");
+
+    assert_eq!(drain_output_backlog(&mut backlog, 3), b"def");
+    assert_eq!(backlog.into_iter().collect::<Vec<_>>(), b"g");
 }
 
 /// Verifies spawns explicit command on pty.
