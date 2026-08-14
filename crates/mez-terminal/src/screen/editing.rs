@@ -13,15 +13,14 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn print(&mut self, ch: char) {
-        if self.try_extend_previous_grapheme(ch) {
-            return;
-        }
         let translated = match self.active_charset() {
             TerminalCharset::Ascii => ch,
             TerminalCharset::DecSpecialGraphics => dec_special_graphics_char(ch).unwrap_or(ch),
         };
-        let text = translated.to_string();
-        let width = terminal_grapheme_width(&text, self.emoji_width);
+        if !translated.is_ascii() && self.try_extend_previous_grapheme(translated) {
+            return;
+        }
+        let width = terminal_char_width(translated, self.emoji_width);
         if width == 0 {
             return;
         }
@@ -50,7 +49,7 @@ impl TerminalScreen {
         for target_column in column..column.saturating_add(width).min(self.cells[row].len()) {
             self.clear_cell_footprint(row, target_column, self.graphic_rendition);
         }
-        self.cells[row][column] = TerminalScreenCell::text(&text);
+        self.cells[row][column] = TerminalScreenCell::scalar(translated);
         self.renditions[row][column] = self.graphic_rendition;
         for offset in 1..width {
             let column = column.saturating_add(offset);
@@ -252,7 +251,7 @@ impl TerminalScreen {
         if count > 0
             && self.cells[row]
                 .get(column)
-                .is_some_and(|cell| cell.continuation)
+                .is_some_and(TerminalScreenCell::is_continuation)
         {
             self.clear_cell_footprint(row, column, self.graphic_rendition);
         }
@@ -280,7 +279,7 @@ impl TerminalScreen {
         if count > 0
             && self.cells[row]
                 .get(column)
-                .is_some_and(|cell| cell.continuation)
+                .is_some_and(TerminalScreenCell::is_continuation)
         {
             self.clear_cell_footprint(row, column, self.graphic_rendition);
         }

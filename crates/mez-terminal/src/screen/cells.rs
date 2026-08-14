@@ -63,15 +63,10 @@ impl TerminalScreen {
                 .history
                 .line_at(row)
                 .is_none_or(|line| line.trim().is_empty()),
-            Some(NormalPhysicalLineIndex::Visible(row)) => {
-                self.cells.get(row).is_none_or(|cells| {
-                    cells
-                        .iter()
-                        .filter(|cell| !cell.continuation)
-                        .flat_map(|cell| cell.text.chars())
-                        .all(char::is_whitespace)
-                })
-            }
+            Some(NormalPhysicalLineIndex::Visible(row)) => self
+                .cells
+                .get(row)
+                .is_none_or(|cells| cells.iter().all(TerminalScreenCell::text_is_whitespace)),
             None => true,
         }
     }
@@ -111,7 +106,7 @@ impl TerminalScreen {
         while leading_column > 0
             && row_cells
                 .get(leading_column)
-                .is_some_and(|cell| cell.continuation)
+                .is_some_and(TerminalScreenCell::is_continuation)
         {
             leading_column = leading_column.saturating_sub(1);
         }
@@ -148,7 +143,7 @@ impl TerminalScreen {
         let columns = row_cells.len();
         let mut column = 0usize;
         while column < columns {
-            if self.cells[row][column].continuation {
+            if self.cells[row][column].is_continuation() {
                 self.cells[row][column] = TerminalScreenCell::blank();
                 column = column.saturating_add(1);
                 continue;
@@ -195,7 +190,9 @@ impl TerminalScreen {
         if self.cells[self.cursor.row][leading_column].is_blank() {
             return false;
         }
-        let mut candidate = self.cells[self.cursor.row][leading_column].text.clone();
+        let Some(mut candidate) = self.cells[self.cursor.row][leading_column].owned_text() else {
+            return false;
+        };
         candidate.push(ch);
         let mut graphemes = terminal_graphemes(&candidate);
         if graphemes.next() != Some(candidate.as_str()) || graphemes.next().is_some() {

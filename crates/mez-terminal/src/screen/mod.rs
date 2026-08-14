@@ -109,70 +109,141 @@ struct StyledPrefixCell {
     rendition: GraphicRendition,
 }
 
+/// Inline-first content stored by one live terminal screen cell.
+///
+/// Untouched blanks, wide-glyph continuation columns, and ordinary Unicode
+/// scalars require no heap allocation. Only multi-scalar extended grapheme
+/// clusters retain an owned string. A written space is represented as a scalar
+/// so reflow can distinguish it from untouched terminal padding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TerminalScreenCellContent {
+    /// Untouched or erased terminal padding.
+    Blank,
+    /// Extra display column occupied by a preceding wide grapheme.
+    Continuation,
+    /// One complete single-scalar grapheme stored inline.
+    Scalar(char),
+    /// A complete multi-scalar extended grapheme cluster.
+    Grapheme(String),
+}
+
 /// One display cell in the live terminal screen buffer.
 ///
-/// Leading cells store the complete grapheme cluster that should be emitted
-/// for that display position. Extra columns occupied by a wide grapheme are
-/// explicit continuation sentinels, so multi-scalar clusters survive the live
-/// screen path without being reduced to their first Unicode scalar.
+/// Leading cells store either an inline scalar or a complete multi-scalar
+/// grapheme. Extra columns occupied by a wide grapheme are explicit
+/// continuation sentinels, preserving width, overwrite, and reflow invariants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TerminalScreenCell {
-    /// Complete grapheme cluster stored at a leading display cell.
-    text: String,
-    /// Whether this cell is a continuation column for a previous wide glyph.
-    continuation: bool,
-    /// Whether terminal output explicitly wrote this cell.
-    ///
-    /// Written default spaces remain part of a logical line during reflow,
-    /// while untouched or erased padding can still be omitted.
-    written: bool,
+    /// Inline-first content and occupancy state for this display cell.
+    content: TerminalScreenCellContent,
 }
 
 impl TerminalScreenCell {
     /// Builds a blank leading screen cell.
     fn blank() -> Self {
         Self {
-            text: " ".to_string(),
-            continuation: false,
-            written: false,
+            content: TerminalScreenCellContent::Blank,
         }
     }
 
     /// Builds a wide-grapheme continuation sentinel.
     fn continuation() -> Self {
         Self {
-            text: String::new(),
-            continuation: true,
-            written: true,
+            content: TerminalScreenCellContent::Continuation,
+        }
+    }
+
+    /// Builds a leading cell containing one inline Unicode scalar.
+    fn scalar(ch: char) -> Self {
+        Self {
+            content: TerminalScreenCellContent::Scalar(ch),
         }
     }
 
     /// Builds a leading cell containing complete terminal text.
     fn text(text: &str) -> Self {
-        Self {
-            text: text.to_string(),
-            continuation: false,
-            written: true,
+        let mut chars = text.chars();
+        match (chars.next(), chars.next()) {
+            (Some(ch), None) => Self::scalar(ch),
+            _ => Self {
+                content: TerminalScreenCellContent::Grapheme(text.to_string()),
+            },
         }
     }
 
     /// Returns whether terminal output explicitly occupied this cell.
     fn is_written(&self) -> bool {
-        self.written
+        !matches!(self.content, TerminalScreenCellContent::Blank)
+    }
+
+    /// Returns whether this is a continuation column for a wide grapheme.
+    fn is_continuation(&self) -> bool {
+        matches!(self.content, TerminalScreenCellContent::Continuation)
     }
 
     /// Returns whether the cell is a default blank leading cell.
     fn is_blank(&self) -> bool {
-        !self.continuation && self.text == " "
+        matches!(
+            self.content,
+            TerminalScreenCellContent::Blank | TerminalScreenCellContent::Scalar(' ')
+        )
     }
 
     /// Returns the display width occupied by this cell's leading text.
     fn width(&self, emoji_width: TerminalEmojiWidth) -> usize {
-        if self.continuation {
-            0
-        } else {
-            terminal_grapheme_width(&self.text, emoji_width)
+        match &self.content {
+            TerminalScreenCellContent::Blank => 1,
+            TerminalScreenCellContent::Continuation => 0,
+            TerminalScreenCellContent::Scalar(ch) => terminal_char_width(*ch, emoji_width),
+            TerminalScreenCellContent::Grapheme(text) => terminal_grapheme_width(text, emoji_width),
         }
+    }
+
+    /// Appends leading cell text while omitting continuation sentinels.
+    fn append_text_to(&self, output: &mut String) {
+        match &self.content {
+            TerminalScreenCellContent::Blank => output.push(' '),
+            TerminalScreenCellContent::Continuation => {}
+            TerminalScreenCellContent::Scalar(ch) => output.push(*ch),
+            TerminalScreenCellContent::Grapheme(text) => output.push_str(text),
+        }
+    }
+
+    /// Returns an owned copy of leading text for grapheme extension only.
+    fn owned_text(&self) -> Option<String> {
+        match &self.content {
+            TerminalScreenCellContent::Blank => Some(" ".to_string()),
+            TerminalScreenCellContent::Continuation => None,
+            TerminalScreenCellContent::Scalar(ch) => Some(ch.to_string()),
+            TerminalScreenCellContent::Grapheme(text) => Some(text.clone()),
+        }
+    }
+
+    /// Reports whether every leading scalar is whitespace.
+    fn text_is_whitespace(&self) -> bool {
+        match &self.content {
+            TerminalScreenCellContent::Blank => true,
+            TerminalScreenCellContent::Continuation => true,
+            TerminalScreenCellContent::Scalar(ch) => ch.is_whitespace(),
+            TerminalScreenCellContent::Grapheme(text) => text.chars().all(char::is_whitespace),
+        }
+    }
+
+    /// Reports whether this cell contains exactly one expected scalar.
+    fn contains_scalar(&self, expected: char) -> bool {
+        matches!(self.content, TerminalScreenCellContent::Scalar(ch) if ch == expected)
+    }
+
+    /// Reports whether this cell uses inline scalar storage.
+    #[cfg(test)]
+    fn is_inline_scalar(&self) -> bool {
+        matches!(self.content, TerminalScreenCellContent::Scalar(_))
+    }
+
+    /// Reports whether this cell owns multi-scalar grapheme storage.
+    #[cfg(test)]
+    fn is_owned_grapheme(&self) -> bool {
+        matches!(self.content, TerminalScreenCellContent::Grapheme(_))
     }
 }
 
@@ -756,7 +827,7 @@ fn styled_line_from_row_with_copy_text(
             .copied()
             .unwrap_or_else(GraphicRendition::default);
 
-        if limited_cells[cell].continuation {
+        if limited_cells[cell].is_continuation() {
             cell = cell.saturating_add(1);
             continue;
         }
@@ -772,7 +843,7 @@ fn styled_line_from_row_with_copy_text(
                 .unwrap_or_else(GraphicRendition::default)
                 == rendition
         {
-            if limited_cells[cell].continuation {
+            if limited_cells[cell].is_continuation() {
                 cell = cell.saturating_add(1);
                 continue;
             }
@@ -805,9 +876,7 @@ fn collect_screen_cell_text(
 ) -> String {
     let mut output = String::new();
     for cell in cells {
-        if !cell.continuation {
-            output.push_str(&cell.text);
-        }
+        cell.append_text_to(&mut output);
     }
     if trim_trailing_whitespace {
         output = output.trim_end().to_string();

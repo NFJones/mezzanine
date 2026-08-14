@@ -20,6 +20,20 @@ impl TerminalScreen {
         self.cells.iter().map(|row| trim_screen_row(row)).collect()
     }
 
+    /// Returns inline-scalar and owned-grapheme cell counts for focused tests.
+    #[cfg(test)]
+    pub(crate) fn visible_cell_storage_counts(&self) -> (usize, usize) {
+        self.cells.iter().flatten().fold(
+            (0usize, 0usize),
+            |(inline_scalars, owned_graphemes), cell| {
+                (
+                    inline_scalars.saturating_add(usize::from(cell.is_inline_scalar())),
+                    owned_graphemes.saturating_add(usize::from(cell.is_owned_grapheme())),
+                )
+            },
+        )
+    }
+
     /// Returns visible lines with non-default SGR style spans preserved.
     pub fn visible_styled_lines(&self) -> Vec<TerminalStyledLine> {
         self.cells

@@ -34,7 +34,7 @@ impl TerminalScreen {
         for expected in configured_prefix.chars() {
             let width = terminal_char_width(expected, self.emoji_width);
             let cell = cells.get(column)?;
-            if width == 0 || cell.continuation || cell.text != expected.to_string() {
+            if width == 0 || cell.is_continuation() || !cell.contains_scalar(expected) {
                 return None;
             }
             prefix.push(StyledPrefixCell {
@@ -64,8 +64,7 @@ impl TerminalScreen {
                 return;
             }
             self.clear_line_copy_text(self.cursor.row);
-            let text = cell.ch.to_string();
-            self.cells[self.cursor.row][self.cursor.column] = TerminalScreenCell::text(&text);
+            self.cells[self.cursor.row][self.cursor.column] = TerminalScreenCell::scalar(cell.ch);
             self.renditions[self.cursor.row][self.cursor.column] = cell.rendition;
             for offset in 1..cell.width {
                 let column = self.cursor.column.saturating_add(offset);

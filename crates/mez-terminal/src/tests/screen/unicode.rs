@@ -294,3 +294,18 @@ fn terminal_screen_rebuilds_emoji_footprints_after_width_policy_change() {
     assert_eq!(screen.cursor_state().row, 0);
     assert_eq!(screen.cursor_state().column, 4);
 }
+
+/// Verifies ordinary printable scalars use inline cell storage while a
+/// multi-scalar grapheme promotes only its leading cell to owned storage.
+#[test]
+fn terminal_screen_stores_ordinary_scalars_inline() {
+    let mut screen = TerminalScreen::new(Size::new(12, 2).unwrap(), 10).unwrap();
+    screen.feed(b"ASCII");
+
+    assert_eq!(screen.visible_cell_storage_counts(), (5, 0));
+
+    screen.feed("⚠️".as_bytes());
+
+    assert_eq!(screen.visible_lines()[0], "ASCII⚠️");
+    assert_eq!(screen.visible_cell_storage_counts(), (5, 1));
+}
