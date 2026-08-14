@@ -948,6 +948,154 @@ fn runtime_no_shell_session_provider_failure_starts_queued_turn() {
     );
 }
 
+/// Verifies a failed action cannot terminally clean up a live shell sibling's
+/// execution owner.
+///
+/// Mixed batches may fail one action synchronously before dispatching a later
+/// shell-backed sibling. The aggregate failure must remain runtime-running
+/// until the pane transaction settles, or its end marker cannot find the
+/// execution record that owns the action result.
+#[test]
+fn runtime_failed_action_retains_live_shell_sibling_execution_until_settlement() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    mark_test_pane_ready(&mut service, "%1");
+    service.permission_policy_mut().set_approval_bypass(true);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "run a mixed action batch")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .expect("started turn should be recorded");
+    service.remove_pending_agent_provider_task(&turn.turn_id);
+
+    let failed_action = mez_agent::AgentAction {
+        id: "patch-invalid".to_string(),
+        rationale: "exercise synchronous action failure".to_string(),
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
+            patch: "invalid patch".to_string(),
+            strip: None,
+        },
+    };
+    let shell_action = mez_agent::AgentAction {
+        id: "shell-live".to_string(),
+        rationale: "exercise live sibling ownership".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "Run the live sibling".to_string(),
+            command: "printf 'live sibling settled\\n'".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let failed_result = mez_agent::ActionResult::failed(
+        &turn,
+        &failed_action,
+        ActionStatus::Failed,
+        "invalid_params",
+        "apply_patch requires a valid Mezzanine patch block",
+    )
+    .unwrap();
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "mixed action batch".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "exercise mixed action ownership".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![failed_action, shell_action.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![
+            failed_result,
+            mez_agent::ActionResult {
+                protocol: "maap/1".to_string(),
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                action_id: shell_action.id.clone(),
+                action_type: "shell_command",
+                status: ActionStatus::Running,
+                content: Vec::new(),
+                structured_content_json: None,
+                permission_evaluation: None,
+                is_error: false,
+                error: None,
+            },
+        ],
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
+    service
+        .agent_turn_executions_mut()
+        .insert(turn.turn_id.clone(), execution);
+
+    service
+        .dispatch_stored_running_shell_actions(&turn.turn_id)
+        .unwrap();
+    let marker = service
+        .running_shell_transactions_for_tests()
+        .iter()
+        .find_map(|(marker, transaction)| match &transaction.kind {
+            RunningShellTransactionKind::AgentAction { action_id }
+                if action_id == &shell_action.id =>
+            {
+                Some(marker.clone())
+            }
+            _ => None,
+        })
+        .expect("shell sibling should own a live transaction");
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
+    transaction.observed_output_preview = "live sibling settled\n".to_string();
+    transaction.observed_output_bytes = transaction.observed_output_preview.len();
+
+    service
+        .observe_agent_shell_transaction_start("%1", &marker, &turn.turn_id, &turn.agent_id, "%1")
+        .unwrap();
+    service
+        .observe_agent_shell_transaction_end("%1", &marker, &turn.turn_id, &turn.agent_id, "%1", 0)
+        .unwrap();
+
+    assert!(service.running_shell_transactions_for_tests().is_empty());
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == turn.turn_id)
+    );
+    assert!(service.agent_turn_ledger().turns().iter().any(|candidate| {
+        candidate.turn_id == turn.turn_id && candidate.state == AgentTurnState::Running
+    }));
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that a nonzero shell action is fed back as ordinary model-visible
 /// command evidence instead of consuming semantic-action recovery budget.
 ///

@@ -742,7 +742,10 @@ impl RuntimeSessionService {
             };
             let mut shell_backed_actions = Vec::new();
             for candidate in &batch.actions {
-                if local_action_plan(candidate)?.is_some() {
+                let result_is_running = execution.action_results.iter().any(|result| {
+                    result.action_id == candidate.id && result.status == ActionStatus::Running
+                });
+                if result_is_running && local_action_plan(candidate)?.is_some() {
                     shell_backed_actions.push(candidate.clone());
                 }
             }

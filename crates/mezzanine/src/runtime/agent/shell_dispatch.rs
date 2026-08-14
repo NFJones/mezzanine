@@ -1193,10 +1193,15 @@ impl RuntimeSessionService {
                 }
             }
         }
-        execution.terminal_state = runtime_agent_turn_state_from_action_results(
-            &execution.action_results,
-            execution.final_turn,
-        );
+        execution.terminal_state =
+            if self.turn_has_running_agent_action_shell_transaction(&turn.turn_id) {
+                AgentTurnState::Running
+            } else {
+                runtime_agent_turn_state_from_action_results(
+                    &execution.action_results,
+                    execution.final_turn,
+                )
+            };
         self.integration
             .runtime_metrics_mut()
             .record_shell_action_batch(dispatched);
