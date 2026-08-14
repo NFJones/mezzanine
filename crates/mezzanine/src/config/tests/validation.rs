@@ -516,6 +516,27 @@ fn rejects_invalid_agent_concurrency_values() {
     );
 }
 
+/// Verifies scheduler queue count and byte budgets must both remain positive
+/// so live configuration cannot silently disable finite admission control.
+#[test]
+fn rejects_invalid_agent_scheduler_queue_limits() {
+    let validation = validate_config_text(
+        ConfigFormat::Toml,
+        "[agents]\nmax_queued_turns = 0\nmax_queued_bytes = 0\n",
+        ConfigScope::Primary,
+    );
+
+    assert!(!validation.valid);
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "agents.max_queued_turns"
+            && diagnostic.message.contains("positive integer")
+    }));
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "agents.max_queued_bytes"
+            && diagnostic.message.contains("positive integer")
+    }));
+}
+
 /// Verifies the Tokio worker count must remain positive so runtime construction
 /// cannot silently recreate the single-thread scheduler starvation condition.
 #[test]

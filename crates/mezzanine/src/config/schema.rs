@@ -559,6 +559,8 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "auto_sizing",
     "subagent_placement",
     "max_concurrent_agents",
+    "max_queued_turns",
+    "max_queued_bytes",
     "max_root_subagents",
     "max_subagents_per_subagent",
     "max_subagent_panes_per_window",

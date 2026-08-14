@@ -9,7 +9,8 @@ use super::{
     BTreeMap, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
     DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT, DEFAULT_AGENT_LOOP_LIMIT,
     DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_MAX_CONCURRENT_AGENTS,
-    DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
+    DEFAULT_MAX_QUEUED_BYTES, DEFAULT_MAX_QUEUED_TURNS, DEFAULT_MAX_ROOT_SUBAGENTS,
+    DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
     DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_SUBAGENT_WAIT_POLICY, MezError, Result,
     RuntimeAgentPersonalityProfile, RuntimeAutoSizingConfig, RuntimeAutoSizingFallbackPolicy,
     SubagentProfile, SubagentWaitPolicy, Value, builtin_subagent_profiles,
@@ -60,6 +61,16 @@ pub(crate) fn runtime_max_concurrent_agents_from_config(root: &Value) -> Result<
         "max_concurrent_agents",
         DEFAULT_MAX_CONCURRENT_AGENTS,
     )
+}
+
+/// Parses the maximum number of turns retained in the agent scheduler queue.
+pub(crate) fn runtime_max_queued_agent_turns_from_config(root: &Value) -> Result<usize> {
+    runtime_positive_agents_usize_from_config(root, "max_queued_turns", DEFAULT_MAX_QUEUED_TURNS)
+}
+
+/// Parses the estimated-byte budget retained by the agent scheduler queue.
+pub(crate) fn runtime_max_queued_agent_bytes_from_config(root: &Value) -> Result<usize> {
+    runtime_positive_agents_usize_from_config(root, "max_queued_bytes", DEFAULT_MAX_QUEUED_BYTES)
 }
 
 /// Parses the retained raw-tail percentage used during context compaction.

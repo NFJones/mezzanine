@@ -20,7 +20,8 @@ use super::{
     runtime_default_models_for_provider, runtime_effective_config_value,
     runtime_history_limit_from_config, runtime_history_rotate_lines_from_config,
     runtime_hook_definitions_from_config, runtime_host_clipboard_from_config,
-    runtime_max_concurrent_agents_from_config, runtime_max_root_subagents_from_config,
+    runtime_max_concurrent_agents_from_config, runtime_max_queued_agent_bytes_from_config,
+    runtime_max_queued_agent_turns_from_config, runtime_max_root_subagents_from_config,
     runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
@@ -317,6 +318,8 @@ impl RuntimeSessionService {
             None => {}
         }
         let max_concurrent_agents = runtime_max_concurrent_agents_from_config(&structured)?;
+        let max_queued_agent_turns = runtime_max_queued_agent_turns_from_config(&structured)?;
+        let max_queued_agent_bytes = runtime_max_queued_agent_bytes_from_config(&structured)?;
         self.configure_subagent_policy(
             runtime_max_subagent_panes_per_window_from_config(&structured)?,
             runtime_max_root_subagents_from_config(&structured)?,
@@ -343,6 +346,10 @@ impl RuntimeSessionService {
             &structured,
         )?);
         self.configure_agent_scheduler_limit(max_concurrent_agents)?;
+        self.configure_agent_scheduler_queue_limits(
+            max_queued_agent_turns,
+            max_queued_agent_bytes,
+        )?;
         self.start_ready_agent_turns()?;
         let mut configured_permissions = runtime_configured_permissions_from_config(&structured)?;
         if let Some(config_root) = self.integration.config_root() {

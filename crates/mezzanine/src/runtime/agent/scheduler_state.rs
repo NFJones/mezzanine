@@ -35,6 +35,18 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Applies the configured queued-turn count and estimated-byte budgets.
+    pub(crate) fn configure_agent_scheduler_queue_limits(
+        &mut self,
+        max_queued_turns: usize,
+        max_queued_bytes: usize,
+    ) -> Result<()> {
+        self.agent
+            .agent_scheduler
+            .set_queue_limits(max_queued_turns, max_queued_bytes)?;
+        Ok(())
+    }
+
     /// Enqueues one validated unit of agent work.
     pub(crate) fn enqueue_agent_work(&mut self, work: ScheduledWork) -> Result<()> {
         self.agent.agent_scheduler.enqueue(work)?;

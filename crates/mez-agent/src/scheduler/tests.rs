@@ -1,8 +1,9 @@
 //! Tests for scheduler queue fairness, concurrency limits, and pane policy.
 
 use super::{
-    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind,
-    SchedulerCancellation, SchedulerErrorKind,
+    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, DEFAULT_MAX_QUEUED_BYTES,
+    DEFAULT_MAX_QUEUED_TURNS, ScheduledWork, ScheduledWorkKind, SchedulerCancellation,
+    SchedulerErrorKind,
 };
 
 /// Runs the work operation for this subsystem.
@@ -30,6 +31,105 @@ fn default_agent_concurrency_is_four() {
         scheduler.snapshot().max_concurrent_agents,
         DEFAULT_MAX_CONCURRENT_AGENTS
     );
+    assert_eq!(
+        scheduler.snapshot().max_queued_turns,
+        DEFAULT_MAX_QUEUED_TURNS
+    );
+    assert_eq!(
+        scheduler.snapshot().max_queued_bytes,
+        DEFAULT_MAX_QUEUED_BYTES
+    );
+}
+
+/// Verifies queue admission accepts the exact configured count limit, rejects
+/// the next turn without retaining it, and frees capacity after cancellation.
+#[test]
+fn scheduler_enforces_queued_turn_count_budget() {
+    let mut scheduler = AgentScheduler::with_limits(1, 2, usize::MAX).unwrap();
+    scheduler.enqueue(work("t1", "a1", "%1")).unwrap();
+    scheduler.enqueue(work("t2", "a2", "%2")).unwrap();
+
+    let error = scheduler.enqueue(work("t3", "a3", "%3")).unwrap_err();
+
+    assert_eq!(error.kind(), SchedulerErrorKind::InvalidState);
+    assert_eq!(scheduler.snapshot().queued, 2);
+    assert_eq!(scheduler.snapshot().admission_rejections, 1);
+    scheduler.cancel("t1").unwrap();
+    scheduler.enqueue(work("t3", "a3", "%3")).unwrap();
+    assert_eq!(scheduler.snapshot().queued, 2);
+}
+
+/// Verifies estimated queued bytes are charged exactly, an oversized next
+/// request is rejected, and cancellation removes the retained-byte charge.
+#[test]
+fn scheduler_enforces_estimated_queued_byte_budget() {
+    let mut scheduler = AgentScheduler::with_limits(1, 4, usize::MAX).unwrap();
+    scheduler.enqueue(work("t1", "a1", "%1")).unwrap();
+    let exact_bytes = scheduler.snapshot().queued_bytes;
+    scheduler.cancel("t1").unwrap();
+    scheduler.set_queue_limits(4, exact_bytes).unwrap();
+
+    scheduler.enqueue(work("t1", "a1", "%1")).unwrap();
+    let error = scheduler.enqueue(work("t2", "a2", "%2")).unwrap_err();
+
+    assert_eq!(error.kind(), SchedulerErrorKind::InvalidState);
+    assert_eq!(scheduler.snapshot().queued_bytes, exact_bytes);
+    assert_eq!(scheduler.snapshot().admission_rejections, 1);
+    scheduler.cancel("t1").unwrap();
+    assert_eq!(scheduler.snapshot().queued_bytes, 0);
+}
+
+/// Verifies indexed turn-id state is removed across queued and running
+/// cancellation so the same stable identifier may be admitted again safely.
+#[test]
+fn scheduler_cancellation_cleans_turn_and_claim_indexes() {
+    let mut scheduler = AgentScheduler::new(1).unwrap();
+    scheduler.enqueue(work("reused", "a1", "%1")).unwrap();
+    scheduler.cancel("reused").unwrap();
+    scheduler.enqueue(work("reused", "a1", "%1")).unwrap();
+    scheduler.start_ready().unwrap();
+    scheduler.cancel("reused").unwrap();
+
+    scheduler.enqueue(work("reused", "a1", "%1")).unwrap();
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "reused");
+}
+
+/// Verifies per-agent ready heads avoid rescanning unrelated queued work when
+/// dispatch removes a planning-only turn from a large multi-agent queue.
+#[test]
+fn scheduler_ready_dispatch_does_not_scan_unrelated_agents() {
+    let mut scheduler = AgentScheduler::with_limits(1, 128, usize::MAX).unwrap();
+    for index in 0..64 {
+        scheduler
+            .enqueue(ScheduledWork {
+                turn_id: format!("turn-{index}"),
+                conversation_id: "conversation-1".to_string(),
+                agent_id: format!("agent-{index}"),
+                pane_id: None,
+                kind: ScheduledWorkKind::PlanningOnly,
+            })
+            .unwrap();
+    }
+    let checks_before_dispatch = scheduler.snapshot().readiness_checks;
+
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "turn-0");
+
+    assert_eq!(
+        scheduler.snapshot().readiness_checks,
+        checks_before_dispatch
+    );
+    assert_eq!(scheduler.snapshot().queued, 63);
+}
+
+/// Verifies queue diagnostics expose a monotonic age for the oldest retained
+/// turn without changing queue order or requiring wall-clock timestamps.
+#[test]
+fn scheduler_snapshot_reports_oldest_queue_age() {
+    let mut scheduler = AgentScheduler::new(1).unwrap();
+    scheduler.enqueue(work("t1", "a1", "%1")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+
+    assert!(scheduler.snapshot().oldest_queued_age_ms >= 1);
 }
 
 /// Verifies that lowering the concurrency limit does not cancel already

@@ -33,8 +33,9 @@ pub use provider_retry::{
     ProviderRetryRecoveryResult, ProviderRetryScheduler, ProviderRetryTransition,
 };
 pub use types::{
-    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, RunningWork, ScheduledWork, ScheduledWorkKind,
-    SchedulerCancellation, SchedulerSnapshot,
+    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, DEFAULT_MAX_QUEUED_BYTES,
+    DEFAULT_MAX_QUEUED_TURNS, RunningWork, ScheduledWork, ScheduledWorkKind, SchedulerCancellation,
+    SchedulerSnapshot,
 };
 
 /// Exposes the tests module boundary.

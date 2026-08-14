@@ -2635,7 +2635,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 54 is the current configuration schema version for this
+schema version 62 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2849,8 +2849,13 @@ The `agents` table MUST support `default_provider`, `default_model_profile`,
 `active_turn_sleep_inhibition`, `shell_only`, `compaction_raw_retention_percent`, `routing`,
 `action_failure_retry_limit`, `loop_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
-`max_concurrent_agents`, `max_root_subagents`, `max_subagents_per_subagent`,
+`max_concurrent_agents`, `max_queued_turns`, `max_queued_bytes`,
+`max_root_subagents`, `max_subagents_per_subagent`,
 `max_subagent_panes_per_window`, `subagent_wait_policy`, and `max_depth`.
+`agents.max_queued_turns` MUST be a positive integer and MUST default to `256`.
+`agents.max_queued_bytes` MUST be a positive integer and MUST default to
+`4194304`. The scheduler MUST reject new queue admission when either budget
+would be exceeded, without dropping work that was already admitted.
 `agents.compaction_raw_retention_percent` MUST be an integer from `1` to `100`,
 MUST default to `10`, and MUST apply to manual compaction and provider
 context-limit recovery rather than proactive threshold compaction.

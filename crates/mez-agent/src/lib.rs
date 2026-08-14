@@ -446,11 +446,11 @@ pub use sandbox_assessment::{
     sandbox_failure_assessment_request,
 };
 pub use scheduler::{
-    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ProviderRetryDispatchResult,
-    ProviderRetryEffect, ProviderRetryEvent, ProviderRetryRecovery, ProviderRetryRecoveryResult,
-    ProviderRetryScheduler, ProviderRetryTransition, RunningWork, ScheduledWork, ScheduledWorkKind,
-    SchedulerCancellation, SchedulerError, SchedulerErrorKind, SchedulerResult, SchedulerSnapshot,
-    runnable_agent_ids,
+    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, DEFAULT_MAX_QUEUED_BYTES,
+    DEFAULT_MAX_QUEUED_TURNS, ProviderRetryDispatchResult, ProviderRetryEffect, ProviderRetryEvent,
+    ProviderRetryRecovery, ProviderRetryRecoveryResult, ProviderRetryScheduler,
+    ProviderRetryTransition, RunningWork, ScheduledWork, ScheduledWorkKind, SchedulerCancellation,
+    SchedulerError, SchedulerErrorKind, SchedulerResult, SchedulerSnapshot, runnable_agent_ids,
 };
 pub use schema::{
     OpenAiMaapToolSurface, maap_action_batch_schema, maap_current_action_batch_description,

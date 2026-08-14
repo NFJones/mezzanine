@@ -147,7 +147,10 @@ use mez_agent::{
     postprocess_shell_action_success_output, select_model_profile, shell_command_result_content,
     transcript_entries_for_execution,
 };
-use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
+use mez_agent::{
+    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, DEFAULT_MAX_QUEUED_BYTES,
+    DEFAULT_MAX_QUEUED_TURNS, ScheduledWork, ScheduledWorkKind,
+};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
 use mez_agent::{AsyncMcpActionExecutor, McpActionExecutor};
 use mez_agent::{
@@ -467,6 +470,7 @@ use config::{
     runtime_hook_target_pane_id, runtime_host_clipboard_from_config,
     runtime_key_bindings_from_config, runtime_key_preset_definition_from_value,
     runtime_marker_for_action, runtime_max_concurrent_agents_from_config,
+    runtime_max_queued_agent_bytes_from_config, runtime_max_queued_agent_turns_from_config,
     runtime_max_root_subagents_from_config, runtime_max_subagent_depth_from_config,
     runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_error_code,

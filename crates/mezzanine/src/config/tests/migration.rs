@@ -1904,6 +1904,45 @@ fn migrates_schema_60_with_host_clipboard_read_bounds() {
     }
 }
 
+/// Verifies schema v62 materializes finite scheduler queue admission bounds in
+/// all supported primary configuration formats without replacing neighboring
+/// agent settings.
+#[test]
+fn migrates_schema_61_with_agent_scheduler_queue_bounds() {
+    for (format, text) in [
+        (
+            ConfigFormat::Toml,
+            "version = 61\n[agents]\nmax_concurrent_agents = 2\n",
+        ),
+        (
+            ConfigFormat::Json,
+            r#"{"version":61,"agents":{"max_concurrent_agents":2}}"#,
+        ),
+        (
+            ConfigFormat::Yaml,
+            "version: 61\nagents:\n  max_concurrent_agents: 2\n",
+        ),
+    ] {
+        let plan = migrate_config_text(format, text).unwrap();
+        let values = extract_config_values(format, &plan.text);
+
+        assert_eq!(plan.from_version, 61);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            values.get("agents.max_queued_turns"),
+            Some(&"256".to_string())
+        );
+        assert_eq!(
+            values.get("agents.max_queued_bytes"),
+            Some(&"4194304".to_string())
+        );
+        assert_eq!(
+            values.get("agents.max_concurrent_agents"),
+            Some(&"2".to_string())
+        );
+    }
+}
+
 /// Verifies that config validation refuses documents written for a newer
 /// schema version than the running binary understands. This prevents older
 /// binaries from silently interpreting keys whose migration or meaning belongs

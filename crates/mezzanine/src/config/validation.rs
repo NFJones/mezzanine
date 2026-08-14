@@ -416,6 +416,8 @@ pub fn validate_config_text(
             || path == "history.rotate_lines"
             || path == "history.saved_sessions_limit"
             || path == "agents.max_concurrent_agents"
+            || path == "agents.max_queued_turns"
+            || path == "agents.max_queued_bytes"
             || path == "agents.max_root_subagents"
             || path == "agents.max_subagents_per_subagent"
             || path == "agents.max_subagent_panes_per_window"

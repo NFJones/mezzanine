@@ -98,7 +98,7 @@ fn retain_named_tables(
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 61
+version = 62
 
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
@@ -301,6 +301,8 @@ default_personality = ""
 always_exposed_mcp_servers = []
 subagent_placement = "new-window"
 max_concurrent_agents = 4
+max_queued_turns = 256
+max_queued_bytes = 4194304
 max_root_subagents = 4
 max_subagents_per_subagent = 2
 max_subagent_panes_per_window = 4

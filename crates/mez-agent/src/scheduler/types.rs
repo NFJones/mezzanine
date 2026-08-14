@@ -6,10 +6,15 @@
 //! blocked and dependency-waiting turns retain lifecycle and pane claims
 //! without consuming provider capacity.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::time::Instant;
 
 /// Default upper bound for concurrently running agent turns.
 pub const DEFAULT_MAX_CONCURRENT_AGENTS: usize = 4;
+/// Default upper bound for turns waiting in the scheduler queue.
+pub const DEFAULT_MAX_QUEUED_TURNS: usize = 256;
+/// Default upper bound for estimated bytes retained by queued turns.
+pub const DEFAULT_MAX_QUEUED_BYTES: usize = 4 * 1024 * 1024;
 
 /// Describes how a scheduled turn interacts with panes and background work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +64,10 @@ pub struct RunningWork {
 pub struct SchedulerSnapshot {
     /// Number of turns waiting to run.
     pub queued: usize,
+    /// Estimated bytes retained by turns waiting to run.
+    pub queued_bytes: usize,
+    /// Age of the oldest queued turn in milliseconds.
+    pub oldest_queued_age_ms: u64,
     /// Number of turns currently running.
     pub running: usize,
     /// Number of turns blocked on external input while retaining agent and
@@ -73,6 +82,36 @@ pub struct SchedulerSnapshot {
     pub active_capacity_used: usize,
     /// Configured maximum concurrent agent turns.
     pub max_concurrent_agents: usize,
+    /// Configured maximum number of queued turns.
+    pub max_queued_turns: usize,
+    /// Configured maximum estimated bytes retained by queued turns.
+    pub max_queued_bytes: usize,
+    /// Number of admissions rejected by queue count or byte budgets.
+    pub admission_rejections: u64,
+    /// Number of queued candidates evaluated by readiness selection.
+    pub readiness_checks: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SchedulerTurnState {
+    Queued,
+    Running,
+    Blocked,
+    Waiting,
+    Reacquiring,
+}
+
+/// One queued work item plus bounded-admission and ordering metadata.
+#[derive(Debug, Clone)]
+pub(super) struct QueuedWork {
+    /// Work retained until scheduler policy admits it.
+    pub(super) work: ScheduledWork,
+    /// Monotonic order used for stable fairness and indexed removal.
+    pub(super) sequence: u64,
+    /// Monotonic enqueue instant used for queue-age diagnostics.
+    pub(super) enqueued_at: Instant,
+    /// Estimated retained bytes charged against the queue budget.
+    pub(super) estimated_bytes: usize,
 }
 
 /// Work returned by a scheduler cancellation operation.
@@ -96,34 +135,59 @@ pub struct AgentScheduler {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) max_concurrent_agents: usize,
-    /// Stores the queued value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) queued: VecDeque<ScheduledWork>,
+    /// Maximum number of turns retained in the waiting queue.
+    pub(super) max_queued_turns: usize,
+    /// Maximum estimated bytes retained in the waiting queue.
+    pub(super) max_queued_bytes: usize,
+    /// Queued work indexed by turn id for constant-time lookup and removal.
+    pub(super) queued: HashMap<String, QueuedWork>,
+    /// Global stable queue order indexed by monotonic sequence.
+    pub(super) queued_order: BTreeMap<u64, String>,
+    /// Queued sequence/id pairs grouped by agent for targeted readiness refresh.
+    pub(super) queued_by_agent: HashMap<String, BTreeSet<(u64, String)>>,
+    /// Queued turn ids grouped by shell pane for targeted claim refresh.
+    pub(super) queued_by_pane: HashMap<String, HashSet<String>>,
+    /// Current earliest runnable sequence/id pair for each agent.
+    pub(super) ready_by_agent: HashMap<String, (u64, String)>,
+    /// Earliest runnable work per agent in global fairness order.
+    pub(super) ready_order: BTreeSet<(u64, String, String)>,
+    /// Next monotonic queue sequence.
+    pub(super) next_sequence: u64,
+    /// Estimated bytes currently retained by queued work.
+    pub(super) queued_bytes: usize,
+    /// Lifecycle state indexed by turn id for duplicate detection.
+    pub(super) turn_states: HashMap<String, SchedulerTurnState>,
+    /// Agents retaining running, blocked, waiting, or reacquiring claims.
+    pub(super) claimed_agents: HashSet<String>,
+    /// Shell panes retaining running, blocked, waiting, or reacquiring claims.
+    pub(super) claimed_panes: HashSet<String>,
     /// Stores the running value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) running: Vec<RunningWork>,
+    pub(super) running: HashMap<String, RunningWork>,
     /// Stores the blocked value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) blocked: Vec<RunningWork>,
+    pub(super) blocked: HashMap<String, RunningWork>,
     /// Parent turns waiting on routed workers or joined subagents.
     ///
     /// Waiting work retains agent and pane exclusivity but does not consume a
     /// provider-capacity slot.
-    pub(super) waiting: Vec<RunningWork>,
+    pub(super) waiting: HashMap<String, RunningWork>,
     /// Pane and agent claims retained while a waiting parent is queued for fair
     /// provider-capacity reacquisition.
-    pub(super) reacquiring: Vec<RunningWork>,
+    pub(super) reacquiring: HashMap<String, RunningWork>,
     /// Stores the last started agent id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) last_started_agent_id: Option<String>,
+    /// Count of admissions rejected by configured queue budgets.
+    pub(super) admission_rejections: u64,
+    /// Count of queue candidates evaluated for readiness.
+    pub(super) readiness_checks: u64,
 }
 
 impl Default for AgentScheduler {
