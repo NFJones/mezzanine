@@ -16,6 +16,9 @@ use super::{
 };
 use crate::host::process::wait_for_child_with_timeout;
 
+/// Maximum bytes retained independently from each external-shell hook stream.
+const EXTERNAL_SHELL_HOOK_OUTPUT_LIMIT_BYTES: usize = 1024 * 1024;
+
 // Runtime hook result, hook executor, and MCP executor support.
 
 impl RuntimeHookPipelineBlock {
@@ -401,6 +404,10 @@ unset MEZ_HOOK_PAYLOAD\n\
                 exit_code: None,
                 stdout: "focused-shell hook queued in active pane".to_string(),
                 stderr: String::new(),
+                stdout_bytes: "focused-shell hook queued in active pane".len(),
+                stderr_bytes: 0,
+                stdout_truncated: false,
+                stderr_truncated: false,
                 timed_out: false,
                 shell_unavailable: false,
                 policy_denied: false,
@@ -456,6 +463,10 @@ pub(super) fn focused_shell_unavailable_output() -> FocusedShellHookOutput {
         exit_code: None,
         stdout: String::new(),
         stderr: "focused shell is unavailable".to_string(),
+        stdout_bytes: 0,
+        stderr_bytes: "focused shell is unavailable".len(),
+        stdout_truncated: false,
+        stderr_truncated: false,
         timed_out: false,
         shell_unavailable: true,
         policy_denied: false,
@@ -492,15 +503,26 @@ pub(super) fn run_external_shell_hook_command(
                 ),
             )
         })?;
-    let Some(status) =
-        wait_for_child_with_timeout(&mut child, Duration::from_millis(plan.timeout_ms))?
-    else {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_reader = std::thread::spawn(move || read_runtime_child_pipe(stdout));
+    let stderr_reader = std::thread::spawn(move || read_runtime_child_pipe(stderr));
+    let status = wait_for_child_with_timeout(&mut child, Duration::from_millis(plan.timeout_ms))?;
+    if status.is_none() {
         let _ = child.kill();
         let _ = child.wait();
+    }
+    let stdout = join_runtime_child_pipe_reader(stdout_reader)?;
+    let stderr = join_runtime_child_pipe_reader(stderr_reader)?;
+    let Some(status) = status else {
         return Ok(FocusedShellHookOutput {
             exit_code: None,
-            stdout: read_runtime_child_pipe(child.stdout.take())?,
-            stderr: read_runtime_child_pipe(child.stderr.take())?,
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdout_bytes: stdout.observed_bytes,
+            stderr_bytes: stderr.observed_bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
             timed_out: true,
             shell_unavailable: false,
             policy_denied: false,
@@ -508,8 +530,12 @@ pub(super) fn run_external_shell_hook_command(
     };
     Ok(FocusedShellHookOutput {
         exit_code: status.code(),
-        stdout: read_runtime_child_pipe(child.stdout.take())?,
-        stderr: read_runtime_child_pipe(child.stderr.take())?,
+        stdout: stdout.text,
+        stderr: stderr.text,
+        stdout_bytes: stdout.observed_bytes,
+        stderr_bytes: stderr.observed_bytes,
+        stdout_truncated: stdout.truncated,
+        stderr_truncated: stderr.truncated,
         timed_out: false,
         shell_unavailable: false,
         policy_denied: false,
@@ -521,13 +547,75 @@ pub(super) fn run_external_shell_hook_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn read_runtime_child_pipe<T: Read>(pipe: Option<T>) -> Result<String> {
+fn read_runtime_child_pipe<T: Read>(pipe: Option<T>) -> Result<RuntimeBoundedHookOutput> {
     let Some(mut pipe) = pipe else {
-        return Ok(String::new());
+        return Ok(RuntimeBoundedHookOutput::default());
     };
-    let mut output = String::new();
-    pipe.read_to_string(&mut output)?;
-    Ok(output)
+    let mut retained = Vec::new();
+    let mut observed_bytes = 0usize;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = pipe.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        observed_bytes = observed_bytes.saturating_add(read);
+        let remaining = EXTERNAL_SHELL_HOOK_OUTPUT_LIMIT_BYTES.saturating_sub(retained.len());
+        retained.extend_from_slice(&buffer[..read.min(remaining)]);
+    }
+    runtime_bounded_hook_output(retained, observed_bytes)
+}
+
+/// Joins one external-shell pipe reader without allowing a panic to escape.
+fn join_runtime_child_pipe_reader(
+    reader: std::thread::JoinHandle<Result<RuntimeBoundedHookOutput>>,
+) -> Result<RuntimeBoundedHookOutput> {
+    reader
+        .join()
+        .map_err(|_| MezError::invalid_state("external-shell hook pipe reader thread panicked"))?
+}
+
+/// Bounded retained external-shell output plus complete byte accounting.
+#[derive(Debug, Default)]
+struct RuntimeBoundedHookOutput {
+    text: String,
+    observed_bytes: usize,
+    truncated: bool,
+}
+
+/// Converts one retained external-shell prefix without splitting UTF-8.
+fn runtime_bounded_hook_output(
+    mut retained: Vec<u8>,
+    observed_bytes: usize,
+) -> Result<RuntimeBoundedHookOutput> {
+    let truncated = observed_bytes > retained.len();
+    match String::from_utf8(retained) {
+        Ok(text) => Ok(RuntimeBoundedHookOutput {
+            text,
+            observed_bytes,
+            truncated,
+        }),
+        Err(error) if error.utf8_error().error_len().is_none() => {
+            let valid_up_to = error.utf8_error().valid_up_to();
+            retained = error.into_bytes();
+            retained.truncate(valid_up_to);
+            let text = String::from_utf8(retained).map_err(|error| {
+                MezError::new(
+                    crate::error::MezErrorKind::Io,
+                    format!("hook output is not UTF-8: {error}"),
+                )
+            })?;
+            Ok(RuntimeBoundedHookOutput {
+                text,
+                observed_bytes,
+                truncated: true,
+            })
+        }
+        Err(error) => Err(MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!("hook output is not UTF-8: {error}"),
+        )),
+    }
 }
 
 /// Runs the focused shell pre action failed result operation for this subsystem.
@@ -548,6 +636,10 @@ pub(super) fn focused_shell_pre_action_failed_result(
         exit_code: None,
         stdout: String::new(),
         stderr: message.to_string(),
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
         failure: Some(HookFailure {
             hook_id: plan.hook_id.clone(),
             event: plan.event,
@@ -573,6 +665,10 @@ pub(super) fn focused_shell_pre_action_timeout_result(
         exit_code: None,
         stdout: String::new(),
         stderr: "focused-shell pre-action hook timed out".to_string(),
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
         failure: Some(HookFailure {
             hook_id: plan.hook_id.clone(),
             event: plan.event,
@@ -593,6 +689,10 @@ pub(super) fn focused_shell_policy_denied_output(message: &str) -> FocusedShellH
         exit_code: Some(126),
         stdout: String::new(),
         stderr: message.to_string(),
+        stdout_bytes: 0,
+        stderr_bytes: message.len(),
+        stdout_truncated: false,
+        stderr_truncated: false,
         timed_out: false,
         shell_unavailable: false,
         policy_denied: true,

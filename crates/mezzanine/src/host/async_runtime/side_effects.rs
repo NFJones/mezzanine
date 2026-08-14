@@ -1766,6 +1766,10 @@ fn hook_spawn_failure_result(plan: &HookExecutionPlan, message: String) -> HookE
         exit_code: None,
         stdout: String::new(),
         stderr: String::new(),
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
         failure: Some(HookFailure {
             hook_id: plan.hook_id.clone(),
             event: plan.event,

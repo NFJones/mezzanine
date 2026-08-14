@@ -109,18 +109,29 @@ pub fn execute_program_hook(plan: &HookExecutionPlan) -> Result<HookExecutionRes
         }
     }
 
-    let Some(status) =
-        wait_for_child_with_timeout(&mut child, Duration::from_millis(plan.timeout_ms))?
-    else {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_reader = std::thread::spawn(move || read_child_pipe(stdout));
+    let stderr_reader = std::thread::spawn(move || read_child_pipe(stderr));
+    let status = wait_for_child_with_timeout(&mut child, Duration::from_millis(plan.timeout_ms))?;
+    if status.is_none() {
         let _ = child.kill();
         let _ = child.wait();
+    }
+    let stdout = join_child_pipe_reader(stdout_reader)?;
+    let stderr = join_child_pipe_reader(stderr_reader)?;
+    let Some(status) = status else {
         return Ok(HookExecutionResult {
             hook_id: plan.hook_id.clone(),
             event: plan.event,
             status: HookExecutionStatus::TimedOut,
             exit_code: None,
-            stdout: read_child_pipe(child.stdout.take())?,
-            stderr: read_child_pipe(child.stderr.take())?,
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdout_bytes: stdout.observed_bytes,
+            stderr_bytes: stderr.observed_bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
             failure: Some(HookFailure {
                 hook_id: plan.hook_id.clone(),
                 event: plan.event,
@@ -131,16 +142,18 @@ pub fn execute_program_hook(plan: &HookExecutionPlan) -> Result<HookExecutionRes
         });
     };
 
-    let stdout = read_child_pipe(child.stdout.take())?;
-    let stderr = read_child_pipe(child.stderr.take())?;
     if status.success() {
         Ok(HookExecutionResult {
             hook_id: plan.hook_id.clone(),
             event: plan.event,
             status: HookExecutionStatus::Succeeded,
             exit_code: status.code(),
-            stdout,
-            stderr,
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdout_bytes: stdout.observed_bytes,
+            stderr_bytes: stderr.observed_bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
             failure: None,
         })
     } else {
@@ -149,8 +162,12 @@ pub fn execute_program_hook(plan: &HookExecutionPlan) -> Result<HookExecutionRes
             event: plan.event,
             status: HookExecutionStatus::Failed,
             exit_code: status.code(),
-            stdout,
-            stderr,
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdout_bytes: stdout.observed_bytes,
+            stderr_bytes: stderr.observed_bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
             failure: Some(HookFailure {
                 hook_id: plan.hook_id.clone(),
                 event: plan.event,
@@ -266,8 +283,12 @@ where
             event: plan.event,
             status: HookExecutionStatus::Succeeded,
             exit_code: status.code(),
-            stdout,
-            stderr,
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdout_bytes: stdout.observed_bytes,
+            stderr_bytes: stderr.observed_bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
             failure: None,
         }))
     } else {
@@ -276,8 +297,12 @@ where
             event: plan.event,
             status: HookExecutionStatus::Failed,
             exit_code: status.code(),
-            stdout,
-            stderr,
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdout_bytes: stdout.observed_bytes,
+            stderr_bytes: stderr.observed_bytes,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
             failure: Some(HookFailure {
                 hook_id: plan.hook_id.clone(),
                 event: plan.event,
@@ -294,15 +319,15 @@ enum ProgramHookIoOutput {
     /// Standard-input payload delivery and shutdown.
     Stdin(Result<()>),
     /// Bounded standard-output retention.
-    Stdout(Result<String>),
+    Stdout(Result<BoundedHookOutput>),
     /// Bounded standard-error retention.
-    Stderr(Result<String>),
+    Stderr(Result<BoundedHookOutput>),
 }
 
 /// Collects all owned pipe tasks after the direct child exits.
 async fn collect_program_hook_io(
     tasks: &mut JoinSet<ProgramHookIoOutput>,
-) -> Result<(String, String)> {
+) -> Result<(BoundedHookOutput, BoundedHookOutput)> {
     let mut stdin_complete = false;
     let mut stdout = None;
     let mut stderr = None;
@@ -347,6 +372,10 @@ fn program_hook_timeout_result(plan: &HookExecutionPlan) -> HookExecutionResult 
         exit_code: None,
         stdout: String::new(),
         stderr: String::new(),
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
         failure: Some(HookFailure {
             hook_id: plan.hook_id.clone(),
             event: plan.event,
@@ -375,6 +404,10 @@ pub fn execute_focused_shell_hook(
         .as_deref()
         .ok_or_else(|| MezError::invalid_args("focused-shell hook plan is missing command"))?;
     let output = executor.run_hook_command(plan)?;
+    let stdout_bytes = output.stdout_bytes;
+    let stderr_bytes = output.stderr_bytes;
+    let stdout_truncated = output.stdout_truncated;
+    let stderr_truncated = output.stderr_truncated;
 
     if output.shell_unavailable {
         return Ok(HookExecutionResult {
@@ -384,6 +417,10 @@ pub fn execute_focused_shell_hook(
             exit_code: None,
             stdout: output.stdout,
             stderr: output.stderr,
+            stdout_bytes,
+            stderr_bytes,
+            stdout_truncated,
+            stderr_truncated,
             failure: Some(HookFailure {
                 hook_id: plan.hook_id.clone(),
                 event: plan.event,
@@ -402,6 +439,10 @@ pub fn execute_focused_shell_hook(
             exit_code: output.exit_code,
             stdout: output.stdout,
             stderr: output.stderr.clone(),
+            stdout_bytes,
+            stderr_bytes,
+            stdout_truncated,
+            stderr_truncated,
             failure: Some(HookFailure {
                 hook_id: plan.hook_id.clone(),
                 event: plan.event,
@@ -420,6 +461,10 @@ pub fn execute_focused_shell_hook(
             exit_code: output.exit_code,
             stdout: output.stdout,
             stderr: output.stderr,
+            stdout_bytes,
+            stderr_bytes,
+            stdout_truncated,
+            stderr_truncated,
             failure: Some(HookFailure {
                 hook_id: plan.hook_id.clone(),
                 event: plan.event,
@@ -438,6 +483,10 @@ pub fn execute_focused_shell_hook(
             exit_code: None,
             stdout: output.stdout,
             stderr: output.stderr,
+            stdout_bytes,
+            stderr_bytes,
+            stdout_truncated,
+            stderr_truncated,
             failure: None,
         });
     }
@@ -454,6 +503,10 @@ pub fn execute_focused_shell_hook(
         exit_code: output.exit_code,
         stdout: output.stdout,
         stderr: output.stderr,
+        stdout_bytes,
+        stderr_bytes,
+        stdout_truncated,
+        stderr_truncated,
         failure: if success {
             None
         } else {
@@ -473,13 +526,72 @@ pub fn execute_focused_shell_hook(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn read_child_pipe<T: Read>(pipe: Option<T>) -> Result<String> {
+fn read_child_pipe<T: Read>(pipe: Option<T>) -> Result<BoundedHookOutput> {
     let Some(mut pipe) = pipe else {
-        return Ok(String::new());
+        return Ok(BoundedHookOutput::default());
     };
-    let mut output = String::new();
-    pipe.read_to_string(&mut output)?;
-    Ok(output)
+    let mut retained = Vec::new();
+    let mut observed_bytes = 0usize;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = pipe.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        observed_bytes = observed_bytes.saturating_add(read);
+        let remaining = PROGRAM_HOOK_OUTPUT_LIMIT_BYTES.saturating_sub(retained.len());
+        retained.extend_from_slice(&buffer[..read.min(remaining)]);
+    }
+    bounded_hook_output(retained, observed_bytes)
+}
+
+/// Joins one synchronous pipe reader without allowing a panic to escape.
+fn join_child_pipe_reader(
+    reader: std::thread::JoinHandle<Result<BoundedHookOutput>>,
+) -> Result<BoundedHookOutput> {
+    reader
+        .join()
+        .map_err(|_| MezError::invalid_state("hook pipe reader thread panicked"))?
+}
+
+/// Bounded retained hook output plus complete drained byte accounting.
+#[derive(Debug, Default)]
+struct BoundedHookOutput {
+    text: String,
+    observed_bytes: usize,
+    truncated: bool,
+}
+
+/// Converts a retained hook-output prefix while tolerating a split final scalar.
+fn bounded_hook_output(mut retained: Vec<u8>, observed_bytes: usize) -> Result<BoundedHookOutput> {
+    let truncated = observed_bytes > retained.len();
+    match String::from_utf8(retained) {
+        Ok(text) => Ok(BoundedHookOutput {
+            text,
+            observed_bytes,
+            truncated,
+        }),
+        Err(error) if error.utf8_error().error_len().is_none() => {
+            let valid_up_to = error.utf8_error().valid_up_to();
+            retained = error.into_bytes();
+            retained.truncate(valid_up_to);
+            let text = String::from_utf8(retained).map_err(|error| {
+                MezError::new(
+                    crate::error::MezErrorKind::Io,
+                    format!("hook output is not UTF-8: {error}"),
+                )
+            })?;
+            Ok(BoundedHookOutput {
+                text,
+                observed_bytes,
+                truncated: true,
+            })
+        }
+        Err(error) => Err(MezError::new(
+            crate::error::MezErrorKind::Io,
+            format!("hook output is not UTF-8: {error}"),
+        )),
+    }
 }
 
 /// Runs the read async child pipe operation for this subsystem.
@@ -487,29 +599,26 @@ fn read_child_pipe<T: Read>(pipe: Option<T>) -> Result<String> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-async fn read_async_child_pipe<T>(pipe: Option<T>) -> Result<String>
+async fn read_async_child_pipe<T>(pipe: Option<T>) -> Result<BoundedHookOutput>
 where
     T: AsyncRead + Unpin,
 {
     let Some(mut pipe) = pipe else {
-        return Ok(String::new());
+        return Ok(BoundedHookOutput::default());
     };
     let mut retained = Vec::new();
+    let mut observed_bytes = 0usize;
     let mut buffer = [0_u8; 8192];
     loop {
         let read = pipe.read(&mut buffer).await?;
         if read == 0 {
             break;
         }
+        observed_bytes = observed_bytes.saturating_add(read);
         let remaining = PROGRAM_HOOK_OUTPUT_LIMIT_BYTES.saturating_sub(retained.len());
         retained.extend_from_slice(&buffer[..read.min(remaining)]);
     }
-    String::from_utf8(retained).map_err(|error| {
-        MezError::new(
-            crate::error::MezErrorKind::Io,
-            format!("hook output is not UTF-8: {error}"),
-        )
-    })
+    bounded_hook_output(retained, observed_bytes)
 }
 
 /// Writes the complete hook payload and closes stdin on completion.

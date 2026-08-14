@@ -43,6 +43,10 @@ impl RuntimeSessionService {
             exit_code: Some(exit_code),
             stdout: format!("focused-shell hook exited with status {exit_code}"),
             stderr: String::new(),
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            stdout_truncated: false,
+            stderr_truncated: false,
             failure: if success {
                 None
             } else {

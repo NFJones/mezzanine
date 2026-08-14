@@ -1,6 +1,40 @@
 //! Runtime tests for config hooks audit behavior.
 
 use super::*;
+use crate::runtime::run_external_shell_hook_command;
+
+/// Verifies the external-shell compatibility runner drains large stdout and
+/// stderr streams concurrently, retains bounded prefixes, and reports the
+/// complete observed byte counts instead of blocking on full child pipes.
+#[test]
+fn external_shell_hook_drains_and_bounds_both_output_streams() {
+    let hook = crate::integrations::hooks::HookDefinition {
+        id: "external-large-output".to_string(),
+        event: HookEvent::SessionDetach,
+        invocation: crate::integrations::hooks::HookInvocation::FocusedShell {
+            command: "i=0; while [ $i -lt 20000 ]; do printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; printf 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210' >&2; i=$((i + 1)); done".to_string(),
+        },
+        enabled: true,
+        required: false,
+        agent_hook: true,
+        matcher_groups: Vec::new(),
+        timeout_ms: Some(5_000),
+        on_failure: None,
+    };
+    let plan = crate::integrations::hooks::plan_hook(&hook)
+        .unwrap()
+        .unwrap();
+
+    let output = run_external_shell_hook_command(Path::new("/bin/sh"), &plan).unwrap();
+
+    assert_eq!(output.exit_code, Some(0));
+    assert_eq!(output.stdout.len(), 1024 * 1024);
+    assert_eq!(output.stderr.len(), 1024 * 1024);
+    assert_eq!(output.stdout_bytes, 1_280_000);
+    assert_eq!(output.stderr_bytes, 1_280_000);
+    assert!(output.stdout_truncated);
+    assert!(output.stderr_truncated);
+}
 
 /// Verifies runtime applies configured lifecycle hooks.
 ///
@@ -153,6 +187,10 @@ fn runtime_async_program_hook_completion_resumes_pre_shell_pipeline() {
         exit_code: Some(0),
         stdout: String::new(),
         stderr: String::new(),
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_truncated: false,
+        stderr_truncated: false,
         failure: None,
     };
 

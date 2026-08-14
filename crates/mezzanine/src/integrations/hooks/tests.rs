@@ -49,6 +49,10 @@ impl FocusedShellExecutor for FakeFocusedShell {
             exit_code: Some(0),
             stdout: String::new(),
             stderr: String::new(),
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            stdout_truncated: false,
+            stderr_truncated: false,
             timed_out: false,
             shell_unavailable: false,
             policy_denied: false,
@@ -116,7 +120,46 @@ fn program_hook_execution_receives_payload_on_stdin() {
 
     assert_eq!(result.status, HookExecutionStatus::Succeeded);
     assert_eq!(result.stdout, r#"{"event":"detach"}"#);
+    assert_eq!(result.stdout_bytes, result.stdout.len());
+    assert_eq!(result.stderr_bytes, 0);
+    assert!(!result.stdout_truncated);
+    assert!(!result.stderr_truncated);
     assert!(result.failure.is_none());
+}
+
+/// Verifies the synchronous compatibility executor drains both large output
+/// streams while the child runs, retains bounded prefixes, and reports the
+/// complete observed byte counts instead of deadlocking on full pipes.
+#[test]
+fn program_hook_drains_and_bounds_both_output_streams() {
+    let hook = HookDefinition {
+        id: "large-output-sync".to_string(),
+        event: HookEvent::SessionDetach,
+        invocation: HookInvocation::Program {
+            command: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "i=0; while [ $i -lt 20000 ]; do printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; printf 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210' >&2; i=$((i + 1)); done".to_string(),
+            ],
+        },
+        enabled: true,
+        required: false,
+        agent_hook: false,
+        matcher_groups: Vec::new(),
+        timeout_ms: Some(5_000),
+        on_failure: None,
+    };
+    let plan = plan_hook(&hook).unwrap().unwrap();
+
+    let result = execute_program_hook(&plan).unwrap();
+
+    assert_eq!(result.status, HookExecutionStatus::Succeeded);
+    assert_eq!(result.stdout.len(), 1024 * 1024);
+    assert_eq!(result.stderr.len(), 1024 * 1024);
+    assert_eq!(result.stdout_bytes, 1_280_000);
+    assert_eq!(result.stderr_bytes, 1_280_000);
+    assert!(result.stdout_truncated);
+    assert!(result.stderr_truncated);
 }
 
 /// Verifies that the Tokio hook executor preserves the synchronous program
@@ -238,6 +281,44 @@ async fn async_program_hook_drains_and_bounds_both_output_streams() {
     assert_eq!(result.status, HookExecutionStatus::Succeeded);
     assert_eq!(result.stdout.len(), 1024 * 1024);
     assert_eq!(result.stderr.len(), 1024 * 1024);
+    assert_eq!(result.stdout_bytes, 1_280_000);
+    assert_eq!(result.stderr_bytes, 1_280_000);
+    assert!(result.stdout_truncated);
+    assert!(result.stderr_truncated);
+}
+
+/// Verifies output exactly at the retained byte limit is not marked truncated.
+/// This distinguishes the boundary from the over-limit drain path while still
+/// exercising a stream substantially larger than an ordinary pipe buffer.
+#[tokio::test(flavor = "current_thread")]
+async fn async_program_hook_exact_output_limit_is_not_truncated() {
+    let hook = HookDefinition {
+        id: "exact-output-limit".to_string(),
+        event: HookEvent::SessionDetach,
+        invocation: HookInvocation::Program {
+            command: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "i=0; while [ $i -lt 16384 ]; do printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; i=$((i + 1)); done".to_string(),
+            ],
+        },
+        enabled: true,
+        required: false,
+        agent_hook: false,
+        matcher_groups: Vec::new(),
+        timeout_ms: Some(5_000),
+        on_failure: None,
+    };
+    let plan = plan_hook(&hook).unwrap().unwrap();
+
+    let result = execute_program_hook_async(&plan).await.unwrap();
+
+    assert_eq!(result.status, HookExecutionStatus::Succeeded);
+    assert_eq!(result.stdout.len(), 1024 * 1024);
+    assert_eq!(result.stdout_bytes, 1024 * 1024);
+    assert!(!result.stdout_truncated);
+    assert_eq!(result.stderr_bytes, 0);
+    assert!(!result.stderr_truncated);
 }
 
 /// Verifies timeout termination reaches descendants in the hook's private
@@ -554,6 +635,10 @@ fn focused_shell_hook_reports_unavailable_shell() {
             exit_code: None,
             stdout: String::new(),
             stderr: "busy".to_string(),
+            stdout_bytes: 0,
+            stderr_bytes: 4,
+            stdout_truncated: false,
+            stderr_truncated: false,
             timed_out: false,
             shell_unavailable: true,
             policy_denied: false,
@@ -597,6 +682,10 @@ fn focused_shell_hook_reports_unobserved_completion_as_queued() {
             exit_code: None,
             stdout: "queued".to_string(),
             stderr: String::new(),
+            stdout_bytes: 6,
+            stderr_bytes: 0,
+            stdout_truncated: false,
+            stderr_truncated: false,
             timed_out: false,
             shell_unavailable: false,
             policy_denied: false,
@@ -645,6 +734,10 @@ fn focused_shell_hook_execution_can_emit_audit_record() {
             exit_code: None,
             stdout: String::new(),
             stderr: "busy".to_string(),
+            stdout_bytes: 0,
+            stderr_bytes: 4,
+            stdout_truncated: false,
+            stderr_truncated: false,
             timed_out: false,
             shell_unavailable: true,
             policy_denied: false,

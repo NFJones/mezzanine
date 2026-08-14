@@ -615,6 +615,14 @@ pub struct HookExecutionResult {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub stderr: String,
+    /// Complete stdout byte count observed while draining the child pipe.
+    pub stdout_bytes: usize,
+    /// Complete stderr byte count observed while draining the child pipe.
+    pub stderr_bytes: usize,
+    /// Whether stdout exceeded the retained output limit.
+    pub stdout_truncated: bool,
+    /// Whether stderr exceeded the retained output limit.
+    pub stderr_truncated: bool,
     /// Stores the failure value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -643,6 +651,14 @@ pub struct FocusedShellHookOutput {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub stderr: String,
+    /// Complete stdout byte count observed by the executor.
+    pub stdout_bytes: usize,
+    /// Complete stderr byte count observed by the executor.
+    pub stderr_bytes: usize,
+    /// Whether stdout exceeded the executor's retained output limit.
+    pub stdout_truncated: bool,
+    /// Whether stderr exceeded the executor's retained output limit.
+    pub stderr_truncated: bool,
     /// Stores the timed out value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
