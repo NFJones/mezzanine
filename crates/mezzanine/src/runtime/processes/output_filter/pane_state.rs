@@ -66,9 +66,9 @@ impl RuntimeSessionService {
             .session
             .active_window()
             .is_none_or(|window| window.active_pane().id.as_str() != descriptor.pane_id.as_str());
-        let render_mode = self.pane_output_render_mode(output.pane_id.as_str());
         let transaction_bytes =
             self.visible_pane_output_bytes(output.pane_id.as_str(), &output.bytes);
+        let render_mode = self.pane_output_render_mode(output.pane_id.as_str());
         let protocol_bytes =
             self.decoded_pane_output_bytes(output.pane_id.as_str(), &transaction_bytes);
         let render_bytes = self.renderable_decoded_pane_output_bytes(
@@ -566,6 +566,9 @@ impl RuntimeSessionService {
         if let Some(start) = find_byte_subsequence(&pending, &marker) {
             self.process
                 .pane_agent_subshell_exit_markers
+                .remove(pane_id);
+            self.process
+                .pane_hidden_shell_render_recent_polls
                 .remove(pane_id);
             let parent_output = &pending[start + marker.len()..];
             let mut visible = Vec::with_capacity(parent_output.len() + 1);

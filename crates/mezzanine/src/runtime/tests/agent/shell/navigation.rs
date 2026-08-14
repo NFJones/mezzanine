@@ -847,6 +847,34 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
         .unwrap();
     service.start_initial_pane_process(None).unwrap();
     wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .write_input_to_pane(
+            &primary,
+            Some("%1"),
+            b"PROMPT_COMMAND=; PS1='parent$ '; export PS1; printf '__MEZ_PARENT_PROMPT_INSTALLED__\\n'\n",
+        )
+        .unwrap();
+    let mut parent_prompt_installed = false;
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        let screen = service.process_pane_screen("%1").unwrap();
+        if screen
+            .visible_lines()
+            .join("\n")
+            .contains("__MEZ_PARENT_PROMPT_INSTALLED__")
+            && screen.cursor_state().column == "parent$ ".chars().count()
+        {
+            parent_prompt_installed = true;
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        parent_prompt_installed,
+        "managed Bash did not display the configured parent prompt; screen={:?}; cursor={:?}",
+        service.process_pane_screen("%1").unwrap().visible_lines(),
+        service.process_pane_screen("%1").unwrap().cursor_state()
+    );
 
     let show = service
         .execute_terminal_command(&primary, "agent-shell")
@@ -895,6 +923,26 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
             .lines()
             .any(|line| line.trim() == "exit"),
         "managed Bash child-shell exit must not enter the pane log: {pane_log_after_exit:?}"
+    );
+    let parent_prompt_column = "parent$ ".chars().count();
+    let mut restored_prompt_cursor = None;
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        let screen = service.process_pane_screen("%1").unwrap();
+        if screen.visible_lines().join("\n").contains("parent$")
+            && screen.cursor_state().column == parent_prompt_column
+        {
+            restored_prompt_cursor = Some(screen.cursor_state().column);
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert_eq!(
+        restored_prompt_cursor,
+        Some(parent_prompt_column),
+        "managed Bash must leave the cursor immediately after its restored prompt; screen={:?}; cursor={:?}",
+        service.process_pane_screen("%1").unwrap().visible_lines(),
+        service.process_pane_screen("%1").unwrap().cursor_state()
     );
 
     service
