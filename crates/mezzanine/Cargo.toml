@@ -34,7 +34,7 @@ serde_norway = "0.9"
 sha2 = "0.11"
 shlex = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 toml = "1.1"
 toml_edit = "0.25"
@@ -49,3 +49,4 @@ zbus-secret-service-keyring-store = { version = "1.0", features = ["rt-tokio-cry
 
 [dev-dependencies]
 portable-pty = "0.9"
+tokio = { version = "1", features = ["test-util"] }
