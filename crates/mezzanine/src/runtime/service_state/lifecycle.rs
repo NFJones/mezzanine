@@ -180,6 +180,8 @@ pub(crate) enum RuntimeSnapshotControlAsyncOutcome {
 pub(crate) struct RuntimePreparedConfigReload {
     /// Refreshed and validated layers to install atomically.
     pub layers: Vec<crate::config::ConfigLayer>,
+    /// Runtime subsystem families whose effective configuration changed.
+    pub affected: super::RuntimeConfigAffectedSubsystems,
     /// Composed configuration whose layer diagnostics were resolved off actor ownership.
     pub effective: crate::config::EffectiveConfig,
     /// Structured configuration prepared for runtime subsystem projection.

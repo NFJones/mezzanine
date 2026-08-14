@@ -968,6 +968,80 @@ async fn async_actor_invalid_config_reload_preserves_live_state() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies a history-only actor reload preserves unrelated live MCP state.
+///
+/// The MCP registry may contain session discovery and availability facts that
+/// are more recent than configuration text. A typed reload delta must avoid
+/// rebuilding that registry when only terminal history settings changed.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_config_reload_preserves_unaffected_mcp_state() {
+    use crate::control::{decode_control_frame, encode_control_body};
+    use crate::storage::snapshot::SnapshotRepository;
+
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-config-reload-mcp-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("config.toml");
+    let initial = "[history]\nlines = 4\n[mcp_servers.fixture]\ncommand = \"mcp-fixture\"\n";
+    std::fs::write(&path, initial).unwrap();
+    let snapshots = SnapshotRepository::new(root.join("snapshots"));
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: Some(path.clone()),
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: initial.to_string(),
+        }])
+        .unwrap();
+    service
+        .mcp_registry_mut()
+        .mark_available("fixture", Vec::new(), 1)
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 10)
+        .unwrap();
+    std::fs::write(
+        &path,
+        "[history]\nlines = 2\n[mcp_servers.fixture]\ncommand = \"mcp-fixture\"\n",
+    )
+    .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let reload = handle
+            .handle_control_input_for_connection_with_snapshots(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"reload","method":"config/reload","params":{"idempotency_key":"history-only-reload"}}"#,
+                ),
+                4096,
+                ControlConnectionState::trusted_existing_client(primary),
+                snapshots,
+            )
+            .await
+            .unwrap();
+        let (body, _) = decode_control_frame(&reload.output, 4096).unwrap();
+        assert!(body.contains(r#""operation":"reload""#), "{body}");
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.service.terminal_history_limit(), 2);
+    assert_eq!(
+        exit.service.mcp_registry().list_servers()[0].status,
+        mez_agent::mcp::McpServerStatus::Available
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that actor-owned control dispatch can route snapshot requests
 /// through a configured repository. The async daemon control service uses this
 /// path when serving live `mez snapshot` requests, so `snapshot/list` must not

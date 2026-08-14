@@ -30,11 +30,11 @@ use super::{
     runtime_terminal_emoji_width_from_config,
     runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
 };
-use crate::runtime::RuntimePreparedConfigReload;
 use crate::runtime::config::{
     PaneSpawnPolicy, runtime_pane_spawn_directory_policy_from_config,
     runtime_pane_spawn_view_policy_from_config,
 };
+use crate::runtime::{RuntimeConfigAffectedSubsystems, RuntimePreparedConfigReload};
 
 impl RuntimeSessionService {
     /// Returns the configuration layers currently applied to the runtime.
@@ -120,6 +120,7 @@ impl RuntimeSessionService {
         request: &crate::control::JsonRpcRequest,
         mut layers: Vec<ConfigLayer>,
     ) -> Result<RuntimePreparedConfigReload> {
+        let previous_structured = runtime_effective_config_value(&layers)?;
         for layer in &mut layers {
             let Some(path) = layer.path.as_ref() else {
                 continue;
@@ -129,9 +130,11 @@ impl RuntimeSessionService {
         }
         let effective = compose_effective_config(&layers)?;
         let structured = runtime_effective_config_value(&layers)?;
+        let affected = RuntimeConfigAffectedSubsystems::between(&previous_structured, &structured);
         let result = crate::control::dispatch_config_parsed_request(request, &layers)?;
         Ok(RuntimePreparedConfigReload {
             layers,
+            affected,
             effective,
             structured,
             result,
@@ -331,7 +334,11 @@ impl RuntimeSessionService {
     pub fn apply_runtime_config_layers(&mut self) -> Result<RuntimeConfigApplyReport> {
         let effective = compose_effective_config(self.integration.config_layers())?;
         let structured = runtime_effective_config_value(self.integration.config_layers())?;
-        self.apply_prepared_runtime_config(effective, structured)
+        self.apply_prepared_runtime_config(
+            effective,
+            structured,
+            RuntimeConfigAffectedSubsystems::all(),
+        )
     }
 
     /// Applies configuration state that was parsed and composed before actor settlement.
@@ -343,190 +350,213 @@ impl RuntimeSessionService {
         &mut self,
         effective: crate::config::EffectiveConfig,
         structured: serde_json::Value,
+        affected: RuntimeConfigAffectedSubsystems,
     ) -> Result<RuntimeConfigApplyReport> {
-        let terminal_history_limit = runtime_history_limit_from_config(&structured)?;
-        let terminal_history_rotate_lines = runtime_history_rotate_lines_from_config(&structured)?;
-        let saved_agent_session_limit = runtime_saved_agent_session_limit_from_config(&structured)?;
-        let terminal_term = runtime_terminal_term_from_config(&structured)?;
-        let pane_spawn_policy = PaneSpawnPolicy {
-            directory: runtime_pane_spawn_directory_policy_from_config(&structured)?,
-            view: runtime_pane_spawn_view_policy_from_config(&structured)?,
-        };
-        let presentation_settings =
-            RuntimePresentationSettings::from_config(&structured, &effective)?;
-        let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
-        let terminal_shell_output_preview_lines =
-            runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
-        let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
-        let audit_log = if runtime_audit_config_present(&structured) {
-            Some(runtime_audit_log_from_config(
+        if affected.terminal {
+            let terminal_history_limit = runtime_history_limit_from_config(&structured)?;
+            let terminal_history_rotate_lines =
+                runtime_history_rotate_lines_from_config(&structured)?;
+            let saved_agent_session_limit =
+                runtime_saved_agent_session_limit_from_config(&structured)?;
+            let terminal_term = runtime_terminal_term_from_config(&structured)?;
+            let pane_spawn_policy = PaneSpawnPolicy {
+                directory: runtime_pane_spawn_directory_policy_from_config(&structured)?,
+                view: runtime_pane_spawn_view_policy_from_config(&structured)?,
+            };
+            let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
+            let terminal_shell_output_preview_lines =
+                runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
+            if let Some(store) = self.persistence.transcript_store_mut() {
+                store.set_saved_sessions_limit(saved_agent_session_limit)?;
+            }
+            self.apply_process_terminal_settings(
+                terminal_history_limit,
+                terminal_history_rotate_lines,
+                terminal_term,
+                pane_spawn_policy,
+                terminal_emoji_width,
+                terminal_shell_output_preview_lines,
+            )?;
+        }
+        if affected.presentation {
+            let presentation_settings =
+                RuntimePresentationSettings::from_config(&structured, &effective)?;
+            let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
+            self.presentation.apply_settings(presentation_settings);
+            self.set_host_clipboard(host_clipboard);
+        }
+        if affected.audit {
+            let audit_log = if runtime_audit_config_present(&structured) {
+                Some(runtime_audit_log_from_config(
+                    &structured,
+                    self.integration.config_root(),
+                )?)
+            } else {
+                None
+            };
+            match audit_log {
+                Some(Some(audit_log)) => self.set_audit_log(audit_log),
+                Some(None) => self.clear_audit_log(),
+                None => {}
+            }
+        }
+        if affected.agents {
+            let max_concurrent_agents = runtime_max_concurrent_agents_from_config(&structured)?;
+            let max_queued_agent_turns = runtime_max_queued_agent_turns_from_config(&structured)?;
+            let max_queued_agent_bytes = runtime_max_queued_agent_bytes_from_config(&structured)?;
+            self.configure_subagent_policy(
+                runtime_max_subagent_panes_per_window_from_config(&structured)?,
+                runtime_max_root_subagents_from_config(&structured)?,
+                runtime_max_subagents_per_subagent_from_config(&structured)?,
+                runtime_max_subagent_depth_from_config(&structured)?,
+                runtime_subagent_wait_policy_from_config(&structured)?,
+            );
+            self.set_active_turn_sleep_inhibition(
+                runtime_active_turn_sleep_inhibition_from_config(&structured)?,
+            );
+            self.set_agent_compaction_raw_retention_percent(
+                runtime_agent_compaction_raw_retention_percent_from_config(&structured)?,
+            );
+            self.set_agent_default_routing(runtime_agent_routing_from_config(&structured)?);
+            self.set_agent_action_failure_retry_limit(
+                runtime_agent_action_failure_retry_limit_from_config(&structured)?,
+            );
+            self.set_agent_loop_limit(runtime_agent_loop_limit_from_config(&structured)?);
+            self.set_agent_auto_sizing(runtime_agent_auto_sizing_from_config(&structured)?);
+            self.set_agent_root_routing_policy(runtime_agent_root_routing_policy_from_config(
                 &structured,
-                self.integration.config_root(),
-            )?)
-        } else {
-            None
-        };
-        if let Some(store) = self.persistence.transcript_store_mut() {
-            store.set_saved_sessions_limit(saved_agent_session_limit)?;
+            )?);
+            self.configure_agent_scheduler_limit(max_concurrent_agents)?;
+            self.configure_agent_scheduler_queue_limits(
+                max_queued_agent_turns,
+                max_queued_agent_bytes,
+            )?;
+            self.start_ready_agent_turns()?;
+            self.integration
+                .replace_subagent_profiles(runtime_subagent_profiles_from_config(&structured)?);
+            let personality_profiles = runtime_agent_personality_profiles_from_config(&structured)?;
+            let default_personality = runtime_default_agent_personality_from_config(&structured)?;
+            if let Some(default_personality) = default_personality.as_ref()
+                && !personality_profiles.contains_key(default_personality)
+            {
+                return Err(MezError::config(format!(
+                    "agents.default_personality `{default_personality}` is not defined in personalities"
+                )));
+            }
+            self.integration
+                .replace_agent_personality_profiles(personality_profiles);
+            self.integration
+                .set_default_agent_personality(default_personality);
+            self.integration.set_custom_agent_system_prompt(
+                runtime_agent_custom_system_prompt_from_config(&structured)?,
+            );
+            self.integration.replace_always_exposed_mcp_servers(
+                runtime_always_exposed_mcp_servers_from_config(&structured)?,
+            );
         }
-        self.apply_process_terminal_settings(
-            terminal_history_limit,
-            terminal_history_rotate_lines,
-            terminal_term,
-            pane_spawn_policy,
-            terminal_emoji_width,
-            terminal_shell_output_preview_lines,
-        )?;
-        self.presentation.apply_settings(presentation_settings);
-        self.set_host_clipboard(host_clipboard);
-        match audit_log {
-            Some(Some(audit_log)) => self.set_audit_log(audit_log),
-            Some(None) => self.clear_audit_log(),
-            None => {}
-        }
-        let max_concurrent_agents = runtime_max_concurrent_agents_from_config(&structured)?;
-        let max_queued_agent_turns = runtime_max_queued_agent_turns_from_config(&structured)?;
-        let max_queued_agent_bytes = runtime_max_queued_agent_bytes_from_config(&structured)?;
-        self.configure_subagent_policy(
-            runtime_max_subagent_panes_per_window_from_config(&structured)?,
-            runtime_max_root_subagents_from_config(&structured)?,
-            runtime_max_subagents_per_subagent_from_config(&structured)?,
-            runtime_max_subagent_depth_from_config(&structured)?,
-            runtime_subagent_wait_policy_from_config(&structured)?,
-        );
-        self.set_active_turn_sleep_inhibition(runtime_active_turn_sleep_inhibition_from_config(
-            &structured,
-        )?);
-        self.set_agent_compaction_raw_retention_percent(
-            runtime_agent_compaction_raw_retention_percent_from_config(&structured)?,
-        );
-        self.set_agent_default_routing(runtime_agent_routing_from_config(&structured)?);
-        self.set_agent_action_failure_retry_limit(
-            runtime_agent_action_failure_retry_limit_from_config(&structured)?,
-        );
-        self.set_agent_loop_limit(runtime_agent_loop_limit_from_config(&structured)?);
-        self.integration.set_provider_auth_refresh_leeway_seconds(
-            runtime_provider_auth_refresh_leeway_seconds_from_config(&structured),
-        );
-        self.set_agent_auto_sizing(runtime_agent_auto_sizing_from_config(&structured)?);
-        self.set_agent_root_routing_policy(runtime_agent_root_routing_policy_from_config(
-            &structured,
-        )?);
-        self.configure_agent_scheduler_limit(max_concurrent_agents)?;
-        self.configure_agent_scheduler_queue_limits(
-            max_queued_agent_turns,
-            max_queued_agent_bytes,
-        )?;
-        self.start_ready_agent_turns()?;
-        let mut configured_permissions = runtime_configured_permissions_from_config(&structured)?;
-        if let Some(config_root) = self.integration.config_root() {
-            for directory_name in [
-                crate::integrations::skills::SKILLS_DIRECTORY_NAME,
-                crate::integrations::macros::MACROS_DIRECTORY_NAME,
-            ] {
-                let scope = config_root
-                    .join(directory_name)
-                    .to_string_lossy()
-                    .into_owned();
-                if !configured_permissions
-                    .resources
-                    .read_scopes
-                    .contains(&scope)
-                {
-                    configured_permissions
+        if affected.permissions {
+            let mut configured_permissions =
+                runtime_configured_permissions_from_config(&structured)?;
+            if let Some(config_root) = self.integration.config_root() {
+                for directory_name in [
+                    crate::integrations::skills::SKILLS_DIRECTORY_NAME,
+                    crate::integrations::macros::MACROS_DIRECTORY_NAME,
+                ] {
+                    let scope = config_root
+                        .join(directory_name)
+                        .to_string_lossy()
+                        .into_owned();
+                    if !configured_permissions
                         .resources
                         .read_scopes
-                        .push(scope.clone());
-                }
-                if !configured_permissions
-                    .resources
-                    .write_scopes
-                    .contains(&scope)
-                {
-                    configured_permissions.resources.write_scopes.push(scope);
-                }
-            }
-        }
-        if let Some(active) = self.integration.live_approval_bypass_override() {
-            configured_permissions
-                .authorization
-                .set_approval_bypass(active);
-        }
-        self.integration
-            .replace_configured_permissions(configured_permissions);
-        let preserved_model_profiles = self.preserved_model_override_profiles();
-        let mut provider_registry = runtime_provider_registry_from_config(&structured)?;
-        for (name, profile) in preserved_model_profiles {
-            if provider_registry.provider(&profile.provider).is_some() {
-                provider_registry.profiles.entry(name).or_insert(profile);
-            }
-        }
-        let preset_registry =
-            runtime_preset_registry_from_config(&structured, &provider_registry.profiles)?;
-        // Synthesize provider entries for authenticated providers not in config.
-        if let Some(auth_store) = self.integration.auth_store() {
-            let all_metadata = auth_store.read_all_metadata().unwrap_or_default();
-            for auth_provider in all_metadata.keys() {
-                if !provider_registry.providers.contains_key(auth_provider)
-                    && let Ok(default_models) = runtime_default_models_for_provider(auth_provider)
-                {
-                    provider_registry.providers.insert(
-                        auth_provider.clone(),
-                        RuntimeProviderConfig {
-                            provider_id: auth_provider.clone(),
-                            kind: auth_provider.clone(),
-                            api: None,
-                            auth_profile: "default".to_string(),
-                            base_url: None,
-                            models: default_models.iter().map(|m| (*m).to_string()).collect(),
-                            default_model: Some(
-                                default_models
-                                    .first()
-                                    .map(|m| (*m).to_string())
-                                    .unwrap_or_default(),
-                            ),
-                            options: BTreeMap::new(),
-                        },
-                    );
+                        .contains(&scope)
+                    {
+                        configured_permissions
+                            .resources
+                            .read_scopes
+                            .push(scope.clone());
+                    }
+                    if !configured_permissions
+                        .resources
+                        .write_scopes
+                        .contains(&scope)
+                    {
+                        configured_permissions.resources.write_scopes.push(scope);
+                    }
                 }
             }
+            if let Some(active) = self.integration.live_approval_bypass_override() {
+                configured_permissions
+                    .authorization
+                    .set_approval_bypass(active);
+            }
+            self.integration
+                .replace_configured_permissions(configured_permissions);
         }
-        self.integration
-            .replace_provider_registry(provider_registry);
-        *self.integration.preset_registry_mut() = preset_registry;
-        self.clear_provider_model_catalog_cache();
-        self.integration
-            .replace_subagent_profiles(runtime_subagent_profiles_from_config(&structured)?);
-        let personality_profiles = runtime_agent_personality_profiles_from_config(&structured)?;
-        let default_personality = runtime_default_agent_personality_from_config(&structured)?;
-        if let Some(default_personality) = default_personality.as_ref()
-            && !personality_profiles.contains_key(default_personality)
-        {
-            return Err(MezError::config(format!(
-                "agents.default_personality `{default_personality}` is not defined in personalities"
-            )));
+        if affected.providers {
+            self.integration.set_provider_auth_refresh_leeway_seconds(
+                runtime_provider_auth_refresh_leeway_seconds_from_config(&structured),
+            );
+            let preserved_model_profiles = self.preserved_model_override_profiles();
+            let mut provider_registry = runtime_provider_registry_from_config(&structured)?;
+            for (name, profile) in preserved_model_profiles {
+                if provider_registry.provider(&profile.provider).is_some() {
+                    provider_registry.profiles.entry(name).or_insert(profile);
+                }
+            }
+            let preset_registry =
+                runtime_preset_registry_from_config(&structured, &provider_registry.profiles)?;
+            // Synthesize provider entries for authenticated providers not in config.
+            if let Some(auth_store) = self.integration.auth_store() {
+                let all_metadata = auth_store.read_all_metadata().unwrap_or_default();
+                for auth_provider in all_metadata.keys() {
+                    if !provider_registry.providers.contains_key(auth_provider)
+                        && let Ok(default_models) =
+                            runtime_default_models_for_provider(auth_provider)
+                    {
+                        provider_registry.providers.insert(
+                            auth_provider.clone(),
+                            RuntimeProviderConfig {
+                                provider_id: auth_provider.clone(),
+                                kind: auth_provider.clone(),
+                                api: None,
+                                auth_profile: "default".to_string(),
+                                base_url: None,
+                                models: default_models.iter().map(|m| (*m).to_string()).collect(),
+                                default_model: Some(
+                                    default_models
+                                        .first()
+                                        .map(|m| (*m).to_string())
+                                        .unwrap_or_default(),
+                                ),
+                                options: BTreeMap::new(),
+                            },
+                        );
+                    }
+                }
+            }
+            self.integration
+                .replace_provider_registry(provider_registry);
+            *self.integration.preset_registry_mut() = preset_registry;
+            self.clear_provider_model_catalog_cache();
         }
-        self.integration
-            .replace_agent_personality_profiles(personality_profiles);
-        self.integration
-            .set_default_agent_personality(default_personality);
-        self.integration.set_custom_agent_system_prompt(
-            runtime_agent_custom_system_prompt_from_config(&structured)?,
-        );
-        self.integration.replace_always_exposed_mcp_servers(
-            runtime_always_exposed_mcp_servers_from_config(&structured)?,
-        );
-        self.integration
-            .replace_hook_definitions(runtime_hook_definitions_from_config(&structured)?);
-        let mut registry = runtime_mcp_registry_from_config(&structured)?;
-        let environment = std::env::vars().collect::<BTreeMap<_, _>>();
-        let blacklisted = registry
-            .blacklist_servers_with_missing_environment(&environment, current_unix_seconds())?;
-        self.integration.mcp_transports_mut().clear();
-        let configured = registry.list_servers().len();
-        *self.integration.mcp_registry_mut() = registry;
+        if affected.hooks {
+            self.integration
+                .replace_hook_definitions(runtime_hook_definitions_from_config(&structured)?);
+        }
+        let mut blacklisted = Vec::new();
+        if affected.mcp {
+            let mut registry = runtime_mcp_registry_from_config(&structured)?;
+            let environment = std::env::vars().collect::<BTreeMap<_, _>>();
+            blacklisted = registry
+                .blacklist_servers_with_missing_environment(&environment, current_unix_seconds())?;
+            self.integration.mcp_transports_mut().clear();
+            *self.integration.mcp_registry_mut() = registry;
+        }
         let trust_prompts_announced =
             self.append_project_trust_prompt_events_for_pending_layers()?;
+        let max_concurrent_agents = self.agent_scheduler().snapshot().max_concurrent_agents;
+        let configured = self.integration.mcp_registry().list_servers().len();
         Ok(RuntimeConfigApplyReport {
             applied_layers: effective.applied_layers().to_vec(),
             skipped_layers: effective.skipped_layers().to_vec(),
@@ -536,7 +566,7 @@ impl RuntimeSessionService {
             window_frames_enabled: self.window_frames_enabled(),
             pane_frames_enabled: self.pane_frames_enabled(),
             max_concurrent_agents,
-            permission_policy_applied: true,
+            permission_policy_applied: affected.permissions,
             mcp_servers_configured: configured,
             mcp_servers_blacklisted: blacklisted,
             providers_configured: self.provider_registry().providers.len(),

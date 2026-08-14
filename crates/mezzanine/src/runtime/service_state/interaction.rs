@@ -145,6 +145,76 @@ pub(crate) struct RuntimeCommandBinding {
     pub source_layer: String,
 }
 
+/// Identifies runtime subsystem families affected by one prepared configuration change.
+///
+/// The asynchronous preparation worker compares the previously applied and
+/// newly composed trees once, then actor settlement uses these typed flags to
+/// avoid rebuilding unrelated runtime state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeConfigAffectedSubsystems {
+    /// Process-terminal and history settings changed.
+    pub(crate) terminal: bool,
+    /// Attached-client presentation, keys, frames, or theme settings changed.
+    pub(crate) presentation: bool,
+    /// Audit persistence settings changed.
+    pub(crate) audit: bool,
+    /// Agent scheduling, subagent, or personality settings changed.
+    pub(crate) agents: bool,
+    /// Permission and sandbox settings changed.
+    pub(crate) permissions: bool,
+    /// Provider, model profile, or model preset settings changed.
+    pub(crate) providers: bool,
+    /// Hook definitions changed.
+    pub(crate) hooks: bool,
+    /// MCP server definitions changed.
+    pub(crate) mcp: bool,
+}
+
+impl RuntimeConfigAffectedSubsystems {
+    /// Marks every projected subsystem for complete startup or rollback application.
+    pub(crate) const fn all() -> Self {
+        Self {
+            terminal: true,
+            presentation: true,
+            audit: true,
+            agents: true,
+            permissions: true,
+            providers: true,
+            hooks: true,
+            mcp: true,
+        }
+    }
+
+    /// Computes affected subsystem families from two composed config trees.
+    pub(crate) fn between(previous: &serde_json::Value, next: &serde_json::Value) -> Self {
+        let changed = |keys: &[&str]| keys.iter().any(|key| previous.get(key) != next.get(key));
+        Self {
+            terminal: changed(&["terminal", "history"]),
+            presentation: changed(&[
+                "terminal",
+                "frames",
+                "theme",
+                "themes",
+                "keys",
+                "key_preset",
+                "key_presets",
+            ]),
+            audit: changed(&["audit"]),
+            agents: changed(&["agents", "subagents", "personalities"]),
+            permissions: changed(&["permissions"]),
+            providers: changed(&[
+                "agents",
+                "auth",
+                "providers",
+                "model_profiles",
+                "model_presets",
+            ]),
+            hooks: changed(&["hooks"]),
+            mcp: changed(&["mcp_servers"]),
+        }
+    }
+}
+
 /// Carries Runtime Config Apply Report state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

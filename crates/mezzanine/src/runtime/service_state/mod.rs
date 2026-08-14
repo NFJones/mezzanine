@@ -38,7 +38,8 @@ pub use agent_state::{
 pub(crate) use interaction::{
     MouseResizeDragState, MouseSelectionDragState, RuntimeAgentCopyOutput,
     RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeCommandBinding,
-    RuntimeMouseClickState, RuntimePrimaryPromptInput, RuntimeSubagentPlacement,
+    RuntimeConfigAffectedSubsystems, RuntimeMouseClickState, RuntimePrimaryPromptInput,
+    RuntimeSubagentPlacement,
 };
 pub use interaction::{
     RuntimeAgentPromptTurnStart, RuntimeAgentTurnStop, RuntimeConfigApplyReport,

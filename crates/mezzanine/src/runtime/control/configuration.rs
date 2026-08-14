@@ -90,6 +90,7 @@ impl RuntimeSessionService {
             }
             let RuntimePreparedConfigReload {
                 layers,
+                affected,
                 effective,
                 structured,
                 result,
@@ -97,7 +98,7 @@ impl RuntimeSessionService {
             let previous_layers = self.integration.config_layers().to_vec();
             let previous_permission_policy = self.permission_policy().clone();
             self.integration.replace_config_layers(layers);
-            let report = match self.apply_prepared_runtime_config(effective, structured) {
+            let report = match self.apply_prepared_runtime_config(effective, structured, affected) {
                 Ok(report) => report,
                 Err(error) => {
                     self.integration.replace_config_layers(previous_layers);

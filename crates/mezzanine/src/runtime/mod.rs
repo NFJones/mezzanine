@@ -548,9 +548,10 @@ use sockets::unix_peer_uid;
 use sockets::{ensure_absolute, ensure_no_mez_separator};
 
 pub(crate) use service_state::{
-    RuntimePreparedConfigReload, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
-    RuntimeSnapshotOwnedCreationContext, RuntimeSubagentPlacement,
+    RuntimeConfigAffectedSubsystems, RuntimePreparedConfigReload,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
+    RuntimeSubagentPlacement,
 };
 
 /// Exposes the tests module boundary.
