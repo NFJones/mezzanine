@@ -27,7 +27,7 @@ impl RuntimeSessionService {
     pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
         let ready = self
             .control
-            .message_service()
+            .message_service_mut()
             .fanout_ready(now_ms, usize::MAX);
         let mut committed = 0usize;
         for fanout in ready {

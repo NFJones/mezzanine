@@ -7,9 +7,9 @@ use super::{
 use crate::MezError;
 use crate::error::Result;
 use mez_agent::messaging::{
-    AgentPresenceStatus, DeliveryStatus, Envelope, MessageConnection, MessageErrorKind,
-    MessageService, Recipient, SenderIdentity, TaskResultPayload, TaskState, TaskStatusPayload,
-    dispatch_mmp_body, mmp_error_code, validate_message_type,
+    AgentPresenceStatus, DeliveryStatus, Envelope, FanoutBudget, MessageConnection,
+    MessageErrorKind, MessageService, Recipient, SenderIdentity, TaskResultPayload, TaskState,
+    TaskStatusPayload, dispatch_mmp_body, mmp_error_code, validate_message_type,
 };
 use mez_core::ids::IdFactory;
 use mez_core::ids::{AgentId, PaneId, WindowId};

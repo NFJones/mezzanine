@@ -3,7 +3,8 @@
 //! These types define agent identity, recipients, delivery batches, presence,
 //! task payloads, and queue state without owning dispatch or serialization code.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::sync::Arc;
 
 use mez_core::ids::{AgentId, IdFactory, PaneId, WindowId};
 use serde::{Deserialize, Serialize};
@@ -84,7 +85,7 @@ pub struct SenderIdentity {
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Recipient {
     /// Represents the Agent case for this enumeration.
     ///
@@ -207,7 +208,7 @@ pub struct SequencedEnvelope {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub envelope: Envelope,
+    pub envelope: Arc<Envelope>,
 }
 
 /// Carries Delivery Cursor state for this subsystem.
@@ -264,6 +265,42 @@ pub struct FanoutBatch {
     pub batch: DeliveryBatch,
 }
 
+/// Aggregate work limits for one fair message-fanout cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FanoutBudget {
+    /// Maximum subscribers considered during one cycle.
+    pub max_recipients: usize,
+    /// Maximum messages selected across all subscriber batches.
+    pub max_messages: usize,
+    /// Maximum payload bytes selected across all subscriber batches.
+    pub max_payload_bytes: usize,
+}
+
+impl Default for FanoutBudget {
+    fn default() -> Self {
+        Self {
+            max_recipients: 64,
+            max_messages: 1_024,
+            max_payload_bytes: 4 * 1_024 * 1_024,
+        }
+    }
+}
+
+/// Cumulative low-cardinality diagnostics for indexed fanout work.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MessageFanoutDiagnostics {
+    /// Number of bounded fanout selection cycles.
+    pub cycles: u64,
+    /// Number of subscribers considered across fanout cycles.
+    pub recipients_considered: u64,
+    /// Number of retained sequence lookups performed for delivery.
+    pub sequence_lookups: u64,
+    /// Number of messages selected across subscriber batches.
+    pub messages_selected: u64,
+    /// Payload bytes selected across subscriber batches.
+    pub payload_bytes_selected: u64,
+}
+
 /// Carries Delivery state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -304,7 +341,7 @@ pub(super) struct AcceptedMessage {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) envelope: Envelope,
+    pub(super) envelope: Arc<Envelope>,
     /// Stores the delivery value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -500,7 +537,7 @@ pub(super) struct QueuedEnvelope {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) envelope: Envelope,
+    pub(super) envelope: Arc<Envelope>,
     /// Stores the accepted at ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -543,7 +580,17 @@ pub struct MessageService {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) queue: VecDeque<QueuedEnvelope>,
+    pub(super) queue: VecDeque<Arc<QueuedEnvelope>>,
+    /// Retained messages keyed by sequence for indexed delivery lookup.
+    pub(super) queued_by_sequence: BTreeMap<MessageSequence, Arc<QueuedEnvelope>>,
+    /// Retained sequence numbers grouped by normalized recipient selector.
+    pub(super) queued_by_recipient: HashMap<Recipient, BTreeSet<MessageSequence>>,
+    /// Subscription order used to resume fair fanout without sorting.
+    pub(super) subscription_order: BTreeMap<String, AgentId>,
+    /// Last subscriber considered by bounded fanout.
+    pub(super) fanout_after_recipient: Option<String>,
+    /// Cumulative bounded-fanout diagnostics.
+    pub(super) fanout_diagnostics: MessageFanoutDiagnostics,
     /// Stores the next sequence value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

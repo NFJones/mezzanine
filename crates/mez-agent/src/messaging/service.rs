@@ -4,6 +4,7 @@
 //! matches recipients, manages fanout cursors, and filters expired envelopes.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use mez_core::ids::{AgentId, IdFactory, PaneId, StableId, WindowId};
 
@@ -11,15 +12,22 @@ use super::error::{MessageError, MessageErrorKind, Result};
 
 use super::types::{
     AcceptedMessage, AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus,
-    Envelope, FanoutBatch, MMP_DUPLICATE_MESSAGE_ID_MESSAGE, MMP_EXPIRED_MESSAGE,
+    Envelope, FanoutBatch, FanoutBudget, MMP_DUPLICATE_MESSAGE_ID_MESSAGE, MMP_EXPIRED_MESSAGE,
     MMP_PAYLOAD_TOO_LARGE_MESSAGE, MMP_PROTOCOL, MMP_UNDELIVERABLE_MESSAGE,
     MessageAcceptedSnapshot, MessageDeliveryCursorSnapshot, MessageDeliverySnapshot,
-    MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot, MessageIdentitySnapshot,
-    MessagePresenceSnapshot, MessageQueuedEnvelopeSnapshot, MessageRecipientSnapshot,
-    MessageSequence, MessageService, MessageServiceSnapshot, PresenceRecord, QueuedEnvelope,
-    Recipient, SenderIdentity, SequencedEnvelope,
+    MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot, MessageFanoutDiagnostics,
+    MessageIdentitySnapshot, MessagePresenceSnapshot, MessageQueuedEnvelopeSnapshot,
+    MessageRecipientSnapshot, MessageSequence, MessageService, MessageServiceSnapshot,
+    PresenceRecord, QueuedEnvelope, Recipient, SenderIdentity, SequencedEnvelope,
 };
 use super::validation::{validate_message_type, validate_protocol, validate_sender_identity};
+
+#[derive(Debug)]
+struct IndexedReceiveSelection {
+    batch: DeliveryBatch,
+    sequence_lookups: u64,
+    payload_bytes: usize,
+}
 
 impl Default for MessageService {
     /// Runs the default operation for this subsystem.
@@ -46,6 +54,11 @@ impl MessageService {
             subscriptions: HashMap::new(),
             accepted_messages: HashMap::new(),
             queue: VecDeque::new(),
+            queued_by_sequence: Default::default(),
+            queued_by_recipient: HashMap::new(),
+            subscription_order: Default::default(),
+            fanout_after_recipient: None,
+            fanout_diagnostics: MessageFanoutDiagnostics::default(),
             next_sequence: 1,
             retention_messages: retention_messages.max(1),
             retention_bytes: retention_bytes.max(1),
@@ -146,7 +159,7 @@ impl MessageService {
             ));
         }
         if let Some(accepted) = self.accepted_messages.get_mut(&envelope.id) {
-            if accepted.envelope == envelope {
+            if accepted.envelope.as_ref() == &envelope {
                 if envelope_expired_at(&accepted.envelope, accepted.accepted_at_ms, now_ms) {
                     accepted.delivery.status = DeliveryStatus::Expired;
                 }
@@ -166,8 +179,8 @@ impl MessageService {
             return Err(MessageError::invalid_state(MMP_EXPIRED_MESSAGE));
         }
         let message_id = envelope.id.clone();
-        let accepted_envelope = envelope.clone();
-        let sequence = self.enqueue(envelope, now_ms)?;
+        let accepted_envelope = Arc::new(envelope);
+        let sequence = self.enqueue(accepted_envelope.clone(), now_ms)?;
 
         let delivery = Delivery {
             accepted: true,
@@ -335,7 +348,7 @@ impl MessageService {
         let retained_messages = self
             .queue
             .iter()
-            .map(queued_envelope_snapshot)
+            .map(|queued| queued_envelope_snapshot(queued))
             .collect::<Vec<_>>();
         let mut accepted_messages = self
             .accepted_messages
@@ -383,27 +396,38 @@ impl MessageService {
             );
         }
         let mut subscriptions = HashMap::new();
+        let mut subscription_order = std::collections::BTreeMap::new();
         for cursor in &snapshot.subscriptions {
             let cursor = DeliveryCursor {
                 recipient: parse_opaque_id(&cursor.recipient, "MMP delivery cursor recipient")?,
                 last_sequence: cursor.last_sequence,
             };
+            subscription_order.insert(
+                cursor.recipient.as_str().to_string(),
+                cursor.recipient.clone(),
+            );
             subscriptions.insert(cursor.recipient.clone(), cursor);
         }
         let mut queue = VecDeque::new();
+        let mut retained_envelopes = HashMap::new();
         let mut queued_bytes = 0usize;
         for retained in &snapshot.retained_messages {
-            let envelope = envelope_from_snapshot(&retained.envelope)?;
+            let envelope = Arc::new(envelope_from_snapshot(&retained.envelope)?);
             queued_bytes = queued_bytes.saturating_add(envelope.payload.len());
-            queue.push_back(QueuedEnvelope {
+            retained_envelopes.insert(envelope.id.clone(), envelope.clone());
+            queue.push_back(Arc::new(QueuedEnvelope {
                 sequence: retained.sequence,
                 envelope,
                 accepted_at_ms: retained.accepted_at_ms,
-            });
+            }));
         }
         let mut accepted_messages = HashMap::new();
         for accepted in &snapshot.accepted_messages {
             let envelope = envelope_from_snapshot(&accepted.envelope)?;
+            let envelope = retained_envelopes
+                .get(&envelope.id)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(envelope));
             let delivery = Delivery {
                 accepted: accepted.delivery.accepted,
                 message_id: accepted.delivery.message_id.clone(),
@@ -428,11 +452,17 @@ impl MessageService {
             subscriptions,
             accepted_messages,
             queue,
+            queued_by_sequence: Default::default(),
+            queued_by_recipient: HashMap::new(),
+            subscription_order,
+            fanout_after_recipient: None,
+            fanout_diagnostics: MessageFanoutDiagnostics::default(),
             next_sequence: snapshot.next_sequence,
             retention_messages: snapshot.retention_messages,
             retention_bytes: snapshot.retention_bytes,
             queued_bytes,
         };
+        service.rebuild_queue_indexes();
         service.prune_accepted_messages_to_retained_queue();
         Ok(service)
     }
@@ -450,6 +480,8 @@ impl MessageService {
             recipient: recipient.clone(),
             last_sequence: self.last_sequence(),
         };
+        self.subscription_order
+            .insert(recipient.as_str().to_string(), recipient.clone());
         self.subscriptions.insert(recipient.clone(), cursor.clone());
         Ok(cursor)
     }
@@ -469,6 +501,8 @@ impl MessageService {
             recipient: recipient.clone(),
             last_sequence: 0,
         };
+        self.subscription_order
+            .insert(recipient.as_str().to_string(), recipient.clone());
         self.subscriptions.insert(recipient.clone(), cursor.clone());
         Ok(cursor)
     }
@@ -505,22 +539,109 @@ impl MessageService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn fanout_ready(&self, now_ms: u64, limit_per_recipient: usize) -> Vec<FanoutBatch> {
-        let mut recipients = self.subscriptions.keys().cloned().collect::<Vec<_>>();
-        recipients.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    pub fn fanout_ready(&mut self, now_ms: u64, limit_per_recipient: usize) -> Vec<FanoutBatch> {
+        self.fanout_ready_with_budget(now_ms, limit_per_recipient, FanoutBudget::default())
+    }
+
+    /// Selects subscriber batches within one aggregate fair-work budget.
+    pub fn fanout_ready_with_budget(
+        &mut self,
+        now_ms: u64,
+        limit_per_recipient: usize,
+        budget: FanoutBudget,
+    ) -> Vec<FanoutBatch> {
+        self.fanout_diagnostics.cycles = self.fanout_diagnostics.cycles.saturating_add(1);
+        if budget.max_recipients == 0
+            || budget.max_messages == 0
+            || budget.max_payload_bytes == 0
+            || limit_per_recipient == 0
+            || self.subscription_order.is_empty()
+        {
+            return Vec::new();
+        }
+
+        let recipients = self.fanout_recipient_cycle(budget.max_recipients);
+        let mut batches = Vec::new();
+        let mut remaining_messages = budget.max_messages;
+        let mut remaining_payload_bytes = budget.max_payload_bytes;
+        for recipient in recipients.into_iter().take(budget.max_recipients) {
+            self.fanout_after_recipient = Some(recipient.as_str().to_string());
+            self.fanout_diagnostics.recipients_considered = self
+                .fanout_diagnostics
+                .recipients_considered
+                .saturating_add(1);
+            let Some(cursor) = self.subscriptions.get(&recipient).cloned() else {
+                continue;
+            };
+            let Some(identity) = self.registered.get(&recipient) else {
+                continue;
+            };
+            let selection = self.receive_after_indexed(
+                &cursor,
+                identity,
+                now_ms,
+                limit_per_recipient.min(remaining_messages),
+                remaining_payload_bytes,
+            );
+            self.fanout_diagnostics.sequence_lookups = self
+                .fanout_diagnostics
+                .sequence_lookups
+                .saturating_add(selection.sequence_lookups);
+            if selection.batch.messages.is_empty() {
+                continue;
+            }
+            let selected_messages = selection.batch.messages.len();
+            remaining_messages = remaining_messages.saturating_sub(selected_messages);
+            remaining_payload_bytes =
+                remaining_payload_bytes.saturating_sub(selection.payload_bytes);
+            self.fanout_diagnostics.messages_selected = self
+                .fanout_diagnostics
+                .messages_selected
+                .saturating_add(u64::try_from(selected_messages).unwrap_or(u64::MAX));
+            self.fanout_diagnostics.payload_bytes_selected = self
+                .fanout_diagnostics
+                .payload_bytes_selected
+                .saturating_add(u64::try_from(selection.payload_bytes).unwrap_or(u64::MAX));
+            batches.push(FanoutBatch {
+                recipient,
+                batch: selection.batch,
+            });
+            if remaining_messages == 0 || remaining_payload_bytes == 0 {
+                break;
+            }
+        }
+        batches
+    }
+
+    /// Returns cumulative bounded-fanout diagnostics.
+    pub fn fanout_diagnostics(&self) -> MessageFanoutDiagnostics {
+        self.fanout_diagnostics
+    }
+
+    fn fanout_recipient_cycle(&self, limit: usize) -> Vec<AgentId> {
+        let mut recipients = Vec::with_capacity(limit.min(self.subscription_order.len()));
+        if let Some(after) = self.fanout_after_recipient.as_ref() {
+            recipients.extend(
+                self.subscription_order
+                    .range((
+                        std::ops::Bound::Excluded(after.clone()),
+                        std::ops::Bound::Unbounded,
+                    ))
+                    .take(limit)
+                    .map(|(_, recipient)| recipient.clone()),
+            );
+            if recipients.len() < limit {
+                recipients.extend(
+                    self.subscription_order
+                        .range(..=after.clone())
+                        .take(limit - recipients.len())
+                        .map(|(_, recipient)| recipient.clone()),
+                );
+            }
+        } else {
+            recipients.extend(self.subscription_order.values().take(limit).cloned());
+        }
         recipients
-            .into_iter()
-            .filter_map(|recipient| {
-                let batch = self
-                    .receive_subscribed(&recipient, now_ms, limit_per_recipient)
-                    .ok()?;
-                if batch.messages.is_empty() {
-                    None
-                } else {
-                    Some(FanoutBatch { recipient, batch })
-                }
-            })
-            .collect()
     }
 
     /// Runs the fanout ready for operation for this subsystem.
@@ -580,23 +701,86 @@ impl MessageService {
                 messages: Vec::new(),
             });
         }
-        let messages = self
-            .queue
-            .iter()
-            .filter(|queued| queued.sequence > cursor.last_sequence)
-            .filter(|queued| !expired(queued, now_ms))
-            .filter(|queued| recipient_matches(identity, &queued.envelope.recipient))
-            .take(limit)
-            .map(|queued| SequencedEnvelope {
-                sequence: queued.sequence,
-                envelope: queued.envelope.clone(),
-            })
-            .collect();
+        Ok(self
+            .receive_after_indexed(cursor, identity, now_ms, limit, usize::MAX)
+            .batch)
+    }
 
-        Ok(DeliveryBatch {
-            cursor: cursor.clone(),
-            messages,
-        })
+    fn receive_after_indexed(
+        &self,
+        cursor: &DeliveryCursor,
+        identity: &SenderIdentity,
+        now_ms: u64,
+        limit: usize,
+        max_payload_bytes: usize,
+    ) -> IndexedReceiveSelection {
+        let selectors = recipient_selectors(identity);
+        let mut next_by_selector = std::collections::BinaryHeap::new();
+        for (index, selector) in selectors.iter().enumerate() {
+            if let Some(sequence) = self
+                .queued_by_recipient
+                .get(selector)
+                .and_then(|sequences| {
+                    sequences
+                        .range((
+                            std::ops::Bound::Excluded(cursor.last_sequence),
+                            std::ops::Bound::Unbounded,
+                        ))
+                        .next()
+                        .copied()
+                })
+            {
+                next_by_selector.push(std::cmp::Reverse((sequence, index)));
+            }
+        }
+
+        let mut messages = Vec::new();
+        let mut sequence_lookups = 0u64;
+        let mut payload_bytes = 0usize;
+        while messages.len() < limit {
+            let Some(std::cmp::Reverse((sequence, selector_index))) = next_by_selector.pop() else {
+                break;
+            };
+            sequence_lookups = sequence_lookups.saturating_add(1);
+            let Some(queued) = self.queued_by_sequence.get(&sequence) else {
+                continue;
+            };
+            let message_bytes = queued.envelope.payload.len();
+            if !expired(queued, now_ms) {
+                if payload_bytes.saturating_add(message_bytes) > max_payload_bytes {
+                    break;
+                }
+                payload_bytes = payload_bytes.saturating_add(message_bytes);
+                messages.push(SequencedEnvelope {
+                    sequence,
+                    envelope: queued.envelope.clone(),
+                });
+            }
+            if let Some(next_sequence) = self
+                .queued_by_recipient
+                .get(&selectors[selector_index])
+                .and_then(|sequences| {
+                    sequences
+                        .range((
+                            std::ops::Bound::Excluded(sequence),
+                            std::ops::Bound::Unbounded,
+                        ))
+                        .next()
+                        .copied()
+                })
+            {
+                next_by_selector.push(std::cmp::Reverse((next_sequence, selector_index)));
+            }
+        }
+
+        IndexedReceiveSelection {
+            batch: DeliveryBatch {
+                cursor: cursor.clone(),
+                messages,
+            },
+            sequence_lookups,
+            payload_bytes,
+        }
     }
 
     /// Runs the advance subscription operation for this subsystem.
@@ -637,7 +821,7 @@ impl MessageService {
                         && recipient_matches(identity, &queued.envelope.recipient)
                 })
             })
-            .map(|queued| queued.envelope.clone())
+            .map(|queued| queued.envelope.as_ref().clone())
             .collect()
     }
 
@@ -663,7 +847,7 @@ impl MessageService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn enqueue(&mut self, envelope: Envelope, now_ms: u64) -> Result<MessageSequence> {
+    fn enqueue(&mut self, envelope: Arc<Envelope>, now_ms: u64) -> Result<MessageSequence> {
         let size = envelope.payload.len();
         if size > self.retention_bytes {
             return Err(MessageError::invalid_args(MMP_PAYLOAD_TOO_LARGE_MESSAGE));
@@ -674,20 +858,51 @@ impl MessageService {
             .checked_add(1)
             .ok_or_else(|| MessageError::invalid_state("message sequence number exhausted"))?;
         self.queued_bytes += size;
-        self.queue.push_back(QueuedEnvelope {
+        let queued = Arc::new(QueuedEnvelope {
             sequence,
             envelope,
             accepted_at_ms: now_ms,
         });
+        self.insert_queue_indexes(&queued);
+        self.queue.push_back(queued);
         while self.queue.len() > self.retention_messages || self.queued_bytes > self.retention_bytes
         {
             if let Some(removed) = self.queue.pop_front() {
+                self.remove_queue_indexes(&removed);
                 self.queued_bytes = self
                     .queued_bytes
                     .saturating_sub(removed.envelope.payload.len());
             }
         }
         Ok(sequence)
+    }
+
+    fn rebuild_queue_indexes(&mut self) {
+        self.queued_by_sequence.clear();
+        self.queued_by_recipient.clear();
+        let retained = self.queue.iter().cloned().collect::<Vec<_>>();
+        for queued in retained {
+            self.insert_queue_indexes(&queued);
+        }
+    }
+
+    fn insert_queue_indexes(&mut self, queued: &Arc<QueuedEnvelope>) {
+        self.queued_by_sequence
+            .insert(queued.sequence, queued.clone());
+        self.queued_by_recipient
+            .entry(queued.envelope.recipient.clone())
+            .or_default()
+            .insert(queued.sequence);
+    }
+
+    fn remove_queue_indexes(&mut self, queued: &QueuedEnvelope) {
+        self.queued_by_sequence.remove(&queued.sequence);
+        if let Some(sequences) = self.queued_by_recipient.get_mut(&queued.envelope.recipient) {
+            sequences.remove(&queued.sequence);
+            if sequences.is_empty() {
+                self.queued_by_recipient.remove(&queued.envelope.recipient);
+            }
+        }
     }
 
     /// Runs the prune accepted messages to retained queue operation for this subsystem.
@@ -759,6 +974,58 @@ fn recipient_matches(identity: &SenderIdentity, recipient: &Recipient) -> bool {
         Recipient::Group(group) => {
             group == "session" || identity.capabilities.iter().any(|cap| cap == group)
         }
+    }
+}
+
+fn recipient_selectors(identity: &SenderIdentity) -> Vec<Recipient> {
+    let mut selectors = Vec::new();
+    let mut seen = HashSet::new();
+    push_recipient_selector(
+        &mut selectors,
+        &mut seen,
+        Recipient::Agent(identity.agent_id.clone()),
+    );
+    push_recipient_selector(&mut selectors, &mut seen, Recipient::Session);
+    push_recipient_selector(
+        &mut selectors,
+        &mut seen,
+        Recipient::Group("session".to_string()),
+    );
+    if let Some(pane_id) = identity.pane_id.as_ref() {
+        push_recipient_selector(&mut selectors, &mut seen, Recipient::Pane(pane_id.clone()));
+    }
+    if let Some(window_id) = identity.window_id.as_ref() {
+        push_recipient_selector(
+            &mut selectors,
+            &mut seen,
+            Recipient::Window(window_id.clone()),
+        );
+    }
+    if let Some(role) = identity.role.as_ref() {
+        push_recipient_selector(&mut selectors, &mut seen, Recipient::Role(role.clone()));
+    }
+    for capability in &identity.capabilities {
+        push_recipient_selector(
+            &mut selectors,
+            &mut seen,
+            Recipient::Capability(capability.clone()),
+        );
+        push_recipient_selector(
+            &mut selectors,
+            &mut seen,
+            Recipient::Group(capability.clone()),
+        );
+    }
+    selectors
+}
+
+fn push_recipient_selector(
+    selectors: &mut Vec<Recipient>,
+    seen: &mut HashSet<Recipient>,
+    selector: Recipient,
+) {
+    if seen.insert(selector.clone()) {
+        selectors.push(selector);
     }
 }
 
