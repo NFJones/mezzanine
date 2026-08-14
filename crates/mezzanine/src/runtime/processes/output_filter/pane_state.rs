@@ -528,6 +528,9 @@ impl RuntimeSessionService {
     /// Retains the parent-owned boundary emitted after one agent subshell exits.
     pub(crate) fn remember_agent_subshell_exit_marker(&mut self, pane_id: &str, marker: Vec<u8>) {
         self.process
+            .pane_agent_subshell_parent_reposition_pending
+            .remove(pane_id);
+        self.process
             .pane_agent_subshell_exit_markers
             .insert(pane_id.to_string(), marker);
     }
@@ -552,6 +555,16 @@ impl RuntimeSessionService {
             .pane_agent_subshell_exit_echo_pending
             .remove(pane_id)
         else {
+            if self
+                .process
+                .pane_agent_subshell_parent_reposition_pending
+                .remove(pane_id)
+            {
+                let mut visible = Vec::with_capacity(bytes.len() + 1);
+                visible.push(b'\r');
+                visible.extend_from_slice(bytes);
+                return visible;
+            }
             return bytes.to_vec();
         };
         pending.extend_from_slice(bytes);
@@ -571,6 +584,12 @@ impl RuntimeSessionService {
                 .pane_hidden_shell_render_recent_polls
                 .remove(pane_id);
             let parent_output = &pending[start + marker.len()..];
+            if parent_output.is_empty() {
+                self.process
+                    .pane_agent_subshell_parent_reposition_pending
+                    .insert(pane_id.to_string());
+                return Vec::new();
+            }
             let mut visible = Vec::with_capacity(parent_output.len() + 1);
             visible.push(b'\r');
             visible.extend_from_slice(parent_output);
@@ -606,6 +625,9 @@ impl RuntimeSessionService {
     pub(crate) fn clear_shell_output_filters_for_foreground_input(&mut self, pane_id: &str) {
         self.process
             .pane_hidden_shell_render_recent_polls
+            .remove(pane_id);
+        self.process
+            .pane_agent_subshell_parent_reposition_pending
             .remove(pane_id);
         self.process.pane_mez_wrapper_filter_pending.remove(pane_id);
         self.process

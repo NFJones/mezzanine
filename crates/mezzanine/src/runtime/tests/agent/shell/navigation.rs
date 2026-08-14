@@ -258,9 +258,13 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     assert_eq!(user_inputs[0].pane_input_parts().0, pane_id);
     assert_eq!(user_inputs[0].pane_input_parts().1, b"echo parent\n");
 
-    let mut parent_prompt_output = exit_marker;
-    parent_prompt_output.extend_from_slice(b"\r$ ");
-    let simple_prompt_repaint = service.visible_pane_output_bytes(&pane_id, &parent_prompt_output);
+    let marker_only = service.visible_pane_output_bytes(&pane_id, &exit_marker);
+    assert!(
+        marker_only.is_empty(),
+        "a marker-only PTY fragment must not move the visible cursor"
+    );
+    let parent_prompt_output = b"\r$ ";
+    let simple_prompt_repaint = service.visible_pane_output_bytes(&pane_id, parent_prompt_output);
     assert_eq!(simple_prompt_repaint, b"\r\r$ ");
     let prompt_repaint = service.renderable_pane_output_bytes(&pane_id, b"user@host ~/repo $ ");
     assert_eq!(prompt_repaint, b"user@host ~/repo $ ");
@@ -941,6 +945,21 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
         restored_prompt_cursor,
         Some(parent_prompt_column),
         "managed Bash must leave the cursor immediately after its restored prompt; screen={:?}; cursor={:?}",
+        service.process_pane_screen("%1").unwrap().visible_lines(),
+        service.process_pane_screen("%1").unwrap().cursor_state()
+    );
+    for _ in 0..50 {
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+        let _ = service.poll_pane_outputs(8192).unwrap();
+    }
+    assert_eq!(
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .cursor_state()
+            .column,
+        parent_prompt_column,
+        "managed Bash must keep the cursor after its restored prompt once delayed exit output settles; screen={:?}; cursor={:?}",
         service.process_pane_screen("%1").unwrap().visible_lines(),
         service.process_pane_screen("%1").unwrap().cursor_state()
     );
