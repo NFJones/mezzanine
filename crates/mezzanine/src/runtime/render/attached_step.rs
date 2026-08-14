@@ -197,7 +197,7 @@ impl RuntimeSessionService {
             || application.agent_prompt_inputs_applied > 0
             || application.view_refresh_required
             || application.full_redraw_required;
-        if applied {
+        if application.registry_persistence_required {
             side_effects.extend(self.registry_persistence_transition().side_effects);
         }
         Ok((
@@ -327,6 +327,7 @@ impl RuntimeSessionService {
             agent_prompt_inputs_applied: 0,
             view_refresh_required: false,
             full_redraw_required: false,
+            registry_persistence_required: false,
         };
 
         if !step.actions.is_empty()
@@ -542,6 +543,8 @@ impl RuntimeSessionService {
                         Ok(true) => {
                             report.mux_actions_applied =
                                 report.mux_actions_applied.saturating_add(1);
+                            report.registry_persistence_required |=
+                                Self::mux_action_requires_registry_persistence(*action);
                             report.view_refresh_required = true;
                             if toggles_agent_shell || Self::mux_action_requires_full_redraw(*action)
                             {
@@ -559,6 +562,7 @@ impl RuntimeSessionService {
                 TerminalClientLoopAction::ExecuteCommand(command) => {
                     match self.execute_terminal_command(primary_client_id, command) {
                         Ok(output) => {
+                            report.registry_persistence_required = true;
                             self.append_lifecycle_event(
                                 EventKind::Diagnostic,
                                 format!(
@@ -585,6 +589,8 @@ impl RuntimeSessionService {
                         Ok(true) => {
                             report.mouse_actions_reported =
                                 report.mouse_actions_reported.saturating_add(1);
+                            report.registry_persistence_required |=
+                                Self::mouse_action_requires_registry_persistence(action);
                             report.view_refresh_required = true;
                             if Self::mouse_action_requires_full_redraw(action.clone())
                                 || overlay_was_open
@@ -626,8 +632,26 @@ impl RuntimeSessionService {
             }
         }
 
-        self.persist_or_defer_registry_update()?;
+        if report.registry_persistence_required && !defer_pane_io {
+            self.persist_or_defer_registry_update()?;
+        }
         Ok((report, pane_input_effects))
+    }
+
+    /// Returns whether a successful mux action changes registry-visible state.
+    fn mux_action_requires_registry_persistence(action: MuxAction) -> bool {
+        matches!(
+            action,
+            MuxAction::NewWindow
+                | MuxAction::NewGroup
+                | MuxAction::BreakPaneToNewWindow
+                | MuxAction::DetachPrimaryClient
+        )
+    }
+
+    /// Returns whether a successful mouse action can run a registry-visible command.
+    fn mouse_action_requires_registry_persistence(action: &MouseAction) -> bool {
+        matches!(action, MouseAction::ReleaseWindowAction { .. })
     }
 
     /// Returns true when a mux action can change pane/window geometry enough to

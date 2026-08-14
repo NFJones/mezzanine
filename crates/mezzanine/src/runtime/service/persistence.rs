@@ -218,14 +218,23 @@ impl RuntimeSessionService {
     /// unit tests and in-memory control helpers can continue using the runtime
     /// without a filesystem-backed session registry.
     pub(crate) fn persist_registry_update(&self) -> Result<bool> {
+        if self.persistence.session_registry().is_none() {
+            return Ok(false);
+        }
         let update = self.registry_update_plan();
         self.persist_registry_update_plan(&update)
     }
 
     /// Defers or persists a registry update from a mutable service path.
     pub(crate) fn persist_or_defer_registry_update(&mut self) -> Result<bool> {
+        if self.persistence.session_registry().is_none() {
+            return Ok(false);
+        }
+        if self.persistence.registry_uses_adapter() {
+            return Ok(true);
+        }
         let update = self.registry_update_plan();
-        self.persist_or_defer_registry_update_plan(update)
+        self.persist_registry_update_plan(&update)
     }
 
     /// Defers or persists a precomputed registry update from a mutable service path.

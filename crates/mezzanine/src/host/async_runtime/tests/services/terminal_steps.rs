@@ -76,10 +76,18 @@ async fn async_attached_terminal_step_uses_runtime_rendered_view() {
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_attached_terminal_step_can_be_applied_through_actor() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-terminal-step-registry-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let registry = SessionRegistry::new(root.clone(), current_effective_uid());
     let mut service = test_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
+    service.set_session_registry(registry);
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
@@ -113,12 +121,21 @@ async fn async_attached_terminal_step_can_be_applied_through_actor() {
         .unwrap();
 
         assert_eq!(application.forwarded_bytes, 6);
+        assert!(!application.registry_persistence_required);
         assert_eq!(
             handle.drain_pane_io_side_effects("%1", 8).await.unwrap(),
             vec![RuntimeSideEffect::WritePaneInput {
                 pane_id: "%1".to_string(),
                 bytes: b"hello\n".to_vec(),
             }]
+        );
+        assert!(
+            handle
+                .drain_persistence_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "ordinary pane input must not enqueue registry persistence"
         );
         let large_input = vec![b'x'; 468_586];
         let (_plan, application) = plan_and_apply_async_attached_terminal_client_step(
@@ -137,6 +154,7 @@ async fn async_attached_terminal_step_can_be_applied_through_actor() {
         .unwrap();
 
         assert_eq!(application.forwarded_bytes, large_input.len());
+        assert!(!application.registry_persistence_required);
         assert_eq!(
             handle
                 .drain_pane_io_side_effects("%1", usize::MAX)
@@ -147,21 +165,34 @@ async fn async_attached_terminal_step_can_be_applied_through_actor() {
                 bytes: large_input,
             }]
         );
-        let split = AttachedTerminalClientStepPlan {
-            actions: vec![TerminalClientLoopAction::ExecuteMux(
-                MuxAction::SplitPaneVertical,
-            )],
+        assert!(
+            handle
+                .drain_persistence_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "large pane input must not enqueue registry persistence"
+        );
+        let new_window = AttachedTerminalClientStepPlan {
+            actions: vec![TerminalClientLoopAction::ExecuteMux(MuxAction::NewWindow)],
             output_lines: Vec::new(),
             output_line_style_spans: Vec::new(),
             input_hangup: false,
             output_hangup: false,
             error_roles: Vec::new(),
         };
-        let split_application = handle
-            .apply_attached_terminal_step_plan(primary, split)
+        let new_window_application = handle
+            .apply_attached_terminal_step_plan(primary, new_window)
             .await
             .unwrap();
-        assert_eq!(split_application.mux_actions_applied, 1);
+        assert_eq!(new_window_application.mux_actions_applied, 1);
+        assert!(new_window_application.registry_persistence_required);
+        let persistence = handle.drain_persistence_side_effects(8).await.unwrap();
+        assert_eq!(persistence.len(), 1);
+        assert!(matches!(
+            persistence[0],
+            RuntimeSideEffect::PersistRegistry { .. }
+        ));
         assert_eq!(
             handle.shutdown().await.unwrap(),
             RuntimeLifecycleState::Running
@@ -175,4 +206,5 @@ async fn async_attached_terminal_step_can_be_applied_through_actor() {
         "actor should process client-step, drain, split, and shutdown requests"
     );
     exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }

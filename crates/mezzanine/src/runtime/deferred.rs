@@ -23,4 +23,6 @@ pub struct AttachedClientStepApplication {
     pub view_refresh_required: bool,
     /// Whether the client needs a full redraw after the step.
     pub full_redraw_required: bool,
+    /// Whether this step changed session metadata persisted by the registry.
+    pub registry_persistence_required: bool,
 }
