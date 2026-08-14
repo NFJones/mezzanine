@@ -102,12 +102,28 @@ impl ProviderRetryPolicy {
             )
     }
 
-    /// Returns the bounded exponential delay for a one-based retry attempt.
-    pub fn delay_ms(self, attempt: u32) -> u64 {
+    /// Returns one bounded, jittered delay for a one-based retry attempt.
+    ///
+    /// `jitter_sample` is injected so callers can use runtime randomness while
+    /// tests remain deterministic. Provider advice is treated as a minimum
+    /// after both local backoff and advice are capped by `max_delay_ms`.
+    pub fn delay_ms(
+        self,
+        attempt: u32,
+        advised_delay_ms: Option<u64>,
+        jitter_sample: Option<u64>,
+    ) -> u64 {
         let exponent = attempt.saturating_sub(1).min(10);
-        self.initial_delay_ms
+        let exponential_delay = self
+            .initial_delay_ms
             .saturating_mul(2u64.saturating_pow(exponent))
-            .min(self.max_delay_ms)
+            .min(self.max_delay_ms);
+        let local_delay = jitter_sample.map_or(exponential_delay, |jitter_sample| {
+            let jitter_floor = exponential_delay / 2;
+            let jitter_span = exponential_delay.saturating_sub(jitter_floor);
+            jitter_floor.saturating_add(jitter_sample % jitter_span.saturating_add(1))
+        });
+        local_delay.max(advised_delay_ms.unwrap_or(0).min(self.max_delay_ms))
     }
 }
 
@@ -117,6 +133,36 @@ pub const DEFAULT_PROVIDER_RETRY_POLICY: ProviderRetryPolicy = ProviderRetryPoli
     initial_delay_ms: 1_000,
     max_delay_ms: 30_000,
 };
+
+/// Parses provider `Retry-After` advice from a sanitized failure payload.
+///
+/// Delta-seconds and HTTP-date forms are supported. `now_unix_ms` is injected
+/// to make date handling deterministic. Malformed values return `None`; past
+/// dates normalize to an immediate zero-millisecond advisory delay.
+pub fn provider_retry_after_delay_ms(
+    provider_failure_json: Option<&str>,
+    now_unix_ms: u64,
+) -> Option<u64> {
+    let value: serde_json::Value = serde_json::from_str(provider_failure_json?).ok()?;
+    let retry_after = value.get("retry_after")?;
+    if let Some(seconds) = retry_after.as_u64() {
+        return Some(seconds.saturating_mul(1_000));
+    }
+    let text = retry_after.as_str()?.trim();
+    if let Ok(seconds) = text.parse::<u64>() {
+        return Some(seconds.saturating_mul(1_000));
+    }
+    let advised = httpdate::parse_http_date(text)
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some(
+        u64::try_from(advised)
+            .unwrap_or(u64::MAX)
+            .saturating_sub(now_unix_ms),
+    )
+}
 
 /// Classifies sanitized provider failure fields for recovery and retry policy.
 ///
@@ -335,7 +381,7 @@ fn provider_error_text_is_output_limit_exceeded(text: &str) -> bool {
 mod tests {
     use super::{
         DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorKind, ProviderErrorRetryClass,
-        classify_provider_error_retry,
+        classify_provider_error_retry, provider_retry_after_delay_ms,
     };
 
     /// Verifies retry eligibility accepts recoverable classes only while the
@@ -357,16 +403,59 @@ mod tests {
         );
     }
 
-    /// Verifies exponential delays are one-based and saturate at the
-    /// canonical provider retry cap.
+    /// Verifies exponential delays are one-based, jittered deterministically,
+    /// honor bounded provider advice, and saturate at the canonical cap.
     #[test]
     fn provider_retry_policy_bounds_exponential_delay() {
-        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(0), 1_000);
-        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(1), 1_000);
-        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(2), 2_000);
-        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(5), 16_000);
-        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(6), 30_000);
-        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(u32::MAX), 30_000);
+        assert_eq!(
+            DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(0, None, Some(0)),
+            500
+        );
+        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(1, None, None), 1_000);
+        assert_eq!(
+            DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(2, None, Some(0)),
+            1_000
+        );
+        assert_eq!(
+            DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(2, Some(1_750), Some(0)),
+            1_750
+        );
+        assert_eq!(
+            DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(1, Some(u64::MAX), Some(0)),
+            30_000
+        );
+        assert_eq!(
+            DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(u32::MAX, None, None),
+            30_000
+        );
+    }
+
+    /// Verifies retry advice accepts delta-seconds and HTTP dates while
+    /// malformed and past values remain safe and deterministic.
+    #[test]
+    fn provider_retry_after_parses_supported_bounded_inputs() {
+        assert_eq!(
+            provider_retry_after_delay_ms(Some(r#"{"retry_after":"12"}"#), 0),
+            Some(12_000)
+        );
+        assert_eq!(
+            provider_retry_after_delay_ms(
+                Some(r#"{"retry_after":"Thu, 01 Jan 1970 00:00:20 GMT"}"#),
+                5_000,
+            ),
+            Some(15_000)
+        );
+        assert_eq!(
+            provider_retry_after_delay_ms(
+                Some(r#"{"retry_after":"Thu, 01 Jan 1970 00:00:01 GMT"}"#),
+                5_000,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            provider_retry_after_delay_ms(Some(r#"{"retry_after":"later"}"#), 0),
+            None
+        );
     }
 
     /// Verifies provider worker event identifiers remain stable while legacy

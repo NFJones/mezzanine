@@ -77,6 +77,31 @@ pub fn provider_failure_json(status_code: Option<u16>, body: &str) -> String {
     Value::Object(object).to_string()
 }
 
+/// Builds sanitized HTTP failure diagnostics including supported retry advice.
+///
+/// Header names are matched case-insensitively. Only `Retry-After` is retained;
+/// all other response headers remain outside the persisted failure payload.
+pub fn provider_failure_json_with_retry_headers(
+    status_code: Option<u16>,
+    body: &str,
+    headers: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let mut value = serde_json::from_str::<Value>(&provider_failure_json(status_code, body))
+        .unwrap_or_else(|_| Value::Object(Map::new()));
+    let retry_after = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty());
+    if let (Some(object), Some(retry_after)) = (value.as_object_mut(), retry_after) {
+        object.insert(
+            "retry_after".to_string(),
+            Value::String(truncate_provider_failure_text(retry_after)),
+        );
+    }
+    value.to_string()
+}
+
 /// Builds bounded, secret-safe structured diagnostics from a provider event.
 pub fn provider_failure_event_json(value: &Value) -> String {
     let mut object = Map::new();

@@ -276,7 +276,7 @@ async fn async_actor_schedules_provider_retry_timer_for_retryable_failure() {
             .unwrap_or_else(|| panic!("expected provider retry timer, got {timer_effects:?}"));
         assert_eq!(retry_key.owner_id, expected_turn);
         assert_eq!(retry_key.generation, 1);
-        assert_eq!(retry_delay_ms, 1_000);
+        assert!((500..=1_000).contains(&retry_delay_ms));
 
         let mut retry = RuntimeEventBatch::new();
         retry.push(RuntimeEvent::Timer(TimerEvent {
@@ -343,8 +343,8 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
         .unwrap();
 
     let client = async {
-        let expected_delays = [1_000, 2_000, 4_000, 8_000, 16_000];
-        for (index, expected_delay_ms) in expected_delays.into_iter().enumerate() {
+        let maximum_delays = [1_000, 2_000, 4_000, 8_000, 16_000];
+        for (index, maximum_delay_ms) in maximum_delays.into_iter().enumerate() {
             let attempt = index + 1;
             let mut failure = RuntimeEventBatch::new();
             failure.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
@@ -374,12 +374,15 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
                 .unwrap_or_else(|| panic!("expected provider retry timer, got {timer_effects:?}"));
             assert_eq!(retry_key.owner_id, expected_turn);
             assert_eq!(retry_key.generation, attempt as u64);
-            assert_eq!(retry_delay_ms, expected_delay_ms);
+            assert!(
+                (maximum_delay_ms / 2..=maximum_delay_ms).contains(&retry_delay_ms),
+                "attempt {attempt} delay {retry_delay_ms} exceeded jitter bounds"
+            );
 
             let mut retry = RuntimeEventBatch::new();
             retry.push(RuntimeEvent::Timer(TimerEvent {
                 key: retry_key,
-                now_ms: expected_delay_ms,
+                now_ms: retry_delay_ms,
             }));
             let retry_report = handle.submit_runtime_events(retry).await.unwrap();
             assert_eq!(retry_report.accepted, 1);
@@ -791,7 +794,7 @@ async fn async_actor_idle_cleanup_preserves_turn_waiting_for_provider_retry_time
                 RuntimeSideEffect::ScheduleTimer { key, delay_ms }
                     if key.kind == RuntimeTimerKind::ProviderRetry =>
                 {
-                    assert_eq!(*delay_ms, 1_000);
+                    assert!((500..=1_000).contains(delay_ms));
                     Some(key.clone())
                 }
                 _ => None,
@@ -939,7 +942,7 @@ async fn async_actor_schedules_provider_retry_timer_for_controller_retry_hint() 
                 RuntimeSideEffect::ScheduleTimer { key, delay_ms }
                     if key.kind == RuntimeTimerKind::ProviderRetry =>
                 {
-                    assert_eq!(*delay_ms, 1_000);
+                    assert!((500..=1_000).contains(delay_ms));
                     Some(key.clone())
                 }
                 _ => None,
@@ -1303,7 +1306,7 @@ async fn async_actor_retries_provider_overload_message_without_rate_limit_status
             .unwrap_or_else(|| panic!("expected provider retry timer, got {timer_effects:?}"));
         assert_eq!(retry_key.owner_id, expected_turn);
         assert_eq!(retry_key.generation, 1);
-        assert_eq!(retry_delay_ms, 1_000);
+        assert!((500..=1_000).contains(&retry_delay_ms));
 
         let mut retry = RuntimeEventBatch::new();
         retry.push(RuntimeEvent::Timer(TimerEvent {

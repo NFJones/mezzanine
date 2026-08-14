@@ -20,6 +20,7 @@ use mez_agent::{
     provider_error_detail as openai_provider_error_detail,
     provider_failure_json as openai_provider_failure_json,
 };
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -243,16 +244,32 @@ where
 
     /// Builds a provider status-code error with sanitized failure metadata.
     fn provider_status_error(&self, surface: &str, response: &ProviderHttpResponse) -> MezError {
+        let mut failure = serde_json::from_str::<Value>(
+            &self
+                .dialect
+                .provider_failure_json(Some(response.status_code), &response.body),
+        )
+        .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+        if let Some(retry_after) = response
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
+            .map(|(_, value)| value.trim())
+            .filter(|value| !value.is_empty())
+            && let Some(object) = failure.as_object_mut()
+        {
+            object.insert(
+                "retry_after".to_string(),
+                Value::String(retry_after.chars().take(128).collect()),
+            );
+        }
         MezError::invalid_state(format!(
             "{} {surface} API returned status {}: {}",
             self.dialect.provider_label(),
             response.status_code,
             self.dialect.provider_error_detail(&response.body)
         ))
-        .with_provider_failure_json(
-            self.dialect
-                .provider_failure_json(Some(response.status_code), &response.body),
-        )
+        .with_provider_failure_json(failure.to_string())
     }
 
     /// Parses a successful model catalog response into shared catalog metadata.

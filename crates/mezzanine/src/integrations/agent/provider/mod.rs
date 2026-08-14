@@ -54,7 +54,7 @@ use mez_agent::{openai_responses_request_body_with_stream, parse_openai_response
 use mez_agent::{parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn};
 use mez_agent::{
     provider_error_detail as openai_provider_error_detail,
-    provider_failure_json as openai_provider_failure_json,
+    provider_failure_json_with_retry_headers as openai_provider_failure_json_with_retry_headers,
 };
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 
@@ -718,10 +718,13 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
                 response.status_code,
                 openai_provider_error_detail(&response.body)
             ))
-            .with_provider_failure_json(openai_provider_failure_json(
-                Some(response.status_code),
-                &response.body,
-            )));
+            .with_provider_failure_json(
+                openai_provider_failure_json_with_retry_headers(
+                    Some(response.status_code),
+                    &response.body,
+                    &response.headers,
+                ),
+            ));
         }
         let models = parse_openai_models_http_body(&response.body)?;
         let reasoning_levels = provider_catalog_reasoning_levels(&models);
@@ -761,10 +764,13 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
                 response.status_code,
                 openai_provider_error_detail(&response.body)
             ))
-            .with_provider_failure_json(openai_provider_failure_json(
-                Some(response.status_code),
-                &response.body,
-            )));
+            .with_provider_failure_json(
+                openai_provider_failure_json_with_retry_headers(
+                    Some(response.status_code),
+                    &response.body,
+                    &response.headers,
+                ),
+            ));
         }
         let (model, raw_text, usage, provider_transcript_events) =
             parse_openai_responses_provider_body(&response.body, &request.model, self.stream)?;
@@ -827,10 +833,13 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                     response.status_code,
                     openai_provider_error_detail(&response.body)
                 ))
-                .with_provider_failure_json(openai_provider_failure_json(
-                    Some(response.status_code),
-                    &response.body,
-                )));
+                .with_provider_failure_json(
+                    openai_provider_failure_json_with_retry_headers(
+                        Some(response.status_code),
+                        &response.body,
+                        &response.headers,
+                    ),
+                ));
             }
             let models = parse_openai_models_http_body(&response.body)?;
             let reasoning_levels = provider_catalog_reasoning_levels(&models);
@@ -905,10 +914,13 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                     response.status_code,
                     openai_provider_error_detail(&response.body)
                 ))
-                .with_provider_failure_json(openai_provider_failure_json(
-                    Some(response.status_code),
-                    &response.body,
-                )));
+                .with_provider_failure_json(
+                    openai_provider_failure_json_with_retry_headers(
+                        Some(response.status_code),
+                        &response.body,
+                        &response.headers,
+                    ),
+                ));
             }
             if let Some(error) = stream_error {
                 return Err(error.into());

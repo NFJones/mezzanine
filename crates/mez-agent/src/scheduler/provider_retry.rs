@@ -63,6 +63,17 @@ pub enum ProviderRetryEvent {
         /// Provider-domain classification of the failure.
         retry_class: ProviderErrorRetryClass,
     },
+    /// A provider request failed with normalized timing inputs.
+    FailureObservedWithTiming {
+        /// Stable active-turn identity.
+        turn_id: String,
+        /// Provider-domain classification of the failure.
+        retry_class: ProviderErrorRetryClass,
+        /// Optional provider-advised minimum delay.
+        advised_delay_ms: Option<u64>,
+        /// Runtime-provided randomness used to jitter local backoff.
+        jitter_sample: u64,
+    },
     /// Product recovery for one planned attempt completed.
     RecoveryCompleted {
         /// Stable active-turn identity.
@@ -162,6 +173,8 @@ enum ProviderRetryPhase {
 struct ProviderRetryState {
     /// Latest one-based retry attempt.
     attempt: u32,
+    /// Delay selected once when this attempt was planned.
+    delay_ms: u64,
     /// Current effect boundary for the attempt.
     phase: ProviderRetryPhase,
 }
@@ -196,7 +209,13 @@ impl ProviderRetryScheduler {
             ProviderRetryEvent::FailureObserved {
                 turn_id,
                 retry_class,
-            } => self.observe_failure(turn_id, retry_class),
+            } => self.observe_failure(turn_id, retry_class, None, None),
+            ProviderRetryEvent::FailureObservedWithTiming {
+                turn_id,
+                retry_class,
+                advised_delay_ms,
+                jitter_sample,
+            } => self.observe_failure(turn_id, retry_class, advised_delay_ms, Some(jitter_sample)),
             ProviderRetryEvent::RecoveryCompleted {
                 turn_id,
                 attempt,
@@ -238,6 +257,8 @@ impl ProviderRetryScheduler {
         &mut self,
         turn_id: String,
         retry_class: ProviderErrorRetryClass,
+        advised_delay_ms: Option<u64>,
+        jitter_sample: Option<u64>,
     ) -> ProviderRetryTransition {
         if turn_id.trim().is_empty() {
             return ProviderRetryTransition::Terminal;
@@ -256,11 +277,14 @@ impl ProviderRetryScheduler {
             return ProviderRetryTransition::Terminal;
         }
         let attempt = recorded_attempts.saturating_add(1);
-        let delay_ms = self.policy.delay_ms(attempt);
+        let delay_ms = self
+            .policy
+            .delay_ms(attempt, advised_delay_ms, jitter_sample);
         self.turns.insert(
             turn_id.clone(),
             ProviderRetryState {
                 attempt,
+                delay_ms,
                 phase: ProviderRetryPhase::Recovering,
             },
         );
@@ -285,13 +309,15 @@ impl ProviderRetryScheduler {
         }
         match result {
             ProviderRetryRecoveryResult::Ready => {
-                if let Some(state) = self.turns.get_mut(turn_id) {
-                    state.phase = ProviderRetryPhase::TimerPending;
-                }
+                let Some(state) = self.turns.get_mut(turn_id) else {
+                    return ProviderRetryTransition::Ignored;
+                };
+                state.phase = ProviderRetryPhase::TimerPending;
+                let delay_ms = state.delay_ms;
                 ProviderRetryTransition::Effect(ProviderRetryEffect::ScheduleTimer {
                     turn_id: turn_id.to_string(),
                     attempt,
-                    delay_ms: self.policy.delay_ms(attempt),
+                    delay_ms,
                 })
             }
             ProviderRetryRecoveryResult::Failed => {
@@ -421,6 +447,38 @@ mod tests {
                 result: ProviderRetryDispatchResult::Ready,
             }),
             ProviderRetryTransition::Applied
+        );
+    }
+
+    /// Verifies provider advice and injected jitter select one bounded delay
+    /// that remains unchanged across the recovery effect boundary.
+    #[test]
+    fn provider_retry_reducer_retains_advised_jittered_delay() {
+        let mut scheduler = ProviderRetryScheduler::default();
+        let recovery = scheduler.apply(ProviderRetryEvent::FailureObservedWithTiming {
+            turn_id: "turn-advised".to_string(),
+            retry_class: ProviderErrorRetryClass::RetryableTransport,
+            advised_delay_ms: Some(1_750),
+            jitter_sample: 0,
+        });
+        assert!(matches!(
+            recovery,
+            ProviderRetryTransition::Effect(ProviderRetryEffect::Recover {
+                delay_ms: 1_750,
+                ..
+            })
+        ));
+        assert_eq!(
+            scheduler.apply(ProviderRetryEvent::RecoveryCompleted {
+                turn_id: "turn-advised".to_string(),
+                attempt: 1,
+                result: ProviderRetryRecoveryResult::Ready,
+            }),
+            ProviderRetryTransition::Effect(ProviderRetryEffect::ScheduleTimer {
+                turn_id: "turn-advised".to_string(),
+                attempt: 1,
+                delay_ms: 1_750,
+            })
         );
     }
 

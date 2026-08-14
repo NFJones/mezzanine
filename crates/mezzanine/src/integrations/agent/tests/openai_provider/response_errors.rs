@@ -33,7 +33,10 @@ fn openai_provider_http_error_includes_provider_message() {
         requests: RefCell::new(Vec::new()),
         response: ProviderHttpResponse {
             status_code: 401,
-            headers: Default::default(),
+            headers: std::collections::BTreeMap::from([(
+                "Retry-After".to_string(),
+                "12".to_string(),
+            )]),
             body: r#"{"error":{"message":"invalid account token","type":"invalid_request_error","code":"bad_account","access_token":"should-redact"}}"#.to_string(),
         },
     };
@@ -61,6 +64,7 @@ fn openai_provider_http_error_includes_provider_message() {
     assert_eq!(failure_json["error"]["type"], "invalid_request_error");
     assert_eq!(failure_json["error"]["code"], "bad_account");
     assert_eq!(failure_json["error"]["access_token"], "[REDACTED]");
+    assert_eq!(failure_json["retry_after"], "12");
 }
 
 #[test]

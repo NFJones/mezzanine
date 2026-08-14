@@ -7,10 +7,13 @@
 //! async actor and tests.
 
 use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
-use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
+use crate::runtime::{
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, current_unix_millis,
+};
 use mez_agent::{
     ProviderErrorRetryClass, ProviderRetryDispatchResult, ProviderRetryEffect, ProviderRetryEvent,
     ProviderRetryRecovery, ProviderRetryRecoveryResult, ProviderRetryTransition,
+    provider_retry_after_delay_ms,
 };
 
 /// Returns the complete serialized OpenAI Responses body size for one dispatch.
@@ -56,8 +59,8 @@ use super::{
     MezError, PaneReadinessState, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
     RuntimeAgentProviderClaim, RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
     RuntimeAgentProviderTask, RuntimeProviderConfig, RuntimeSessionService, assemble_model_request,
-    current_unix_millis, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    json_escape, openai_compatible_provider_from_auth_store_with_provider_options,
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
+    openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options, resolve_provider_api,
     runtime_agent_turn_start_hook_payload, runtime_mezzanine_error_code,
     runtime_provider_event_error,
@@ -199,13 +202,17 @@ impl RuntimeSessionService {
         retry_class: ProviderErrorRetryClass,
         error: &MezError,
     ) -> Result<Option<RuntimeTransition>> {
-        let decision =
-            self.agent
-                .provider_retry_scheduler
-                .apply(ProviderRetryEvent::FailureObserved {
-                    turn_id: turn_id.to_string(),
-                    retry_class,
-                });
+        let decision = self.agent.provider_retry_scheduler.apply(
+            ProviderRetryEvent::FailureObservedWithTiming {
+                turn_id: turn_id.to_string(),
+                retry_class,
+                advised_delay_ms: provider_retry_after_delay_ms(
+                    error.provider_failure_json(),
+                    current_unix_millis(),
+                ),
+                jitter_sample: rand::random(),
+            },
+        );
         let ProviderRetryTransition::Effect(ProviderRetryEffect::Recover {
             recovery,
             attempt,
