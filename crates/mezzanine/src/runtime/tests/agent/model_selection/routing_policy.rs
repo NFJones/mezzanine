@@ -1010,6 +1010,16 @@ reasoning_profile = "high"
         Some(mez_agent::AgentCapability::RespondOnly),
         "routed presentation must expose a hard response-only action surface"
     );
+    let frame_context = service.terminal_frame_context();
+    let pane_context = frame_context
+        .panes
+        .get("%1")
+        .expect("routed parent pane context should exist");
+    assert_eq!(
+        pane_context.agent_status.as_deref(),
+        Some("thinking"),
+        "routed parent presentation must not re-enter the routing status"
+    );
     let parent_turn = service
         .agent_turn_ledger()
         .turns()

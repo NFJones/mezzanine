@@ -249,6 +249,7 @@ impl RuntimeSessionService {
         if turn.state != mez_agent::AgentTurnState::Running {
             return Ok(crate::runtime::RuntimeTransition::default());
         }
+        self.mark_agent_turn_routing_applied(turn.turn_id.clone());
 
         let parent_session = self
             .agent_shell_store()
