@@ -1,8 +1,8 @@
 //! Runtime event application and lifecycle notification.
 
 use super::coalesce::{
-    provider_retry_timer_side_effect_turn_id, runtime_event_requires_registry_persistence,
-    runtime_timer_kind_is_shell_transaction, side_effects_include_registry_persistence,
+    runtime_event_requires_registry_persistence, runtime_timer_kind_is_shell_transaction,
+    side_effects_include_registry_persistence,
 };
 use super::{
     AgentId, AgentProviderEvent, AsyncHookEvent, AsyncRuntimeSessionActor, ClientEvent, ClientId,
@@ -87,47 +87,11 @@ impl AsyncRuntimeSessionActor {
         for event in batch.prioritized_events() {
             let event_requires_registry_persistence =
                 runtime_event_requires_registry_persistence(&event);
-            let mut application = self.apply_runtime_event(event).await?;
+            let application = self.apply_runtime_event(event).await?;
             if application.applied {
                 registry_persistence_required =
                     registry_persistence_required || event_requires_registry_persistence;
-                self.service.maybe_bootstrap_ready_panes()?;
-                let mut actor_progress_turn_ids = self.actor_owned_agent_progress_turn_ids();
-                actor_progress_turn_ids.extend(
-                    application
-                        .side_effects
-                        .iter()
-                        .filter_map(provider_retry_timer_side_effect_turn_id),
-                );
-                let reconciled = self
-                    .service
-                    .reconcile_agent_runtime_progress_paths_with_actor_progress(
-                        &actor_progress_turn_ids,
-                    )?;
-                if reconciled > 0 {
-                    application
-                        .side_effects
-                        .extend(self.render_side_effects(RenderInvalidationReason::FullRedraw));
-                    application
-                        .side_effects
-                        .extend(self.pending_provider_dispatch_side_effects()?);
-                }
-                application
-                    .side_effects
-                    .extend(self.deferred_service_side_effects_from_service());
-                application
-                    .side_effects
-                    .extend(self.cancel_stale_shell_transaction_timer_side_effects());
-                application
-                    .side_effects
-                    .extend(self.shell_transaction_timer_side_effects());
-                application
-                    .side_effects
-                    .extend(self.idle_cleanup_timer_side_effects());
-            } else {
-                application
-                    .side_effects
-                    .extend(self.deferred_service_side_effects_from_service());
+                report.applied = report.applied.saturating_add(1);
             }
             registry_persistence_queued = registry_persistence_queued
                 || side_effects_include_registry_persistence(&application.side_effects);
@@ -135,9 +99,35 @@ impl AsyncRuntimeSessionActor {
                 .side_effects
                 .saturating_add(application.side_effects.len());
             self.queue_runtime_side_effects(application.side_effects)?;
-            if application.applied {
-                report.applied = report.applied.saturating_add(1);
+        }
+        let mut batch_side_effects = Vec::new();
+        if report.applied > 0 {
+            self.metrics.runtime_event_reconciliation_passes = self
+                .metrics
+                .runtime_event_reconciliation_passes
+                .saturating_add(1);
+            self.service.maybe_bootstrap_ready_panes()?;
+            let actor_progress_turn_ids = self.actor_owned_agent_progress_turn_ids();
+            let reconciled = self
+                .service
+                .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                    &actor_progress_turn_ids,
+                )?;
+            if reconciled > 0 {
+                batch_side_effects
+                    .extend(self.render_side_effects(RenderInvalidationReason::FullRedraw));
+                batch_side_effects.extend(self.pending_provider_dispatch_side_effects()?);
             }
+            batch_side_effects.extend(self.cancel_stale_shell_transaction_timer_side_effects());
+            batch_side_effects.extend(self.shell_transaction_timer_side_effects());
+            batch_side_effects.extend(self.idle_cleanup_timer_side_effects());
+        }
+        batch_side_effects.extend(self.deferred_service_side_effects_from_service());
+        registry_persistence_queued = registry_persistence_queued
+            || side_effects_include_registry_persistence(&batch_side_effects);
+        report.side_effects = report.side_effects.saturating_add(batch_side_effects.len());
+        if !batch_side_effects.is_empty() {
+            self.queue_runtime_side_effects(batch_side_effects)?;
         }
         if report.applied > 0
             && registry_persistence_required

@@ -114,3 +114,57 @@ fn async_runtime_event_batch_preserves_pane_output_fifo_when_prioritized() {
     );
     assert!(matches!(prioritized.last(), Some(RuntimeEvent::Timer(_))));
 }
+
+/// Verifies multiple applied events trigger one global reconciliation pass,
+/// while a later no-op batch does not scan global runtime state again.
+///
+/// Direct event application and ingress accounting remain per event, but
+/// bootstrap discovery, progress repair, deferred draining, and timer
+/// regeneration belong to the coherent batch boundary.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_reconciles_global_state_once_per_applied_event_batch() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut applied = RuntimeEventBatch::new();
+        applied.push(RuntimeEvent::Client(ClientEvent::ResizeSignal {
+            client_id: primary.clone(),
+        }));
+        applied.push(RuntimeEvent::Client(ClientEvent::OutputReady {
+            client_id: primary,
+        }));
+        let report = handle.submit_runtime_events(applied).await.unwrap();
+        assert_eq!(report.accepted, 2);
+        assert_eq!(report.applied, 2);
+
+        let metrics = handle.metrics().await.unwrap();
+        assert_eq!(metrics.runtime_events_applied, 2);
+        assert_eq!(metrics.runtime_event_reconciliation_passes, 1);
+
+        let mut no_op = RuntimeEventBatch::new();
+        no_op.push(RuntimeEvent::Pane(PaneEvent::InputWritten {
+            pane_id: "%missing".to_string(),
+            bytes: 1,
+        }));
+        let report = handle.submit_runtime_events(no_op).await.unwrap();
+        assert_eq!(report.applied, 0);
+        assert_eq!(
+            handle
+                .metrics()
+                .await
+                .unwrap()
+                .runtime_event_reconciliation_passes,
+            1
+        );
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.metrics.runtime_event_reconciliation_passes, 1);
+}

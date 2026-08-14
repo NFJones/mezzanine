@@ -138,6 +138,8 @@ pub struct AsyncRuntimeActorMetrics {
     pub runtime_events_accepted: u64,
     /// Number of typed runtime events applied to mutable runtime state.
     pub runtime_events_applied: u64,
+    /// Number of once-per-batch global reconciliation passes performed.
+    pub runtime_event_reconciliation_passes: u64,
     /// Histogram of accepted event counts per runtime event batch.
     pub runtime_event_batch_sizes: RuntimeHistogram,
     /// Number of runtime side effects queued by event application.

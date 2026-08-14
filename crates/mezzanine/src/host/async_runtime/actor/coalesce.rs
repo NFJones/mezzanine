@@ -258,25 +258,6 @@ pub(super) fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) 
     }
 }
 
-/// Returns the owning turn for a provider retry timer side effect.
-///
-/// Retry timer side effects are created before they are registered in the
-/// actor's scheduled-timer map. Reconciliation inspects the not-yet-queued
-/// side-effect list through this helper so retryable provider failures are not
-/// mistaken for unreachable running turns.
-pub(super) fn provider_retry_timer_side_effect_turn_id(
-    effect: &RuntimeSideEffect,
-) -> Option<String> {
-    match effect {
-        RuntimeSideEffect::ScheduleTimer { key, .. }
-            if key.kind == RuntimeTimerKind::ProviderRetry =>
-        {
-            Some(key.owner_id.clone())
-        }
-        _ => None,
-    }
-}
-
 /// Runs the runtime client step application applied operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

@@ -477,6 +477,16 @@ mod tests {
                 && output
                     .windows(b"\x1b]133;D;1\x1b\\".len())
                     .any(|window| window == b"\x1b]133;D;1\x1b\\")
+                && output
+                    .windows(b"\x1b]133;A\x1b\\".len())
+                    .filter(|window| *window == b"\x1b]133;A\x1b\\")
+                    .count()
+                    >= 5
+                && output
+                    .windows(b"\x1b]133;B\x1b\\".len())
+                    .filter(|window| *window == b"\x1b]133;B\x1b\\")
+                    .count()
+                    >= 5
         });
         assert_eq!(
             second_output
