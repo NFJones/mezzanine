@@ -11,14 +11,14 @@ use std::sync::Arc;
 #[cfg(test)]
 use super::{
     DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput,
-    TerminalFramePosition, fit_width, render_window_frame_text,
+    TerminalFramePosition, WindowPresentationOptions, fit_width, plan_window_presentation,
+    render_window_frame_text, window_with_group_frame_space,
 };
 use super::{
     MezError, Result, TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
-    TerminalScreen, TerminalStyledLine, WindowPresentationOptions, pane_border_rendition,
-    pane_divider_rendition, place_group_frame, place_window_frame, plan_window_presentation,
-    render_styled_pane_lines, styled_group_frame_line, styled_window_frame_line,
-    window_with_group_frame_space, write_styled_merged_pane_frames_on_dividers,
+    TerminalScreen, TerminalStyledLine, pane_border_rendition, pane_divider_rendition,
+    place_group_frame, place_window_frame, render_styled_pane_lines, styled_group_frame_line,
+    styled_window_frame_line, write_styled_merged_pane_frames_on_dividers,
 };
 #[cfg(test)]
 use super::{group_frame_text, render_pane_lines, write_merged_pane_frames_on_dividers};
@@ -78,8 +78,10 @@ pub fn draw_styled_window_from_screen_and_row_resolvers<'a>(
     config: &TerminalClientLoopConfig,
     screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen>,
     styled_rows_for_pane: impl Fn(&str, &TerminalScreen) -> Arc<[TerminalStyledLine]>,
+    presentation_plan: &mez_mux::presentation::WindowPresentationPlan,
 ) -> Result<Vec<TerminalStyledLine>> {
-    let render_window = window_with_group_frame_space(window, config)?;
+    let mut render_window = window.clone();
+    render_window.size = presentation_plan.display_size;
     let pane_inputs = window
         .panes()
         .iter()
@@ -110,6 +112,7 @@ pub fn draw_styled_window_from_screen_and_row_resolvers<'a>(
             config.pane_frame_style,
         ),
         &config.ui_theme,
+        presentation_plan,
     )?;
     if let Some(frame) = styled_group_frame_line(
         &config.frame_context,
@@ -276,18 +279,8 @@ pub(super) fn render_styled_window_with_pane_frame_template(
     window_frame: TerminalFrameRenderOptions<'_>,
     pane_frame: TerminalFrameRenderOptions<'_>,
     ui_theme: &UiTheme,
+    plan: &mez_mux::presentation::WindowPresentationPlan,
 ) -> Result<Vec<TerminalStyledLine>> {
-    let plan = plan_window_presentation(
-        window,
-        WindowPresentationOptions {
-            group_frame_visible: false,
-            window_frame_visible: window_frame.enabled,
-            window_frame_position: window_frame.position,
-            pane_frames_visible: pane_frame.enabled,
-            pane_frame_position: pane_frame.position,
-        },
-    )
-    .ok_or_else(|| MezError::invalid_state("cannot render a window with no panes"))?;
     let panes_by_source_index = window
         .panes()
         .iter()

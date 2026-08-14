@@ -132,6 +132,48 @@ fn runtime_render_reuses_unchanged_pane_styled_rows_by_generation() {
     assert_eq!(service.pane_styled_row_cache_stats_for_tests(), (1, 2, 1));
 }
 
+/// Verifies repeated presentation queries reuse one bounded window snapshot,
+/// while a geometry mutation replaces that entry instead of returning stale
+/// pane regions.
+#[test]
+fn runtime_window_presentation_plan_cache_tracks_geometry_changes() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let initial_window = service.session().active_window().unwrap().clone();
+
+    let initial = service
+        .window_presentation_plan_for_tests(&initial_window)
+        .unwrap();
+    let repeated = service
+        .window_presentation_plan_for_tests(&initial_window)
+        .unwrap();
+
+    assert!(std::sync::Arc::ptr_eq(&initial, &repeated));
+    assert_eq!(
+        service.window_presentation_plan_cache_stats_for_tests(),
+        (1, 1, 1)
+    );
+
+    assert!(
+        service
+            .apply_attached_mux_action(&primary, MuxAction::SplitPaneVertical)
+            .unwrap()
+    );
+    let split_window = service.session().active_window().unwrap().clone();
+    let split = service
+        .window_presentation_plan_for_tests(&split_window)
+        .unwrap();
+
+    assert!(!std::sync::Arc::ptr_eq(&initial, &split));
+    assert_eq!(split.panes.len(), 2);
+    assert_eq!(
+        service.window_presentation_plan_cache_stats_for_tests(),
+        (1, 2, 1)
+    );
+}
+
 /// Verifies that a live agent footer re-enables animated frame ticks so active
 /// agent progress indicators keep their motion while work is still running.
 #[test]

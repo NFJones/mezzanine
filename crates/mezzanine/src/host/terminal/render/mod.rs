@@ -19,9 +19,10 @@ use mez_mux::layout::{PaneGeometry, Size, Window};
 use mez_mux::presentation::{ClientViewRole, ReadlinePromptRegion, RenderedClientView};
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
-    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, WindowPresentationOptions,
-    WindowPresentationPlan, plan_window_presentation,
+    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, WindowPresentationPlan,
 };
+#[cfg(test)]
+use mez_mux::presentation::{WindowPresentationOptions, plan_window_presentation};
 use mez_mux::render::line_slice;
 use mez_mux::render::{
     FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, FrameStatusValue,
@@ -245,12 +246,13 @@ pub fn render_attached_client_view_with_screen_resolvers<'a>(
     config: &TerminalClientLoopConfig,
     client_size: Size,
 ) -> Result<Option<RenderedClientView>> {
+    let presentation_plan = window_presentation_plan(window, config)?;
     render_attached_client_view_with_screen_and_row_resolvers(
         role,
         window,
         visual_screen_for_pane,
-        _process_screen_for_pane,
         |_pane_id, screen| std::sync::Arc::from(screen.visible_styled_lines()),
+        &presentation_plan,
         config,
         client_size,
     )
@@ -261,8 +263,8 @@ pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
     role: ClientViewRole,
     window: &Window,
     visual_screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen> + Copy,
-    _process_screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen> + Copy,
     styled_rows_for_pane: impl Fn(&str, &TerminalScreen) -> std::sync::Arc<[TerminalStyledLine]>,
+    presentation_plan: &WindowPresentationPlan,
     config: &TerminalClientLoopConfig,
     client_size: Size,
 ) -> Result<Option<RenderedClientView>> {
@@ -274,6 +276,7 @@ pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
         config,
         visual_screen_for_pane,
         styled_rows_for_pane,
+        presentation_plan,
     )?;
     let mut lines = Vec::with_capacity(styled_lines.len());
     let mut line_style_spans = Vec::with_capacity(styled_lines.len());
@@ -281,14 +284,19 @@ pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
         lines.push(line.text);
         line_style_spans.push(line.style_spans);
     }
-    let (cursor_row, cursor_column, cursor_visible) =
-        rendered_cursor(window, visual_screen_for_pane, config, role)?;
+    let (cursor_row, cursor_column, cursor_visible) = rendered_cursor(
+        window,
+        visual_screen_for_pane,
+        presentation_plan,
+        config,
+        role,
+    )?;
     let readline_input_active = role == ClientViewRole::Primary
         && window
             .panes()
             .get(window.active_pane_index())
             .is_some_and(|pane| pane_agent_shell_visible(&config.frame_context, pane.id.as_str()));
-    let agent_prompt_region = active_agent_prompt_region(window, config, role)?;
+    let agent_prompt_region = active_agent_prompt_region(window, presentation_plan, config, role)?;
     align_active_agent_prompt_block_to_region(
         window,
         config,
@@ -341,6 +349,7 @@ pub fn render_attached_client_view_with_screen_and_row_resolvers<'a>(
 }
 
 /// Returns a display window whose body is reduced by the conditional group bar.
+#[cfg(test)]
 fn window_with_group_frame_space(
     window: &Window,
     config: &TerminalClientLoopConfig,
@@ -352,6 +361,7 @@ fn window_with_group_frame_space(
 }
 
 /// Resolves product frame configuration into the narrow mux presentation input.
+#[cfg(test)]
 fn window_presentation_options(config: &TerminalClientLoopConfig) -> WindowPresentationOptions {
     WindowPresentationOptions {
         group_frame_visible: group_frame_visible(&config.frame_context),
@@ -363,6 +373,7 @@ fn window_presentation_options(config: &TerminalClientLoopConfig) -> WindowPrese
 }
 
 /// Plans one product window through the mux-owned presentation boundary.
+#[cfg(test)]
 fn window_presentation_plan(
     window: &Window,
     config: &TerminalClientLoopConfig,
@@ -379,6 +390,7 @@ fn window_presentation_plan(
 fn rendered_cursor<'a>(
     window: &Window,
     screen_for_pane: impl Fn(&str) -> Option<&'a TerminalScreen>,
+    presentation_plan: &WindowPresentationPlan,
     config: &TerminalClientLoopConfig,
     role: ClientViewRole,
 ) -> Result<(usize, usize, bool)> {
@@ -389,8 +401,7 @@ fn rendered_cursor<'a>(
     let Some(active_pane) = window.panes().get(active_index) else {
         return Ok((0, 0, false));
     };
-    let render_plan = window_presentation_plan(window, config)?;
-    let pane_plan = render_plan
+    let pane_plan = presentation_plan
         .pane(active_index)
         .ok_or_else(|| MezError::invalid_state("active pane is missing from presentation plan"))?;
     if pane_plan.content_region.is_empty() {
@@ -434,6 +445,7 @@ fn rendered_cursor<'a>(
 /// on duplicated control-flow logic.
 fn active_agent_prompt_region(
     window: &Window,
+    presentation_plan: &WindowPresentationPlan,
     config: &TerminalClientLoopConfig,
     role: ClientViewRole,
 ) -> Result<Option<ReadlinePromptRegion>> {
@@ -444,7 +456,7 @@ fn active_agent_prompt_region(
     if !pane_agent_shell_visible(&config.frame_context, active_pane.id.as_str()) {
         return Ok(None);
     }
-    active_pane_render_region(window, config, role)
+    active_pane_render_region(window, presentation_plan, role)
 }
 
 /// Runs the active pane render region operation for this subsystem.
@@ -454,7 +466,7 @@ fn active_agent_prompt_region(
 /// on duplicated control-flow logic.
 fn active_pane_render_region(
     window: &Window,
-    config: &TerminalClientLoopConfig,
+    presentation_plan: &WindowPresentationPlan,
     role: ClientViewRole,
 ) -> Result<Option<ReadlinePromptRegion>> {
     if role != ClientViewRole::Primary {
@@ -464,8 +476,7 @@ fn active_pane_render_region(
     if window.panes().get(active_index).is_none() {
         return Ok(None);
     }
-    let render_plan = window_presentation_plan(window, config)?;
-    let pane_plan = render_plan
+    let pane_plan = presentation_plan
         .pane(active_index)
         .ok_or_else(|| MezError::invalid_state("active pane is missing from presentation plan"))?;
     if pane_plan.content_region.is_empty() {

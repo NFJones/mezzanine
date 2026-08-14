@@ -248,6 +248,8 @@ pub(crate) struct RuntimePresentationComponent {
     settings: RuntimePresentationSettings,
     /// Generation-keyed immutable visible rows for pane composition.
     pane_styled_row_cache: std::cell::RefCell<RuntimePaneStyledRowCache>,
+    /// Bounded geometry-plan cache for the current window snapshot.
+    window_presentation_plan_cache: std::cell::RefCell<RuntimeWindowPresentationPlanCache>,
     /// Cached output for command-backed window status pills.
     window_status_pill_cache: std::cell::RefCell<RuntimeStatusPillCache>,
     /// Copy, paste-buffer, and host-clipboard state.
@@ -315,6 +317,18 @@ struct RuntimePaneStyledRowCache {
         String,
         (u64, std::sync::Arc<[mez_terminal::TerminalStyledLine]>),
     >,
+    hits: u64,
+    misses: u64,
+}
+
+/// One-entry presentation-plan cache keyed by every geometry-affecting input.
+#[derive(Debug, Default)]
+struct RuntimeWindowPresentationPlanCache {
+    entry: Option<(
+        mez_mux::layout::Window,
+        mez_mux::presentation::WindowPresentationOptions,
+        std::sync::Arc<mez_mux::presentation::WindowPresentationPlan>,
+    )>,
     hits: u64,
     misses: u64,
 }
@@ -1175,6 +1189,22 @@ impl RuntimeSessionService {
     pub(crate) fn pane_styled_row_cache_stats_for_tests(&self) -> (u64, u64, usize) {
         let cache = self.presentation.pane_styled_row_cache.borrow();
         (cache.hits, cache.misses, cache.rows.len())
+    }
+
+    /// Returns window presentation-plan cache hit, miss, and entry counts.
+    #[cfg(test)]
+    pub(crate) fn window_presentation_plan_cache_stats_for_tests(&self) -> (u64, u64, usize) {
+        let cache = self.presentation.window_presentation_plan_cache.borrow();
+        (cache.hits, cache.misses, usize::from(cache.entry.is_some()))
+    }
+
+    /// Returns the cached presentation plan for one test window snapshot.
+    #[cfg(test)]
+    pub(crate) fn window_presentation_plan_for_tests(
+        &self,
+        window: &mez_mux::layout::Window,
+    ) -> Option<std::sync::Arc<mez_mux::presentation::WindowPresentationPlan>> {
+        self.window_presentation_plan(window)
     }
 
     /// Returns deferred copied-word cleanup state for product integration tests.

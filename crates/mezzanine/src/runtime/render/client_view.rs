@@ -164,11 +164,13 @@ impl RuntimeSessionService {
             .rows
             .retain(|pane_id, _| active_pane_ids.contains(pane_id));
         let pane_styled_row_cache = &self.presentation.pane_styled_row_cache;
+        let presentation_plan = self
+            .window_presentation_plan(window)
+            .ok_or_else(|| MezError::invalid_state("cannot plan a window with no visible panes"))?;
         let mut view = render_attached_client_view_with_screen_and_row_resolvers(
             role,
             window,
             |pane_id| self.presented_pane_screen(pane_id),
-            |pane_id| self.process_pane_screen(pane_id),
             |pane_id, screen| {
                 let generation = screen.render_generation();
                 let mut cache = pane_styled_row_cache.borrow_mut();
@@ -189,6 +191,7 @@ impl RuntimeSessionService {
                     .insert(pane_id.to_string(), (generation, rows.clone()));
                 rows
             },
+            presentation_plan.as_ref(),
             config,
             client_size,
         )?;
@@ -556,17 +559,34 @@ impl RuntimeSessionService {
     pub(super) fn window_presentation_plan(
         &self,
         window: &mez_mux::layout::Window,
-    ) -> Option<WindowPresentationPlan> {
-        plan_window_presentation(
-            window,
-            WindowPresentationOptions {
-                group_frame_visible: self.session.window_groups().len() > 1,
-                window_frame_visible: self.presentation.settings.window_frames_enabled,
-                window_frame_position: self.presentation.settings.window_frame_position,
-                pane_frames_visible: self.presentation.settings.pane_frames_enabled,
-                pane_frame_position: self.presentation.settings.pane_frame_position,
-            },
-        )
+    ) -> Option<std::sync::Arc<WindowPresentationPlan>> {
+        let options = WindowPresentationOptions {
+            group_frame_visible: self.session.window_groups().len() > 1,
+            window_frame_visible: self.presentation.settings.window_frames_enabled,
+            window_frame_position: self.presentation.settings.window_frame_position,
+            pane_frames_visible: self.presentation.settings.pane_frames_enabled,
+            pane_frame_position: self.presentation.settings.pane_frame_position,
+        };
+        let mut cache = self
+            .presentation
+            .window_presentation_plan_cache
+            .borrow_mut();
+        if let Some((_, _, plan)) =
+            cache
+                .entry
+                .as_ref()
+                .filter(|(cached_window, cached_options, _)| {
+                    cached_window == window && *cached_options == options
+                })
+        {
+            let plan = plan.clone();
+            cache.hits = cache.hits.saturating_add(1);
+            return Some(plan);
+        }
+        let plan = std::sync::Arc::new(plan_window_presentation(window, options)?);
+        cache.misses = cache.misses.saturating_add(1);
+        cache.entry = Some((window.clone(), options, plan.clone()));
+        Some(plan)
     }
 
     /// Returns the mux-planned absolute content region for a runtime pane.
