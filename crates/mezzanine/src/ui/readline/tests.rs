@@ -3,7 +3,9 @@
 use super::{
     ReadlineEdit, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind,
 };
+use crate::ui::selector::{SelectorExtraCandidate, SelectorSurface};
 use mez_mux::readline::{ReadlineBracketedPasteRejection, ReadlineDecodedInput};
+use mez_mux::selector::{SelectorCandidate, SelectorCandidateKind};
 
 /// Verifies large pasted text renders as one compact editable block while
 /// submission still recovers the exact original payload through the product
@@ -413,6 +415,33 @@ fn readline_agent_prompt_renders_slash_command_shadow_hint() {
     assert_eq!(prompt.buffer.line(), "/log");
     assert_eq!(prompt.render_with_shadow_hint(), "mez> /log-level");
     assert_eq!(prompt.rendered_shadow_hint_columns(), Some((9, 6)));
+}
+
+/// Verifies one prompt revision computes its shadow hint once and reuses the
+/// resulting text and display-cell columns, including a double-width Unicode
+/// suffix. Editing the prompt must invalidate that snapshot exactly once.
+#[test]
+fn readline_prompt_render_snapshot_reuses_unicode_shadow_hint() {
+    let mut prompt = ReadlinePrompt::new(ReadlinePromptKind::Agent);
+    prompt.set_selector_extra_candidates([SelectorExtraCandidate::new(
+        SelectorSurface::AgentCommand,
+        "@",
+        SelectorCandidate::new("@é界", SelectorCandidateKind::Value, true),
+    )]);
+
+    assert_eq!(
+        prompt_outcome(&mut prompt, "ask @é".as_bytes()),
+        ReadlineOutcome::Edited
+    );
+    assert_eq!(prompt.render_snapshot_misses_for_tests(), 0);
+    assert_eq!(prompt.render_with_shadow_hint(), "mez> ask @é界");
+    assert_eq!(prompt.rendered_shadow_hint_columns(), Some((11, 2)));
+    assert_eq!(prompt.rendered_cursor_column(), 11);
+    assert_eq!(prompt.render_snapshot_misses_for_tests(), 1);
+
+    assert_eq!(prompt_outcome(&mut prompt, b"x"), ReadlineOutcome::Edited);
+    assert_eq!(prompt.render_with_shadow_hint(), "mez> ask @éx");
+    assert_eq!(prompt.render_snapshot_misses_for_tests(), 2);
 }
 
 /// Verifies that agent prompts reserve line-feed for an embedded newline while

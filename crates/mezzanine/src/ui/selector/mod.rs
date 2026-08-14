@@ -20,17 +20,21 @@ mod filesystem;
 mod parameters;
 
 pub use api::{
-    SelectorExtraCandidate, SelectorSurface, shadow_hint_with_extra_in_working_directory,
-    start_active_selector_with_extra_in_working_directory,
+    SelectorExtraCandidate, SelectorSurface, shadow_hint_with_extra_and_filesystem_candidates,
+    start_active_selector_with_extra_and_filesystem_candidates,
 };
 #[cfg(test)]
 pub use api::{
     plan_selector, plan_selector_with_extra, plan_selector_with_extra_in_working_directory,
     shadow_hint, shadow_hint_with_extra, start_active_selector,
 };
-use command_catalog::{canonical_agent_command, selector_candidates};
+#[cfg(test)]
+use command_catalog::selector_candidates;
+use command_catalog::{canonical_agent_command, selector_candidates_with_filesystem};
+#[cfg(test)]
 use filesystem::path_candidates;
 pub use filesystem::record_browser_save_path_candidates;
+pub use filesystem::{AsyncFilesystemSelectorCandidates, AsyncFilesystemSelectorSnapshot};
 use parameters::{
     agent_parameter_hint, flag_candidates, mezzanine_parameter_hint, value_candidates,
 };

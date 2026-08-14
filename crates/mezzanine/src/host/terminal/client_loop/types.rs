@@ -102,6 +102,8 @@ pub struct ReadlinePromptStatusRow {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub cursor_visible: bool,
+    /// Shadow-hint start and width in prompt-relative terminal display cells.
+    pub shadow_hint_columns: Option<(usize, usize)>,
 }
 
 /// Carries Readline Prompt Client Presentation state for this subsystem.

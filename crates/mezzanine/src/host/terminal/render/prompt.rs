@@ -57,7 +57,8 @@ pub fn render_readline_prompt_status_row(
     prompt: &ReadlinePrompt,
     width: usize,
 ) -> ReadlinePromptStatusRow {
-    let raw_cursor_column = prompt.rendered_cursor_column();
+    let snapshot = prompt.render_snapshot();
+    let raw_cursor_column = snapshot.cursor_column;
     let cursor_column = raw_cursor_column
         .saturating_add(2)
         .min(width.saturating_sub(1));
@@ -66,11 +67,12 @@ pub fn render_readline_prompt_status_row(
             kind: ClientStatusKind::Plain,
             text: format!(
                 "{MEZ_UI_PREFIX}{}",
-                fit_width(&prompt.render_with_shadow_hint(), width.saturating_sub(2))
+                fit_width(&snapshot.text, width.saturating_sub(2))
             ),
         },
         cursor_column,
         cursor_visible: width > 0 && raw_cursor_column <= width.saturating_sub(2),
+        shadow_hint_columns: snapshot.shadow_hint_columns,
     }
 }
 
@@ -101,9 +103,13 @@ pub fn compose_readline_prompt_client_presentation(
                 rendition: agent_prompt_input_rendition(&view.ui_theme),
             });
         }
-        if let Some(span) =
-            prompt_shadow_hint_style_span(prompt, 2, presentation_width, &view.ui_theme)
-        {
+        if let Some(span) = prompt_shadow_hint_style_span(
+            prompt,
+            row.shadow_hint_columns,
+            2,
+            presentation_width,
+            &view.ui_theme,
+        ) {
             last.push(span);
         }
     }
@@ -188,7 +194,13 @@ pub fn compose_prompt_overlay_presentation_with_styles(
                 length: width,
                 rendition: prompt_region_rendition(prompt, ui_theme),
             });
-            if let Some(span) = prompt_shadow_hint_style_span(prompt, 2, width, ui_theme) {
+            if let Some(span) = prompt_shadow_hint_style_span(
+                prompt,
+                status_row.shadow_hint_columns,
+                2,
+                width,
+                ui_theme,
+            ) {
                 last.push(span);
             }
         }
@@ -362,11 +374,12 @@ pub(super) fn display_overlay_text_rendition(ui_theme: &UiTheme) -> GraphicRendi
 /// on duplicated control-flow logic.
 fn prompt_shadow_hint_style_span(
     prompt: &ReadlinePrompt,
+    shadow_hint_columns: Option<(usize, usize)>,
     rendered_column_offset: usize,
     width: usize,
     ui_theme: &UiTheme,
 ) -> Option<TerminalStyleSpan> {
-    let (start, length) = prompt.rendered_shadow_hint_columns()?;
+    let (start, length) = shadow_hint_columns?;
     let start = start.saturating_add(rendered_column_offset);
     let end = start.saturating_add(length).min(width);
     (start < end).then_some(TerminalStyleSpan {
@@ -479,10 +492,11 @@ fn render_wrapped_prompt_layout(
     width: usize,
     max_rows: usize,
 ) -> WrappedPromptLayout {
-    let raw_line = format!("{MEZ_UI_PREFIX}{}", prompt.render_with_shadow_hint());
-    let raw_cursor_index = prompt.rendered_cursor_column().saturating_add(2);
-    let raw_shadow_range = prompt
-        .rendered_shadow_hint_columns()
+    let snapshot = prompt.render_snapshot();
+    let raw_line = format!("{MEZ_UI_PREFIX}{}", snapshot.text);
+    let raw_cursor_index = snapshot.cursor_column.saturating_add(2);
+    let raw_shadow_range = snapshot
+        .shadow_hint_columns
         .map(|(start, length)| (start.saturating_add(2), start.saturating_add(2 + length)));
     let continuation_indent =
         if prompt.kind == ReadlinePromptKind::Agent && !prompt.reverse_search_active() {

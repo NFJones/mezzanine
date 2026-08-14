@@ -6,15 +6,80 @@
 
 use crate::error::Result;
 use crate::ui::selector::{
-    SelectorExtraCandidate, SelectorSurface, shadow_hint_with_extra_in_working_directory,
-    start_active_selector_with_extra_in_working_directory,
+    AsyncFilesystemSelectorCandidates, AsyncFilesystemSelectorSnapshot, SelectorExtraCandidate,
+    SelectorSurface, shadow_hint_with_extra_and_filesystem_candidates,
+    start_active_selector_with_extra_and_filesystem_candidates,
 };
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use super::types::{ReadlinePrompt, ReadlinePromptKind};
 use mez_mux::readline::{ReadlineOutcome, ReadlinePromptMode};
 use mez_mux::selector::SelectorShadowHint;
 use unicode_width::UnicodeWidthStr;
+
+/// One immutable prompt presentation computed from a single shadow-hint result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReadlinePromptRenderSnapshot {
+    /// Complete prompt text including any transient shadow hint.
+    pub(crate) text: String,
+    /// Cursor column in terminal display cells.
+    pub(crate) cursor_column: usize,
+    /// Shadow hint start and width in terminal display cells.
+    pub(crate) shadow_hint_columns: Option<(usize, usize)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReadlinePromptRenderSnapshotKey {
+    kind: ReadlinePromptKind,
+    rendered_reverse_search: Option<String>,
+    rendered_line: String,
+    line: String,
+    cursor: usize,
+    selector_revision: u64,
+    filesystem_completion_generation: Option<u64>,
+}
+
+#[derive(Debug, Default)]
+struct ReadlinePromptRenderSnapshotCacheState {
+    entry: Option<(
+        ReadlinePromptRenderSnapshotKey,
+        ReadlinePromptRenderSnapshot,
+    )>,
+    misses: u64,
+}
+
+/// Clone-safe operational cache for prompt render projections.
+#[derive(Debug, Clone, Default)]
+pub(super) struct ReadlinePromptRenderSnapshotCache {
+    state: Arc<Mutex<ReadlinePromptRenderSnapshotCacheState>>,
+}
+
+impl ReadlinePromptRenderSnapshotCache {
+    fn get(&self, key: &ReadlinePromptRenderSnapshotKey) -> Option<ReadlinePromptRenderSnapshot> {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .entry
+            .as_ref()
+            .filter(|(cached_key, _)| cached_key == key)
+            .map(|(_, snapshot)| snapshot.clone())
+    }
+
+    fn store(&self, key: ReadlinePromptRenderSnapshotKey, snapshot: ReadlinePromptRenderSnapshot) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.misses = state.misses.saturating_add(1);
+        state.entry = Some((key, snapshot));
+    }
+
+    #[cfg(test)]
+    fn misses(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .misses
+    }
+}
 
 impl ReadlinePrompt {
     /// Creates an empty prompt using mux-owned editing state.
@@ -25,6 +90,9 @@ impl ReadlinePrompt {
             selector: None,
             selector_extra_candidates: Vec::new(),
             selector_working_directory: None,
+            filesystem_selector_candidates: AsyncFilesystemSelectorCandidates::default(),
+            selector_revision: 0,
+            render_snapshot_cache: Default::default(),
         }
     }
 
@@ -38,12 +106,39 @@ impl ReadlinePrompt {
         &mut self,
         candidates: impl IntoIterator<Item = SelectorExtraCandidate>,
     ) {
-        self.selector_extra_candidates = candidates.into_iter().collect();
+        let candidates = candidates.into_iter().collect::<Vec<_>>();
+        if self.selector_extra_candidates != candidates {
+            self.selector_extra_candidates = candidates;
+            self.selector_revision = self.selector_revision.wrapping_add(1);
+        }
     }
 
     /// Replaces the prompt-local working directory used for completion.
     pub fn set_selector_working_directory(&mut self, working_directory: Option<PathBuf>) {
+        if self.selector_working_directory != working_directory {
+            self.selector_revision = self.selector_revision.wrapping_add(1);
+        }
         self.selector_working_directory = working_directory;
+    }
+
+    /// Computes or reuses one complete prompt render snapshot.
+    pub(crate) fn render_snapshot(&self) -> ReadlinePromptRenderSnapshot {
+        let filesystem_snapshot = self.filesystem_selector_snapshot();
+        let key = ReadlinePromptRenderSnapshotKey {
+            kind: self.kind,
+            rendered_reverse_search: self.state.rendered_reverse_search(),
+            rendered_line: self.state.buffer.rendered_line(),
+            line: self.state.buffer.line().to_string(),
+            cursor: self.state.buffer.cursor(),
+            selector_revision: self.selector_revision,
+            filesystem_completion_generation: filesystem_snapshot.completion_generation(),
+        };
+        if let Some(snapshot) = self.render_snapshot_cache.get(&key) {
+            return snapshot;
+        }
+        let snapshot = self.compute_render_snapshot(&key, &filesystem_snapshot);
+        self.render_snapshot_cache.store(key, snapshot.clone());
+        snapshot
     }
 
     /// Renders the prompt as plain text for a terminal row.
@@ -54,39 +149,20 @@ impl ReadlinePrompt {
     }
 
     /// Renders the prompt with transient selector shadow text.
+    #[cfg(test)]
     pub fn render_with_shadow_hint(&self) -> String {
-        if let Some(search) = self.state.rendered_reverse_search() {
-            return search;
-        }
-        format!("{}{}", self.prefix(), self.buffer_line_with_shadow_hint())
+        self.render_snapshot().text
     }
 
     /// Returns the shadow-hint column and width in the rendered prompt.
+    #[cfg(test)]
     pub fn rendered_shadow_hint_columns(&self) -> Option<(usize, usize)> {
-        if self.state.reverse_search_active() {
-            return None;
-        }
-        let hint = self.shadow_hint()?;
-        let line = self.state.buffer.line();
-        let insert_at = hint.insert_at.min(line.len());
-        if !line.is_char_boundary(insert_at) {
-            return None;
-        }
-        let start = UnicodeWidthStr::width(self.prefix())
-            .saturating_add(self.state.buffer.rendered_columns_before(insert_at));
-        Some((start, UnicodeWidthStr::width(hint.text.as_str())))
+        self.render_snapshot().shadow_hint_columns
     }
 
     /// Returns the cursor column in the rendered prompt line.
     pub fn rendered_cursor_column(&self) -> usize {
-        if let Some(column) = self.state.reverse_search_cursor_column() {
-            return column;
-        }
-        UnicodeWidthStr::width(self.prefix()).saturating_add(
-            self.state
-                .buffer
-                .rendered_columns_before(self.state.buffer.cursor()),
-        )
+        self.render_snapshot().cursor_column
     }
 
     /// Applies raw terminal input with product selector policy around the
@@ -118,29 +194,75 @@ impl ReadlinePrompt {
         self.state.reverse_search_active()
     }
 
-    fn shadow_hint(&self) -> Option<SelectorShadowHint> {
-        let surface = self.selector_surface()?;
-        shadow_hint_with_extra_in_working_directory(
+    fn filesystem_selector_snapshot(&self) -> AsyncFilesystemSelectorSnapshot {
+        let Some(surface) = self.selector_surface() else {
+            return AsyncFilesystemSelectorSnapshot::default();
+        };
+        self.filesystem_selector_candidates.snapshot(
             surface,
             self.state.buffer.line(),
             self.state.buffer.cursor(),
-            &self.selector_extra_candidates,
             self.selector_working_directory.as_deref(),
         )
     }
 
-    fn buffer_line_with_shadow_hint(&self) -> String {
-        let line = self.state.buffer.line();
-        let Some(hint) = self.shadow_hint() else {
-            return self.state.buffer.rendered_line();
-        };
-        if hint.insert_at > line.len() || !line.is_char_boundary(hint.insert_at) {
-            return self.state.buffer.rendered_line();
+    fn shadow_hint(
+        &self,
+        filesystem_snapshot: &AsyncFilesystemSelectorSnapshot,
+    ) -> Option<SelectorShadowHint> {
+        let surface = self.selector_surface()?;
+        shadow_hint_with_extra_and_filesystem_candidates(
+            surface,
+            self.state.buffer.line(),
+            self.state.buffer.cursor(),
+            &self.selector_extra_candidates,
+            filesystem_snapshot.candidates(),
+        )
+    }
+
+    fn compute_render_snapshot(
+        &self,
+        key: &ReadlinePromptRenderSnapshotKey,
+        filesystem_snapshot: &AsyncFilesystemSelectorSnapshot,
+    ) -> ReadlinePromptRenderSnapshot {
+        if let Some(search) = key.rendered_reverse_search.as_ref() {
+            return ReadlinePromptRenderSnapshot {
+                text: search.clone(),
+                cursor_column: self.state.reverse_search_cursor_column().unwrap_or(0),
+                shadow_hint_columns: None,
+            };
         }
-        self.state
-            .buffer
-            .rendered_line_with_insert(hint.insert_at, &hint.text)
-            .unwrap_or_else(|| self.state.buffer.rendered_line())
+        let line = self.state.buffer.line();
+        let hint = self
+            .shadow_hint(filesystem_snapshot)
+            .filter(|hint| hint.insert_at <= line.len() && line.is_char_boundary(hint.insert_at));
+        let rendered_line = hint
+            .as_ref()
+            .and_then(|hint| {
+                self.state
+                    .buffer
+                    .rendered_line_with_insert(hint.insert_at, &hint.text)
+            })
+            .unwrap_or_else(|| key.rendered_line.clone());
+        let shadow_hint_columns = hint.as_ref().map(|hint| {
+            let start = UnicodeWidthStr::width(self.prefix())
+                .saturating_add(self.state.buffer.rendered_columns_before(hint.insert_at));
+            (start, UnicodeWidthStr::width(hint.text.as_str()))
+        });
+        ReadlinePromptRenderSnapshot {
+            text: format!("{}{}", self.prefix(), rendered_line),
+            cursor_column: UnicodeWidthStr::width(self.prefix()).saturating_add(
+                self.state
+                    .buffer
+                    .rendered_columns_before(self.state.buffer.cursor()),
+            ),
+            shadow_hint_columns,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn render_snapshot_misses_for_tests(&self) -> u64 {
+        self.render_snapshot_cache.misses()
     }
 
     fn apply_selector_input(&mut self, reverse: bool) -> ReadlineOutcome {
@@ -165,13 +287,19 @@ impl ReadlinePrompt {
                 selector
             }
             _ => {
-                let Some(selector) = start_active_selector_with_extra_in_working_directory(
+                let filesystem_snapshot = self.filesystem_selector_candidates.snapshot(
+                    surface,
+                    self.state.buffer.line(),
+                    self.state.buffer.cursor(),
+                    self.selector_working_directory.as_deref(),
+                );
+                let Some(selector) = start_active_selector_with_extra_and_filesystem_candidates(
                     surface,
                     self.state.buffer.line(),
                     self.state.buffer.cursor(),
                     reverse,
                     &self.selector_extra_candidates,
-                    self.selector_working_directory.as_deref(),
+                    filesystem_snapshot.candidates(),
                 ) else {
                     self.selector = None;
                     return ReadlineOutcome::Noop;

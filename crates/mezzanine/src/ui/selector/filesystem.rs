@@ -2,8 +2,229 @@
 
 use super::{
     Path, PathBuf, SelectorCandidate, SelectorCandidateKind, SelectorSurface, SelectorTokenContext,
-    canonical_agent_command, fs, unescape_selector_shell_token,
+    canonical_agent_command, fs, selector_token_context, unescape_selector_shell_token,
 };
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
+
+/// Maximum filesystem candidates retained for one selector query.
+const MAX_FILESYSTEM_SELECTOR_CANDIDATES: usize = 200;
+
+/// Nonblocking filesystem candidate discovery owned by one readline prompt.
+///
+/// Cloned prompts share one worker and one exact-key result snapshot. Rapid
+/// revisions overwrite pending work, while generation checks prevent an older
+/// directory scan from replacing candidates for newer prompt text or cwd.
+#[derive(Clone)]
+pub struct AsyncFilesystemSelectorCandidates {
+    state: Arc<Mutex<AsyncFilesystemSelectorState>>,
+    wake: Arc<OnceLock<Option<mpsc::SyncSender<()>>>>,
+}
+
+impl fmt::Debug for AsyncFilesystemSelectorCandidates {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AsyncFilesystemSelectorCandidates")
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for AsyncFilesystemSelectorCandidates {
+    fn eq(&self, _other: &Self) -> bool {
+        // Worker/cache state is operational and does not change prompt value semantics.
+        true
+    }
+}
+
+impl Eq for AsyncFilesystemSelectorCandidates {}
+
+#[derive(Debug, Default)]
+struct AsyncFilesystemSelectorState {
+    generation: u64,
+    pending: Option<AsyncFilesystemSelectorRequest>,
+    active: Option<AsyncFilesystemSelectorKey>,
+    completed: Option<AsyncFilesystemSelectorCompletion>,
+}
+
+#[derive(Debug, Clone)]
+struct AsyncFilesystemSelectorRequest {
+    generation: u64,
+    key: AsyncFilesystemSelectorKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AsyncFilesystemSelectorKey {
+    surface: SelectorSurface,
+    line: String,
+    cursor: usize,
+    working_directory: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct AsyncFilesystemSelectorCompletion {
+    generation: u64,
+    key: AsyncFilesystemSelectorKey,
+    candidates: Arc<[SelectorCandidate]>,
+}
+
+/// Exact-key nonblocking filesystem candidate snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AsyncFilesystemSelectorSnapshot {
+    completion_generation: Option<u64>,
+    candidates: Arc<[SelectorCandidate]>,
+}
+
+impl AsyncFilesystemSelectorSnapshot {
+    /// Returns the generation of the completed exact-key scan, when available.
+    pub fn completion_generation(&self) -> Option<u64> {
+        self.completion_generation
+    }
+
+    /// Returns the immutable candidates discovered for this exact prompt key.
+    pub fn candidates(&self) -> &[SelectorCandidate] {
+        &self.candidates
+    }
+}
+
+impl Default for AsyncFilesystemSelectorCandidates {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(AsyncFilesystemSelectorState::default())),
+            wake: Arc::new(OnceLock::new()),
+        }
+    }
+}
+
+impl AsyncFilesystemSelectorCandidates {
+    /// Returns a completed exact-key snapshot or starts bounded background discovery.
+    pub fn snapshot(
+        &self,
+        surface: SelectorSurface,
+        line: &str,
+        cursor: usize,
+        working_directory: Option<&Path>,
+    ) -> AsyncFilesystemSelectorSnapshot {
+        let context = selector_token_context(line, cursor);
+        if !path_completion_allowed(surface, &context) {
+            return AsyncFilesystemSelectorSnapshot::default();
+        }
+        let key = AsyncFilesystemSelectorKey {
+            surface,
+            line: line.to_string(),
+            cursor: context.cursor,
+            working_directory: working_directory.map(Path::to_path_buf),
+        };
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(completed) = state.completed.as_ref().filter(|entry| entry.key == key) {
+            return AsyncFilesystemSelectorSnapshot {
+                completion_generation: Some(completed.generation),
+                candidates: completed.candidates.clone(),
+            };
+        }
+        if state.active.as_ref() == Some(&key)
+            || state
+                .pending
+                .as_ref()
+                .is_some_and(|request| request.key == key)
+        {
+            return AsyncFilesystemSelectorSnapshot::default();
+        }
+        state.generation = state.generation.wrapping_add(1);
+        state.pending = Some(AsyncFilesystemSelectorRequest {
+            generation: state.generation,
+            key,
+        });
+        drop(state);
+        if let Some(wake) = self.wake.get_or_init(|| {
+            let (wake, receiver) = mpsc::sync_channel(1);
+            let weak_state = Arc::downgrade(&self.state);
+            std::thread::Builder::new()
+                .name("mez-filesystem-selector".to_string())
+                .spawn(move || run_async_filesystem_selector_worker(weak_state, receiver))
+                .ok()
+                .map(|_| wake)
+        }) {
+            let _ = wake.try_send(());
+        }
+        AsyncFilesystemSelectorSnapshot::default()
+    }
+
+    /// Waits for one exact request to complete in focused tests.
+    #[cfg(test)]
+    pub fn complete_for_tests(
+        &self,
+        surface: SelectorSurface,
+        line: &str,
+        cursor: usize,
+        working_directory: Option<&Path>,
+    ) -> Vec<SelectorCandidate> {
+        for _ in 0..1_000 {
+            let _ = self.snapshot(surface, line, cursor, working_directory);
+            let completed_candidates = {
+                let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+                state
+                    .completed
+                    .as_ref()
+                    .filter(|entry| {
+                        entry.key.surface == surface
+                            && entry.key.line == line
+                            && entry.key.cursor == cursor
+                            && entry.key.working_directory.as_deref() == working_directory
+                    })
+                    .map(|entry| entry.candidates.to_vec())
+            };
+            if let Some(candidates) = completed_candidates {
+                return candidates;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("filesystem selector discovery did not complete");
+    }
+}
+
+fn run_async_filesystem_selector_worker(
+    weak_state: Weak<Mutex<AsyncFilesystemSelectorState>>,
+    receiver: mpsc::Receiver<()>,
+) {
+    while receiver.recv().is_ok() {
+        loop {
+            let Some(state) = weak_state.upgrade() else {
+                return;
+            };
+            let request = {
+                let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                let request = state.pending.take();
+                state.active = request.as_ref().map(|request| request.key.clone());
+                request
+            };
+            let Some(request) = request else {
+                break;
+            };
+            let context = selector_token_context(&request.key.line, request.key.cursor);
+            let candidates = path_candidates(
+                request.key.surface,
+                &context,
+                request.key.working_directory.as_deref(),
+            );
+            let Some(state) = weak_state.upgrade() else {
+                return;
+            };
+            let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+            if state.generation == request.generation {
+                state.completed = Some(AsyncFilesystemSelectorCompletion {
+                    generation: request.generation,
+                    key: request.key,
+                    candidates: Arc::from(candidates),
+                });
+            }
+            state.active = None;
+            if state.pending.is_none() {
+                break;
+            }
+        }
+    }
+}
 
 /// Builds filesystem path candidates for command arguments.
 pub(super) fn path_candidates(
@@ -20,32 +241,28 @@ pub(super) fn path_candidates(
         return Vec::new();
     };
     let include_hidden = name_prefix.starts_with('.');
-    let mut candidates = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !include_hidden && name.starts_with('.') {
-                return None;
-            }
-            if !name.starts_with(&name_prefix) {
-                return None;
-            }
-            let is_dir = entry.file_type().ok().is_some_and(|kind| kind.is_dir());
-            let suffix = if is_dir { "/" } else { "" };
-            let value = format!(
-                "{display_prefix}{}{suffix}",
-                escape_path_component_for_shell(&name)
-            );
-            Some(SelectorCandidate::new(
-                value,
-                SelectorCandidateKind::Value,
-                !is_dir,
-            ))
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| left.value.cmp(&right.value));
-    candidates.truncate(200);
-    candidates
+    let mut candidates = BTreeMap::new();
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !include_hidden && name.starts_with('.') {
+            continue;
+        }
+        if !name.starts_with(&name_prefix) {
+            continue;
+        }
+        let is_dir = entry.file_type().ok().is_some_and(|kind| kind.is_dir());
+        let suffix = if is_dir { "/" } else { "" };
+        let value = format!(
+            "{display_prefix}{}{suffix}",
+            escape_path_component_for_shell(&name)
+        );
+        let candidate = SelectorCandidate::new(value, SelectorCandidateKind::Value, !is_dir);
+        candidates.insert(candidate.value.clone(), candidate);
+        if candidates.len() > MAX_FILESYSTEM_SELECTOR_CANDIDATES {
+            candidates.pop_last();
+        }
+    }
+    candidates.into_values().collect()
 }
 
 /// Builds literal filesystem candidates for one standalone save-path field.
@@ -63,25 +280,25 @@ pub fn record_browser_save_path_candidates(
         return Vec::new();
     };
     let include_hidden = name_prefix.starts_with('.');
-    let mut candidates = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if (!include_hidden && name.starts_with('.')) || !name.starts_with(&name_prefix) {
-                return None;
-            }
-            let is_dir = entry.file_type().ok().is_some_and(|kind| kind.is_dir());
-            let suffix = if is_dir { "/" } else { "" };
-            Some(SelectorCandidate::new(
-                format!("{display_prefix}{name}{suffix}"),
-                SelectorCandidateKind::Value,
-                false,
-            ))
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| left.value.cmp(&right.value));
-    candidates.truncate(200);
-    candidates
+    let mut candidates = BTreeMap::new();
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if (!include_hidden && name.starts_with('.')) || !name.starts_with(&name_prefix) {
+            continue;
+        }
+        let is_dir = entry.file_type().ok().is_some_and(|kind| kind.is_dir());
+        let suffix = if is_dir { "/" } else { "" };
+        let candidate = SelectorCandidate::new(
+            format!("{display_prefix}{name}{suffix}"),
+            SelectorCandidateKind::Value,
+            false,
+        );
+        candidates.insert(candidate.value.clone(), candidate);
+        if candidates.len() > MAX_FILESYSTEM_SELECTOR_CANDIDATES {
+            candidates.pop_last();
+        }
+    }
+    candidates.into_values().collect()
 }
 
 /// Returns whether filesystem completion should be offered for this token.

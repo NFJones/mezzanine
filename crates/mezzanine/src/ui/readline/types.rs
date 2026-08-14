@@ -3,7 +3,9 @@
 //! These definitions describe edits, outcomes, prompt kinds, loop configuration,
 //! and state containers while leaving behavior to focused sibling modules.
 
-use crate::ui::selector::{SelectorExtraCandidate, SelectorSurface};
+use crate::ui::selector::{
+    AsyncFilesystemSelectorCandidates, SelectorExtraCandidate, SelectorSurface,
+};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
@@ -25,7 +27,7 @@ pub enum ReadlinePromptKind {
 }
 
 /// A prompt instance for one interactive command surface.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct ReadlinePrompt {
     /// Stores the kind value for this data structure.
     ///
@@ -54,7 +56,43 @@ pub struct ReadlinePrompt {
     /// so selector filesystem candidates resolve against the active pane cwd
     /// instead of the Mez server process working directory.
     pub selector_working_directory: Option<PathBuf>,
+    /// Prompt-owned single-worker filesystem candidate snapshot.
+    ///
+    /// Cloned render projections share the worker, while exact query/cwd keys
+    /// and generation checks prevent stale scans from changing newer prompts.
+    pub(super) filesystem_selector_candidates: AsyncFilesystemSelectorCandidates,
+    /// Monotonic revision of runtime candidates and completion cwd inputs.
+    pub(super) selector_revision: u64,
+    /// Operational render cache excluded from prompt value semantics.
+    pub(super) render_snapshot_cache: super::prompt::ReadlinePromptRenderSnapshotCache,
 }
+
+impl Clone for ReadlinePrompt {
+    fn clone(&self) -> Self {
+        Self {
+            kind: self.kind,
+            state: self.state.clone(),
+            selector: self.selector.clone(),
+            selector_extra_candidates: self.selector_extra_candidates.clone(),
+            selector_working_directory: self.selector_working_directory.clone(),
+            filesystem_selector_candidates: self.filesystem_selector_candidates.clone(),
+            selector_revision: self.selector_revision,
+            render_snapshot_cache: self.render_snapshot_cache.clone(),
+        }
+    }
+}
+
+impl PartialEq for ReadlinePrompt {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.state == other.state
+            && self.selector == other.selector
+            && self.selector_extra_candidates == other.selector_extra_candidates
+            && self.selector_working_directory == other.selector_working_directory
+    }
+}
+
+impl Eq for ReadlinePrompt {}
 
 impl Deref for ReadlinePrompt {
     type Target = ReadlinePromptState;

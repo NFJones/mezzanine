@@ -1,9 +1,11 @@
 //! Mezzanine and agent command catalogs plus command-specific candidates.
 
+#[cfg(test)]
+use super::{Path, path_candidates};
 use super::{
-    Path, SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
+    SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
     SelectorTokenContext, baseline_commands, baseline_slash_commands, dedupe_selector_candidates,
-    flag_candidates, path_candidates, value_candidates,
+    flag_candidates, value_candidates,
 };
 
 /// Builds command candidates for the Mezzanine prompt surface.
@@ -28,9 +30,6 @@ pub(super) fn mezzanine_candidates(context: &SelectorTokenContext) -> Vec<Select
 /// on duplicated control-flow logic.
 pub(super) fn agent_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
     if context.tokens_before.is_empty() {
-        if !context.query.is_empty() && !context.query.starts_with('/') {
-            return path_candidates(SelectorSurface::AgentCommand, context, None);
-        }
         return baseline_slash_commands()
             .into_iter()
             .flat_map(|spec| {
@@ -57,11 +56,23 @@ pub(super) fn agent_candidates(context: &SelectorTokenContext) -> Vec<SelectorCa
 }
 
 /// Builds selector candidates from static command metadata plus runtime values.
+#[cfg(test)]
 pub(super) fn selector_candidates(
     surface: SelectorSurface,
     context: &SelectorTokenContext,
     extra_candidates: &[SelectorExtraCandidate],
     working_directory: Option<&Path>,
+) -> Vec<SelectorCandidate> {
+    let filesystem_candidates = path_candidates(surface, context, working_directory);
+    selector_candidates_with_filesystem(surface, context, extra_candidates, &filesystem_candidates)
+}
+
+/// Builds selector candidates from static/runtime values and one filesystem snapshot.
+pub(super) fn selector_candidates_with_filesystem(
+    surface: SelectorSurface,
+    context: &SelectorTokenContext,
+    extra_candidates: &[SelectorExtraCandidate],
+    filesystem_candidates: &[SelectorCandidate],
 ) -> Vec<SelectorCandidate> {
     let mut candidates = match surface {
         SelectorSurface::MezzanineCommand => mezzanine_candidates(context),
@@ -92,6 +103,7 @@ pub(super) fn selector_candidates(
         );
     }
     let Some(command) = selector_context_command(surface, context) else {
+        candidates.extend(filesystem_candidates.iter().cloned());
         return candidates;
     };
     candidates.extend(
@@ -127,7 +139,7 @@ pub(super) fn selector_candidates(
             })
             .map(|extra| extra.candidate.clone()),
     );
-    candidates.extend(path_candidates(surface, context, working_directory));
+    candidates.extend(filesystem_candidates.iter().cloned());
     candidates
 }
 

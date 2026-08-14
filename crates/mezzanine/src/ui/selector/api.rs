@@ -1,11 +1,13 @@
 //! Public product selector adapter API and shadow-hint orchestration.
 
 use super::{
-    ActiveSelector, Path, SelectorCandidate, SelectorCandidateKind, SelectorPlan,
-    SelectorShadowHint, SelectorTokenContext, agent_parameter_hint, canonical_agent_command,
+    ActiveSelector, SelectorCandidate, SelectorCandidateKind, SelectorPlan, SelectorShadowHint,
+    SelectorTokenContext, agent_parameter_hint, canonical_agent_command,
     filter_and_sort_selector_candidates, mezzanine_parameter_hint,
-    selector_candidate_prefix_suffix, selector_candidates, selector_token_context,
+    selector_candidate_prefix_suffix, selector_candidates_with_filesystem, selector_token_context,
 };
+#[cfg(test)]
+use super::{Path, selector_candidates};
 
 /// Interactive prompt surface requesting selector candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +93,7 @@ pub fn start_active_selector(
 }
 
 /// Starts active selection with runtime candidates and explicit path context.
+#[cfg(test)]
 pub fn start_active_selector_with_extra_in_working_directory(
     surface: SelectorSurface,
     line: &str,
@@ -105,6 +108,25 @@ pub fn start_active_selector_with_extra_in_working_directory(
         cursor,
         extra_candidates,
         working_directory,
+    )?;
+    Some(ActiveSelector::new(surface, line, cursor, plan, reverse))
+}
+
+/// Starts active selection from runtime values and prefetched filesystem candidates.
+pub fn start_active_selector_with_extra_and_filesystem_candidates(
+    surface: SelectorSurface,
+    line: &str,
+    cursor: usize,
+    reverse: bool,
+    extra_candidates: &[SelectorExtraCandidate],
+    filesystem_candidates: &[SelectorCandidate],
+) -> Option<ActiveSelector<SelectorSurface>> {
+    let plan = plan_selector_with_extra_and_filesystem_candidates(
+        surface,
+        line,
+        cursor,
+        extra_candidates,
+        filesystem_candidates,
     )?;
     Some(ActiveSelector::new(surface, line, cursor, plan, reverse))
 }
@@ -128,6 +150,7 @@ pub fn plan_selector_with_extra(
 
 /// Builds a selector plan for the token at `cursor` with runtime candidates
 /// resolved relative to one explicit working directory.
+#[cfg(test)]
 pub fn plan_selector_with_extra_in_working_directory(
     surface: SelectorSurface,
     line: &str,
@@ -137,6 +160,30 @@ pub fn plan_selector_with_extra_in_working_directory(
 ) -> Option<SelectorPlan> {
     let context = selector_token_context(line, cursor);
     let candidates = selector_candidates(surface, &context, extra_candidates, working_directory);
+    let candidates = filter_and_sort_selector_candidates(candidates, &context.query);
+    (!candidates.is_empty()).then_some(SelectorPlan {
+        replacement_start: context.token_start,
+        replacement_end: context.token_end,
+        query: context.query,
+        candidates,
+    })
+}
+
+/// Builds a selector plan from runtime values and prefetched filesystem candidates.
+fn plan_selector_with_extra_and_filesystem_candidates(
+    surface: SelectorSurface,
+    line: &str,
+    cursor: usize,
+    extra_candidates: &[SelectorExtraCandidate],
+    filesystem_candidates: &[SelectorCandidate],
+) -> Option<SelectorPlan> {
+    let context = selector_token_context(line, cursor);
+    let candidates = selector_candidates_with_filesystem(
+        surface,
+        &context,
+        extra_candidates,
+        filesystem_candidates,
+    );
     let candidates = filter_and_sort_selector_candidates(candidates, &context.query);
     (!candidates.is_empty()).then_some(SelectorPlan {
         replacement_start: context.token_start,
@@ -169,6 +216,7 @@ pub fn shadow_hint_with_extra(
 
 /// Builds the current prefix or parameter shadow hint with runtime candidates
 /// resolved relative to one explicit working directory.
+#[cfg(test)]
 pub fn shadow_hint_with_extra_in_working_directory(
     surface: SelectorSurface,
     line: &str,
@@ -188,7 +236,58 @@ pub fn shadow_hint_with_extra_in_working_directory(
     .or_else(|| parameter_shadow_hint(surface, &context, cursor))
 }
 
+/// Builds a shadow hint from runtime values and prefetched filesystem candidates.
+pub fn shadow_hint_with_extra_and_filesystem_candidates(
+    surface: SelectorSurface,
+    line: &str,
+    cursor: usize,
+    extra_candidates: &[SelectorExtraCandidate],
+    filesystem_candidates: &[SelectorCandidate],
+) -> Option<SelectorShadowHint> {
+    let context = selector_token_context(line, cursor);
+    let cursor = context.cursor;
+    prefix_shadow_hint_with_filesystem_candidates(
+        surface,
+        &context,
+        cursor,
+        extra_candidates,
+        filesystem_candidates,
+    )
+    .or_else(|| parameter_shadow_hint(surface, &context, cursor))
+}
+
+/// Builds a candidate-prefix shadow hint from one immutable filesystem snapshot.
+fn prefix_shadow_hint_with_filesystem_candidates(
+    surface: SelectorSurface,
+    context: &SelectorTokenContext,
+    cursor: usize,
+    extra_candidates: &[SelectorExtraCandidate],
+    filesystem_candidates: &[SelectorCandidate],
+) -> Option<SelectorShadowHint> {
+    if cursor != context.token_end || context.query.is_empty() {
+        return None;
+    }
+    let candidates = selector_candidates_with_filesystem(
+        surface,
+        context,
+        extra_candidates,
+        filesystem_candidates,
+    );
+    let candidate = filter_and_sort_selector_candidates(candidates, &context.query)
+        .into_iter()
+        .find(|candidate| {
+            selector_candidate_prefix_suffix(candidate.value.as_str(), &context.query).is_some()
+        })?;
+    let text = selector_candidate_prefix_suffix(candidate.value.as_str(), &context.query)?;
+    (!text.is_empty()).then_some(SelectorShadowHint {
+        insert_at: cursor,
+        text,
+        kind: candidate.kind,
+    })
+}
+
 /// Builds a candidate-prefix shadow hint at the active cursor.
+#[cfg(test)]
 fn prefix_shadow_hint(
     surface: SelectorSurface,
     context: &SelectorTokenContext,

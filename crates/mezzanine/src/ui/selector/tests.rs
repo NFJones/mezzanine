@@ -1,10 +1,10 @@
 //! Product selector adapter tests.
 
 use super::{
-    SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
-    plan_selector, plan_selector_with_extra, plan_selector_with_extra_in_working_directory,
-    record_browser_save_path_candidates, shadow_hint, shadow_hint_with_extra,
-    start_active_selector,
+    AsyncFilesystemSelectorCandidates, SelectorCandidate, SelectorCandidateKind,
+    SelectorExtraCandidate, SelectorSurface, plan_selector, plan_selector_with_extra,
+    plan_selector_with_extra_in_working_directory, record_browser_save_path_candidates,
+    shadow_hint, shadow_hint_with_extra, start_active_selector,
 };
 use mez_mux::selector::apply_selector_candidate;
 use std::fs;
@@ -265,6 +265,106 @@ fn record_browser_save_path_candidates_are_literal_and_pane_relative() {
         .collect::<Vec<_>>();
     assert_eq!(visible, vec!["dir with spaces/", "report file.md"]);
     assert_eq!(hidden, vec![".hidden.md"]);
+}
+
+/// Verifies interactive filesystem discovery returns immediately without a
+/// synchronous scan, retains only the first 200 lexicographic matches, and
+/// treats an unreadable or missing directory as an empty completed snapshot.
+#[test]
+fn async_filesystem_selector_bounds_candidates_and_handles_missing_directories() {
+    let root =
+        std::env::temp_dir().join(format!("mez-async-selector-bounds-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    for index in (0..250).rev() {
+        fs::write(root.join(format!("item-{index:03}")), "item").unwrap();
+    }
+    let candidates = AsyncFilesystemSelectorCandidates::default();
+
+    let initial = candidates.snapshot(
+        SelectorSurface::AgentCommand,
+        "item-",
+        "item-".len(),
+        Some(root.as_path()),
+    );
+    assert!(initial.candidates().is_empty());
+    assert_eq!(initial.completion_generation(), None);
+
+    let completed = candidates.complete_for_tests(
+        SelectorSurface::AgentCommand,
+        "item-",
+        "item-".len(),
+        Some(root.as_path()),
+    );
+    assert_eq!(completed.len(), 200);
+    assert_eq!(completed.first().unwrap().value, "item-000");
+    assert_eq!(completed.last().unwrap().value, "item-199");
+
+    let missing = root.join("missing");
+    let missing_completed = candidates.complete_for_tests(
+        SelectorSurface::AgentCommand,
+        "./",
+        2,
+        Some(missing.as_path()),
+    );
+    let _ = fs::remove_dir_all(&root);
+    assert!(missing_completed.is_empty());
+}
+
+/// Verifies a newer prompt/cwd request supersedes older pending or active
+/// discovery. A late completion for the old key must not replace the exact-key
+/// snapshot consumed by the current prompt revision.
+#[test]
+fn async_filesystem_selector_rejects_stale_request_results() {
+    let old_root = std::env::temp_dir().join(format!(
+        "mez-async-selector-stale-old-{}",
+        std::process::id()
+    ));
+    let new_root = std::env::temp_dir().join(format!(
+        "mez-async-selector-stale-new-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&old_root);
+    let _ = fs::remove_dir_all(&new_root);
+    fs::create_dir_all(&old_root).unwrap();
+    fs::create_dir_all(&new_root).unwrap();
+    for index in 0..250 {
+        fs::write(old_root.join(format!("entry-{index:03}")), "old").unwrap();
+    }
+    fs::write(new_root.join("entry-current"), "new").unwrap();
+    let candidates = AsyncFilesystemSelectorCandidates::default();
+
+    let _ = candidates.snapshot(
+        SelectorSurface::AgentCommand,
+        "entry-",
+        "entry-".len(),
+        Some(old_root.as_path()),
+    );
+    let _ = candidates.snapshot(
+        SelectorSurface::AgentCommand,
+        "entry-",
+        "entry-".len(),
+        Some(new_root.as_path()),
+    );
+    let completed = candidates.complete_for_tests(
+        SelectorSurface::AgentCommand,
+        "entry-",
+        "entry-".len(),
+        Some(new_root.as_path()),
+    );
+    let current = candidates.snapshot(
+        SelectorSurface::AgentCommand,
+        "entry-",
+        "entry-".len(),
+        Some(new_root.as_path()),
+    );
+    let _ = fs::remove_dir_all(&old_root);
+    let _ = fs::remove_dir_all(&new_root);
+
+    assert_eq!(completed.len(), 1);
+    assert_eq!(completed[0].value, "entry-current");
+    assert!(current.completion_generation().is_some());
+    assert_eq!(current.candidates(), completed.as_slice());
 }
 
 /// Verifies first-token agent shell input still plans filesystem
