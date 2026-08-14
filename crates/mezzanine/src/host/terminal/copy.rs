@@ -125,7 +125,7 @@ impl CopyMode {
         let mut copied = Vec::new();
         let mut emitted_group_starts = BTreeSet::new();
         for line in start.line..=end.line {
-            let Some(copy_line) = self.0.copy_lines().get(line) else {
+            let Some(copy_line) = self.0.copy_line(line) else {
                 continue;
             };
             if let Some((group_start, group_end, raw_line)) =
@@ -151,22 +151,22 @@ impl CopyMode {
             return Some((group_start, group_end, raw_line.to_string()));
         }
         let (group_start, group_end) = self.transformed_source_group_bounds_for_line(line)?;
-        let raw_line = self.0.copy_lines().get(group_start)?;
-        Some((group_start, group_end, raw_line.clone()))
+        let raw_line = self.0.copy_line(group_start)?;
+        Some((group_start, group_end, raw_line.to_string()))
     }
 
     /// Returns transformed source-group bounds for any row in that group.
     fn transformed_source_group_bounds_for_line(&self, line: usize) -> Option<(usize, usize)> {
-        let copy_lines = self.0.copy_lines();
         let mut group_start = line;
         while group_start > 0
-            && copy_lines
-                .get(group_start)
+            && self
+                .0
+                .copy_line(group_start)
                 .is_some_and(|candidate| candidate == AGENT_COPY_SKIP_LINE)
         {
             group_start = group_start.saturating_sub(1);
         }
-        let copy_line = copy_lines.get(group_start)?;
+        let copy_line = self.0.copy_line(group_start)?;
         let (candidate_start, group_end) =
             self.transformed_source_group_bounds(group_start, copy_line)?;
         (line >= candidate_start && line <= group_end).then_some((candidate_start, group_end))
@@ -188,16 +188,16 @@ impl CopyMode {
         line: usize,
         copy_line: &str,
     ) -> Option<(usize, usize)> {
-        let copy_lines = self.0.copy_lines();
         if copy_line == AGENT_COPY_SKIP_LINE
             || decode_agent_copy_source_line(copy_line).is_some()
-            || copy_lines.get(line.saturating_add(1))? != AGENT_COPY_SKIP_LINE
+            || self.0.copy_line(line.saturating_add(1))? != AGENT_COPY_SKIP_LINE
         {
             return None;
         }
         let mut group_end = line.saturating_add(1);
-        while copy_lines
-            .get(group_end.saturating_add(1))
+        while self
+            .0
+            .copy_line(group_end.saturating_add(1))
             .is_some_and(|candidate| candidate == AGENT_COPY_SKIP_LINE)
         {
             group_end = group_end.saturating_add(1);
@@ -211,18 +211,16 @@ impl CopyMode {
         while start > 0
             && self
                 .0
-                .copy_lines()
-                .get(start.saturating_sub(1))
+                .copy_line(start.saturating_sub(1))
                 .is_some_and(|candidate| candidate == copy_line)
         {
             start = start.saturating_sub(1);
         }
         let mut end = line;
-        while end.saturating_add(1) < self.0.copy_lines().len()
+        while end.saturating_add(1) < self.0.line_count()
             && self
                 .0
-                .copy_lines()
-                .get(end.saturating_add(1))
+                .copy_line(end.saturating_add(1))
                 .is_some_and(|candidate| candidate == copy_line)
         {
             end = end.saturating_add(1);

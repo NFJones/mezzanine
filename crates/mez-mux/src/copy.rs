@@ -532,8 +532,8 @@ impl CopyBuffer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StyledCopyMode {
     buffer: CopyBuffer,
-    copy_lines: Vec<String>,
-    styled_lines: Vec<TerminalStyledLine>,
+    style_spans: Vec<Vec<mez_terminal::TerminalStyleSpan>>,
+    copy_overrides: Vec<Option<String>>,
     alternate_screen_was_active: bool,
 }
 
@@ -570,18 +570,19 @@ impl StyledCopyMode {
         cursor: CopyPosition,
         alternate_screen_was_active: bool,
     ) -> Result<Self> {
-        let lines = styled_lines
-            .iter()
-            .map(|line| line.text.clone())
-            .collect::<Vec<_>>();
-        let copy_lines = styled_lines
-            .iter()
-            .map(|line| line.copy_text.clone().unwrap_or_else(|| line.text.clone()))
-            .collect::<Vec<_>>();
+        let mut lines = Vec::with_capacity(styled_lines.len());
+        let mut style_spans = Vec::with_capacity(styled_lines.len());
+        let mut copy_overrides = Vec::with_capacity(styled_lines.len());
+        for line in styled_lines {
+            let copy_override = line.copy_text.filter(|copy_text| copy_text != &line.text);
+            lines.push(line.text);
+            style_spans.push(line.style_spans);
+            copy_overrides.push(copy_override);
+        }
         Ok(Self {
             buffer: CopyBuffer::new(lines, viewport_rows, scroll_top, cursor)?,
-            copy_lines,
-            styled_lines,
+            style_spans,
+            copy_overrides,
             alternate_screen_was_active,
         })
     }
@@ -596,19 +597,27 @@ impl StyledCopyMode {
         &mut self.buffer
     }
 
-    /// Returns copy-text metadata parallel to the display rows.
-    pub fn copy_lines(&self) -> &[String] {
-        &self.copy_lines
+    /// Returns source-aware copy text for one row, falling back to display text.
+    pub fn copy_line(&self, line: usize) -> Option<&str> {
+        self.copy_overrides
+            .get(line)
+            .and_then(Option::as_deref)
+            .or_else(|| self.buffer.lines().get(line).map(String::as_str))
     }
 
-    /// Returns all styled terminal rows in the copy buffer.
-    pub fn styled_lines(&self) -> &[TerminalStyledLine] {
-        &self.styled_lines
-    }
-
-    /// Returns styled rows currently visible in the copy viewport.
-    pub fn visible_styled_lines(&self) -> &[TerminalStyledLine] {
-        &self.styled_lines[self.buffer.scroll_top()..self.buffer.visible_end_line()]
+    /// Builds styled rows currently visible in the copy viewport.
+    ///
+    /// Copy mode retains one complete display-text set. Only the bounded
+    /// viewport is cloned for rendering, avoiding a second full-history text
+    /// vector while preserving the existing presentation contract.
+    pub fn visible_styled_lines(&self) -> Vec<TerminalStyledLine> {
+        (self.buffer.scroll_top()..self.buffer.visible_end_line())
+            .map(|line| TerminalStyledLine {
+                text: self.buffer.lines()[line].clone(),
+                style_spans: self.style_spans[line].clone(),
+                copy_text: self.copy_overrides[line].clone(),
+            })
+            .collect()
     }
 
     /// Returns whether the terminal used its alternate screen at entry.
@@ -852,12 +861,28 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(copy.styled_lines(), styled_lines);
-        assert_eq!(copy.copy_lines(), ["first", "# raw source"]);
-        assert_eq!(copy.visible_styled_lines(), &styled_lines[1..]);
+        assert_eq!(copy.lines(), ["first", "rendered source"]);
+        assert_eq!(copy.copy_line(0), Some("first"));
+        assert_eq!(copy.copy_line(1), Some("# raw source"));
+        assert_eq!(copy.visible_styled_lines(), styled_lines[1..]);
         assert!(copy.alternate_screen_was_active());
         copy.move_cursor_to_line_end();
         assert_eq!(copy.cursor().column, "rendered source".len());
+    }
+
+    /// Verifies copy text identical to display text is represented by fallback
+    /// rather than a duplicate retained string.
+    #[test]
+    fn styled_copy_mode_retains_only_distinct_copy_overrides() {
+        let mut line = TerminalStyledLine::plain("shared");
+        line.copy_text = Some("shared".to_string());
+
+        let copy =
+            StyledCopyMode::new(vec![line], 1, 0, CopyPosition { line: 0, column: 0 }, false)
+                .unwrap();
+
+        assert_eq!(copy.copy_overrides, [None]);
+        assert_eq!(copy.copy_line(0), Some("shared"));
     }
 
     /// Verifies styled copy state preserves mux-owned invalid viewport

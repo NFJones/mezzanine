@@ -498,7 +498,7 @@ impl RuntimeSessionService {
                     .position(|p| p.id.as_str() == pane_id.as_str())
                 && let Some((row, column, size)) = self.copy_mode_overlay_region(window, pane_index)
             {
-                let mut lines = copy_mode.visible_styled_lines().to_vec();
+                let mut lines = copy_mode.visible_styled_lines();
                 apply_copy_mode_selection_spans(
                     copy_mode,
                     &mut lines,
@@ -527,7 +527,7 @@ impl RuntimeSessionService {
             else {
                 continue;
             };
-            let mut lines = copy_mode.visible_styled_lines().to_vec();
+            let mut lines = copy_mode.visible_styled_lines();
             apply_copy_mode_selection_spans(
                 copy_mode,
                 &mut lines,
