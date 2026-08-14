@@ -501,7 +501,7 @@ mod tests {
                 interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
                 allowed_actions: mez_agent::AllowedActionSet::action_execution_base(),
                 recovery_input: None,
-                messages: Vec::new(),
+                messages: Vec::new().into(),
             },
             response: ModelResponse {
                 provider: "deepseek".to_string(),
@@ -588,7 +588,7 @@ mod tests {
                     mez_agent::AgentCapability::RespondOnly,
                 ),
                 recovery_input: None,
-                messages: Vec::new(),
+                messages: Vec::new().into(),
             },
             response: ModelResponse {
                 provider: "runtime-batch".to_string(),
@@ -659,7 +659,7 @@ mod tests {
                 interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
                 allowed_actions: mez_agent::AllowedActionSet::action_execution_base(),
                 recovery_input: None,
-                messages: Vec::new(),
+                messages: Vec::new().into(),
             },
             response: ModelResponse {
                 provider: "openai".to_string(),

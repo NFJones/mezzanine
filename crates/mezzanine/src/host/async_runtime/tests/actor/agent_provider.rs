@@ -278,7 +278,8 @@ async fn async_actor_applies_agent_provider_completion_events() {
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "summarize the pane".to_string(),
-            }],
+            }]
+            .into(),
         },
         response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
@@ -434,7 +435,8 @@ async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "record the issue".to_string(),
-            }],
+            }]
+            .into(),
         },
         response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
@@ -622,7 +624,8 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "summarize the pane".to_string(),
-            }],
+            }]
+            .into(),
         },
         response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),

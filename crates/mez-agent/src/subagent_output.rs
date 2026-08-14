@@ -166,7 +166,7 @@ mod tests {
                 allowed_actions: AllowedActionSet::say_only(),
                 stop: None,
                 recovery_input: None,
-                messages: Vec::new(),
+                messages: Vec::new().into(),
             },
             response: ModelResponse {
                 provider: "test".to_string(),

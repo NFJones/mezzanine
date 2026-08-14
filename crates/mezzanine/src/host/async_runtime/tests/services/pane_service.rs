@@ -1038,7 +1038,8 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                     source: mez_agent::ContextSourceKind::UserInstruction,
                     placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "print a marker".to_string(),
-                }],
+                }]
+                .into(),
             },
             response: mez_agent::ModelResponse {
                 provider: task.model_profile.provider.clone(),

@@ -224,7 +224,8 @@ mod tests {
                     placement: crate::ContextPlacement::ConversationAppend,
                     content: "continue".to_string(),
                 },
-            ],
+            ]
+            .into(),
         };
 
         let rendered = openai_render_request_messages(&request).unwrap();

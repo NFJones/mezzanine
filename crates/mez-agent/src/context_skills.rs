@@ -28,7 +28,7 @@ impl SkillActionSurfaceContext {
 
 /// Removes redundant skill actions after catalog or skill context is loaded.
 pub fn constrain_skill_actions_for_loaded_context(request: &mut ModelRequest) {
-    let state = skill_action_surface_context_from_messages(&request.messages);
+    let state = skill_action_surface_context_from_messages(request.messages.iter());
     if !state.has_redundant_skill_state() {
         return;
     }
@@ -39,8 +39,8 @@ pub fn constrain_skill_actions_for_loaded_context(request: &mut ModelRequest) {
 }
 
 /// Extracts accumulated skill state from provider-bound messages.
-fn skill_action_surface_context_from_messages(
-    messages: &[ModelMessage],
+fn skill_action_surface_context_from_messages<'a>(
+    messages: impl IntoIterator<Item = &'a ModelMessage>,
 ) -> SkillActionSurfaceContext {
     let mut state = SkillActionSurfaceContext::default();
     for message in messages {

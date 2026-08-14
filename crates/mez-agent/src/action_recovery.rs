@@ -576,7 +576,7 @@ mod tests {
             allowed_actions: AllowedActionSet::capability_decision(),
             stop: None,
             recovery_input: None,
-            messages: Vec::new(),
+            messages: Vec::new().into(),
         }
     }
 

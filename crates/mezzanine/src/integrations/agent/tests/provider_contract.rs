@@ -106,7 +106,8 @@ fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
                 placement: mez_agent::ContextPlacement::EphemeralTail,
                 content: "LIVE_STATE_MARKER".to_string(),
             },
-        ],
+        ]
+        .into(),
     };
 
     let rendered = [

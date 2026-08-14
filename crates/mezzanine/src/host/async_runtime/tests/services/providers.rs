@@ -278,7 +278,8 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "list files".to_string(),
-            }],
+            }]
+            .into(),
         },
         response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
@@ -461,7 +462,8 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "research patch behavior".to_string(),
-            }],
+            }]
+            .into(),
         },
         response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
@@ -592,7 +594,8 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "research provider docs".to_string(),
-            }],
+            }]
+            .into(),
         },
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

@@ -860,7 +860,7 @@ mod tests {
             allowed_actions: AllowedActionSet::action_execution_base(),
             stop: None,
             recovery_input: None,
-            messages,
+            messages: messages.into(),
         }
     }
 

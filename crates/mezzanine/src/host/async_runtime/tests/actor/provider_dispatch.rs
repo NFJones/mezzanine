@@ -202,7 +202,8 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "print a marker".to_string(),
-            }],
+            }]
+            .into(),
         },
         response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),

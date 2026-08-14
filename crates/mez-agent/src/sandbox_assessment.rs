@@ -208,7 +208,8 @@ pub fn sandbox_failure_assessment_request(
                 placement: ContextPlacement::ConversationAppend,
                 content: task,
             },
-        ],
+        ]
+        .into(),
     })
 }
 

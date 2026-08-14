@@ -178,7 +178,8 @@ async fn async_zsh_large_semantic_patch_completes_and_releases_input() {
                     source: mez_agent::ContextSourceKind::UserInstruction,
                     placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "patch the large fixture".to_string(),
-                }],
+                }]
+                .into(),
             },
             response: mez_agent::ModelResponse {
                 provider: task.model_profile.provider.clone(),

@@ -1255,7 +1255,7 @@ mod tests {
             allowed_actions: crate::AllowedActionSet::say_only(),
             stop: None,
             recovery_input: None,
-            messages,
+            messages: messages.into(),
         }
     }
 

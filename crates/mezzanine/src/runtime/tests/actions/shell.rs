@@ -225,7 +225,8 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                     source: ContextSourceKind::UserInstruction,
                     placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "run a command".to_string(),
-                }],
+                }]
+                .into(),
             },
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),

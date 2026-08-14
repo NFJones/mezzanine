@@ -154,7 +154,7 @@ pub(super) fn runtime_model_remember_request(
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: format!("Remember mode: {mode}\n\n{source_text}"),
             },
-        ],
+        ].into(),
     })
 }
 

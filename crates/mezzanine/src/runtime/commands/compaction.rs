@@ -967,7 +967,7 @@ pub(super) fn runtime_model_compaction_request(
                     context,
                 ),
             },
-        ],
+        ].into(),
     })
 }
 

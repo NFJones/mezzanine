@@ -160,7 +160,7 @@ pub fn assemble_model_request_from_context(
         allowed_actions: AllowedActionSet::capability_decision(),
         stop: is_deepseek.then(|| vec!["\n}".to_string()]),
         recovery_input: None,
-        messages,
+        messages: messages.into(),
     };
     constrain_skill_actions_for_loaded_context(&mut request);
     Ok(request)

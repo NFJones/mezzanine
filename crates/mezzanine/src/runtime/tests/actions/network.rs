@@ -172,7 +172,8 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
                 source: ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "research docs".to_string(),
-            }],
+            }]
+            .into(),
         },
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

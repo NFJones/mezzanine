@@ -2498,7 +2498,8 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
         source: ContextSourceKind::UserInstruction,
         placement: mez_agent::ContextPlacement::ConversationAppend,
         content: "research provider docs".to_string(),
-    }];
+    }]
+    .into();
     let execution = mez_agent::AgentTurnExecution {
         request,
         response: mez_agent::ModelResponse {

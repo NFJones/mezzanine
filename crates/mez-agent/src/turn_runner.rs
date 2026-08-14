@@ -603,7 +603,8 @@ mod tests {
                     source: ContextSourceKind::UserInstruction,
                     placement: crate::ContextPlacement::ConversationAppend,
                     content: "finish the task".to_string(),
-                }],
+                }]
+                .into(),
             })
         }
 

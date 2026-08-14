@@ -10,7 +10,9 @@ use std::fmt;
 use crate::accounting::ModelTokenUsage;
 use crate::http::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
 use crate::openai_continuity::{OpenAiRequestContinuitySnapshot, OpenAiRequestMessageDigest};
-use crate::{ContextSourceKind, ModelMessage, ModelMessageRole, ProviderTranscriptEvent};
+use crate::{
+    ContextSourceKind, ModelMessage, ModelMessageRole, ModelMessages, ProviderTranscriptEvent,
+};
 
 /// Result type returned while assembling one provider request.
 pub type ProviderRequestAssemblyResult<T> = Result<T, ProviderRequestAssemblyError>;
@@ -31,7 +33,7 @@ pub struct OpenAiRenderedMessages {
 /// Renders provider-independent messages into OpenAI Responses input shape.
 ///
 pub fn openai_render_messages(
-    messages: &[ModelMessage],
+    messages: &ModelMessages,
 ) -> ProviderRequestAssemblyResult<OpenAiRenderedMessages> {
     let mut instructions = Vec::new();
     let mut input = Vec::new();

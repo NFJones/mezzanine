@@ -815,7 +815,8 @@ fn runtime_model_request_fixture_for_agent(
             source: ContextSourceKind::UserInstruction,
             placement: mez_agent::ContextPlacement::ConversationAppend,
             content: "initial request".to_string(),
-        }],
+        }]
+        .into(),
     }
 }
 

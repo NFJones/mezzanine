@@ -460,7 +460,8 @@ mod tests {
                     placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "summarize this conversation".to_string(),
                 },
-            ],
+            ]
+            .into(),
         };
 
         let body =
@@ -518,7 +519,8 @@ mod tests {
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "summarize this conversation".to_string(),
-            }],
+            }]
+            .into(),
         };
 
         let body =
@@ -578,7 +580,8 @@ mod tests {
                     placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "summarize this conversation".to_string(),
                 },
-            ],
+            ]
+            .into(),
         };
 
         let body =
@@ -637,7 +640,8 @@ mod tests {
                     placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "summarize this conversation".to_string(),
                 },
-            ],
+            ]
+            .into(),
         };
 
         let body = anthropic_messages_request_body(&request, false, &options).unwrap();
@@ -676,7 +680,8 @@ mod tests {
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "summarize this conversation".to_string(),
-            }],
+            }]
+            .into(),
         };
 
         let body =
@@ -728,7 +733,8 @@ mod tests {
                 source: mez_agent::ContextSourceKind::UserInstruction,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "pick the best provider".to_string(),
-            }],
+            }]
+            .into(),
         };
 
         let body =

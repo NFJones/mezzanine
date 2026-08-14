@@ -809,7 +809,8 @@ mod tests {
                 source: ContextSourceKind::DeveloperInstruction,
                 placement: crate::ContextPlacement::StablePrefix,
                 content: "Follow developer authority.".to_string(),
-            }],
+            }]
+            .into(),
         };
 
         let default_messages =

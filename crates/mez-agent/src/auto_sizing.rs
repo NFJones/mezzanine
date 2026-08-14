@@ -442,7 +442,7 @@ pub fn auto_sizing_request(
         issue_actions_enabled: true,
         interaction_kind: ModelInteractionKind::AutoSizing,
         allowed_actions: AllowedActionSet::say_only(),
-        messages,
+        messages: messages.into(),
     })
 }
 

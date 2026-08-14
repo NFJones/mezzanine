@@ -605,7 +605,8 @@ pub fn macro_step_model_request(parent_turn: &AgentTurnRecord) -> ModelRequest {
             source: ContextSourceKind::TranscriptUser,
             placement: crate::ContextPlacement::ConversationAppend,
             content: "runtime-owned macro first step".to_string(),
-        }],
+        }]
+        .into(),
     }
 }
 
@@ -721,7 +722,8 @@ pub fn macro_judge_model_request(
                 placement: crate::ContextPlacement::ConversationAppend,
                 content: macro_judge_task(run, step, result, next_step),
             },
-        ],
+        ]
+        .into(),
     })
 }
 
