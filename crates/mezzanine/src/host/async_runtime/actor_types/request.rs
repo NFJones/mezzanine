@@ -3,6 +3,7 @@
 use super::{
     AgentId, AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult,
     AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncRuntimeActorMetrics,
+    AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
     AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientId, ClientStatusLine,
     ClientViewRole, ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection,
     PaneProcess, PaneResizeUpdate, RenderedClientView, Result, RuntimeAgentCompactionDispatch,
@@ -111,7 +112,7 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         ///
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
-        config: TerminalClientLoopConfig,
+        config: AsyncTerminalClientConfigInput,
         /// Stores the render value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -174,21 +175,21 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<usize>>,
     },
-    /// Represents the Terminal Client Loop Config case for this enumeration.
+    /// Resolves or refreshes a shared terminal configuration snapshot.
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    TerminalClientLoopConfig {
+    TerminalClientLoopConfigSnapshot {
         /// Stores the config value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
-        config: TerminalClientLoopConfig,
+        config: AsyncTerminalClientConfigInput,
         /// Stores the reply value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
-        reply: oneshot::Sender<Result<TerminalClientLoopConfig>>,
+        reply: oneshot::Sender<Result<AsyncTerminalClientConfigSnapshot>>,
     },
     /// Represents the Handle Control Input case for this enumeration.
     ///

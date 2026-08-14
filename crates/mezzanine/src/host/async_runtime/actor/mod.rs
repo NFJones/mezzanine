@@ -3,6 +3,7 @@
 //! This module owns the async runtime actor boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
+use super::actor_types::{AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot};
 use super::{
     AgentId, AgentProviderEvent, Arc, AsyncControlInputResult, AsyncHookEvent, AsyncMessageFanout,
     AsyncMessageInputResult, AsyncRenderedClientFlush, AsyncRenderedClientFrame,

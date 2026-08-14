@@ -94,6 +94,7 @@ impl AsyncRuntimeSessionActor {
         let side_effect_delivery_notify = Arc::new(Notify::new());
         let (side_effect_delivery_tx, side_effect_delivery_rx) = watch::channel(0u64);
         let (lifecycle_state_tx, lifecycle_state_rx) = watch::channel(service.lifecycle_state());
+        let (terminal_config_generation_tx, terminal_config_generation_rx) = watch::channel(0u64);
         service.use_audit_effect_adapter();
         service.use_pane_pipe_effect_adapter();
         service.use_transcript_effect_adapter();
@@ -110,6 +111,7 @@ impl AsyncRuntimeSessionActor {
                 side_effect_delivery_notify: side_effect_delivery_notify.clone(),
                 side_effect_delivery_rx,
                 lifecycle_state_rx,
+                terminal_config_generation_rx,
             },
             Self {
                 service,
@@ -120,6 +122,8 @@ impl AsyncRuntimeSessionActor {
                 side_effect_delivery_notify,
                 side_effect_delivery_tx,
                 lifecycle_state_tx,
+                terminal_config_generation: 0,
+                terminal_config_generation_tx,
                 side_effects: VecDeque::with_capacity(config.side_effect_buffer),
                 pane_input_leases: Default::default(),
                 timers: Default::default(),

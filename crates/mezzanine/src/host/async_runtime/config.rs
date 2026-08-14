@@ -246,6 +246,10 @@ pub struct AsyncRuntimeSessionActor {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) lifecycle_state_tx: watch::Sender<RuntimeLifecycleState>,
+    /// Current generation of actor-resolved terminal configuration snapshots.
+    pub(super) terminal_config_generation: u64,
+    /// Publishes terminal configuration generation changes to attached clients.
+    pub(super) terminal_config_generation_tx: watch::Sender<u64>,
     /// Stores the side effects value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -312,6 +316,8 @@ pub struct AsyncRuntimeSessionHandle {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) lifecycle_state_rx: watch::Receiver<RuntimeLifecycleState>,
+    /// Observes terminal configuration generation changes without actor calls.
+    pub(super) terminal_config_generation_rx: watch::Receiver<u64>,
 }
 
 /// Carries Async Runtime Actor Exit state for this subsystem.

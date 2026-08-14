@@ -7,10 +7,11 @@
 use super::{
     AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AgentTurnLedger, AgentTurnRunner,
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncAttachedTerminalIo,
-    AsyncAttachedTerminalLoopRequest, AsyncRuntimeSessionHandle, AsyncTerminalIoFuture,
-    AsyncTerminalOutputWriteReport, AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness,
-    AttachedTerminalFdRole, AttachedTerminalOutputModes, ClientId, ClientStatusLine,
-    ClientViewRole, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
+    AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalResolvedLoopRequest,
+    AsyncRuntimeSessionHandle, AsyncTerminalIoFuture, AsyncTerminalOutputWriteReport,
+    AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness, AttachedTerminalFdRole,
+    AttachedTerminalOutputModes, ClientId, ClientStatusLine, ClientViewRole,
+    DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, MezError, MouseAction, Result,
     RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentRememberDispatch,
@@ -18,7 +19,7 @@ use super::{
     RuntimeEventBatch, RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
     Size, TerminalClientLoopAction, empty_attached_terminal_loop_report,
     is_terminal_runtime_lifecycle_state, merge_attached_terminal_loop_report,
-    run_async_attached_terminal_client_loop, sleep,
+    run_async_attached_terminal_client_loop_with_snapshot, sleep,
 };
 #[cfg(test)]
 use super::{AsyncRuntimeService, AsyncRuntimeServiceExit};

@@ -50,5 +50,8 @@ pub use message::{
     serve_async_runtime_message_connection, serve_async_runtime_message_connection_loop,
     serve_async_runtime_message_listener,
 };
-pub use render::{AsyncRenderedClientFlush, AsyncRenderedClientFrame};
+pub(in crate::host::async_runtime) use render::AsyncTerminalClientConfigInput;
+pub use render::{
+    AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncTerminalClientConfigSnapshot,
+};
 pub(super) use request::AsyncRuntimeRequest;

@@ -686,3 +686,75 @@ async fn async_actor_serializes_lifecycle_render_and_shutdown() {
 
     assert_eq!(exit.commands_processed, 3);
 }
+
+/// Verifies actor-resolved terminal configuration snapshots retain the same
+/// immutable allocation while their generation is current, avoid treating
+/// cursor-only repaint requests as configuration changes, and refresh exactly
+/// when a presentation/configuration invalidation makes the snapshot stale.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_reuses_and_invalidates_terminal_config_snapshots() {
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+    let client_id = ClientId::new('c', 9040);
+
+    let client = async {
+        let initial = handle
+            .resolve_terminal_client_loop_config(TerminalClientLoopConfig::default())
+            .await
+            .unwrap();
+        let reused = handle
+            .render_client_frame_with_snapshot(
+                ClientViewRole::Observer,
+                Size::new(80, 24).unwrap(),
+                initial.clone(),
+                false,
+            )
+            .await
+            .unwrap()
+            .config;
+        assert_eq!(reused.generation(), initial.generation());
+        assert!(std::ptr::eq(reused.config(), initial.config()));
+
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id: client_id.clone(),
+                reason: RenderInvalidationReason::CursorBlink,
+            }])
+            .await
+            .unwrap();
+        let cursor_reused = handle
+            .refresh_terminal_client_loop_config(reused.clone())
+            .await
+            .unwrap();
+        assert_eq!(cursor_reused.generation(), reused.generation());
+        assert!(std::ptr::eq(cursor_reused.config(), reused.config()));
+
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id,
+                reason: RenderInvalidationReason::Configuration,
+            }])
+            .await
+            .unwrap();
+        let refreshed = handle
+            .render_client_frame_with_snapshot(
+                ClientViewRole::Observer,
+                Size::new(80, 24).unwrap(),
+                cursor_reused.clone(),
+                false,
+            )
+            .await
+            .unwrap()
+            .config;
+        assert!(refreshed.generation() > cursor_reused.generation());
+        assert!(!std::ptr::eq(refreshed.config(), cursor_reused.config()));
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 6);
+}

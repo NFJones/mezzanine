@@ -7,8 +7,8 @@ use super::coalesce::{
 };
 use super::{
     AsyncRuntimeSessionActor, ClientId, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL,
-    DEFAULT_PANE_PIPE_HEALTH_DELAY_MS, DEFAULT_SHELL_RECOVERY_INTERVAL_MS, MezError, Result,
-    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
+    DEFAULT_PANE_PIPE_HEALTH_DELAY_MS, DEFAULT_SHELL_RECOVERY_INTERVAL_MS, MezError,
+    RenderInvalidationReason, Result, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
 };
 
 impl AsyncRuntimeSessionActor {
@@ -96,6 +96,9 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         side_effects: Vec<RuntimeSideEffect>,
     ) -> Result<()> {
+        let terminal_config_invalidated = side_effects
+            .iter()
+            .any(runtime_side_effect_invalidates_terminal_config);
         let (side_effects, coalesced) =
             coalesce_output_side_effects_for_enqueue(&mut self.side_effects, side_effects);
         if self.side_effects.len().saturating_add(side_effects.len()) > self.side_effect_buffer {
@@ -107,6 +110,12 @@ impl AsyncRuntimeSessionActor {
                 runtime_side_effect_kind_summary(self.side_effects.iter()),
                 runtime_side_effect_kind_summary(side_effects.iter())
             )));
+        }
+        if terminal_config_invalidated {
+            self.terminal_config_generation = self.terminal_config_generation.wrapping_add(1);
+            let _ = self
+                .terminal_config_generation_tx
+                .send(self.terminal_config_generation);
         }
         let timer_schedules = side_effects
             .iter()
@@ -420,4 +429,16 @@ impl AsyncRuntimeSessionActor {
         self.queue_runtime_side_effects(side_effects)?;
         Ok(count)
     }
+}
+
+/// Returns whether one side effect can change actor-resolved terminal state.
+fn runtime_side_effect_invalidates_terminal_config(effect: &RuntimeSideEffect) -> bool {
+    matches!(
+        effect,
+        RuntimeSideEffect::RenderClient { reason, .. }
+            if !matches!(
+                reason,
+                RenderInvalidationReason::CursorBlink | RenderInvalidationReason::StatusLine
+            )
+    )
 }

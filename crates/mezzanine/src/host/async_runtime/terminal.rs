@@ -6,10 +6,11 @@
 
 use super::{
     AsyncAttachedTerminalIo, AsyncRenderedClientFrame, AsyncRuntimeSessionHandle,
-    AsyncRuntimeSideEffectServiceConfig, AttachedTerminalClientLoopConfig,
-    AttachedTerminalClientLoopReport, AttachedTerminalFdRole, AttachedTerminalOutputModes,
-    ClientId, ClientStatusLine, ClientViewRole, MezError, Result, RuntimeSideEffect, Size,
-    TerminalClientLoopConfig, plan_attached_terminal_client_step_with_host_paste_buffer,
+    AsyncRuntimeSideEffectServiceConfig, AsyncTerminalClientConfigSnapshot,
+    AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport, AttachedTerminalFdRole,
+    AttachedTerminalOutputModes, ClientId, ClientStatusLine, ClientViewRole, MezError, Result,
+    RuntimeSideEffect, Size, TerminalClientLoopConfig,
+    plan_attached_terminal_client_step_with_host_paste_buffer,
     run_async_client_output_flush_service,
 };
 use crate::host::terminal::TerminalClientLoopAction;
@@ -56,6 +57,31 @@ pub struct AsyncAttachedTerminalLoopRequest {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub loop_config: AttachedTerminalClientLoopConfig,
+}
+
+/// Lightweight resolved request used by the long-lived attached client service.
+///
+/// The actor-resolved configuration is shared behind an immutable snapshot,
+/// while host bracketed-paste fields remain owned by the individual client.
+pub(in crate::host::async_runtime) struct AsyncAttachedTerminalResolvedLoopRequest {
+    /// Client role used for input and presentation policy.
+    pub role: ClientViewRole,
+    /// Attached client receiving output and authoring input.
+    pub client_id: ClientId,
+    /// Primary client identity required for primary input application.
+    pub primary_client_id: Option<ClientId>,
+    /// Current dimensions reported by the attached terminal.
+    pub client_size: Size,
+    /// Immutable actor-resolved terminal configuration.
+    pub terminal_config: AsyncTerminalClientConfigSnapshot,
+    /// Bounded inner-loop limits.
+    pub loop_config: AttachedTerminalClientLoopConfig,
+    /// Whether this client is inside a host bracketed-paste payload.
+    pub host_bracketed_paste_active: bool,
+    /// Client-local bytes retained until the host paste completes.
+    pub host_bracketed_paste_buffer: Vec<u8>,
+    /// Start time used to recover stale host paste payloads.
+    pub host_bracketed_paste_started_at: Option<std::time::Instant>,
 }
 
 /// Maximum time one attached-terminal loop step may spend in an awaited
@@ -269,15 +295,56 @@ fn merge_attached_terminal_flush_report(
     loop_report.pending_output_bytes = flush.pending_output_bytes;
 }
 
-/// Runs the run async attached terminal client loop operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Resolves raw terminal configuration and runs one attached-client loop.
+#[cfg(test)]
 pub async fn run_async_attached_terminal_client_loop<I, S>(
     handle: &AsyncRuntimeSessionHandle,
     io: &mut I,
-    request: AsyncAttachedTerminalLoopRequest,
+    mut request: AsyncAttachedTerminalLoopRequest,
+    status_provider: S,
+) -> Result<AttachedTerminalClientLoopReport>
+where
+    I: AsyncAttachedTerminalIo,
+    S: FnMut(u64) -> Result<Option<ClientStatusLine>>,
+{
+    let host_bracketed_paste_active = request.terminal_config.host_bracketed_paste_active;
+    let host_bracketed_paste_buffer =
+        std::mem::take(&mut request.terminal_config.host_bracketed_paste_buffer);
+    let host_bracketed_paste_started_at = request
+        .terminal_config
+        .host_bracketed_paste_started_at
+        .take();
+    request.terminal_config.host_bracketed_paste_active = false;
+    let terminal_config = handle
+        .resolve_terminal_client_loop_config(request.terminal_config)
+        .await?;
+    run_async_attached_terminal_client_loop_with_snapshot(
+        handle,
+        io,
+        AsyncAttachedTerminalResolvedLoopRequest {
+            role: request.role,
+            client_id: request.client_id,
+            primary_client_id: request.primary_client_id,
+            client_size: request.client_size,
+            terminal_config,
+            loop_config: request.loop_config,
+            host_bracketed_paste_active,
+            host_bracketed_paste_buffer,
+            host_bracketed_paste_started_at,
+        },
+        status_provider,
+    )
+    .await
+}
+
+/// Runs one attached-client loop from an actor-resolved configuration snapshot.
+pub(in crate::host::async_runtime) async fn run_async_attached_terminal_client_loop_with_snapshot<
+    I,
+    S,
+>(
+    handle: &AsyncRuntimeSessionHandle,
+    io: &mut I,
+    request: AsyncAttachedTerminalResolvedLoopRequest,
     status_provider: S,
 ) -> Result<AttachedTerminalClientLoopReport>
 where
@@ -311,16 +378,15 @@ where
         input_hangups: 0,
         output_hangups: 0,
         error_roles: Vec::new(),
-        host_bracketed_paste_active: request.terminal_config.host_bracketed_paste_active,
-        host_bracketed_paste_buffer: request.terminal_config.host_bracketed_paste_buffer.clone(),
-        host_bracketed_paste_started_at: request.terminal_config.host_bracketed_paste_started_at,
+        host_bracketed_paste_active: request.host_bracketed_paste_active,
+        host_bracketed_paste_buffer: Vec::new(),
+        host_bracketed_paste_started_at: request.host_bracketed_paste_started_at,
     };
     let cursor_blink_epoch = std::time::Instant::now();
-    let mut host_bracketed_paste_active = request.terminal_config.host_bracketed_paste_active;
-    let mut host_bracketed_paste_buffer =
-        request.terminal_config.host_bracketed_paste_buffer.clone();
-    let mut host_bracketed_paste_started_at =
-        request.terminal_config.host_bracketed_paste_started_at;
+    let mut terminal_config = request.terminal_config.clone();
+    let mut host_bracketed_paste_active = request.host_bracketed_paste_active;
+    let mut host_bracketed_paste_buffer = request.host_bracketed_paste_buffer;
+    let mut host_bracketed_paste_started_at = request.host_bracketed_paste_started_at;
 
     for _ in 0..request.loop_config.max_iterations {
         let readiness = if request.role == ClientViewRole::Primary {
@@ -358,20 +424,21 @@ where
         let frame = if output_writable {
             await_attached_terminal_step(
                 "client frame render",
-                handle.render_client_frame(
+                handle.render_client_frame_with_snapshot(
                     request.role,
                     request.client_size,
-                    request.terminal_config.clone(),
+                    terminal_config.clone(),
                     output_writable,
                 ),
             )
             .await?
         } else {
             AsyncRenderedClientFrame {
-                config: request.terminal_config.clone(),
+                config: terminal_config.clone(),
                 view: None,
             }
         };
+        terminal_config = frame.config.clone();
         let status = if output_writable {
             status_provider(report.iterations)?
         } else {
@@ -390,7 +457,6 @@ where
             },
         )?;
         report.host_bracketed_paste_active = host_bracketed_paste_active;
-        report.host_bracketed_paste_buffer = host_bracketed_paste_buffer.clone();
         report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
 
         let agent_prompt_input_action = request.role == ClientViewRole::Primary
@@ -424,13 +490,16 @@ where
                             client_id: request.client_id.clone(),
                             error,
                             client_size: request.client_size,
-                            terminal_config: frame.config.clone(),
+                            terminal_config: frame.config.config().clone(),
                             cursor_blink_epoch,
                             output_writable,
                         },
                         &mut report,
                     )
                     .await?;
+                    report.host_bracketed_paste_active = host_bracketed_paste_active;
+                    report.host_bracketed_paste_buffer = host_bracketed_paste_buffer;
+                    report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
                     return Ok(report);
                 }
             })
@@ -515,13 +584,16 @@ where
                             client_id: request.client_id.clone(),
                             error,
                             client_size: request.client_size,
-                            terminal_config: frame.config.clone(),
+                            terminal_config: frame.config.config().clone(),
                             cursor_blink_epoch,
                             output_writable,
                         },
                         &mut report,
                     )
                     .await?;
+                    report.host_bracketed_paste_active = host_bracketed_paste_active;
+                    report.host_bracketed_paste_buffer = host_bracketed_paste_buffer;
+                    report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
                     return Ok(report);
                 }
             })
@@ -539,7 +611,7 @@ where
             if application.view_refresh_required && output_writable {
                 let refreshed = await_attached_terminal_step(
                     "refreshed client frame render",
-                    handle.render_client_frame(
+                    handle.render_client_frame_with_snapshot(
                         request.role,
                         request.client_size,
                         frame.config.clone(),
@@ -607,5 +679,8 @@ where
     }
 
     report.pending_output_bytes = io.pending_output_bytes();
+    report.host_bracketed_paste_active = host_bracketed_paste_active;
+    report.host_bracketed_paste_buffer = host_bracketed_paste_buffer;
+    report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
     Ok(report)
 }

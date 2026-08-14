@@ -1,15 +1,16 @@
 //! Attached-terminal client service construction, wakeups, and render rate limiting.
 
 use super::{
-    AsyncAttachedTerminalIo, AsyncAttachedTerminalLoopRequest, AsyncRuntimeSessionHandle,
-    AsyncTerminalIoFuture, AsyncTerminalOutputWriteReport, AttachedTerminalClientLoopReport,
-    AttachedTerminalFdReadiness, AttachedTerminalFdRole, ClientStatusLine,
-    DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
+    AsyncAttachedTerminalIo, AsyncAttachedTerminalLoopRequest,
+    AsyncAttachedTerminalResolvedLoopRequest, AsyncRuntimeSessionHandle, AsyncTerminalIoFuture,
+    AsyncTerminalOutputWriteReport, AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness,
+    AttachedTerminalFdRole, ClientStatusLine, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, MezError, MouseAction,
     RenderInvalidationReason, Result, RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey,
     RuntimeTimerKind, TerminalClientLoopAction, TerminalFdInterest, TerminalStyleSpan,
     empty_attached_terminal_loop_report, is_terminal_runtime_lifecycle_state,
-    merge_attached_terminal_loop_report, run_async_attached_terminal_client_loop, sleep, watch,
+    merge_attached_terminal_loop_report, run_async_attached_terminal_client_loop_with_snapshot,
+    sleep, watch,
 };
 #[cfg(test)]
 use super::{AsyncRuntimeService, AsyncRuntimeServiceExit};
@@ -130,6 +131,19 @@ pub struct AsyncAttachedTerminalClientServiceReport {
     pub terminal_resizes: u64,
 }
 
+/// Moves final client-local paste state into a completed service report.
+fn finish_attached_terminal_client_service_report(
+    mut report: AsyncAttachedTerminalClientServiceReport,
+    host_bracketed_paste_active: bool,
+    host_bracketed_paste_buffer: Vec<u8>,
+    host_bracketed_paste_started_at: Option<std::time::Instant>,
+) -> AsyncAttachedTerminalClientServiceReport {
+    report.loop_report.host_bracketed_paste_active = host_bracketed_paste_active;
+    report.loop_report.host_bracketed_paste_buffer = host_bracketed_paste_buffer;
+    report.loop_report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
+    report
+}
+
 /// Runs the run async attached terminal client service operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -150,6 +164,17 @@ where
     let mut status_provider = status_provider;
     service_config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut host_bracketed_paste_active = request.terminal_config.host_bracketed_paste_active;
+    let mut host_bracketed_paste_buffer =
+        std::mem::take(&mut request.terminal_config.host_bracketed_paste_buffer);
+    let mut host_bracketed_paste_started_at = request
+        .terminal_config
+        .host_bracketed_paste_started_at
+        .take();
+    request.terminal_config.host_bracketed_paste_active = false;
+    let mut terminal_config = handle
+        .resolve_terminal_client_loop_config(std::mem::take(&mut request.terminal_config))
+        .await?;
     let mut report = AsyncAttachedTerminalClientServiceReport {
         batches: 0,
         loop_report: empty_attached_terminal_loop_report(),
@@ -162,20 +187,25 @@ where
     let mut resize_debounce_generation = 0u64;
     let mut render_requested = true;
     let mut render_limiter =
-        AttachedTerminalRenderRateLimiter::new(request.terminal_config.render_rate_limit_fps);
+        AttachedTerminalRenderRateLimiter::new(terminal_config.render_rate_limit_fps);
 
     while report.batches < service_config.max_batches {
         let state = *lifecycle_watcher.borrow_and_update();
         report.terminal_state = state;
         if is_attached_terminal_client_stop_state(state) {
             report.stopped_by_lifecycle = true;
-            return Ok(report);
+            return Ok(finish_attached_terminal_client_service_report(
+                report,
+                host_bracketed_paste_active,
+                host_bracketed_paste_buffer,
+                host_bracketed_paste_started_at,
+            ));
         }
 
-        request.terminal_config = handle
-            .terminal_client_loop_config(request.terminal_config.clone())
+        terminal_config = handle
+            .refresh_terminal_client_loop_config(terminal_config)
             .await?;
-        render_limiter.set_rate_limit(request.terminal_config.render_rate_limit_fps);
+        render_limiter.set_rate_limit(terminal_config.render_rate_limit_fps);
 
         let wake = wait_for_attached_terminal_batch_readiness(
             handle,
@@ -253,10 +283,20 @@ where
 
         let iteration_offset = report.loop_report.iterations;
         let mut prepolled_io = PrepolledAttachedTerminalIo::new(io, readiness);
-        let mut batch = run_async_attached_terminal_client_loop(
+        let mut batch = run_async_attached_terminal_client_loop_with_snapshot(
             handle,
             &mut prepolled_io,
-            request.clone(),
+            AsyncAttachedTerminalResolvedLoopRequest {
+                role: request.role,
+                client_id: request.client_id.clone(),
+                primary_client_id: request.primary_client_id.clone(),
+                client_size: request.client_size,
+                terminal_config: terminal_config.clone(),
+                loop_config: request.loop_config,
+                host_bracketed_paste_active,
+                host_bracketed_paste_buffer: std::mem::take(&mut host_bracketed_paste_buffer),
+                host_bracketed_paste_started_at,
+            },
             |iteration| status_provider(iteration_offset.saturating_add(iteration)),
         )
         .await?;
@@ -266,11 +306,9 @@ where
             batch.input_hangups > 0 || batch.output_hangups > 0 || !batch.error_roles.is_empty();
         report.action_counts.record(&batch.actions);
         resized_this_batch |= attached_terminal_actions_include_resize(&batch.actions);
-        request.terminal_config.host_bracketed_paste_active = batch.host_bracketed_paste_active;
-        request.terminal_config.host_bracketed_paste_buffer =
-            batch.host_bracketed_paste_buffer.clone();
-        request.terminal_config.host_bracketed_paste_started_at =
-            batch.host_bracketed_paste_started_at;
+        host_bracketed_paste_active = batch.host_bracketed_paste_active;
+        host_bracketed_paste_buffer = std::mem::take(&mut batch.host_bracketed_paste_buffer);
+        host_bracketed_paste_started_at = batch.host_bracketed_paste_started_at;
         batch.actions.clear();
         merge_attached_terminal_loop_report(&mut report.loop_report, batch);
         if batch_output_frames > 0 {
@@ -287,20 +325,35 @@ where
                 handle,
                 pending_resize_debounce_timer.replace(next_key.clone()),
                 next_key,
-                request.terminal_config.resize_debounce_ms,
+                terminal_config.resize_debounce_ms,
             )
             .await?;
         }
         if should_finish {
-            return Ok(report);
+            return Ok(finish_attached_terminal_client_service_report(
+                report,
+                host_bracketed_paste_active,
+                host_bracketed_paste_buffer,
+                host_bracketed_paste_started_at,
+            ));
         }
         if report.batches >= service_config.max_batches {
-            return Ok(report);
+            return Ok(finish_attached_terminal_client_service_report(
+                report,
+                host_bracketed_paste_active,
+                host_bracketed_paste_buffer,
+                host_bracketed_paste_started_at,
+            ));
         }
     }
 
     report.terminal_state = *lifecycle_watcher.borrow();
-    Ok(report)
+    Ok(finish_attached_terminal_client_service_report(
+        report,
+        host_bracketed_paste_active,
+        host_bracketed_paste_buffer,
+        host_bracketed_paste_started_at,
+    ))
 }
 
 /// Runs the attached terminal actions include resize operation for this subsystem.

@@ -133,7 +133,7 @@ pub use actor_types::{
     serve_async_runtime_message_listener,
 };
 pub use actor_types::{
-    AsyncRenderedClientFlush, AsyncRenderedClientFrame,
+    AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncTerminalClientConfigSnapshot,
     serve_async_runtime_control_listener_with_snapshots,
     serve_async_runtime_message_listener_concurrent,
 };
@@ -193,7 +193,12 @@ pub use supervisor::{
 };
 #[cfg(test)]
 pub use supervisor::{AsyncRuntimeServiceReport, AsyncRuntimeServiceSupervisor};
-pub use terminal::{AsyncAttachedTerminalLoopRequest, run_async_attached_terminal_client_loop};
+pub use terminal::AsyncAttachedTerminalLoopRequest;
+#[cfg(test)]
+pub use terminal::run_async_attached_terminal_client_loop;
+pub(in crate::host::async_runtime) use terminal::{
+    AsyncAttachedTerminalResolvedLoopRequest, run_async_attached_terminal_client_loop_with_snapshot,
+};
 #[cfg(test)]
 pub use terminal_io::AsyncAttachedTerminalFdLoopIo;
 #[cfg(test)]

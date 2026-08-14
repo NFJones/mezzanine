@@ -418,38 +418,47 @@ async fn async_attached_terminal_loop_times_out_stalled_readiness_poll() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
         .unwrap();
-    let (handle, _actor) = AsyncRuntimeActorFixture::from_service(service)
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
     let mut io = StalledReadinessIo;
 
-    let result = tokio::time::timeout(
-        Duration::from_millis(251),
-        run_async_attached_terminal_client_loop(
-            &handle,
-            &mut io,
-            AsyncAttachedTerminalLoopRequest {
-                role: ClientViewRole::Primary,
-                client_id: primary.clone(),
-                primary_client_id: Some(primary),
-                client_size: Size::new(80, 24).unwrap(),
-                terminal_config: TerminalClientLoopConfig::default(),
-                loop_config: AttachedTerminalClientLoopConfig {
-                    max_iterations: 1,
-                    max_input_bytes: 64,
+    let client = async {
+        let result = tokio::time::timeout(
+            Duration::from_millis(251),
+            run_async_attached_terminal_client_loop(
+                &handle,
+                &mut io,
+                AsyncAttachedTerminalLoopRequest {
+                    role: ClientViewRole::Primary,
+                    client_id: primary.clone(),
+                    primary_client_id: Some(primary),
+                    client_size: Size::new(80, 24).unwrap(),
+                    terminal_config: TerminalClientLoopConfig::default(),
+                    loop_config: AttachedTerminalClientLoopConfig {
+                        max_iterations: 1,
+                        max_input_bytes: 64,
+                    },
                 },
-            },
-            |_| Ok(None),
-        ),
-    )
-    .await
-    .expect("attached-terminal loop should return its own timeout before the test guard");
-    let error = result.unwrap_err();
+                |_| Ok(None),
+            ),
+        )
+        .await
+        .expect("attached-terminal loop should return its own timeout before the test guard");
+        let error = result.unwrap_err();
 
-    assert_eq!(
-        error.to_string(),
-        "InvalidState: async attached terminal readiness poll timed out after 250 ms"
-    );
+        assert_eq!(
+            error.to_string(),
+            "InvalidState: async attached terminal readiness poll timed out after 250 ms"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(exit.commands_processed, 2);
 }
 
 /// Verifies large foreground input is drained across bounded client reads.

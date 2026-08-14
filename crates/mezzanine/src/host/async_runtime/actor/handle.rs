@@ -3,6 +3,7 @@
 use super::{
     AgentId, AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult,
     AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeSessionHandle,
+    AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
     AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientId, ClientViewRole,
     ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection, MezError,
     PaneResizeUpdate, Result, RuntimeAgentProviderDispatch, RuntimeApprovedExternalActionDispatch,
@@ -96,7 +97,25 @@ impl AsyncRuntimeSessionHandle {
         self.request(|reply| AsyncRuntimeRequest::RenderClientFrame {
             role,
             client_size,
-            config,
+            config: AsyncTerminalClientConfigInput::Raw(Box::new(config)),
+            render,
+            reply,
+        })
+        .await?
+    }
+
+    /// Renders from an actor-resolved snapshot, refreshing stale generations.
+    pub(in crate::host::async_runtime) async fn render_client_frame_with_snapshot(
+        &self,
+        role: ClientViewRole,
+        client_size: Size,
+        config: AsyncTerminalClientConfigSnapshot,
+        render: bool,
+    ) -> Result<AsyncRenderedClientFrame> {
+        self.request(|reply| AsyncRuntimeRequest::RenderClientFrame {
+            role,
+            client_size,
+            config: AsyncTerminalClientConfigInput::Snapshot(config),
             render,
             reply,
         })
@@ -141,12 +160,49 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only compatibility API is exercised by selected async runtime suites"
+    )]
     pub async fn terminal_client_loop_config(
         &self,
         config: TerminalClientLoopConfig,
     ) -> Result<TerminalClientLoopConfig> {
-        self.request(|reply| AsyncRuntimeRequest::TerminalClientLoopConfig { config, reply })
-            .await?
+        self.resolve_terminal_client_loop_config(config)
+            .await
+            .map(|snapshot| snapshot.config().clone())
+    }
+
+    /// Resolves raw terminal configuration into one shared actor snapshot.
+    pub(in crate::host::async_runtime) async fn resolve_terminal_client_loop_config(
+        &self,
+        config: TerminalClientLoopConfig,
+    ) -> Result<AsyncTerminalClientConfigSnapshot> {
+        self.request(
+            |reply| AsyncRuntimeRequest::TerminalClientLoopConfigSnapshot {
+                config: AsyncTerminalClientConfigInput::Raw(Box::new(config)),
+                reply,
+            },
+        )
+        .await?
+    }
+
+    /// Reuses a current snapshot locally or asks the actor to refresh it.
+    pub(in crate::host::async_runtime) async fn refresh_terminal_client_loop_config(
+        &self,
+        snapshot: AsyncTerminalClientConfigSnapshot,
+    ) -> Result<AsyncTerminalClientConfigSnapshot> {
+        if *self.terminal_config_generation_rx.borrow() == snapshot.generation() {
+            return Ok(snapshot);
+        }
+        self.request(
+            |reply| AsyncRuntimeRequest::TerminalClientLoopConfigSnapshot {
+                config: AsyncTerminalClientConfigInput::Snapshot(snapshot),
+                reply,
+            },
+        )
+        .await?
     }
 
     /// Runs the handle control input for connection operation for this subsystem.

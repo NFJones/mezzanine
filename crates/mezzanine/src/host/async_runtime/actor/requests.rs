@@ -3,12 +3,38 @@
 use super::construction::execute_snapshot_control_async_work;
 use super::{
     AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult, AsyncRenderedClientFrame,
-    AsyncRuntimeRequest, AsyncRuntimeSessionActor, DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
-    RuntimeSessionService, decode_control_frame, delivery_batch_json, encode_control_body,
-    encode_mmp_body,
+    AsyncRuntimeRequest, AsyncRuntimeSessionActor, AsyncTerminalClientConfigInput,
+    AsyncTerminalClientConfigSnapshot, DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS, RuntimeSessionService,
+    decode_control_frame, delivery_batch_json, encode_control_body, encode_mmp_body,
 };
 
 impl AsyncRuntimeSessionActor {
+    /// Resolves stale terminal configuration while reusing current snapshots.
+    fn resolve_terminal_client_config_snapshot(
+        &self,
+        input: AsyncTerminalClientConfigInput,
+    ) -> crate::Result<AsyncTerminalClientConfigSnapshot> {
+        match input {
+            AsyncTerminalClientConfigInput::Snapshot(snapshot)
+                if snapshot.generation() == self.terminal_config_generation =>
+            {
+                Ok(snapshot)
+            }
+            AsyncTerminalClientConfigInput::Raw(config) => self
+                .service
+                .terminal_client_loop_config(*config)
+                .map(|config| {
+                    AsyncTerminalClientConfigSnapshot::new(self.terminal_config_generation, config)
+                }),
+            AsyncTerminalClientConfigInput::Snapshot(snapshot) => self
+                .service
+                .terminal_client_loop_config(snapshot.config().clone())
+                .map(|config| {
+                    AsyncTerminalClientConfigSnapshot::new(self.terminal_config_generation, config)
+                }),
+        }
+    }
+
     /// Runs the handle request operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -79,14 +105,13 @@ impl AsyncRuntimeSessionActor {
                         self.metrics.render_client_frame_requests.saturating_add(1);
                 }
                 let result = self
-                    .service
-                    .terminal_client_loop_config(config)
+                    .resolve_terminal_client_config_snapshot(config)
                     .and_then(|config| {
                         let view = if render {
                             self.service.render_client_view_with_resolved_config(
                                 role,
                                 client_size,
-                                &config,
+                                config.config(),
                             )?
                         } else {
                             None
@@ -124,8 +149,8 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
-            AsyncRuntimeRequest::TerminalClientLoopConfig { config, reply } => {
-                let result = self.service.terminal_client_loop_config(config);
+            AsyncRuntimeRequest::TerminalClientLoopConfigSnapshot { config, reply } => {
+                let result = self.resolve_terminal_client_config_snapshot(config);
                 let _ = reply.send(result);
                 false
             }
