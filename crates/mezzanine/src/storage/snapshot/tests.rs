@@ -269,6 +269,69 @@ fn snapshot_repository_selects_latest_snapshot_by_session() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies an ordinary snapshot write consults only indexed winners instead
+/// of parsing unrelated manifests after the latest index has been established.
+#[test]
+fn snapshot_repository_updates_latest_index_without_scanning_unrelated_manifests() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-incremental-index-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut old = manifest();
+    old.state.id = "snap-old".to_string();
+    old.state.created_at = "2026-04-30T00:00:00Z".to_string();
+    old.state.storage_ref = "snap-old.payload".to_string();
+    repo.write(&old).unwrap();
+    fs::write(root.join("unrelated.manifest"), "malformed").unwrap();
+    let mut new = manifest();
+    new.state.id = "snap-new".to_string();
+    new.state.created_at = "2026-04-30T00:00:01Z".to_string();
+    new.state.storage_ref = "snap-new.payload".to_string();
+
+    repo.write(&new).unwrap();
+
+    let latest_index = fs::read_to_string(root.join("latest.index")).unwrap();
+    assert!(latest_index.contains("all\tsnap-new\n"));
+    assert!(latest_index.contains("session\t$1\tsnap-new\n"));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies malformed latest-index contents trigger a full manifest recovery
+/// rebuild and leave no temporary replacement file behind.
+#[test]
+fn snapshot_repository_recovers_malformed_latest_index_on_write() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-snapshot-repo-index-recovery-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let repo = SnapshotRepository::new(root.clone());
+    let mut old = manifest();
+    old.state.id = "snap-old".to_string();
+    old.state.created_at = "2026-04-30T00:00:00Z".to_string();
+    old.state.storage_ref = "snap-old.payload".to_string();
+    repo.write(&old).unwrap();
+    fs::write(root.join("latest.index"), "malformed\n").unwrap();
+    let mut new = manifest();
+    new.state.id = "snap-new".to_string();
+    new.state.created_at = "2026-04-30T00:00:01Z".to_string();
+    new.state.storage_ref = "snap-new.payload".to_string();
+
+    repo.write(&new).unwrap();
+
+    assert_eq!(repo.latest(None).unwrap().unwrap().id, "snap-new");
+    assert!(fs::read_dir(&root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")
+    }));
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies snapshot resume plans are served from manifest metadata.
 ///
 /// This regression scenario documents the behavior being protected so a

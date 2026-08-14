@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::{MezError, Result};
@@ -24,6 +25,16 @@ use super::types::{
 };
 #[cfg(test)]
 use super::types::{SnapshotConfigLayerMetadata, SnapshotFrameState, SnapshotPaneCapture};
+
+/// Persisted global and per-session latest-snapshot identities.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LatestSnapshotIndex {
+    latest_all: Option<String>,
+    latest_by_session: BTreeMap<String, String>,
+}
+
+/// Process-local suffix used to avoid collisions between atomic index writers.
+static NEXT_LATEST_INDEX_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 impl SnapshotRepository {
     /// Runs the new operation for this subsystem.
@@ -63,7 +74,7 @@ impl SnapshotRepository {
     /// Writes a snapshot manifest through Tokio filesystem APIs.
     pub async fn write_async(&self, manifest: &SnapshotManifest) -> Result<PathBuf> {
         let path = manifest.write_to_dir_async(&self.root).await?;
-        self.write_latest_indexes(&manifest.state)?;
+        self.write_latest_indexes_async(&manifest.state).await?;
         Ok(path)
     }
 
@@ -248,7 +259,7 @@ impl SnapshotRepository {
         };
         tokio::fs::remove_file(&path).await?;
         self.remove_payload_if_local_async(&manifest).await?;
-        self.rebuild_latest_indexes()?;
+        self.rebuild_latest_indexes_async().await?;
         Ok(true)
     }
 
@@ -530,9 +541,108 @@ impl SnapshotRepository {
         self.write_latest_index_file(&snapshots)
     }
 
-    /// Refreshes latest indexes after a successful manifest write.
-    fn write_latest_indexes(&self, _state: &SnapshotState) -> Result<()> {
-        self.rebuild_latest_indexes()
+    /// Rebuilds latest indexes asynchronously for deletion or recovery paths.
+    async fn rebuild_latest_indexes_async(&self) -> Result<()> {
+        let snapshots = self.list_async().await?;
+        self.write_latest_index_file_async(&snapshots).await
+    }
+
+    /// Updates latest indexes after a successful manifest write.
+    fn write_latest_indexes(&self, state: &SnapshotState) -> Result<()> {
+        let mut index = match self.read_latest_index_state() {
+            Ok(Some(index)) => index,
+            Ok(None) | Err(_) => return self.rebuild_latest_indexes(),
+        };
+        if self.update_latest_index(&mut index, state).is_err() {
+            return self.rebuild_latest_indexes();
+        }
+        self.write_latest_index_state(&index)
+    }
+
+    /// Updates latest indexes without synchronous filesystem work.
+    async fn write_latest_indexes_async(&self, state: &SnapshotState) -> Result<()> {
+        let mut index = match self.read_latest_index_state_async().await {
+            Ok(Some(index)) => index,
+            Ok(None) | Err(_) => return self.rebuild_latest_indexes_async().await,
+        };
+        if self
+            .update_latest_index_async(&mut index, state)
+            .await
+            .is_err()
+        {
+            return self.rebuild_latest_indexes_async().await;
+        }
+        self.write_latest_index_state_async(&index).await
+    }
+
+    /// Compares a new snapshot with only the currently indexed winners.
+    fn update_latest_index(
+        &self,
+        index: &mut LatestSnapshotIndex,
+        state: &SnapshotState,
+    ) -> Result<()> {
+        let latest_all_id = index
+            .latest_all
+            .clone()
+            .ok_or_else(|| MezError::invalid_state("snapshot latest index has no global entry"))?;
+        let latest_all = self.inspect(&latest_all_id)?.state;
+        if Self::compare_latest_snapshots(&latest_all, state) == Ordering::Less {
+            index.latest_all = Some(state.id.clone());
+        }
+
+        if let Some(latest_session_id) = index.latest_by_session.get(&state.session_id).cloned() {
+            let latest_session = self.inspect(&latest_session_id)?.state;
+            if latest_session.session_id != state.session_id {
+                return Err(MezError::invalid_state(
+                    "snapshot latest index session entry points to another session",
+                ));
+            }
+            if Self::compare_latest_snapshots(&latest_session, state) == Ordering::Less {
+                index
+                    .latest_by_session
+                    .insert(state.session_id.clone(), state.id.clone());
+            }
+        } else {
+            index
+                .latest_by_session
+                .insert(state.session_id.clone(), state.id.clone());
+        }
+        Ok(())
+    }
+
+    /// Async counterpart to [`Self::update_latest_index`].
+    async fn update_latest_index_async(
+        &self,
+        index: &mut LatestSnapshotIndex,
+        state: &SnapshotState,
+    ) -> Result<()> {
+        let latest_all_id = index
+            .latest_all
+            .clone()
+            .ok_or_else(|| MezError::invalid_state("snapshot latest index has no global entry"))?;
+        let latest_all = self.inspect_async(&latest_all_id).await?.state;
+        if Self::compare_latest_snapshots(&latest_all, state) == Ordering::Less {
+            index.latest_all = Some(state.id.clone());
+        }
+
+        if let Some(latest_session_id) = index.latest_by_session.get(&state.session_id).cloned() {
+            let latest_session = self.inspect_async(&latest_session_id).await?.state;
+            if latest_session.session_id != state.session_id {
+                return Err(MezError::invalid_state(
+                    "snapshot latest index session entry points to another session",
+                ));
+            }
+            if Self::compare_latest_snapshots(&latest_session, state) == Ordering::Less {
+                index
+                    .latest_by_session
+                    .insert(state.session_id.clone(), state.id.clone());
+            }
+        } else {
+            index
+                .latest_by_session
+                .insert(state.session_id.clone(), state.id.clone());
+        }
+        Ok(())
     }
 
     /// Returns the filesystem path for the latest snapshot index.
@@ -540,33 +650,175 @@ impl SnapshotRepository {
         self.root.join("latest.index")
     }
 
+    /// Returns a unique sibling path for atomic latest-index replacement.
+    fn latest_index_temp_path(&self) -> PathBuf {
+        let suffix = NEXT_LATEST_INDEX_TEMP_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        self.root.join(format!(
+            ".latest.index.{}.{}.tmp",
+            std::process::id(),
+            suffix
+        ))
+    }
+
     /// Reads one snapshot id from the latest index file.
     fn read_latest_index(&self, session_id: Option<&str>) -> Result<Option<String>> {
+        let Some(index) = self.read_latest_index_state()? else {
+            return Ok(None);
+        };
+        Ok(match session_id {
+            Some(session_id) => index.latest_by_session.get(session_id).cloned(),
+            None => index.latest_all,
+        })
+    }
+
+    /// Reads and validates the complete latest-index state.
+    fn read_latest_index_state(&self) -> Result<Option<LatestSnapshotIndex>> {
         let data = match fs::read_to_string(self.latest_index_path()) {
             Ok(data) => data,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         };
+        Self::decode_latest_index(&data).map(Some)
+    }
+
+    /// Reads and validates the complete latest-index state asynchronously.
+    async fn read_latest_index_state_async(&self) -> Result<Option<LatestSnapshotIndex>> {
+        let data = match tokio::fs::read_to_string(self.latest_index_path()).await {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        Self::decode_latest_index(&data).map(Some)
+    }
+
+    /// Decodes one strict latest-index file.
+    fn decode_latest_index(data: &str) -> Result<LatestSnapshotIndex> {
+        let mut index = LatestSnapshotIndex::default();
         for line in data.lines() {
-            if session_id.is_none() {
-                if let Some(snapshot_id) = line.strip_prefix("all\t") {
-                    validate_snapshot_id(snapshot_id)?;
-                    return Ok(Some(snapshot_id.to_string()));
+            if let Some(snapshot_id) = line.strip_prefix("all\t") {
+                validate_snapshot_id(snapshot_id)?;
+                if index.latest_all.replace(snapshot_id.to_string()).is_some() {
+                    return Err(MezError::invalid_state(
+                        "snapshot latest index contains duplicate global entries",
+                    ));
                 }
                 continue;
             }
             let Some(rest) = line.strip_prefix("session\t") else {
-                continue;
+                return Err(MezError::invalid_state(
+                    "snapshot latest index contains an invalid entry",
+                ));
             };
-            let Some((indexed_session_id, snapshot_id)) = rest.split_once('\t') else {
-                continue;
+            let Some((session_id, snapshot_id)) = rest.split_once('\t') else {
+                return Err(MezError::invalid_state(
+                    "snapshot latest index contains a malformed session entry",
+                ));
             };
-            if Some(indexed_session_id) == session_id {
-                validate_snapshot_id(snapshot_id)?;
-                return Ok(Some(snapshot_id.to_string()));
+            if session_id.is_empty() {
+                return Err(MezError::invalid_state(
+                    "snapshot latest index contains an empty session id",
+                ));
+            }
+            validate_snapshot_id(snapshot_id)?;
+            if index
+                .latest_by_session
+                .insert(session_id.to_string(), snapshot_id.to_string())
+                .is_some()
+            {
+                return Err(MezError::invalid_state(
+                    "snapshot latest index contains duplicate session entries",
+                ));
             }
         }
-        Ok(None)
+        if index.latest_all.is_none() {
+            return Err(MezError::invalid_state(
+                "snapshot latest index has no global entry",
+            ));
+        }
+        Ok(index)
+    }
+
+    /// Encodes one deterministic global and per-session latest index.
+    fn encode_latest_index(index: &LatestSnapshotIndex) -> Result<String> {
+        let latest_all = index
+            .latest_all
+            .as_deref()
+            .ok_or_else(|| MezError::invalid_state("snapshot latest index has no global entry"))?;
+        validate_snapshot_id(latest_all)?;
+        let mut output = format!("all\t{latest_all}\n");
+        for (session_id, snapshot_id) in &index.latest_by_session {
+            if session_id.is_empty() || has_manifest_control_character(session_id) {
+                return Err(MezError::invalid_state(
+                    "snapshot latest index contains an invalid session id",
+                ));
+            }
+            validate_snapshot_id(snapshot_id)?;
+            output.push_str("session\t");
+            output.push_str(session_id);
+            output.push('\t');
+            output.push_str(snapshot_id);
+            output.push('\n');
+        }
+        Ok(output)
+    }
+
+    /// Atomically replaces the latest index with private durable contents.
+    fn write_latest_index_state(&self, index: &LatestSnapshotIndex) -> Result<()> {
+        fs::create_dir_all(&self.root)?;
+        set_private_dir_permissions(&self.root)?;
+        let path = self.latest_index_path();
+        let temporary = self.latest_index_temp_path();
+        let output = Self::encode_latest_index(index)?;
+        let write_result = (|| {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            file.write_all(output.as_bytes())?;
+            file.sync_all()?;
+            set_private_file_permissions(&temporary)?;
+            fs::rename(&temporary, &path)?;
+            set_private_file_permissions(&path)?;
+            if let Ok(directory) = fs::File::open(&self.root) {
+                let _ = directory.sync_all();
+            }
+            Ok(())
+        })();
+        if write_result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        write_result
+    }
+
+    /// Async counterpart to [`Self::write_latest_index_state`].
+    async fn write_latest_index_state_async(&self, index: &LatestSnapshotIndex) -> Result<()> {
+        tokio::fs::create_dir_all(&self.root).await?;
+        set_private_dir_permissions_async(&self.root).await?;
+        let path = self.latest_index_path();
+        let temporary = self.latest_index_temp_path();
+        let output = Self::encode_latest_index(index)?;
+        let write_result = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .await?;
+            file.write_all(output.as_bytes()).await?;
+            file.flush().await?;
+            file.sync_all().await?;
+            set_private_file_permissions_async(&temporary).await?;
+            tokio::fs::rename(&temporary, &path).await?;
+            set_private_file_permissions_async(&path).await?;
+            if let Ok(directory) = tokio::fs::File::open(&self.root).await {
+                let _ = directory.sync_all().await;
+            }
+            Ok(())
+        }
+        .await;
+        if write_result.is_err() {
+            let _ = tokio::fs::remove_file(&temporary).await;
+        }
+        write_result
     }
 
     /// Writes the latest index file for global and per-session lookups.
@@ -594,30 +846,49 @@ impl SnapshotRepository {
                 *entry = snapshot;
             }
         }
+        let index = LatestSnapshotIndex {
+            latest_all: latest_all.map(|snapshot| snapshot.id.clone()),
+            latest_by_session: latest_by_session
+                .into_iter()
+                .map(|(session_id, snapshot)| (session_id.to_string(), snapshot.id.clone()))
+                .collect(),
+        };
+        self.write_latest_index_state(&index)
+    }
 
-        fs::create_dir_all(&self.root)?;
-        set_private_dir_permissions(&self.root)?;
-        let mut output = String::new();
-        if let Some(snapshot) = latest_all {
-            output.push_str("all\t");
-            output.push_str(&snapshot.id);
-            output.push('\n');
+    /// Async latest-index writer used by recovery and deletion paths.
+    async fn write_latest_index_file_async(&self, snapshots: &[SnapshotState]) -> Result<()> {
+        if snapshots.is_empty() {
+            match tokio::fs::remove_file(self.latest_index_path()).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            return Ok(());
         }
-        for (session_id, snapshot) in latest_by_session {
-            output.push_str("session\t");
-            output.push_str(session_id);
-            output.push('\t');
-            output.push_str(&snapshot.id);
-            output.push('\n');
+        let mut latest_all: Option<&SnapshotState> = None;
+        let mut latest_by_session: BTreeMap<&str, &SnapshotState> = BTreeMap::new();
+        for snapshot in snapshots {
+            if latest_all.is_none_or(|latest| {
+                Self::compare_latest_snapshots(latest, snapshot) == Ordering::Less
+            }) {
+                latest_all = Some(snapshot);
+            }
+            let entry = latest_by_session
+                .entry(snapshot.session_id.as_str())
+                .or_insert(snapshot);
+            if Self::compare_latest_snapshots(entry, snapshot) == Ordering::Less {
+                *entry = snapshot;
+            }
         }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
-        file.write_all(output.as_bytes())?;
-        set_private_file_permissions(&path)?;
-        Ok(())
+        let index = LatestSnapshotIndex {
+            latest_all: latest_all.map(|snapshot| snapshot.id.clone()),
+            latest_by_session: latest_by_session
+                .into_iter()
+                .map(|(session_id, snapshot)| (session_id.to_string(), snapshot.id.clone()))
+                .collect(),
+        };
+        self.write_latest_index_state_async(&index).await
     }
 
     /// Runs the remove payload if local operation for this subsystem.
