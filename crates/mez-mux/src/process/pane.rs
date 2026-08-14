@@ -162,6 +162,13 @@ pub struct PaneProcess {
     /// Whether the pane was launched as its configured interactive shell.
     #[cfg(target_os = "macos")]
     pub(super) shell_input_acknowledgements_supported: bool,
+    /// Monotonic count of shell-record acknowledgement bytes read from the PTY.
+    ///
+    /// macOS shell pacing snapshots this counter before writing a record and
+    /// waits for it to advance, avoiding repeated scans of the retained output
+    /// backlog. Saturation preserves monotonic comparisons over process life.
+    #[cfg(target_os = "macos")]
+    pub(super) shell_input_acknowledgements_seen: usize,
     /// Stores the primary pid value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -362,11 +369,7 @@ impl PaneProcess {
                     .map_or(bounded.len(), |index| index + 1);
                 let record = &bounded[..record_len];
                 let activity = self.output_activity_sequence();
-                let acknowledgement_count = self
-                    .output_backlog
-                    .iter()
-                    .filter(|byte| **byte == SHELL_INPUT_RECORD_ACK_BYTE)
-                    .count();
+                let acknowledgement_count = self.shell_input_acknowledgements_seen;
                 self.write_input(record)?;
                 written = written.saturating_add(record_len);
                 if (receiver_acknowledged && receiver_input_record_requires_ack(record))
@@ -407,13 +410,7 @@ impl PaneProcess {
         let started = Instant::now();
         loop {
             self.buffer_available_output_for_write()?;
-            if self
-                .output_backlog
-                .iter()
-                .filter(|byte| **byte == SHELL_INPUT_RECORD_ACK_BYTE)
-                .count()
-                > acknowledgement_count
-            {
+            if self.shell_input_acknowledgements_seen > acknowledgement_count {
                 return Ok(true);
             }
             let elapsed = started.elapsed();
@@ -512,6 +509,14 @@ impl PaneProcess {
                         self.output_backlog_limit_bytes,
                     ) {
                         break;
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        self.shell_input_acknowledgements_seen = self
+                            .shell_input_acknowledgements_seen
+                            .saturating_add(shell_input_acknowledgement_count(
+                                &self.output_read_buffer[..count],
+                            ));
                     }
                     self.output_activity_sequence = self.output_activity_sequence.saturating_add(1);
                 }
@@ -847,6 +852,15 @@ pub(super) fn drain_output_backlog(backlog: &mut VecDeque<u8>, max_bytes: usize)
     output.extend_from_slice(&wrapped[..wrapped_len]);
     backlog.drain(..read_len);
     output
+}
+
+/// Counts shell-record acknowledgement bytes in one newly read PTY chunk.
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn shell_input_acknowledgement_count(bytes: &[u8]) -> usize {
+    bytes
+        .iter()
+        .filter(|byte| **byte == SHELL_INPUT_RECORD_ACK_BYTE)
+        .count()
 }
 
 /// Runs the foreground process group id operation for this subsystem.

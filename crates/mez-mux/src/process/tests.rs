@@ -1,6 +1,8 @@
 //! Unit tests for pane process command planning and PTY lifecycle behavior.
 
-use super::pane::{append_output_chunk_to_backlog, drain_output_backlog};
+use super::pane::{
+    append_output_chunk_to_backlog, drain_output_backlog, shell_input_acknowledgement_count,
+};
 use super::{
     PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
     shell_command_from_argv, spawn_pane_process, spawn_pane_process_with_start_directory,
@@ -153,6 +155,22 @@ fn output_backlog_bulk_drain_preserves_wraparound_order() {
 
     assert_eq!(drain_output_backlog(&mut backlog, 3), b"def");
     assert_eq!(backlog.into_iter().collect::<Vec<_>>(), b"g");
+}
+
+/// Verifies incremental shell acknowledgement accounting observes only raw
+/// receiver bytes in each new PTY chunk, independent of backlog wrap or drain.
+#[test]
+fn shell_input_acknowledgements_are_counted_per_new_chunk() {
+    assert_eq!(shell_input_acknowledgement_count(b"visible"), 0);
+    assert_eq!(
+        shell_input_acknowledgement_count(&[
+            b'a',
+            super::SHELL_INPUT_RECORD_ACK_BYTE,
+            b'b',
+            super::SHELL_INPUT_RECORD_ACK_BYTE,
+        ]),
+        2
+    );
 }
 
 /// Verifies spawns explicit command on pty.

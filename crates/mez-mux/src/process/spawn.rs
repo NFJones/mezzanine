@@ -142,6 +142,8 @@ pub fn spawn_pane_process_with_start_directory(
         output_closed: false,
         #[cfg(target_os = "macos")]
         shell_input_acknowledgements_supported: explicit_command.is_none(),
+        #[cfg(target_os = "macos")]
+        shell_input_acknowledgements_seen: 0,
         primary_pid,
         process_group_leader,
         initial_working_directory,
