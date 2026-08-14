@@ -14,11 +14,11 @@ use super::{
     runtime_agent_shell_stop_response_json, runtime_mezzanine_error_code,
 };
 use crate::integrations::agent::slash::AgentShellPresentation;
-use crate::runtime::PaneReadinessState;
+use crate::runtime::{PaneReadinessState, runtime_random_marker_token};
 use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::{
-    ShellClassification, agent_subshell_enter_command_with_shell_compatibility,
-    bash_private_source_input, parse_macro_prompt_invocation,
+    ShellClassification, agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
+    agent_subshell_exit_marker_bytes, bash_private_source_input, parse_macro_prompt_invocation,
 };
 
 /// Authenticated provenance carried with one live agent-shell command.
@@ -1121,12 +1121,14 @@ impl RuntimeSessionService {
         let bash_receiver_install_marker = prepared_bootstrap
             .as_ref()
             .map(|(marker, _)| marker.as_str());
-        let shell_command = agent_subshell_enter_command_with_shell_compatibility(
+        let exit_marker = runtime_random_marker_token(&format!("agent-subshell-exit\0{pane_id}"))?;
+        let shell_command = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
             shell_identity.shell_path(),
             classification,
             zsh_history_token.as_ref(),
             bash_receiver_rcfile.as_deref(),
             bash_receiver_install_marker,
+            Some(&exit_marker),
         )?;
         if let Some((marker, wrapper)) = prepared_bootstrap.as_ref() {
             self.bind_agent_subshell_bootstrap_marker(pane_id, marker);
@@ -1161,6 +1163,10 @@ impl RuntimeSessionService {
         };
         match self.write_runtime_pane_shell_input(pane_id, shell_input.as_bytes()) {
             Ok(()) => {
+                self.remember_agent_subshell_exit_marker(
+                    pane_id,
+                    agent_subshell_exit_marker_bytes(&exit_marker),
+                );
                 self.enter_agent_subshell(pane_id);
                 self.take_agent_subshell_command_exit(pane_id);
                 self.remember_hidden_shell_render_suppression(pane_id);

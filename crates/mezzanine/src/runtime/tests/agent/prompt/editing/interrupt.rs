@@ -141,11 +141,15 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let exit_marker = service
+        .agent_subshell_exit_marker_for_tests(&pane_id)
+        .unwrap()
+        .to_vec();
     service
-        .apply_pane_output_bytes(pane_id.clone(), b"ex".to_vec())
-        .unwrap();
-    service
-        .apply_pane_output_bytes(pane_id.clone(), b"it\r\n".to_vec())
+        .apply_pane_output_bytes(
+            pane_id.clone(),
+            b"delayed child prompt\r\n\x1b[?2004l\r\r\nexit\r\n".to_vec(),
+        )
         .unwrap();
     assert_eq!(
         service
@@ -154,11 +158,46 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
             .normal_content_lines()
             .join("\n"),
         pane_log_before_exit_echo,
-        "the child-shell EOF echo must not enter the pane log"
+        "all child-owned output before the parent boundary must remain out of the pane log"
     );
+    let marker_split = exit_marker.len() / 2;
     service
-        .apply_pane_output_bytes(pane_id.clone(), b"\x1b]133;A\x1b\\user@host".to_vec())
+        .apply_pane_output_bytes(pane_id.clone(), exit_marker[..marker_split].to_vec())
         .unwrap();
+    assert_eq!(
+        service
+            .process_pane_screen(&pane_id)
+            .unwrap()
+            .normal_content_lines()
+            .join("\n"),
+        pane_log_before_exit_echo,
+        "a fragmented parent boundary must not enter the pane log"
+    );
+    let mut completed_boundary = exit_marker[marker_split..].to_vec();
+    completed_boundary.extend_from_slice(b"\x1b]133;A\x1b\\user@host");
+    service
+        .apply_pane_output_bytes(pane_id.clone(), completed_boundary)
+        .unwrap();
+    let pane_log_after_exit_echo = service
+        .process_pane_screen(&pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !pane_log_after_exit_echo
+            .lines()
+            .any(|line| line.trim() == "exit"),
+        "readline cleanup and the child-shell EOF echo must not enter the pane log: {pane_log_after_exit_echo:?}"
+    );
+    assert!(
+        pane_log_after_exit_echo.contains("user@host"),
+        "parent prompt bytes following the suppressed exit must remain visible: {pane_log_after_exit_echo:?}"
+    );
+    assert_eq!(
+        service.visible_pane_output_bytes(&pane_id, b"ordinary parent output\r\n"),
+        b"ordinary parent output\r\n",
+        "the one-shot teardown filter must release subsequent parent output"
+    );
     assert!(
         std::ptr::eq(
             service.pane_screen(&pane_id).unwrap(),

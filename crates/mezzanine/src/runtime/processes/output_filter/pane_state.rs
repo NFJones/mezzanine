@@ -525,18 +525,25 @@ impl RuntimeSessionService {
         );
     }
 
-    /// Marks the next child-shell `exit` echo for pane-log suppression.
-    ///
-    /// The echo can be split across PTY reads. Its line ending is retained so
-    /// the parent prompt keeps its terminal position, while its text never
-    /// enters the pane screen or scrollback.
+    /// Retains the parent-owned boundary emitted after one agent subshell exits.
+    pub(crate) fn remember_agent_subshell_exit_marker(&mut self, pane_id: &str, marker: Vec<u8>) {
+        self.process
+            .pane_agent_subshell_exit_markers
+            .insert(pane_id.to_string(), marker);
+    }
+
+    /// Arms child-shell teardown suppression until the parent boundary arrives.
     pub(crate) fn remember_agent_subshell_exit_echo(&mut self, pane_id: &str) {
         self.process
             .pane_agent_subshell_exit_echo_pending
             .insert(pane_id.to_string(), Vec::new());
     }
 
-    /// Filters the one expected child-shell `exit` echo before general wrapper filtering.
+    /// Filters all child-owned teardown before general wrapper filtering.
+    ///
+    /// The parent wrapper emits an opaque marker after the child exits and
+    /// cleanup completes. PTY bytes before that marker are never pane content;
+    /// bytes after it are the restored parent shell and remain visible.
     fn visible_agent_subshell_exit_echo_bytes(&mut self, pane_id: &str, bytes: &[u8]) -> Vec<u8> {
         let Some(mut pending) = self
             .process
@@ -546,24 +553,38 @@ impl RuntimeSessionService {
             return bytes.to_vec();
         };
         pending.extend_from_slice(bytes);
-        for terminator in [
-            b"exit\r\n".as_slice(),
-            b"exit\n".as_slice(),
-            b"exit\r".as_slice(),
-        ] {
-            if pending.starts_with(terminator) {
-                let mut visible = terminator[4..].to_vec();
-                visible.extend_from_slice(&pending[terminator.len()..]);
-                return visible;
-            }
-        }
-        if b"exit\r\n".starts_with(&pending) || b"exit\n".starts_with(&pending) {
+        let Some(marker) = self
+            .process
+            .pane_agent_subshell_exit_markers
+            .get(pane_id)
+            .cloned()
+        else {
+            return pending;
+        };
+        if let Some(start) = find_byte_subsequence(&pending, &marker) {
             self.process
-                .pane_agent_subshell_exit_echo_pending
-                .insert(pane_id.to_string(), pending);
-            return Vec::new();
+                .pane_agent_subshell_exit_markers
+                .remove(pane_id);
+            return pending[start + marker.len()..].to_vec();
         }
-        pending
+        let suffix_length = (1..marker.len().min(pending.len() + 1))
+            .rev()
+            .find(|length| pending.ends_with(&marker[..*length]))
+            .unwrap_or(0);
+        self.process.pane_agent_subshell_exit_echo_pending.insert(
+            pane_id.to_string(),
+            pending[pending.len().saturating_sub(suffix_length)..].to_vec(),
+        );
+        Vec::new()
+    }
+
+    /// Returns the registered parent exit boundary for focused regressions.
+    #[cfg(test)]
+    pub(crate) fn agent_subshell_exit_marker_for_tests(&self, pane_id: &str) -> Option<&[u8]> {
+        self.process
+            .pane_agent_subshell_exit_markers
+            .get(pane_id)
+            .map(Vec::as_slice)
     }
 
     /// Clears retained shell-output filters for explicit foreground input.

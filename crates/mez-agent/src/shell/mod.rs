@@ -38,10 +38,11 @@ pub use transaction::{
     SHELL_TRANSACTION_SIDECAR_FRAME_BYTES, ShellChildArgument, ShellChildLaunch,
     ShellClassification, ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport,
     agent_subshell_enter_command, agent_subshell_enter_command_with_shell_compatibility,
-    agent_subshell_enter_command_with_zsh_history_token, bash_private_source_input, fish_quote,
-    fish_wrapper_receiver_init_command, posix_shell_history_suppression_finish,
-    posix_shell_history_suppression_start, shell_command_contains_unquoted_heredoc,
-    validate_agent_authored_shell_command,
+    agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
+    agent_subshell_enter_command_with_zsh_history_token, agent_subshell_exit_marker_bytes,
+    bash_private_source_input, fish_quote, fish_wrapper_receiver_init_command,
+    posix_shell_history_suppression_finish, posix_shell_history_suppression_start,
+    shell_command_contains_unquoted_heredoc, validate_agent_authored_shell_command,
 };
 
 /// Categorizes deterministic shell-source validation failures.

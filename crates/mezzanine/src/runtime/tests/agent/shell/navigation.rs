@@ -243,6 +243,10 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
         service.pane_screen(&pane_id).unwrap(),
         service.process_pane_screen(&pane_id).unwrap(),
     ));
+    let exit_marker = service
+        .agent_subshell_exit_marker_for_tests(&pane_id)
+        .unwrap()
+        .to_vec();
 
     let dispatch = service
         .write_input_to_pane(&primary, Some(&pane_id), b"echo parent\n")
@@ -254,7 +258,9 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     assert_eq!(user_inputs[0].pane_input_parts().0, pane_id);
     assert_eq!(user_inputs[0].pane_input_parts().1, b"echo parent\n");
 
-    let simple_prompt_repaint = service.visible_pane_output_bytes(&pane_id, b"\r$ ");
+    let mut parent_prompt_output = exit_marker;
+    parent_prompt_output.extend_from_slice(b"\r$ ");
+    let simple_prompt_repaint = service.visible_pane_output_bytes(&pane_id, &parent_prompt_output);
     assert_eq!(simple_prompt_repaint, b"\r$ ");
     let prompt_repaint = service.renderable_pane_output_bytes(&pane_id, b"user@host ~/repo $ ");
     assert_eq!(prompt_repaint, b"user@host ~/repo $ ");
@@ -552,12 +558,15 @@ fn runtime_agent_shell_reentry_uses_hidden_parent_prompt_without_hidden_probe() 
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     service.drain_pane_io_transition();
+    let exit_marker = service
+        .agent_subshell_exit_marker_for_tests(&pane_id)
+        .unwrap()
+        .to_vec();
 
+    let mut parent_prompt_output = exit_marker;
+    parent_prompt_output.extend_from_slice(b"\x1b]133;A\x1b\\user@host ~/repo $ \x1b]133;B\x1b\\");
     service
-        .apply_pane_output_bytes(
-            pane_id.clone(),
-            b"\x1b]133;A\x1b\\user@host ~/repo $ \x1b]133;B\x1b\\".to_vec(),
-        )
+        .apply_pane_output_bytes(pane_id.clone(), parent_prompt_output)
         .unwrap();
     assert_eq!(
         service.pane_readiness_state(&pane_id),
@@ -875,6 +884,17 @@ fn runtime_agent_shell_reentry_after_parent_bash_commands_completes_identity_pro
         service.pane_foreground_certified_shell_state("%1"),
         Some(true),
         "parent Bash did not regain the foreground after agent exit"
+    );
+    let pane_log_after_exit = service
+        .process_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        !pane_log_after_exit
+            .lines()
+            .any(|line| line.trim() == "exit"),
+        "managed Bash child-shell exit must not enter the pane log: {pane_log_after_exit:?}"
     );
 
     service

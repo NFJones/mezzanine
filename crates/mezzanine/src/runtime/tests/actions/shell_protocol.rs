@@ -874,6 +874,8 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
         .enter_or_resume(&pane_id)
         .unwrap();
     service.enter_agent_subshell(pane_id.clone());
+    let exit_marker = b"\x1b]133;mez_agent_subshell_exit=test-boundary\x1b\\".to_vec();
+    service.remember_agent_subshell_exit_marker(&pane_id, exit_marker.clone());
     let started = service
         .start_agent_prompt_turn(&pane_id, "search the file")
         .unwrap();
@@ -922,8 +924,10 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
     assert_eq!(exit_inputs[2].pane_input_parts().1, b"exit\n");
     assert!(!service.agent_subshell_is_active(&pane_id));
     assert!(!service.agent_subshell_command_exit_is_pending_for_tests(&pane_id));
+    let mut exit_output = b"exit\r\n".to_vec();
+    exit_output.extend_from_slice(&exit_marker);
     service
-        .apply_pane_output_bytes(pane_id.clone(), b"exit\r\n".to_vec())
+        .apply_pane_output_bytes(pane_id.clone(), exit_output)
         .unwrap();
     let pane_text = service
         .pane_screen(&pane_id)

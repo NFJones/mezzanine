@@ -95,6 +95,68 @@ fn agent_subshell_enter_command_keeps_physical_lines_pty_safe() {
     }
 }
 
+#[test]
+/// Verifies every supported agent subshell transport emits an opaque parent
+/// boundary only after the child handoff returns.
+///
+/// Shells disagree about EOF text and prompt ordering, so runtime filtering
+/// must synchronize on a parent-owned marker rather than an `exit` line. This
+/// regression covers direct Fish and managed Bash source as well as encoded
+/// POSIX and Zsh wrappers.
+fn agent_subshell_exit_boundary_follows_child_cleanup_for_every_shell() {
+    let exit_marker = marker();
+    let expected_marker = format!(
+        "printf '\\033]133;mez_agent_subshell_exit={}\\033\\\\'",
+        exit_marker.as_str()
+    );
+    assert_eq!(
+        agent_subshell_exit_marker_bytes(&exit_marker),
+        format!(
+            "\x1b]133;mez_agent_subshell_exit={}\x1b\\",
+            exit_marker.as_str()
+        )
+        .into_bytes()
+    );
+
+    for (path, classification, managed_bash) in [
+        ("/bin/sh", ShellClassification::PosixSh, false),
+        ("/bin/bash", ShellClassification::Bash, true),
+        ("/bin/zsh", ShellClassification::Zsh, false),
+        ("/bin/fish", ShellClassification::Fish, false),
+    ] {
+        let handoff = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
+            Path::new(path),
+            classification,
+            (classification == ShellClassification::Zsh).then_some(&exit_marker),
+            managed_bash.then_some(Path::new("/tmp/mez-managed-bashrc")),
+            managed_bash.then_some("bootstrap-marker"),
+            Some(&exit_marker),
+        )
+        .unwrap();
+        let source = if classification == ShellClassification::Fish || managed_bash {
+            handoff
+        } else {
+            decoded_posix_wrapper_source(&handoff)
+        };
+        let cleanup = if classification == ShellClassification::Fish {
+            source.find("set -e MEZ_SHELL_STTY_STATE")
+        } else {
+            source.rfind("unset -f __mez_agent_subshell_handoff")
+        }
+        .unwrap_or_else(|| panic!("{classification:?}: {source}"));
+        let boundary = source
+            .rfind(&expected_marker)
+            .unwrap_or_else(|| panic!("{classification:?}: {source}"));
+
+        assert!(cleanup < boundary, "{classification:?}: {source}");
+        assert_eq!(
+            source.matches(&expected_marker).count(),
+            1,
+            "{classification:?}: {source}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 /// Verifies Fish handoffs restore parent-local private-mode state after both a
