@@ -256,6 +256,20 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::HostClipboard(clipboard_event) => {
                 self.service.apply_host_clipboard_event(clipboard_event)
             }
+            RuntimeEvent::StatusPill(status_pill_event) => {
+                let Some(changed) = self.service.apply_status_pill_event(status_pill_event) else {
+                    return Ok(RuntimeTransition::default());
+                };
+                let side_effects = if changed {
+                    self.render_side_effects(RenderInvalidationReason::StatusLine)
+                } else {
+                    Vec::new()
+                };
+                Ok(RuntimeTransition {
+                    applied: true,
+                    side_effects,
+                })
+            }
             RuntimeEvent::Shutdown(shutdown) => self.apply_runtime_shutdown_event(shutdown),
             RuntimeEvent::Timer(timer) => self.apply_runtime_timer_event(timer),
             RuntimeEvent::Process(process_event) => {

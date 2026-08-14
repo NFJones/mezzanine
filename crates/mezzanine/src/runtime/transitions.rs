@@ -132,6 +132,8 @@ pub enum RuntimeEvent {
     Persistence(PersistenceEvent),
     /// A bounded host-clipboard worker completed outside the runtime actor.
     HostClipboard(HostClipboardEvent),
+    /// A command-backed status-pill worker completed outside the runtime actor.
+    StatusPill(crate::runtime::RuntimeStatusPillEvent),
     /// A runtime-owned timer fired.
     Timer(TimerEvent),
     /// The supervisor requested runtime shutdown.
@@ -156,6 +158,7 @@ impl RuntimeEvent {
             Self::Hook(_) => "hook",
             Self::Persistence(_) => "persistence",
             Self::HostClipboard(_) => "host_clipboard",
+            Self::StatusPill(_) => "status_pill",
             Self::Timer(_) => "timer",
             Self::Shutdown(_) => "shutdown",
         }
@@ -676,6 +679,11 @@ pub enum RuntimeSideEffect {
         /// Immutable command/function plan detached from actor-owned state.
         plan: crate::host::terminal::HostClipboardReadPlan,
     },
+    /// Refresh one command-backed status pill on an external worker.
+    RefreshStatusPill {
+        /// Immutable generation-stamped refresh plan.
+        plan: crate::runtime::RuntimeStatusPillRefreshPlan,
+    },
     /// Start an agent provider request outside the actor.
     DispatchAgentProvider {
         /// Stores the agent id value for this data structure.
@@ -955,7 +963,8 @@ const fn runtime_event_application_priority(event: &RuntimeEvent) -> u8 {
         | RuntimeEvent::AgentRemember(_)
         | RuntimeEvent::Hook(_)
         | RuntimeEvent::Persistence(_)
-        | RuntimeEvent::HostClipboard(_) => 2,
+        | RuntimeEvent::HostClipboard(_)
+        | RuntimeEvent::StatusPill(_) => 2,
     }
 }
 

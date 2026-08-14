@@ -51,7 +51,19 @@ impl AsyncRuntimeSessionActor {
             } => {
                 self.metrics.render_client_view_requests =
                     self.metrics.render_client_view_requests.saturating_add(1);
-                let result = self.service.render_client_view(role, client_size, &config);
+                let result = self
+                    .service
+                    .render_client_view(role, client_size, &config)
+                    .and_then(|view| {
+                        let effects = self
+                            .service
+                            .drain_status_pill_refresh_transition()
+                            .side_effects;
+                        if !effects.is_empty() {
+                            self.queue_runtime_side_effects(effects)?;
+                        }
+                        Ok(view)
+                    });
                 let _ = reply.send(result);
                 false
             }
@@ -79,6 +91,13 @@ impl AsyncRuntimeSessionActor {
                         } else {
                             None
                         };
+                        let effects = self
+                            .service
+                            .drain_status_pill_refresh_transition()
+                            .side_effects;
+                        if !effects.is_empty() {
+                            self.queue_runtime_side_effects(effects)?;
+                        }
                         Ok(AsyncRenderedClientFrame { config, view })
                     });
                 let _ = reply.send(result);
@@ -844,6 +863,10 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::DrainHostClipboardSideEffects { limit, reply } => {
                 let _ = reply.send(self.drain_host_clipboard_side_effects(limit));
+                false
+            }
+            AsyncRuntimeRequest::DrainStatusPillSideEffects { limit, reply } => {
+                let _ = reply.send(self.drain_status_pill_side_effects(limit));
                 false
             }
             AsyncRuntimeRequest::DrainPaneIoSideEffects {

@@ -418,6 +418,10 @@ use status_pills::{
     RuntimeStatusPillCache, RuntimeStatusPillDefinition,
     runtime_status_pill_definitions_from_config,
 };
+pub use status_pills::{
+    RuntimeStatusPillEvent, RuntimeStatusPillRefreshPlan,
+    execute_runtime_status_pill_refresh_plan_with_cancellation,
+};
 pub use transitions::{
     AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent, ClientEvent,
     HostClipboardEvent, HostClipboardPasteTarget, PaneEvent, PaneForegroundProcessObservation,

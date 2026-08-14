@@ -248,6 +248,7 @@ pub(super) fn runtime_event_requires_registry_persistence(event: &RuntimeEvent) 
         | RuntimeEvent::Hook(_)
         | RuntimeEvent::Persistence(_)
         | RuntimeEvent::HostClipboard(_)
+        | RuntimeEvent::StatusPill(_)
         | RuntimeEvent::Timer(_) => false,
         RuntimeEvent::Client(_)
         | RuntimeEvent::Process(_)
@@ -377,6 +378,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::ScheduleTimer { .. } => "schedule-timer",
         RuntimeSideEffect::CancelTimer { .. } => "cancel-timer",
         RuntimeSideEffect::ReadHostClipboard { .. } => "read-host-clipboard",
+        RuntimeSideEffect::RefreshStatusPill { .. } => "refresh-status-pill",
         RuntimeSideEffect::DispatchAgentProvider { .. } => "dispatch-agent-provider",
         RuntimeSideEffect::DispatchApprovedExternalAction { .. } => {
             "dispatch-approved-external-action"

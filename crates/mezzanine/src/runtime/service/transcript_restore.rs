@@ -708,6 +708,7 @@ impl RuntimeSessionService {
         side_effects.extend(self.drain_pane_pipe_persistence_transition().side_effects);
         side_effects.extend(self.drain_program_hook_transition().side_effects);
         side_effects.extend(self.drain_host_clipboard_read_transition().side_effects);
+        side_effects.extend(self.drain_status_pill_refresh_transition().side_effects);
         RuntimeTransition {
             applied: false,
             side_effects,

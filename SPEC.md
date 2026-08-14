@@ -2786,11 +2786,15 @@ that configured pill as a status pill. Implementations MUST execute a configured
 pill command only while `#{pill.<name>}` appears in the effective
 `frames.window.right_status` template, MUST respect the configured refresh
 interval, MUST bound command execution by timeout, and MUST not execute status
-pill commands from the terminal frame renderer. Command stdout MUST be trimmed
-to the first line before display and bounded by the configured maximum output
-length. Empty output behavior MUST be one of `hide`, `show_empty`, or
-`keep_previous`; error behavior MUST be one of `hide`, `show_error`, or
-`keep_previous`.
+pill commands from the terminal frame renderer. Rendering MUST use the most
+recent cached value and schedule at most one asynchronous refresh per pill.
+Refresh workers MUST drain stdout and stderr concurrently, bound retained
+output, terminate and reap timed-out process groups on Linux and macOS, and
+return generation-stamped completions so stale results cannot replace newer
+state. Command stdout MUST be trimmed to the first line before display and
+bounded by the configured maximum output length. Empty output behavior MUST be
+one of `hide`, `show_empty`, or `keep_previous`; error behavior MUST be one of
+`hide`, `show_error`, or `keep_previous`.
 
 The `theme` table MUST support `active`, `aliases`, and `colors`. `theme.active`
 MUST select the active named theme and MUST default to `acid_lime`.

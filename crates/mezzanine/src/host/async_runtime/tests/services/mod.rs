@@ -12,6 +12,7 @@ mod rendering;
 #[cfg(target_os = "macos")]
 mod semantic_patch;
 mod side_effects;
+mod status_pills;
 mod terminal_io;
 mod terminal_loop;
 mod terminal_service;

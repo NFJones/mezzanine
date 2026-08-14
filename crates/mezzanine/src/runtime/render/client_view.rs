@@ -1150,7 +1150,7 @@ impl RuntimeSessionService {
             .presentation
             .window_status_pill_cache
             .borrow_mut()
-            .refresh_active(
+            .render_active(
                 &self.presentation.settings.window_status_pill_definitions,
                 &template,
             );

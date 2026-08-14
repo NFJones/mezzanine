@@ -38,15 +38,15 @@ use super::{
     PaneSurfaceKind, PasteBuffers, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt,
     ReadlinePromptKind, RenderedClientView, Result, RuntimeAgentPromptInput, RuntimeCommandBinding,
     RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition,
-    Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext,
-    TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis,
-    current_unix_seconds, json_escape, mouse_action_name, mux_action_command_prompt_prefill,
-    mux_action_name, pane_navigation_direction, parse_command_sequence,
-    render_attached_client_view_with_screen_resolvers, runtime_agent_shell_command_response_json,
-    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
-    runtime_approval_policy_name, runtime_copy_position_for_view, runtime_fit_status_line,
-    runtime_paste_bytes, select_clipboard_paste_source, window_frame_action_pillbox_cells,
-    window_frame_pillbox_cells,
+    RuntimeTransition, Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
+    TerminalFrameContext, TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count,
+    current_unix_millis, current_unix_seconds, json_escape, mouse_action_name,
+    mux_action_command_prompt_prefill, mux_action_name, pane_navigation_direction,
+    parse_command_sequence, render_attached_client_view_with_screen_resolvers,
+    runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
+    runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
+    runtime_fit_status_line, runtime_paste_bytes, select_clipboard_paste_source,
+    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 /// Maximum elapsed time between two pane-content clicks recognized as a double click.
 const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
@@ -1046,6 +1046,40 @@ impl RuntimeSessionService {
     pub(crate) fn clear_agent_prompt_inputs(&mut self) {
         self.presentation.agent_prompt_inputs.clear();
         self.presentation.agent_prompt_selector_refreshes.clear();
+    }
+
+    /// Drains command-backed status pill refreshes scheduled during rendering.
+    pub(crate) fn drain_status_pill_refresh_transition(&self) -> RuntimeTransition {
+        let plans = self
+            .presentation
+            .window_status_pill_cache
+            .borrow_mut()
+            .drain_refresh_plans();
+        RuntimeTransition {
+            applied: false,
+            side_effects: plans
+                .into_iter()
+                .map(|plan| RuntimeSideEffect::RefreshStatusPill { plan })
+                .collect(),
+        }
+    }
+
+    /// Applies a current status pill completion and reports visible change.
+    pub(crate) fn apply_status_pill_event(
+        &self,
+        event: crate::runtime::RuntimeStatusPillEvent,
+    ) -> Option<bool> {
+        self.presentation
+            .window_status_pill_cache
+            .borrow_mut()
+            .apply_event(
+                &self.presentation.settings.window_status_pill_definitions,
+                &self
+                    .presentation
+                    .settings
+                    .window_frame_right_status_template,
+                event,
+            )
     }
 }
 

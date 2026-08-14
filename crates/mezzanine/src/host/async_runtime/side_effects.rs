@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use crate::host::terminal::attached_terminal_output_disconnected;
@@ -28,7 +29,9 @@ use crate::integrations::hooks::{
     HookExecutionPlan, HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureKind,
     execute_program_hook_async_with_cancellation,
 };
-use crate::runtime::apply_registry_update_async;
+use crate::runtime::{
+    apply_registry_update_async, execute_runtime_status_pill_refresh_plan_with_cancellation,
+};
 use crate::security::audit::AuditRetentionPolicy;
 use crate::storage::transcript::AgentTranscriptStore;
 use mez_agent::transcript::TranscriptEntry;
@@ -211,6 +214,21 @@ pub struct AsyncHostClipboardSideEffectServiceReport {
     /// Number of actor drain polls attempted.
     pub polls: u64,
     /// Number of clipboard reads drained from the actor.
+    pub drained: u64,
+    /// Number of completion events submitted to actor ingress.
+    pub submitted_events: usize,
+    /// Number of completion events applied by the actor.
+    pub applied_events: usize,
+    /// Runtime lifecycle state seen at service exit.
+    pub terminal_state: RuntimeLifecycleState,
+}
+
+/// Report returned by the command-backed status-pill worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AsyncStatusPillSideEffectServiceReport {
+    /// Number of actor drain polls attempted.
+    pub polls: u64,
+    /// Number of refresh plans drained from the actor.
     pub drained: u64,
     /// Number of completion events submitted to actor ingress.
     pub submitted_events: usize,
@@ -627,6 +645,110 @@ pub fn build_async_host_clipboard_side_effect_service(
     config.validate()?;
     Ok(AsyncRuntimeService::new_auxiliary(name, async move {
         let report = run_async_host_clipboard_side_effect_service(&handle, config, |_, state| {
+            is_terminal_runtime_lifecycle_state(state)
+        })
+        .await?;
+        Ok(AsyncRuntimeServiceExit::completed(report.drained))
+    }))
+}
+
+/// Drains status-pill refresh plans, executes each drained batch concurrently,
+/// and reports typed completions to the serialized actor.
+pub async fn run_async_status_pill_side_effect_service<S>(
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncRuntimeSideEffectServiceConfig,
+    mut should_stop: S,
+) -> Result<AsyncStatusPillSideEffectServiceReport>
+where
+    S: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    config.validate()?;
+    let mut lifecycle_watcher = handle.lifecycle_state_watcher();
+    let mut side_effect_watcher = handle.side_effect_delivery_watcher();
+    let mut report = AsyncStatusPillSideEffectServiceReport {
+        polls: 0,
+        drained: 0,
+        submitted_events: 0,
+        applied_events: 0,
+        terminal_state: *lifecycle_watcher.borrow(),
+    };
+
+    while report.polls < config.max_polls {
+        let state = *lifecycle_watcher.borrow_and_update();
+        report.terminal_state = state;
+        if should_stop(report.polls, state) {
+            return Ok(report);
+        }
+
+        report.polls = report.polls.saturating_add(1);
+        let effects = handle
+            .drain_status_pill_side_effects(config.drain_limit)
+            .await?;
+        if effects.is_empty() {
+            if report.polls >= config.max_polls || should_stop(report.polls, state) {
+                return Ok(report);
+            }
+            wait_for_side_effects_or_bounded_idle(
+                &mut lifecycle_watcher,
+                &mut side_effect_watcher,
+                config,
+            )
+            .await;
+            continue;
+        }
+
+        report.drained = report
+            .drained
+            .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
+        let mut tasks = JoinSet::new();
+        for effect in effects {
+            let RuntimeSideEffect::RefreshStatusPill { plan } = effect else {
+                continue;
+            };
+            let mut cancellation = handle.lifecycle_state_watcher();
+            tasks.spawn(async move {
+                execute_runtime_status_pill_refresh_plan_with_cancellation(plan, async move {
+                    loop {
+                        let state = *cancellation.borrow();
+                        if is_terminal_runtime_lifecycle_state(state)
+                            || cancellation.changed().await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                })
+                .await
+            });
+        }
+        let mut batch = RuntimeEventBatch::new();
+        while let Some(completion) = tasks.join_next().await {
+            let event = completion.map_err(|error| {
+                MezError::invalid_state(format!("status pill worker task failed: {error}"))
+            })?;
+            if let Some(event) = event {
+                batch.push(RuntimeEvent::StatusPill(event));
+            }
+        }
+        if !batch.events.is_empty() {
+            let ingress = handle.submit_runtime_events(batch).await?;
+            report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
+            report.applied_events = report.applied_events.saturating_add(ingress.applied);
+        }
+    }
+
+    report.terminal_state = *lifecycle_watcher.borrow();
+    Ok(report)
+}
+
+/// Builds the supervised command-backed status-pill refresh service.
+pub fn build_async_status_pill_side_effect_service(
+    name: impl Into<String>,
+    handle: AsyncRuntimeSessionHandle,
+    config: AsyncRuntimeSideEffectServiceConfig,
+) -> Result<AsyncRuntimeService> {
+    config.validate()?;
+    Ok(AsyncRuntimeService::new_auxiliary(name, async move {
+        let report = run_async_status_pill_side_effect_service(&handle, config, |_, state| {
             is_terminal_runtime_lifecycle_state(state)
         })
         .await?;

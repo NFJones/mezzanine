@@ -2,18 +2,21 @@
 //!
 //! This module owns the configuration model, active-template detection, bounded
 //! command execution, and cache state for `#{pill.<name>}` window status fields.
-//! Rendering receives only cached text so terminal frame rendering stays pure
-//! and command execution only happens for pills referenced by the active
-//! `frames.window.right_status` template.
+//! Rendering receives only cached text and schedules generation-stamped work so
+//! terminal frame rendering stays pure. A supervised worker executes commands
+//! only for pills referenced by the active `frames.window.right_status`
+//! template, and the actor applies typed completions to this cache.
 
-use super::{BTreeMap, Command, Duration, MezError, Result, Stdio, Value, current_unix_millis};
-use crate::host::process::wait_for_child_with_timeout;
-use std::io::Read;
+use super::{BTreeMap, Duration, MezError, Result, Value, current_unix_millis};
+use std::process::Stdio;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// Default timeout for one status pill command execution.
 pub(super) const DEFAULT_STATUS_PILL_TIMEOUT_MS: u64 = 750;
 /// Default maximum number of Unicode scalar values retained from command output.
 pub(super) const DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS: usize = 32;
+/// Maximum bytes retained from one status pill stdout stream.
+const STATUS_PILL_OUTPUT_LIMIT_BYTES: usize = 1024 * 1024;
 /// Text shown for failed pills when configured with `show_error`.
 pub(super) const STATUS_PILL_ERROR_TEXT: &str = "error";
 
@@ -85,17 +88,79 @@ pub(super) struct RuntimeStatusPillState {
     display: Option<String>,
     /// Next Unix millisecond timestamp at which the command may be refreshed.
     next_refresh_at_ms: u64,
+    /// Refresh currently owned by the asynchronous worker.
+    pending_generation: Option<u64>,
+}
+
+/// Immutable external work for one command-backed status pill refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeStatusPillRefreshPlan {
+    /// Configured pill name.
+    name: String,
+    /// Monotonic cache generation used to reject stale completions.
+    generation: u64,
+    /// Definition snapshot that produced this refresh.
+    definition: RuntimeStatusPillDefinition,
+}
+
+#[cfg(test)]
+impl RuntimeStatusPillRefreshPlan {
+    /// Builds one deterministic command plan for async-runtime tests.
+    pub(crate) fn for_tests(
+        name: &str,
+        generation: u64,
+        command: &str,
+        timeout_ms: u64,
+        max_output_chars: usize,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            generation,
+            definition: RuntimeStatusPillDefinition {
+                label: None,
+                command: command.to_string(),
+                interval_ms: 1_000,
+                initial: None,
+                timeout_ms,
+                empty_behavior: RuntimeStatusPillEmptyBehavior::Hide,
+                error_behavior: RuntimeStatusPillErrorBehavior::Hide,
+                max_output_chars,
+                style: None,
+            },
+        }
+    }
+}
+
+/// Result of one bounded status pill command execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeStatusPillRefreshOutcome {
+    /// Command exited successfully with normalized bounded stdout.
+    Succeeded(String),
+    /// Command failed, timed out, emitted invalid UTF-8, or could not be read.
+    Failed,
+}
+
+/// Typed completion emitted by the asynchronous status pill worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeStatusPillEvent {
+    /// Original immutable refresh request.
+    plan: RuntimeStatusPillRefreshPlan,
+    /// Bounded command outcome.
+    outcome: RuntimeStatusPillRefreshOutcome,
 }
 
 /// Cache and scheduler for command-backed status pills.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct RuntimeStatusPillCache {
     states: BTreeMap<String, RuntimeStatusPillState>,
+    pending_refreshes: Vec<RuntimeStatusPillRefreshPlan>,
+    /// Cache-wide generation preventing reuse after pill removal and re-addition.
+    next_generation: u64,
 }
 
 impl RuntimeStatusPillCache {
-    /// Refreshes active pill definitions and returns display strings keyed by pill name.
-    pub(super) fn refresh_active(
+    /// Returns cached display strings and schedules due refreshes as external work.
+    pub(super) fn render_active(
         &mut self,
         definitions: &BTreeMap<String, RuntimeStatusPillDefinition>,
         template: &str,
@@ -117,17 +182,57 @@ impl RuntimeStatusPillCache {
                     .map(|initial| definition.display_text(Some(initial)))
                     .filter(|value| !value.is_empty());
             }
-            if state.next_refresh_at_ms <= now_ms {
-                let next_display =
-                    runtime_status_pill_execute(definition, state.display.as_deref());
-                state.display = next_display;
+            if state.next_refresh_at_ms <= now_ms && state.pending_generation.is_none() {
+                self.next_generation = self.next_generation.wrapping_add(1).max(1);
+                let generation = self.next_generation;
+                state.pending_generation = Some(generation);
                 state.next_refresh_at_ms = now_ms.saturating_add(definition.interval_ms.max(1_000));
+                self.pending_refreshes.push(RuntimeStatusPillRefreshPlan {
+                    name: name.clone(),
+                    generation,
+                    definition: definition.clone(),
+                });
             }
             if let Some(display) = state.display.as_ref().filter(|value| !value.is_empty()) {
                 output.insert(name.clone(), display.clone());
             }
         }
         output
+    }
+
+    /// Drains scheduled refresh plans for the supervised external worker.
+    pub(super) fn drain_refresh_plans(&mut self) -> Vec<RuntimeStatusPillRefreshPlan> {
+        std::mem::take(&mut self.pending_refreshes)
+    }
+
+    /// Applies one current completion and reports whether visible text changed.
+    pub(super) fn apply_event(
+        &mut self,
+        definitions: &BTreeMap<String, RuntimeStatusPillDefinition>,
+        template: &str,
+        event: RuntimeStatusPillEvent,
+    ) -> Option<bool> {
+        let active_names = runtime_status_pill_names_from_template(template);
+        if !active_names.contains_key(event.plan.name.as_str()) {
+            return None;
+        }
+        let definition = definitions.get(event.plan.name.as_str())?;
+        let state = self.states.get_mut(event.plan.name.as_str())?;
+        if state.pending_generation != Some(event.plan.generation) {
+            return None;
+        }
+        state.pending_generation = None;
+        if definition != &event.plan.definition {
+            state.next_refresh_at_ms = 0;
+            return Some(false);
+        }
+        let previous = state.display.clone();
+        state.display = runtime_status_pill_display_from_outcome(
+            definition,
+            previous.as_deref(),
+            event.outcome,
+        );
+        Some(state.display != previous)
     }
 }
 
@@ -327,19 +432,24 @@ fn runtime_status_pill_error_behavior(
     }
 }
 
-/// Executes one status pill command and returns the next rendered display state.
-fn runtime_status_pill_execute(
+/// Applies configured display policy to one external command outcome.
+fn runtime_status_pill_display_from_outcome(
     definition: &RuntimeStatusPillDefinition,
     previous: Option<&str>,
+    outcome: RuntimeStatusPillRefreshOutcome,
 ) -> Option<String> {
-    match runtime_status_pill_command_output(definition) {
-        Ok(output) if output.is_empty() => match definition.empty_behavior {
-            RuntimeStatusPillEmptyBehavior::Hide => None,
-            RuntimeStatusPillEmptyBehavior::ShowEmpty => Some(definition.display_text(None)),
-            RuntimeStatusPillEmptyBehavior::KeepPrevious => previous.map(ToOwned::to_owned),
-        },
-        Ok(output) => Some(definition.display_text(Some(&output))),
-        Err(()) => match definition.error_behavior {
+    match outcome {
+        RuntimeStatusPillRefreshOutcome::Succeeded(output) if output.is_empty() => {
+            match definition.empty_behavior {
+                RuntimeStatusPillEmptyBehavior::Hide => None,
+                RuntimeStatusPillEmptyBehavior::ShowEmpty => Some(definition.display_text(None)),
+                RuntimeStatusPillEmptyBehavior::KeepPrevious => previous.map(ToOwned::to_owned),
+            }
+        }
+        RuntimeStatusPillRefreshOutcome::Succeeded(output) => {
+            Some(definition.display_text(Some(&output)))
+        }
+        RuntimeStatusPillRefreshOutcome::Failed => match definition.error_behavior {
             RuntimeStatusPillErrorBehavior::Hide => None,
             RuntimeStatusPillErrorBehavior::ShowError => {
                 Some(definition.display_text(Some(STATUS_PILL_ERROR_TEXT)))
@@ -349,43 +459,162 @@ fn runtime_status_pill_execute(
     }
 }
 
-/// Runs the configured command with bounded timeout and normalized stdout.
-fn runtime_status_pill_command_output(
+/// Executes one status pill refresh outside serialized runtime ownership.
+#[cfg(test)]
+pub async fn execute_runtime_status_pill_refresh_plan_async(
+    plan: RuntimeStatusPillRefreshPlan,
+) -> RuntimeStatusPillEvent {
+    execute_runtime_status_pill_refresh_plan_with_cancellation(plan, std::future::pending())
+        .await
+        .expect("a pending cancellation source cannot cancel status-pill execution")
+}
+
+/// Executes one refresh until completion, timeout, or lifecycle cancellation.
+pub async fn execute_runtime_status_pill_refresh_plan_with_cancellation<C>(
+    plan: RuntimeStatusPillRefreshPlan,
+    cancellation: C,
+) -> Option<RuntimeStatusPillEvent>
+where
+    C: std::future::Future<Output = ()>,
+{
+    let outcome = runtime_status_pill_command_output_async(&plan.definition, cancellation).await?;
+    Some(RuntimeStatusPillEvent { plan, outcome })
+}
+
+/// Runs the configured command with bounded time and concurrently drained pipes.
+async fn runtime_status_pill_command_output_async<C>(
     definition: &RuntimeStatusPillDefinition,
-) -> std::result::Result<String, ()> {
-    let mut child = Command::new("/bin/sh")
+    cancellation: C,
+) -> Option<RuntimeStatusPillRefreshOutcome>
+where
+    C: std::future::Future<Output = ()>,
+{
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command
         .arg("-c")
         .arg(&definition.command)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| ())?;
-    let status =
-        match wait_for_child_with_timeout(&mut child, Duration::from_millis(definition.timeout_ms))
-            .map_err(|_| ())?
-        {
-            Some(status) => status,
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(());
-            }
-        };
-    if !status.success() {
-        return Err(());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.as_std_mut().process_group(0);
     }
-    let mut stdout = String::new();
-    child
-        .stdout
-        .as_mut()
-        .ok_or(())?
-        .read_to_string(&mut stdout)
-        .map_err(|_| ())?;
-    Ok(runtime_status_pill_normalize_output(
-        &stdout,
-        definition.max_output_chars,
+    let Ok(mut child) = command.spawn() else {
+        return Some(RuntimeStatusPillRefreshOutcome::Failed);
+    };
+    let mut process_group = RuntimeStatusPillProcessGroupGuard::new(&child);
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        terminate_runtime_status_pill_process(&mut child, &process_group).await;
+        process_group.disarm();
+        return Some(RuntimeStatusPillRefreshOutcome::Failed);
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(definition.timeout_ms);
+    tokio::pin!(cancellation);
+    let completed = tokio::select! {
+        completed = async {
+            tokio::join!(
+                child.wait(),
+                read_bounded_status_pill_pipe(stdout, STATUS_PILL_OUTPUT_LIMIT_BYTES),
+                read_bounded_status_pill_pipe(stderr, 0),
+            )
+        } => completed,
+        _ = tokio::time::sleep_until(deadline) => {
+            terminate_runtime_status_pill_process(&mut child, &process_group).await;
+            process_group.disarm();
+            return Some(RuntimeStatusPillRefreshOutcome::Failed);
+        }
+        _ = &mut cancellation => {
+            terminate_runtime_status_pill_process(&mut child, &process_group).await;
+            process_group.disarm();
+            return None;
+        }
+    };
+    process_group.disarm();
+    let (Ok(status), Ok(stdout), Ok(_stderr)) = completed else {
+        return Some(RuntimeStatusPillRefreshOutcome::Failed);
+    };
+    if !status.success() {
+        return Some(RuntimeStatusPillRefreshOutcome::Failed);
+    }
+    let Ok(stdout) = String::from_utf8(stdout) else {
+        return Some(RuntimeStatusPillRefreshOutcome::Failed);
+    };
+    Some(RuntimeStatusPillRefreshOutcome::Succeeded(
+        runtime_status_pill_normalize_output(&stdout, definition.max_output_chars),
     ))
+}
+
+/// Drains one child stream while retaining no more than `max_bytes`.
+async fn read_bounded_status_pill_pipe<R>(mut pipe: R, max_bytes: usize) -> std::io::Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut retained = Vec::with_capacity(max_bytes.min(8192));
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = pipe.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(retained);
+        }
+        let accepted = max_bytes.saturating_sub(retained.len()).min(read);
+        retained.extend_from_slice(&chunk[..accepted]);
+    }
+}
+
+/// Best-effort private-process-group cleanup for status pill commands.
+struct RuntimeStatusPillProcessGroupGuard {
+    #[cfg(unix)]
+    process_group_id: Option<i32>,
+    armed: bool,
+}
+
+impl RuntimeStatusPillProcessGroupGuard {
+    /// Arms cleanup for one spawned child process group.
+    fn new(child: &tokio::process::Child) -> Self {
+        Self {
+            #[cfg(unix)]
+            process_group_id: child.id().and_then(|id| i32::try_from(id).ok()),
+            armed: true,
+        }
+    }
+
+    /// Prevents cleanup after the direct child has been reaped.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    /// Terminates the private process group when supported.
+    fn terminate(&self) {
+        if !self.armed {
+            return;
+        }
+        #[cfg(unix)]
+        if let Some(process_group_id) = self.process_group_id {
+            // SAFETY: the pid belongs to a child started in its own process group.
+            unsafe {
+                libc::kill(-process_group_id, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+impl Drop for RuntimeStatusPillProcessGroupGuard {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+/// Terminates descendants and reaps the direct status pill child.
+async fn terminate_runtime_status_pill_process(
+    child: &mut tokio::process::Child,
+    process_group: &RuntimeStatusPillProcessGroupGuard,
+) {
+    process_group.terminate();
+    let _ = child.start_kill();
+    let _ = child.wait().await;
 }
 
 /// Normalizes command stdout for single-line status rendering.
@@ -405,7 +634,8 @@ mod tests {
     use super::{
         BTreeMap, DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS, DEFAULT_STATUS_PILL_TIMEOUT_MS,
         RuntimeStatusPillCache, RuntimeStatusPillDefinition, RuntimeStatusPillEmptyBehavior,
-        RuntimeStatusPillErrorBehavior, runtime_status_pill_names_from_template,
+        RuntimeStatusPillErrorBehavior, RuntimeStatusPillEvent, RuntimeStatusPillRefreshOutcome,
+        execute_runtime_status_pill_refresh_plan_async, runtime_status_pill_names_from_template,
     };
 
     /// Verifies that active pill detection follows the same `#{...}` field
@@ -458,9 +688,94 @@ mod tests {
         );
 
         let mut cache = RuntimeStatusPillCache::default();
-        let values = cache.refresh_active(&definitions, "#{pill.used}");
+        let values = cache.render_active(&definitions, "#{pill.used}");
 
-        assert_eq!(values.get("used").map(String::as_str), Some("USED ok"));
+        assert!(!values.contains_key("used"));
         assert!(!values.contains_key("unused"));
+        let plans = cache.drain_refresh_plans();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].name, "used");
+
+        let repeated = cache.render_active(&definitions, "#{pill.used}");
+        assert!(repeated.is_empty());
+        assert!(cache.drain_refresh_plans().is_empty());
+    }
+
+    /// Verifies stale generations are ignored and current completions apply
+    /// configured visible output policy exactly once.
+    #[test]
+    fn status_pill_cache_rejects_stale_completions() {
+        let mut definitions = BTreeMap::new();
+        definitions.insert(
+            "used".to_string(),
+            RuntimeStatusPillDefinition {
+                label: Some("USED".to_string()),
+                command: "printf ok".to_string(),
+                interval_ms: 1_000,
+                initial: Some("initial".to_string()),
+                timeout_ms: DEFAULT_STATUS_PILL_TIMEOUT_MS,
+                empty_behavior: RuntimeStatusPillEmptyBehavior::Hide,
+                error_behavior: RuntimeStatusPillErrorBehavior::Hide,
+                max_output_chars: DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS,
+                style: None,
+            },
+        );
+        let mut cache = RuntimeStatusPillCache::default();
+        let visible = cache.render_active(&definitions, "#{pill.used}");
+        assert_eq!(
+            visible.get("used").map(String::as_str),
+            Some("USED initial")
+        );
+        let plan = cache.drain_refresh_plans().remove(0);
+        let mut stale = plan.clone();
+        stale.generation = stale.generation.saturating_add(1);
+
+        assert_eq!(
+            cache.apply_event(
+                &definitions,
+                "#{pill.used}",
+                RuntimeStatusPillEvent {
+                    plan: stale,
+                    outcome: RuntimeStatusPillRefreshOutcome::Succeeded("stale".to_string()),
+                },
+            ),
+            None
+        );
+        assert_eq!(
+            cache.apply_event(
+                &definitions,
+                "#{pill.used}",
+                RuntimeStatusPillEvent {
+                    plan,
+                    outcome: RuntimeStatusPillRefreshOutcome::Succeeded("ready".to_string()),
+                },
+            ),
+            Some(true)
+        );
+        let visible = cache.render_active(&definitions, "#{pill.used}");
+        assert_eq!(visible.get("used").map(String::as_str), Some("USED ready"));
+    }
+
+    /// Verifies stdout and stderr are drained concurrently under one deadline,
+    /// output is normalized, and timed-out helpers fail without hanging.
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_pill_executor_bounds_output_and_timeout() {
+        let successful = super::RuntimeStatusPillRefreshPlan::for_tests(
+            "pipe-fill",
+            1,
+            "printf '  ready  \\nignored'; head -c 2097152 /dev/zero >&2",
+            1_000,
+            5,
+        );
+        let completed = execute_runtime_status_pill_refresh_plan_async(successful).await;
+        assert_eq!(
+            completed.outcome,
+            RuntimeStatusPillRefreshOutcome::Succeeded("ready".to_string())
+        );
+
+        let timed_out =
+            super::RuntimeStatusPillRefreshPlan::for_tests("timeout", 1, "sleep 1", 20, 32);
+        let completed = execute_runtime_status_pill_refresh_plan_async(timed_out).await;
+        assert_eq!(completed.outcome, RuntimeStatusPillRefreshOutcome::Failed);
     }
 }

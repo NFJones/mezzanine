@@ -860,6 +860,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Completion channel for the drained effects.
         reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
     },
+    /// Drains command-backed status-pill refreshes for the external worker.
+    DrainStatusPillSideEffects {
+        /// Maximum effects returned in one request.
+        limit: usize,
+        /// Completion channel for the drained effects.
+        reply: oneshot::Sender<Result<Vec<RuntimeSideEffect>>>,
+    },
     /// Represents the Drain Pane Io Side Effects case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

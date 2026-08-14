@@ -358,6 +358,32 @@ impl AsyncRuntimeSessionActor {
         Ok(drained)
     }
 
+    /// Drains command-backed status-pill refresh work for the external worker.
+    pub(super) fn drain_status_pill_side_effects(
+        &mut self,
+        limit: usize,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        if limit == 0 {
+            return Err(MezError::invalid_args(
+                "async runtime status pill side-effect drain limit must be greater than zero",
+            ));
+        }
+        let mut drained = Vec::new();
+        let mut retained = VecDeque::with_capacity(self.side_effects.len());
+        while let Some(effect) = self.side_effects.pop_front() {
+            if drained.len() < limit
+                && matches!(effect, RuntimeSideEffect::RefreshStatusPill { .. })
+            {
+                drained.push(effect);
+            } else {
+                retained.push_back(effect);
+            }
+        }
+        self.side_effects = retained;
+        self.record_side_effect_drain(drained.len());
+        Ok(drained)
+    }
+
     /// Runs the drain pane io side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -591,6 +617,13 @@ impl AsyncRuntimeSessionActor {
         else {
             return Ok(None);
         };
+        let status_pill_effects = self
+            .service
+            .drain_status_pill_refresh_transition()
+            .side_effects;
+        if !status_pill_effects.is_empty() {
+            self.queue_runtime_side_effects(status_pill_effects)?;
+        }
         let cursor_visible = view.cursor_visible;
         let cursor_row = view.cursor_row;
         let cursor_column = view.cursor_column;

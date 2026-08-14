@@ -641,6 +641,15 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Drains command-backed status-pill refreshes for the supervised worker.
+    pub async fn drain_status_pill_side_effects(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<RuntimeSideEffect>> {
+        self.request(|reply| AsyncRuntimeRequest::DrainStatusPillSideEffects { limit, reply })
+            .await?
+    }
+
     /// Runs the drain pane io side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
