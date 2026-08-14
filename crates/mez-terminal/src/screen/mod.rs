@@ -493,17 +493,6 @@ enum NormalPhysicalLineIndex {
     Visible(usize),
 }
 
-/// Captures enough physical-row metadata to find recent logical lines.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct NormalPhysicalLineTarget {
-    /// Stores the physical row index this target addresses.
-    index: NormalPhysicalLineIndex,
-    /// Presented row text after trimming terminal padding.
-    text: String,
-    /// Whether this physical row wraps into the next physical row.
-    wraps_to_next: bool,
-}
-
 /// Carries Terminal Screen state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

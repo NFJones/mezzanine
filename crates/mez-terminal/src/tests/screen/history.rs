@@ -456,3 +456,40 @@ fn terminal_screen_resize_shrink_preserves_dropped_row_copy_text_in_history() {
     assert_eq!(history_styled[1].copy_text.as_deref(), Some("copy-one"));
     assert_eq!(screen.visible_lines(), vec!["line2", "line3", "line4"]);
 }
+
+/// Verifies recent copy metadata inspects only the newest requested logical
+/// line instead of cloning or scanning a large retained scrollback.
+#[test]
+fn terminal_screen_recent_copy_text_walk_is_bounded_by_affected_rows() {
+    let history_lines = (0..10_000)
+        .map(|index| format!("history-{index:05}"))
+        .collect::<Vec<_>>();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10_100).unwrap();
+    screen.restore_normal_styled_content(&history_lines, &[]);
+
+    let inspected = screen
+        .set_recent_normal_copy_texts_with_inspection_count(&["latest source".to_string()], "skip");
+
+    assert_eq!(screen.history().len(), 10_000);
+    assert_eq!(screen.history().copy_text_at(9_999), Some("latest source"));
+    assert!(inspected <= 6, "inspected {inspected} rows");
+}
+
+/// Verifies the bounded reverse walk preserves source text on the first row
+/// of a wrapped logical line and continuation markers on later physical rows.
+#[test]
+fn terminal_screen_recent_copy_text_walk_preserves_wrapped_line_metadata() {
+    let mut screen = TerminalScreen::new(Size::new(5, 3).unwrap(), 32).unwrap();
+    screen.feed(b"abcdefghij");
+
+    let inspected = screen.set_recent_normal_copy_texts_with_inspection_count(
+        &["raw wrapped source".to_string()],
+        "skip",
+    );
+    let visible = screen.visible_styled_lines();
+
+    assert_eq!(visible[0].copy_text.as_deref(), Some("raw wrapped source"));
+    assert_eq!(visible[1].copy_text.as_deref(), Some("skip"));
+    assert_eq!(visible[2].copy_text, None);
+    assert!(inspected <= 4, "inspected {inspected} rows");
+}

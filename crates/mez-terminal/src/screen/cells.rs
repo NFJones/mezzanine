@@ -27,28 +27,53 @@ impl TerminalScreen {
             .collect()
     }
 
-    /// Returns normal-screen physical rows with addresses for copy metadata.
-    pub(super) fn normal_physical_line_targets(&self) -> Vec<NormalPhysicalLineTarget> {
-        let mut targets = self
-            .history
-            .styled_lines_with_wraps()
-            .enumerate()
-            .map(|(index, (line, wraps_to_next))| NormalPhysicalLineTarget {
-                index: NormalPhysicalLineIndex::History(index),
-                text: line.text,
-                wraps_to_next,
-            })
-            .collect::<Vec<_>>();
-        if !self.alternate.active() {
-            targets.extend(self.visible_styled_lines().into_iter().enumerate().map(
-                |(index, line)| NormalPhysicalLineTarget {
-                    index: NormalPhysicalLineIndex::Visible(index),
-                    text: line.text,
-                    wraps_to_next: self.line_wraps.get(index).copied().unwrap_or(false),
-                },
-            ));
+    /// Returns the number of addressable normal-screen physical rows.
+    pub(super) fn normal_physical_line_count(&self) -> usize {
+        self.history.len().saturating_add(self.cells.len())
+    }
+
+    /// Resolves one unified normal-screen physical-row offset.
+    pub(super) fn normal_physical_line_index(
+        &self,
+        offset: usize,
+    ) -> Option<NormalPhysicalLineIndex> {
+        let history_rows = self.history.len();
+        if offset < history_rows {
+            return Some(NormalPhysicalLineIndex::History(offset));
         }
-        targets
+        let visible_row = offset.saturating_sub(history_rows);
+        (visible_row < self.cells.len()).then_some(NormalPhysicalLineIndex::Visible(visible_row))
+    }
+
+    /// Reports whether one unified physical row wraps into its successor.
+    pub(super) fn normal_physical_line_wraps_to_next(&self, offset: usize) -> bool {
+        match self.normal_physical_line_index(offset) {
+            Some(NormalPhysicalLineIndex::History(row)) => self.history.line_wraps_to_next(row),
+            Some(NormalPhysicalLineIndex::Visible(row)) => {
+                self.line_wraps.get(row).copied().unwrap_or(false)
+            }
+            None => false,
+        }
+    }
+
+    /// Reports whether one unified physical row contains only whitespace.
+    pub(super) fn normal_physical_line_is_blank(&self, offset: usize) -> bool {
+        match self.normal_physical_line_index(offset) {
+            Some(NormalPhysicalLineIndex::History(row)) => self
+                .history
+                .line_at(row)
+                .is_none_or(|line| line.trim().is_empty()),
+            Some(NormalPhysicalLineIndex::Visible(row)) => {
+                self.cells.get(row).is_none_or(|cells| {
+                    cells
+                        .iter()
+                        .filter(|cell| !cell.continuation)
+                        .flat_map(|cell| cell.text.chars())
+                        .all(char::is_whitespace)
+                })
+            }
+            None => true,
+        }
     }
 
     /// Updates the raw-copy text associated with one normal physical row.

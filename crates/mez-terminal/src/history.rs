@@ -233,6 +233,22 @@ impl HistoryBuffer {
         self.lines.iter().map(String::as_str)
     }
 
+    /// Returns one retained presented row without cloning its text.
+    pub(crate) fn line_at(&self, index: usize) -> Option<&str> {
+        self.lines.get(index).map(String::as_str)
+    }
+
+    /// Reports whether one retained physical row wraps into its successor.
+    pub(crate) fn line_wraps_to_next(&self, index: usize) -> bool {
+        self.line_wraps.get(index).copied().unwrap_or(false)
+    }
+
+    /// Returns one retained copy-source override for focused tests.
+    #[cfg(test)]
+    pub(crate) fn copy_text_at(&self, index: usize) -> Option<&str> {
+        self.line_copy_texts.get(index).and_then(Option::as_deref)
+    }
+
     /// Iterates over retained presented lines and style metadata.
     pub fn styled_lines(&self) -> impl Iterator<Item = TerminalStyledLine> + '_ {
         self.lines

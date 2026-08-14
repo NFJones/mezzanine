@@ -73,39 +73,67 @@ impl TerminalScreen {
         copy_texts: &[String],
         continuation_copy_text: &str,
     ) {
+        let _ = self.set_recent_normal_copy_texts_inner(copy_texts, continuation_copy_text);
+    }
+
+    /// Assigns recent copy text and returns inspected physical-row count for tests.
+    #[cfg(test)]
+    pub(crate) fn set_recent_normal_copy_texts_with_inspection_count(
+        &mut self,
+        copy_texts: &[String],
+        continuation_copy_text: &str,
+    ) -> usize {
+        self.set_recent_normal_copy_texts_inner(copy_texts, continuation_copy_text)
+    }
+
+    /// Performs a bounded reverse walk over newest normal-screen logical lines.
+    fn set_recent_normal_copy_texts_inner(
+        &mut self,
+        copy_texts: &[String],
+        continuation_copy_text: &str,
+    ) -> usize {
         if copy_texts.is_empty() || self.alternate.active() {
-            return;
+            return 0;
         }
-        let mut targets = self.normal_physical_line_targets();
-        while targets
-            .last()
-            .is_some_and(|target| !target.wraps_to_next && target.text.trim().is_empty())
-        {
-            targets.pop();
+        let mut inspected_rows = 0usize;
+        let mut target_end = self.normal_physical_line_count();
+        while target_end > 0 {
+            let target = target_end.saturating_sub(1);
+            inspected_rows = inspected_rows.saturating_add(1);
+            if self.normal_physical_line_wraps_to_next(target)
+                || !self.normal_physical_line_is_blank(target)
+            {
+                break;
+            }
+            target_end = target;
         }
 
-        let mut target_end = targets.len();
         for copy_text in copy_texts.iter().rev() {
             if target_end == 0 {
                 break;
             }
             let mut start = target_end.saturating_sub(1);
-            while start > 0 && targets[start.saturating_sub(1)].wraps_to_next {
+            while start > 0 {
+                inspected_rows = inspected_rows.saturating_add(1);
+                if !self.normal_physical_line_wraps_to_next(start.saturating_sub(1)) {
+                    break;
+                }
                 start = start.saturating_sub(1);
             }
-            self.assign_normal_physical_copy_text(targets[start].index, Some(copy_text.clone()));
-            for target in targets
-                .iter()
-                .take(target_end)
-                .skip(start.saturating_add(1))
-            {
-                self.assign_normal_physical_copy_text(
-                    target.index,
-                    Some(continuation_copy_text.to_string()),
-                );
+            if let Some(index) = self.normal_physical_line_index(start) {
+                self.assign_normal_physical_copy_text(index, Some(copy_text.clone()));
+            }
+            for offset in start.saturating_add(1)..target_end {
+                if let Some(index) = self.normal_physical_line_index(offset) {
+                    self.assign_normal_physical_copy_text(
+                        index,
+                        Some(continuation_copy_text.to_string()),
+                    );
+                }
             }
             target_end = start;
         }
+        inspected_rows
     }
 
     /// Runs the history operation for this subsystem.
