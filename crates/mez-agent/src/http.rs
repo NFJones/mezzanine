@@ -479,7 +479,10 @@ fn parse_sse_event_block(block: &str) -> Option<SseEvent> {
 #[derive(Debug, Default)]
 pub struct ProviderSseTerminalDetector {
     scanned_bytes: usize,
+    separator_search_bytes: usize,
     terminal_seen: bool,
+    #[cfg(test)]
+    searched_bytes: usize,
 }
 
 impl ProviderSseTerminalDetector {
@@ -488,20 +491,29 @@ impl ProviderSseTerminalDetector {
         if self.terminal_seen {
             return true;
         }
-        if self.scanned_bytes > body.len() {
+        if self.scanned_bytes > body.len() || self.separator_search_bytes > body.len() {
             self.scanned_bytes = 0;
+            self.separator_search_bytes = 0;
         }
         while self.scanned_bytes < body.len() {
-            let remaining = &body[self.scanned_bytes..];
+            let search_start = self.separator_search_bytes.max(self.scanned_bytes);
+            let remaining = &body[search_start..];
+            #[cfg(test)]
+            {
+                self.searched_bytes = self.searched_bytes.saturating_add(remaining.len());
+            }
             let Some((separator_index, separator_len)) = find_sse_block_separator(remaining) else {
+                self.separator_search_bytes = body.len().saturating_sub(3).max(self.scanned_bytes);
                 break;
             };
-            let block_end = self.scanned_bytes + separator_index;
+            let block_end = search_start + separator_index;
             let Ok(block) = std::str::from_utf8(&body[self.scanned_bytes..block_end]) else {
                 self.scanned_bytes = block_end + separator_len;
+                self.separator_search_bytes = self.scanned_bytes;
                 continue;
             };
             self.scanned_bytes = block_end + separator_len;
+            self.separator_search_bytes = self.scanned_bytes;
             if sse_block_is_terminal(block) {
                 self.terminal_seen = true;
                 return true;
@@ -788,5 +800,38 @@ mod tests {
 
         let crlf = b"event: response.failed\r\ndata: {\"type\":\"response.failed\"}\r\n\r\n";
         assert!(ProviderSseTerminalDetector::default().has_terminal_event(crlf));
+    }
+
+    /// A large incomplete event delivered one byte at a time advances the
+    /// separator search cursor while retaining only enough overlap for a split
+    /// CRLF delimiter. Total inspected bytes therefore remain linear, and the
+    /// completed terminal event is still recognized when its delimiter lands.
+    #[test]
+    fn provider_sse_incomplete_event_scan_work_is_linear() {
+        let complete = format!(
+            "event: response.completed\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.completed",
+                "padding": "x".repeat(64 * 1024)
+            })
+        );
+        let incomplete_len = complete.len().saturating_sub(2);
+        let mut detector = ProviderSseTerminalDetector::default();
+        let mut body = Vec::with_capacity(complete.len());
+
+        for byte in &complete.as_bytes()[..incomplete_len] {
+            body.push(*byte);
+            assert!(!detector.has_terminal_event(&body));
+        }
+
+        assert!(
+            detector.searched_bytes <= body.len().saturating_mul(4),
+            "searched {} bytes for an {} byte incomplete event",
+            detector.searched_bytes,
+            body.len()
+        );
+
+        body.extend_from_slice(&complete.as_bytes()[incomplete_len..]);
+        assert!(detector.has_terminal_event(&body));
     }
 }
