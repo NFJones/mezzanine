@@ -333,11 +333,27 @@ async fn monitor_runtime_agent_provider_dispatch(
     )? {
         return Ok(None);
     }
-    let mut worker = tokio::spawn(execute_runtime_agent_provider_dispatch(dispatch, None));
+    let pane_id = dispatch.turn.pane_id.clone();
+    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::channel(32);
+    let mut worker = tokio::spawn(execute_runtime_agent_provider_dispatch(
+        dispatch,
+        Some(progress_sender),
+    ));
     loop {
         tokio::select! {
             result = &mut worker => {
                 return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
+            }
+            Some(text) = progress_receiver.recv() => {
+                let mut batch = RuntimeEventBatch::new();
+                batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::OutputProgress {
+                    agent_id: agent_id.clone(),
+                    turn_id: turn_id.clone(),
+                    pane_id: pane_id.clone(),
+                    action_id: "provider-stream".to_string(),
+                    lines: vec![text],
+                }));
+                handle.submit_runtime_events(batch).await?;
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -584,7 +600,7 @@ fn remember_worker_event(
 /// on duplicated control-flow logic.
 async fn execute_runtime_agent_provider_dispatch(
     dispatch: RuntimeAgentProviderDispatch,
-    _output_progress_sender: Option<tokio::sync::mpsc::UnboundedSender<AgentProviderEvent>>,
+    output_progress_sender: Option<tokio::sync::mpsc::Sender<String>>,
 ) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
         turn,
@@ -748,12 +764,13 @@ async fn execute_runtime_agent_provider_dispatch(
                 issue_actions_enabled,
             };
             let execution = runner
-                .run_turn_async_ref_with_allowed_actions(
+                .run_turn_async_ref_with_allowed_actions_and_progress(
                     &mut ledger,
                     turn.clone(),
                     &context,
                     allowed_actions.clone(),
                     interaction_kind,
+                    output_progress_sender.clone(),
                 )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
@@ -782,12 +799,13 @@ async fn execute_runtime_agent_provider_dispatch(
                 issue_actions_enabled,
             };
             let execution = runner
-                .run_turn_async_ref_with_allowed_actions(
+                .run_turn_async_ref_with_allowed_actions_and_progress(
                     &mut ledger,
                     turn.clone(),
                     &context,
                     allowed_actions.clone(),
                     interaction_kind,
+                    output_progress_sender.clone(),
                 )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
@@ -816,12 +834,13 @@ async fn execute_runtime_agent_provider_dispatch(
                 issue_actions_enabled,
             };
             let execution = runner
-                .run_turn_async_ref_with_allowed_actions(
+                .run_turn_async_ref_with_allowed_actions_and_progress(
                     &mut ledger,
                     turn.clone(),
                     &context,
                     allowed_actions.clone(),
                     interaction_kind,
+                    output_progress_sender.clone(),
                 )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
@@ -850,12 +869,13 @@ async fn execute_runtime_agent_provider_dispatch(
                 issue_actions_enabled,
             };
             let execution = runner
-                .run_turn_async_ref_with_allowed_actions(
+                .run_turn_async_ref_with_allowed_actions_and_progress(
                     &mut ledger,
                     turn.clone(),
                     &context,
                     allowed_actions.clone(),
                     interaction_kind,
+                    output_progress_sender.clone(),
                 )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;

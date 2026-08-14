@@ -10,17 +10,33 @@
 use super::{
     AsyncModelProvider, AsyncProviderHttpTransport, DEFAULT_PROVIDER_TIMEOUT_MS, ExposeSecret,
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderModelCatalog, Result, SecretString, parse_openai_models_http_body,
-    provider_quota_usage_from_headers, validate_non_empty,
+    ProviderModelCatalog, Result, SecretString, bounded_provider_progress_text,
+    parse_openai_models_http_body, provider_quota_usage_from_headers, validate_non_empty,
 };
 #[cfg(test)]
 use super::{ModelProvider, ProviderHttpTransport};
 use mez_agent::{
-    provider_catalog_reasoning_levels, provider_error_detail as openai_provider_error_detail,
+    SseEvent, provider_catalog_reasoning_levels,
+    provider_error_detail as openai_provider_error_detail,
     provider_failure_json as openai_provider_failure_json,
 };
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
+
+/// Incremental provider-specific state for one Chat Completions SSE response.
+pub trait ChatCompletionsStreamDecoder: Send {
+    /// Applies one complete SSE event and returns display-safe text progress.
+    fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>>;
+
+    /// Finalizes the accumulated stream into the existing response projection.
+    fn finish(
+        self: Box<Self>,
+        headers: BTreeMap<String, String>,
+        request: &ModelRequest,
+        provider_id: &str,
+    ) -> Result<ModelResponse>;
+}
 
 /// Provider-specific behavior required by the Chat Completions transport shell.
 pub trait ChatCompletionsDialect: Clone + Send + Sync + Default + 'static {
@@ -71,6 +87,14 @@ pub trait ChatCompletionsDialect: Clone + Send + Sync + Default + 'static {
     /// Returns the stream parser mode that should be used for a request.
     fn effective_stream(&self, _request: &ModelRequest, stream: bool) -> bool {
         stream
+    }
+
+    /// Builds provider-specific incremental state for one streaming request.
+    fn stream_decoder(
+        &self,
+        _request: &ModelRequest,
+    ) -> Result<Option<Box<dyn ChatCompletionsStreamDecoder>>> {
+        Ok(None)
     }
 
     /// Builds an optional retry request after a parseable but inadequate reply.
@@ -361,6 +385,14 @@ where
         &'a self,
         request: &'a ModelRequest,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        self.send_request_async_with_progress(request, None)
+    }
+
+    fn send_request_async_with_progress<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        progress: Option<tokio::sync::mpsc::Sender<String>>,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         Box::pin(async move {
             if request.provider != AsyncModelProvider::provider_id(self) {
                 return Err(self.provider_mismatch_error());
@@ -372,16 +404,54 @@ where
                 self.stream,
                 self.timeout_ms,
             )?;
-            let response = self.transport.send_async(&http_request).await?;
+            let effective_stream = self.dialect.effective_stream(request, self.stream);
+            let mut stream_decoder = if effective_stream {
+                self.dialect.stream_decoder(request)?
+            } else {
+                None
+            };
+            let mut stream_error = None;
+            let response = if let Some(decoder) = stream_decoder.as_mut() {
+                let mut on_event = |event| {
+                    if stream_error.is_none() {
+                        match decoder.push_event(&event) {
+                            Ok(Some(text)) => {
+                                if let Some(progress) = progress.as_ref() {
+                                    let _ =
+                                        progress.try_send(bounded_provider_progress_text(&text));
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(error) => stream_error = Some(error),
+                        }
+                    }
+                };
+                self.transport
+                    .send_async_with_sse_events(&http_request, &mut on_event)
+                    .await?
+            } else {
+                self.transport.send_async(&http_request).await?
+            };
             if !(200..300).contains(&response.status_code) {
                 return Err(self.provider_status_error("Chat Completions", &response));
             }
-            let mut parsed = self.dialect.parse_chat_response(
-                response,
-                request,
-                AsyncModelProvider::provider_id(self),
-                self.dialect.effective_stream(request, self.stream),
-            )?;
+            if let Some(error) = stream_error {
+                return Err(error);
+            }
+            let mut parsed = if let Some(decoder) = stream_decoder {
+                decoder.finish(
+                    response.headers,
+                    request,
+                    AsyncModelProvider::provider_id(self),
+                )?
+            } else {
+                self.dialect.parse_chat_response(
+                    response,
+                    request,
+                    AsyncModelProvider::provider_id(self),
+                    effective_stream,
+                )?
+            };
             if let Some(retry) = self.dialect.build_retry_chat_request(
                 request,
                 self.api_key_secret(),

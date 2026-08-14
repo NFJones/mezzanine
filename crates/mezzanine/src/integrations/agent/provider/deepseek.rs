@@ -4,7 +4,9 @@
 //! provider identity, and product error projection around lower-owned DeepSeek
 //! endpoint, request policy, and response parsing.
 
-use super::chat_completions::{ChatCompletionsDialect, ChatCompletionsRetry};
+use super::chat_completions::{
+    ChatCompletionsDialect, ChatCompletionsRetry, ChatCompletionsStreamDecoder,
+};
 use super::errors::provider_maap_parse_error;
 use super::{
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse, Result,
@@ -13,7 +15,8 @@ use super::{
 use mez_agent::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
-    DeepSeekMaapRequestStrategy, DeepSeekResponse, deepseek_chat_completions_endpoint_for_base_url,
+    DeepSeekChatCompletionsStreamDecoder, DeepSeekMaapRequestStrategy, DeepSeekResponse, SseEvent,
+    deepseek_chat_completions_endpoint_for_base_url,
     deepseek_chat_completions_request_body_with_strategy, deepseek_effective_stream,
     deepseek_maap_request_strategy, deepseek_models_endpoint_for_base_url,
     deepseek_request_requires_maap, deepseek_should_retry_with_forced_maap,
@@ -76,6 +79,15 @@ impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
 
     fn effective_stream(&self, request: &ModelRequest, stream: bool) -> bool {
         deepseek_effective_stream(stream, deepseek_maap_request_strategy(request))
+    }
+
+    fn stream_decoder(
+        &self,
+        _request: &ModelRequest,
+    ) -> Result<Option<Box<dyn ChatCompletionsStreamDecoder>>> {
+        Ok(Some(Box::new(
+            DeepSeekChatCompletionsStreamDecoder::default(),
+        )))
     }
 
     fn build_retry_chat_request(
@@ -142,6 +154,24 @@ fn deepseek_required_maap_response(
         )),
         &response.raw_text,
     ))
+}
+
+impl ChatCompletionsStreamDecoder for DeepSeekChatCompletionsStreamDecoder {
+    fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>> {
+        Ok(DeepSeekChatCompletionsStreamDecoder::push_event(
+            self, event,
+        ))
+    }
+
+    fn finish(
+        self: Box<Self>,
+        headers: BTreeMap<String, String>,
+        request: &ModelRequest,
+        provider_id: &str,
+    ) -> Result<ModelResponse> {
+        let decoded = DeepSeekChatCompletionsStreamDecoder::finish(*self, request)?;
+        deepseek_model_response_from_decoded(decoded, headers, provider_id)
+    }
 }
 
 /// Builds a DeepSeek Chat Completions HTTP request.
@@ -214,13 +244,23 @@ pub(super) fn parse_deepseek_chat_completions_http_response(
     stream: bool,
 ) -> Result<ModelResponse> {
     let ProviderHttpResponse { headers, body, .. } = response;
+    let decoded = parse_deepseek_chat_completions_provider_body(&body, request, stream)?;
+    deepseek_model_response_from_decoded(decoded, headers, provider_id)
+}
+
+/// Attaches product-owned provider identity and quota metadata to decoded output.
+fn deepseek_model_response_from_decoded(
+    decoded: DeepSeekResponse,
+    headers: BTreeMap<String, String>,
+    provider_id: &str,
+) -> Result<ModelResponse> {
     let DeepSeekResponse {
         model,
         raw_text,
         usage,
         action_batch,
         provider_transcript_events,
-    } = parse_deepseek_chat_completions_provider_body(&body, request, stream)?;
+    } = decoded;
     Ok(ModelResponse {
         provider: provider_id.to_string(),
         model,

@@ -369,6 +369,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
 /// Product effects supplied to the canonical lower production turn loop.
 struct ProductAgentTurnEnvironment<'runner, 'config, P> {
     runner: &'runner AgentTurnRunner<'config, P>,
+    progress: Option<tokio::sync::mpsc::Sender<String>>,
 }
 
 impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment<'_, '_, P> {
@@ -403,7 +404,10 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
     }
 
     async fn send_request(&self, request: &ModelRequest) -> Result<super::super::ModelResponse> {
-        self.runner.provider.send_request_async(request).await
+        self.runner
+            .provider
+            .send_request_async_with_progress(request, self.progress.clone())
+            .await
     }
 
     fn provider_failure(&self, error: &MezError) -> AgentTurnProviderFailure {
@@ -515,21 +519,26 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: &AgentContext,
     ) -> Result<AgentTurnExecution> {
-        self.run_turn_async_ref_with_allowed_actions(ledger, turn, context, None, None)
-            .await
+        self.run_turn_async_ref_with_allowed_actions_and_progress(
+            ledger, turn, context, None, None, None,
+        )
+        .await
     }
 
-    /// Executes a borrowed-context async turn with an optional
-    /// controller-selected initial action surface.
-    pub async fn run_turn_async_ref_with_allowed_actions(
+    /// Executes a borrowed-context turn while forwarding bounded stream progress.
+    pub async fn run_turn_async_ref_with_allowed_actions_and_progress(
         &self,
         ledger: &mut AgentTurnLedger,
         turn: AgentTurnRecord,
         context: &AgentContext,
         allowed_actions: Option<AllowedActionSet>,
         interaction_kind: Option<mez_agent::ModelInteractionKind>,
+        progress: Option<tokio::sync::mpsc::Sender<String>>,
     ) -> Result<AgentTurnExecution> {
-        let environment = ProductAgentTurnEnvironment { runner: self };
+        let environment = ProductAgentTurnEnvironment {
+            runner: self,
+            progress,
+        };
         let limits = AgentTurnLimits::default();
         let turn_id = turn.turn_id.clone();
         match tokio::time::timeout(

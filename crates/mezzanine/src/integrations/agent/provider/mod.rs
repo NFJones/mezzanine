@@ -38,6 +38,7 @@ pub(crate) use errors::{
 #[cfg(test)]
 pub use http::ProviderHttpTransport;
 pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
+use mez_agent::OpenAiResponsesStreamDecoder;
 use mez_agent::parse_openai_models_http_body;
 use mez_agent::provider_quota_usage_from_headers;
 use mez_agent::{
@@ -58,6 +59,12 @@ use mez_agent::{
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
+
+/// Bounds one display-only provider stream delta before cross-task delivery.
+pub(super) fn bounded_provider_progress_text(text: &str) -> String {
+    const MAX_PROGRESS_CHARS: usize = 1_024;
+    text.chars().take(MAX_PROGRESS_CHARS).collect()
+}
 /// OpenAI organization routing header for multi-organization API keys.
 pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
 /// OpenAI project routing header for project-scoped API accounting.
@@ -117,6 +124,15 @@ pub trait AsyncModelProvider: Send + Sync {
         &'a self,
         request: &'a ModelRequest,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>;
+
+    /// Sends one request while best-effort reporting bounded visible stream deltas.
+    fn send_request_async_with_progress<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        _progress: Option<tokio::sync::mpsc::Sender<String>>,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        self.send_request_async(request)
+    }
 
     /// Runs the list models async operation for this subsystem.
     ///
@@ -838,6 +854,14 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
         &'a self,
         request: &'a ModelRequest,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        self.send_request_async_with_progress(request, None)
+    }
+
+    fn send_request_async_with_progress<'a>(
+        &'a self,
+        request: &'a ModelRequest,
+        progress: Option<tokio::sync::mpsc::Sender<String>>,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         Box::pin(async move {
             if request.provider != AsyncModelProvider::provider_id(self) {
                 return Err(MezError::invalid_args(
@@ -852,7 +876,29 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 self.stream,
                 self.timeout_ms,
             )?;
-            let response = self.transport.send_async(&http_request).await?;
+            let mut stream_decoder = OpenAiResponsesStreamDecoder::default();
+            let mut stream_error = None;
+            let response = if self.stream {
+                let mut on_event = |event| {
+                    if stream_error.is_none() {
+                        match stream_decoder.push_event(&event) {
+                            Ok(Some(text)) => {
+                                if let Some(progress) = progress.as_ref() {
+                                    let _ =
+                                        progress.try_send(bounded_provider_progress_text(&text));
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(error) => stream_error = Some(error),
+                        }
+                    }
+                };
+                self.transport
+                    .send_async_with_sse_events(&http_request, &mut on_event)
+                    .await?
+            } else {
+                self.transport.send_async(&http_request).await?
+            };
             if !(200..300).contains(&response.status_code) {
                 return Err(MezError::invalid_state(format!(
                     "OpenAI Responses API returned status {}: {}",
@@ -864,8 +910,14 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                     &response.body,
                 )));
             }
-            let (model, raw_text, usage, provider_transcript_events) =
-                parse_openai_responses_provider_body(&response.body, &request.model, self.stream)?;
+            if let Some(error) = stream_error {
+                return Err(error.into());
+            }
+            let (model, raw_text, usage, provider_transcript_events) = if self.stream {
+                stream_decoder.finish(&request.model)?
+            } else {
+                parse_openai_responses_provider_body(&response.body, &request.model, false)?
+            };
             let quota_usage = provider_quota_usage_from_headers(&response.headers);
             let action_batch = if !request.interaction_kind.expects_maap_batch() {
                 None

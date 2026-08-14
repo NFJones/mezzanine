@@ -84,6 +84,253 @@ pub fn parse_openai_responses_http_body(
     Ok((model, raw_text, usage, provider_transcript_events))
 }
 
+/// Incrementally accumulates one OpenAI Responses API SSE stream.
+#[derive(Debug, Default)]
+pub struct OpenAiResponsesStreamDecoder {
+    model: Option<String>,
+    completed: bool,
+    usage: ModelTokenUsage,
+    function_calls: BTreeMap<u64, OpenAiFunctionCallAccumulator>,
+    completed_output_items: BTreeMap<u64, serde_json::Value>,
+    completed_response_output: Option<Vec<serde_json::Value>>,
+    output_item_text: String,
+    delta_text: String,
+}
+
+impl OpenAiResponsesStreamDecoder {
+    /// Applies one complete SSE event and returns display-safe text progress.
+    pub fn push_event(
+        &mut self,
+        event: &crate::SseEvent,
+    ) -> ProviderResponseResult<Option<String>> {
+        let data = event.data.trim();
+        if data == "[DONE]" {
+            self.completed = true;
+            return Ok(None);
+        }
+        let value: serde_json::Value = serde_json::from_str(data).map_err(|error| {
+            ProviderResponseError::invalid_state(format!(
+                "OpenAI stream event was not JSON: {error}"
+            ))
+        })?;
+        if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+            let message = error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("OpenAI stream contained an error");
+            return Err(ProviderResponseError::invalid_state(message)
+                .with_provider_failure_json(openai_provider_failure_event_json(&value)));
+        }
+        let event_usage = openai_token_usage_from_response_value(&value);
+        if !event_usage.is_zero() {
+            self.usage = event_usage;
+        }
+
+        let event_type = value
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .or(event.name.as_deref())
+            .unwrap_or_default();
+        if self.model.is_none() {
+            self.model = value
+                .get("response")
+                .and_then(|response| response.get("model"))
+                .or_else(|| value.get("model"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+
+        match event_type {
+            "response.output_item.done" | "response.output_item.added" => {
+                if let Some(item) = value.get("item") {
+                    collect_openai_maap_function_call_event_item(
+                        &mut self.function_calls,
+                        &value,
+                        item,
+                    )?;
+                    append_openai_response_item_text(item, &mut self.output_item_text);
+                    if event_type == "response.output_item.done" {
+                        let output_index = openai_output_index(&value).unwrap_or_default();
+                        self.completed_output_items
+                            .insert(output_index, item.clone());
+                    }
+                }
+                Ok(None)
+            }
+            "response.output_text.delta" => {
+                let delta = value
+                    .get("delta")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                self.delta_text.push_str(delta);
+                Ok((!delta.is_empty()).then(|| delta.to_string()))
+            }
+            "response.function_call_arguments.delta" => {
+                if let Some(delta) = value.get("delta").and_then(serde_json::Value::as_str) {
+                    let output_index = openai_output_index(&value).unwrap_or_default();
+                    push_openai_function_call_argument_delta(
+                        self.function_calls.entry(output_index).or_default(),
+                        delta,
+                    )?;
+                }
+                Ok(None)
+            }
+            "response.function_call_arguments.done" => {
+                let output_index = openai_output_index(&value).unwrap_or_default();
+                if let Some(item) = value.get("item") {
+                    collect_openai_maap_function_call_event_item(
+                        &mut self.function_calls,
+                        &value,
+                        item,
+                    )?;
+                }
+                if let Some(arguments) = value
+                    .get("arguments")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| value.get("item").and_then(openai_function_call_arguments))
+                {
+                    set_openai_function_call_complete_arguments(
+                        self.function_calls.entry(output_index).or_default(),
+                        arguments,
+                    )?;
+                }
+                Ok(None)
+            }
+            "response.completed" => {
+                self.completed = true;
+                self.completed_response_output = value
+                    .pointer("/response/output")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned();
+                Ok(None)
+            }
+            "response.failed" => Err(ProviderResponseError::invalid_state(
+                openai_stream_event_error_detail(&value, "OpenAI stream failed"),
+            )
+            .with_provider_failure_json(openai_provider_failure_event_json(&value))),
+            "response.incomplete" => {
+                let stop_reason = value
+                    .pointer("/response/incomplete_details/reason")
+                    .or_else(|| value.pointer("/incomplete_details/reason"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown");
+                let safe_partial_text = if self.output_item_text.is_empty() {
+                    self.delta_text.clone()
+                } else {
+                    self.output_item_text.clone()
+                };
+                let complete_native_items = self
+                    .function_calls
+                    .values()
+                    .filter(|call| call.complete_arguments.is_some())
+                    .count();
+                let incomplete_native_items = self
+                    .function_calls
+                    .len()
+                    .saturating_sub(complete_native_items);
+                let continuation_disposition = if incomplete_native_items == 0 {
+                    ProviderOutputLimitContinuationDisposition::ContinueVisibleText
+                } else {
+                    ProviderOutputLimitContinuationDisposition::ReemitAtomicNativeCall
+                };
+                Err(
+                    ProviderResponseError::invalid_state(openai_stream_event_error_detail(
+                        &value,
+                        "OpenAI stream returned an incomplete response",
+                    ))
+                    .with_provider_failure_json(openai_provider_failure_event_json(&value))
+                    .with_output_limit_state(ProviderOutputLimitState::new(
+                        "openai",
+                        "responses",
+                        stop_reason,
+                        value
+                            .pointer("/response/id")
+                            .or_else(|| value.get("response_id"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                        safe_partial_text,
+                        complete_native_items,
+                        incomplete_native_items,
+                        self.usage,
+                        continuation_disposition,
+                    )),
+                )
+            }
+            "message" | "" => {
+                if let Some(text) = value.get("output_text").and_then(serde_json::Value::as_str) {
+                    self.output_item_text.push_str(text);
+                } else if let Some(text) = collect_openai_output_text(&value) {
+                    self.output_item_text.push_str(&text);
+                }
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Finalizes the accumulated stream into the existing response projection.
+    pub fn finish(
+        self,
+        fallback_model: &str,
+    ) -> ProviderResponseResult<(
+        String,
+        String,
+        ModelTokenUsage,
+        Vec<ProviderTranscriptEvent>,
+    )> {
+        let output_item_text_empty = self.output_item_text.is_empty();
+        let raw_text = if let Some(arguments) =
+            collect_openai_maap_function_call_arguments_from_accumulators(&self.function_calls)?
+        {
+            arguments
+        } else if output_item_text_empty {
+            self.delta_text
+        } else {
+            self.output_item_text
+        };
+        if raw_text.is_empty() {
+            return Err(ProviderResponseError::invalid_state(
+                "OpenAI stream did not contain text or MAAP function-call output",
+            ));
+        }
+        if !self.completed && output_item_text_empty && self.function_calls.is_empty() {
+            return Err(ProviderResponseError::invalid_state(
+                "OpenAI stream closed before response.completed",
+            ));
+        }
+        let native_output = self
+            .completed_response_output
+            .unwrap_or_else(|| self.completed_output_items.into_values().collect());
+        let provider_transcript_events =
+            ProviderTranscriptEvent::validated_openai_response_output(native_output)
+                .into_iter()
+                .collect();
+        Ok((
+            self.model.unwrap_or_else(|| fallback_model.to_string()),
+            raw_text,
+            self.usage,
+            provider_transcript_events,
+        ))
+    }
+}
+
+/// Finalizes an already incrementally decoded OpenAI SSE event sequence.
+pub fn parse_openai_responses_stream_events(
+    events: impl IntoIterator<Item = crate::SseEvent>,
+    fallback_model: &str,
+) -> ProviderResponseResult<(
+    String,
+    String,
+    ModelTokenUsage,
+    Vec<ProviderTranscriptEvent>,
+)> {
+    let mut decoder = OpenAiResponsesStreamDecoder::default();
+    for event in events {
+        let _ = decoder.push_event(&event)?;
+    }
+    decoder.finish(fallback_model)
+}
+
 /// Parses one streaming OpenAI Responses API SSE body.
 pub fn parse_openai_responses_stream_body(
     body: &str,

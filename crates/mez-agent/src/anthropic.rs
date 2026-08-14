@@ -647,6 +647,190 @@ fn parse_anthropic_messages_http_body(
     })
 }
 
+/// Incrementally accumulates one Anthropic Messages API SSE stream.
+#[derive(Debug, Default)]
+pub struct AnthropicMessagesStreamDecoder {
+    model: Option<String>,
+    usage: ModelTokenUsage,
+    stop_reason: Option<String>,
+    completed: bool,
+    blocks: BTreeMap<u64, AnthropicStreamContentBlock>,
+}
+
+impl AnthropicMessagesStreamDecoder {
+    /// Applies one complete SSE event and returns display-safe text progress.
+    pub fn push_event(
+        &mut self,
+        event: &crate::SseEvent,
+    ) -> Result<Option<String>, AnthropicResponseError> {
+        let data = event.data.trim();
+        if data.is_empty() {
+            return Ok(None);
+        }
+        let value: serde_json::Value = serde_json::from_str(data).map_err(|error| {
+            ProviderResponseError::invalid_state(format!(
+                "Anthropic stream event was not JSON: {error}"
+            ))
+        })?;
+        if event.name.as_deref() == Some("error")
+            || value.get("type").and_then(serde_json::Value::as_str) == Some("error")
+        {
+            return Err(
+                anthropic_provider_error_from_value(&value, "Anthropic stream error")
+                    .unwrap_or_else(|| {
+                        ProviderResponseError::invalid_state(
+                            "Anthropic stream returned an error event",
+                        )
+                        .with_provider_failure_json(anthropic_provider_failure_event_json(&value))
+                    })
+                    .into(),
+            );
+        }
+        match value
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .or(event.name.as_deref())
+        {
+            Some("message_start") => {
+                if self.model.is_none() {
+                    self.model = value
+                        .pointer("/message/model")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string);
+                }
+                anthropic_overlay_usage(&mut self.usage, value.pointer("/message/usage"));
+                Ok(None)
+            }
+            Some("content_block_start") => {
+                let index = value
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| {
+                        ProviderResponseError::invalid_state(
+                            "Anthropic stream content_block_start event is missing an index",
+                        )
+                    })?;
+                let block = value.get("content_block").ok_or_else(|| {
+                    ProviderResponseError::invalid_state(
+                        "Anthropic stream content_block_start event is missing content_block",
+                    )
+                })?;
+                self.blocks
+                    .insert(index, AnthropicStreamContentBlock::from_start(block)?);
+                Ok(None)
+            }
+            Some("content_block_delta") => {
+                let index = value
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| {
+                        ProviderResponseError::invalid_state(
+                            "Anthropic stream content_block_delta event is missing an index",
+                        )
+                    })?;
+                let delta = value.get("delta").ok_or_else(|| {
+                    ProviderResponseError::invalid_state(
+                        "Anthropic stream content_block_delta event is missing delta",
+                    )
+                })?;
+                let progress = (delta.get("type").and_then(serde_json::Value::as_str)
+                    == Some("text_delta"))
+                .then(|| {
+                    delta
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .filter(|text| !text.is_empty());
+                self.blocks
+                    .get_mut(&index)
+                    .ok_or_else(|| {
+                        ProviderResponseError::invalid_state(format!(
+                            "Anthropic stream delta referenced unknown content block index {index}"
+                        ))
+                    })?
+                    .apply_delta(delta)?;
+                Ok(progress)
+            }
+            Some("content_block_stop") => {
+                let index = value
+                    .get("index")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| {
+                        ProviderResponseError::invalid_state(
+                            "Anthropic stream content_block_stop event is missing an index",
+                        )
+                    })?;
+                let block = self.blocks.get_mut(&index).ok_or_else(|| {
+                    ProviderResponseError::invalid_state(format!(
+                        "Anthropic stream stop referenced unknown content block index {index}"
+                    ))
+                })?;
+                block.stopped = true;
+                Ok(None)
+            }
+            Some("message_delta") => {
+                if let Some(reason) = value
+                    .pointer("/delta/stop_reason")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    self.stop_reason = Some(reason.to_string());
+                }
+                anthropic_overlay_usage(&mut self.usage, value.get("usage"));
+                Ok(None)
+            }
+            Some("message_stop") => {
+                self.completed = true;
+                Ok(None)
+            }
+            Some("ping") | Some(_) | None => Ok(None),
+        }
+    }
+
+    /// Finalizes accumulated stream state into the existing response projection.
+    pub fn finish(
+        self,
+        fallback_model: &str,
+        turn_id: &str,
+        agent_id: &str,
+        requires_maap: bool,
+    ) -> Result<AnthropicMessagesResponse, AnthropicResponseError> {
+        let content = self
+            .blocks
+            .into_values()
+            .map(AnthropicStreamContentBlock::finish)
+            .collect::<Result<Vec<_>, _>>()?;
+        let (raw_text, action_batch) =
+            anthropic_content_to_output(&content, turn_id, agent_id, requires_maap)?;
+        if let Some(error) = anthropic_stop_reason_response_error(
+            self.stop_reason.as_deref(),
+            &raw_text,
+            requires_maap,
+        ) {
+            return Err(error.into());
+        }
+        if raw_text.is_empty() && action_batch.is_none() {
+            return Err(ProviderResponseError::invalid_state(
+                "Anthropic stream did not contain text or MAAP tool_use output",
+            )
+            .into());
+        }
+        if !self.completed && action_batch.is_none() {
+            return Err(ProviderResponseError::invalid_state(
+                "Anthropic stream closed before message_stop",
+            )
+            .into());
+        }
+        Ok(AnthropicMessagesResponse {
+            model: self.model.unwrap_or_else(|| fallback_model.to_string()),
+            raw_text,
+            action_batch,
+            usage: self.usage,
+        })
+    }
+}
+
 /// Parses one streaming Anthropic Messages API SSE body.
 fn parse_anthropic_messages_stream_body(
     body: &str,

@@ -12,9 +12,10 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use mez_agent::{
-    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, ProviderHttpError, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderHttpResult, ProviderHttpTimeoutPhase, ProviderHttpTimeouts,
-    ProviderSseTerminalDetector,
+    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, IncrementalSseDecoder, ProviderHttpError,
+    ProviderHttpRequest, ProviderHttpResponse, ProviderHttpResult, ProviderHttpTimeoutPhase,
+    ProviderHttpTimeouts, ProviderSseTerminalDetector, SseEvent, SseParseError, parse_sse_events,
+    provider_sse_event_is_terminal,
 };
 
 /// Defines the Provider Http Transport behavior contract for this subsystem.
@@ -45,6 +46,32 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
         &'a self,
         request: &'a ProviderHttpRequest,
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>>;
+
+    /// Sends one request and reports parsed SSE events as they become available.
+    ///
+    /// Compatibility transports may retain a complete body and use this default
+    /// implementation. Streaming transports override it so callers can update
+    /// provider-specific decoder state before the terminal event arrives.
+    fn send_async_with_sse_events<'a>(
+        &'a self,
+        request: &'a ProviderHttpRequest,
+        on_event: &'a mut (dyn FnMut(SseEvent) + Send),
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let response = self.send_async(request).await?;
+            if provider_http_expects_event_stream(&request.headers, &response.headers) {
+                let events = parse_sse_events(
+                    &response.body,
+                    "provider stream response did not contain SSE data events",
+                )
+                .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
+                for event in events {
+                    on_event(event);
+                }
+            }
+            Ok(response)
+        })
+    }
 }
 
 /// Carries Reqwest Provider Http Transport state for this subsystem.
@@ -205,6 +232,38 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
         request: &'a ProviderHttpRequest,
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
         Box::pin(async move {
+            let mut event_body = String::new();
+            let mut response = {
+                let mut collect_event = |event: SseEvent| {
+                    if let Some(name) = event.name {
+                        event_body.push_str("event: ");
+                        event_body.push_str(&name);
+                        event_body.push('\n');
+                    }
+                    for line in event.data.lines() {
+                        event_body.push_str("data: ");
+                        event_body.push_str(line);
+                        event_body.push('\n');
+                    }
+                    event_body.push('\n');
+                };
+                self.send_async_with_sse_events(request, &mut collect_event)
+                    .await?
+            };
+            if response.body.is_empty() && !event_body.is_empty() {
+                response.body = event_body;
+            }
+            Ok(response)
+        })
+    }
+
+    /// Streams complete SSE events to the provider decoder during body reads.
+    fn send_async_with_sse_events<'a>(
+        &'a self,
+        request: &'a ProviderHttpRequest,
+        on_event: &'a mut (dyn FnMut(SseEvent) + Send),
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
+        Box::pin(async move {
             request.timeouts.validate()?;
             let started_at = tokio::time::Instant::now();
             let first_byte_deadline =
@@ -285,7 +344,11 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                 .min(DEFAULT_PROVIDER_MAX_RESPONSE_BYTES);
             let mut body_truncated = false;
             let mut body = Vec::new();
+            let retain_body = !expects_event_stream || !(200..300).contains(&status_code);
+            let mut response_bytes = 0usize;
             let mut terminal_detector = ProviderSseTerminalDetector::default();
+            let mut event_decoder = expects_event_stream.then(IncrementalSseDecoder::default);
+            let mut terminal_event_seen = false;
             let mut progress_phase = ProviderHttpTimeoutPhase::FirstByte;
             let mut progress_timeout_ms = request.timeouts.first_byte_timeout_ms;
             let mut progress_deadline = first_byte_deadline;
@@ -326,21 +389,37 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                 if chunk.is_empty() {
                     continue;
                 }
-                if body.len().saturating_add(chunk.len()) > response_limit {
+                if response_bytes.saturating_add(chunk.len()) > response_limit {
                     if request.max_response_bytes.is_none() {
                         return Err(ProviderHttpError::invalid_state(
                             "provider HTTP response exceeds configured limit",
                         ));
                     }
-                    let remaining = response_limit.saturating_sub(body.len());
-                    if remaining > 0 {
+                    let remaining = response_limit.saturating_sub(response_bytes);
+                    if retain_body && remaining > 0 {
                         body.extend_from_slice(&chunk[..remaining]);
                     }
                     body_truncated = true;
                     break;
                 }
-                body.extend_from_slice(&chunk);
-                if expects_event_stream && terminal_detector.has_terminal_event(&body) {
+                response_bytes = response_bytes.saturating_add(chunk.len());
+                if retain_body {
+                    body.extend_from_slice(&chunk);
+                }
+                if let Some(decoder) = event_decoder.as_mut() {
+                    decoder
+                        .push::<SseParseError, _>(&chunk, |event| {
+                            terminal_event_seen =
+                                terminal_event_seen || provider_sse_event_is_terminal(&event);
+                            on_event(event);
+                            Ok(())
+                        })
+                        .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
+                }
+                if expects_event_stream
+                    && (terminal_event_seen
+                        || (retain_body && terminal_detector.has_terminal_event(&body)))
+                {
                     break;
                 }
                 progress_phase = ProviderHttpTimeoutPhase::InterChunk;
@@ -348,8 +427,25 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                 progress_deadline = tokio::time::Instant::now()
                     + Duration::from_millis(request.timeouts.inter_chunk_timeout_ms);
             }
+            if let Some(decoder) = event_decoder.as_mut() {
+                decoder
+                    .finish::<SseParseError, _>(
+                        "provider stream response did not contain SSE data events",
+                        |event| {
+                            on_event(event);
+                            Ok(())
+                        },
+                    )
+                    .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
+            }
             if body_truncated {
                 response_headers.insert("x-mez-body-truncated".to_string(), "true".to_string());
+            }
+            if expects_event_stream && !retain_body {
+                response_headers.insert(
+                    "x-mez-stream-decoded".to_string(),
+                    "incremental".to_string(),
+                );
             }
             let body = if body_truncated && request.max_response_bytes.is_some() {
                 String::from_utf8_lossy(&body).into_owned()
@@ -486,6 +582,97 @@ mod provider_transport_tests {
 
         assert_eq!(response.status_code, 200);
         assert!(response.body.contains("response.completed"));
+    }
+
+    /// Verifies observer-based provider streaming exposes visible deltas before
+    /// terminal completion and does not retain the complete successful SSE body.
+    ///
+    /// The server gates its terminal event until the test observes the first
+    /// decoded delta. This makes a full-body implementation deadlock or time out,
+    /// while the incremental path returns an empty compatibility body after the
+    /// final event because provider-specific state already owns the response.
+    #[tokio::test]
+    async fn provider_transport_streams_events_before_terminal_without_retaining_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            let delta = concat!(
+                "event: response.output_text.delta\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"early\"}\n\n"
+            );
+            stream
+                .write_all(format!("{:x}\r\n{}\r\n", delta.len(), delta).as_bytes())
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+            release_rx.await.unwrap();
+            let completed = concat!(
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-test\"}}\n\n"
+            );
+            stream
+                .write_all(format!("{:x}\r\n{}\r\n", completed.len(), completed).as_bytes())
+                .await
+                .unwrap();
+            stream.flush().await.unwrap();
+        });
+        let request = ProviderHttpRequest {
+            method: "POST".to_string(),
+            url: format!("http://{address}/responses"),
+            headers: BTreeMap::from([("Accept".to_string(), "text/event-stream".to_string())]),
+            body: "{}".to_string(),
+            timeouts: ProviderHttpTimeouts::from_total(1_000),
+            max_response_bytes: None,
+        };
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(4);
+        let client = tokio::spawn(async move {
+            let mut on_event = move |event| {
+                let _ = progress_tx.try_send(event);
+            };
+            ReqwestProviderHttpTransport
+                .send_async_with_sse_events(&request, &mut on_event)
+                .await
+        });
+
+        let progress = tokio::time::timeout(Duration::from_millis(250), progress_rx.recv())
+            .await
+            .expect("first provider delta should arrive before terminal completion")
+            .expect("provider progress channel should remain open");
+        assert_eq!(progress.name.as_deref(), Some("response.output_text.delta"));
+        assert!(progress.data.contains("early"));
+        assert!(!client.is_finished());
+        release_tx.send(()).unwrap();
+
+        let response = client.await.unwrap().unwrap();
+        server.await.unwrap();
+        assert_eq!(response.status_code, 200);
+        assert!(response.body.is_empty());
+        assert_eq!(
+            response
+                .headers
+                .get("x-mez-stream-decoded")
+                .map(String::as_str),
+            Some("incremental")
+        );
     }
 
     /// Verifies callers can request a lower retained response-body cap than

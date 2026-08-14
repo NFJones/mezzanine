@@ -4,7 +4,7 @@
 //! and product response/error projection around provider-independent Anthropic
 //! policy and response parsing in `mez-agent`.
 
-use super::chat_completions::ChatCompletionsDialect;
+use super::chat_completions::{ChatCompletionsDialect, ChatCompletionsStreamDecoder};
 use super::{
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse, Result,
     provider_quota_usage_from_headers, validate_non_empty,
@@ -13,9 +13,9 @@ use super::{
 use mez_agent::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use mez_agent::{
     ANTHROPIC_MESSAGES_ENDPOINT, AnthropicMessagesOptions, AnthropicMessagesResponse,
-    anthropic_messages_endpoint_for_base_url, anthropic_messages_request_body,
-    anthropic_provider_failure_json, anthropic_request_requires_maap,
-    parse_anthropic_messages_provider_body,
+    AnthropicMessagesStreamDecoder, SseEvent, anthropic_messages_endpoint_for_base_url,
+    anthropic_messages_request_body, anthropic_provider_failure_json,
+    anthropic_request_requires_maap, parse_anthropic_messages_provider_body,
 };
 use std::collections::BTreeMap;
 
@@ -96,12 +96,7 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
         stream: bool,
     ) -> Result<ModelResponse> {
         let ProviderHttpResponse { headers, body, .. } = response;
-        let AnthropicMessagesResponse {
-            model,
-            raw_text,
-            action_batch,
-            usage,
-        } = parse_anthropic_messages_provider_body(
+        let decoded = parse_anthropic_messages_provider_body(
             &body,
             &request.model,
             stream,
@@ -109,16 +104,19 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
             &request.agent_id,
             anthropic_request_requires_maap(request),
         )?;
-        Ok(ModelResponse {
-            provider: provider_id.to_string(),
-            model,
-            raw_text,
-            usage,
-            latest_request_usage: None,
-            quota_usage: provider_quota_usage_from_headers(&headers),
-            action_batch,
-            provider_transcript_events: Vec::new(),
-        })
+        Ok(anthropic_model_response_from_decoded(
+            decoded,
+            headers,
+            provider_id,
+        ))
+    }
+
+    /// Builds incremental Anthropic state for one streaming Messages response.
+    fn stream_decoder(
+        &self,
+        _request: &ModelRequest,
+    ) -> Result<Option<Box<dyn ChatCompletionsStreamDecoder>>> {
+        Ok(Some(Box::new(AnthropicMessagesStreamDecoder::default())))
     }
 
     /// Builds the provider-specific model catalog HTTP request.
@@ -131,6 +129,56 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
         Err(MezError::invalid_state(
             "Anthropic provider model listing is not implemented yet",
         ))
+    }
+}
+
+impl ChatCompletionsStreamDecoder for AnthropicMessagesStreamDecoder {
+    fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>> {
+        Ok(AnthropicMessagesStreamDecoder::push_event(self, event)?)
+    }
+
+    fn finish(
+        self: Box<Self>,
+        headers: BTreeMap<String, String>,
+        request: &ModelRequest,
+        provider_id: &str,
+    ) -> Result<ModelResponse> {
+        let decoded = AnthropicMessagesStreamDecoder::finish(
+            *self,
+            &request.model,
+            &request.turn_id,
+            &request.agent_id,
+            anthropic_request_requires_maap(request),
+        )?;
+        Ok(anthropic_model_response_from_decoded(
+            decoded,
+            headers,
+            provider_id,
+        ))
+    }
+}
+
+/// Attaches product-owned provider identity and quota metadata to decoded output.
+fn anthropic_model_response_from_decoded(
+    decoded: AnthropicMessagesResponse,
+    headers: BTreeMap<String, String>,
+    provider_id: &str,
+) -> ModelResponse {
+    let AnthropicMessagesResponse {
+        model,
+        raw_text,
+        action_batch,
+        usage,
+    } = decoded;
+    ModelResponse {
+        provider: provider_id.to_string(),
+        model,
+        raw_text,
+        usage,
+        latest_request_usage: None,
+        quota_usage: provider_quota_usage_from_headers(&headers),
+        action_batch,
+        provider_transcript_events: Vec::new(),
     }
 }
 

@@ -467,6 +467,164 @@ struct DeepSeekStreamToolCall {
     arguments: String,
 }
 
+/// Incrementally accumulates one DeepSeek Chat Completions SSE stream.
+#[derive(Debug, Default)]
+pub struct DeepSeekChatCompletionsStreamDecoder {
+    text_content: String,
+    reasoning_content: String,
+    tool_calls: BTreeMap<u64, DeepSeekStreamToolCall>,
+    model: Option<String>,
+    usage: ModelTokenUsage,
+    finish_reason: Option<String>,
+}
+
+impl DeepSeekChatCompletionsStreamDecoder {
+    /// Applies one complete SSE event and returns display-safe text progress.
+    pub fn push_event(&mut self, event: &crate::SseEvent) -> Option<String> {
+        let data = event.data.trim();
+        if data == "[DONE]" || data.is_empty() {
+            return None;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+            return None;
+        };
+        if self.model.is_none() {
+            self.model = value
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+        if let Some(usage) = value.get("usage") {
+            self.usage = parse_deepseek_usage(usage);
+        }
+
+        let mut visible_progress = String::new();
+        let choices = value.get("choices").and_then(serde_json::Value::as_array)?;
+        for choice in choices {
+            if let Some(reason) = choice
+                .get("finish_reason")
+                .and_then(serde_json::Value::as_str)
+            {
+                self.finish_reason = Some(reason.to_string());
+            }
+            let Some(delta) = choice.get("delta") else {
+                continue;
+            };
+            if let Some(content) = delta.get("content").and_then(serde_json::Value::as_str) {
+                self.text_content.push_str(content);
+                visible_progress.push_str(content);
+            }
+            if let Some(reasoning) = delta
+                .get("reasoning_content")
+                .and_then(serde_json::Value::as_str)
+            {
+                self.reasoning_content.push_str(reasoning);
+            }
+            if let Some(tool_deltas) = delta
+                .get("tool_calls")
+                .and_then(serde_json::Value::as_array)
+            {
+                for tool_delta in tool_deltas {
+                    let index = tool_delta
+                        .get("index")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    let accumulator = self.tool_calls.entry(index).or_default();
+                    if let Some(id) = tool_delta.get("id").and_then(serde_json::Value::as_str) {
+                        accumulator.id = id.to_string();
+                    }
+                    if let Some(function) = tool_delta.get("function") {
+                        if let Some(name) = function.get("name").and_then(serde_json::Value::as_str)
+                        {
+                            accumulator.function_name = name.to_string();
+                        }
+                        if let Some(arguments) = function
+                            .get("arguments")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            accumulator.arguments.push_str(arguments);
+                        }
+                    }
+                }
+            }
+        }
+        (!visible_progress.is_empty()).then_some(visible_progress)
+    }
+
+    /// Finalizes accumulated stream state into the existing response projection.
+    pub fn finish(mut self, request: &ModelRequest) -> DeepSeekResponseResult<DeepSeekResponse> {
+        if deepseek_thinking_enabled_for_request(request)
+            || request.model.to_ascii_lowercase().contains("r1")
+        {
+            self.text_content = strip_think_tags(&self.text_content);
+        }
+        let raw_text = if self.text_content.is_empty() {
+            if self.tool_calls.is_empty() {
+                "(empty)".to_string()
+            } else {
+                "executing".to_string()
+            }
+        } else {
+            self.text_content.clone()
+        };
+        let tool_calls = self
+            .tool_calls
+            .values()
+            .map(|call| {
+                serde_json::json!({
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function_name,
+                        "arguments": call.arguments
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let message = serde_json::json!({
+            "content": self.text_content,
+            "tool_calls": tool_calls
+        });
+        let reasoning = (!self.reasoning_content.is_empty()).then_some(self.reasoning_content);
+        let provider_transcript_events =
+            deepseek_provider_transcript_events_for_message(&message, reasoning);
+        let action_batch = if deepseek_request_requires_maap(request) {
+            match parse_deepseek_maap_action_batch(&message, &raw_text, request) {
+                Ok(action_batch) => action_batch,
+                Err(error) => {
+                    return Err(deepseek_completion_finish_reason_error(
+                        self.finish_reason.as_deref(),
+                        &raw_text,
+                        Some(&error),
+                        request,
+                    )
+                    .map(Into::into)
+                    .unwrap_or_else(|| error.into()));
+                }
+            }
+        } else {
+            None
+        };
+        if action_batch.is_none()
+            && let Some(error) = deepseek_completion_finish_reason_error(
+                self.finish_reason.as_deref(),
+                &raw_text,
+                None,
+                request,
+            )
+        {
+            return Err(error.into());
+        }
+        Ok(DeepSeekResponse {
+            model: self.model.unwrap_or_else(|| request.model.clone()),
+            raw_text,
+            usage: self.usage,
+            action_batch,
+            provider_transcript_events,
+        })
+    }
+}
+
 /// Parses a DeepSeek Chat Completions streaming (SSE) response body.
 ///
 /// Accumulates content text, reasoning content, and tool-call argument

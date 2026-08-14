@@ -304,6 +304,172 @@ pub fn parse_sse_events(
     Ok(events)
 }
 
+/// Default maximum number of data-bearing events accepted from one provider stream.
+pub const DEFAULT_PROVIDER_MAX_SSE_EVENTS: usize = 65_536;
+
+/// Incrementally decodes complete SSE blocks while retaining only the unfinished suffix.
+///
+/// Chunk boundaries may split UTF-8 scalars, lines, or block separators. Completed
+/// events are emitted exactly once and removed from the retained buffer. The event
+/// count bound prevents a peer from replacing the response-byte limit with an
+/// unbounded stream of tiny events.
+#[derive(Debug)]
+pub struct IncrementalSseDecoder {
+    pending: Vec<u8>,
+    event_count: usize,
+    max_events: usize,
+}
+
+impl Default for IncrementalSseDecoder {
+    fn default() -> Self {
+        Self {
+            pending: Vec::new(),
+            event_count: 0,
+            max_events: DEFAULT_PROVIDER_MAX_SSE_EVENTS,
+        }
+    }
+}
+
+impl IncrementalSseDecoder {
+    /// Builds a decoder with an explicit cumulative data-event limit.
+    pub fn with_event_limit(max_events: usize) -> Self {
+        Self {
+            max_events,
+            ..Self::default()
+        }
+    }
+
+    /// Appends one transport chunk and emits every newly completed data event.
+    pub fn push<E, F>(&mut self, chunk: &[u8], mut on_event: F) -> Result<(), E>
+    where
+        E: From<SseParseError>,
+        F: FnMut(SseEvent) -> Result<(), E>,
+    {
+        self.pending.extend_from_slice(chunk);
+        let mut consumed = 0usize;
+        while consumed < self.pending.len() {
+            let Some((separator_index, separator_len)) =
+                find_sse_block_separator(&self.pending[consumed..])
+            else {
+                break;
+            };
+            let block_end = consumed.saturating_add(separator_index);
+            let block = std::str::from_utf8(&self.pending[consumed..block_end]).map_err(|_| {
+                SseParseError {
+                    message: "provider SSE event is not valid UTF-8".to_string(),
+                }
+            })?;
+            if let Some(event) = parse_sse_event_block(block) {
+                self.emit_event(event, &mut on_event)?;
+            }
+            consumed = block_end.saturating_add(separator_len);
+        }
+        if consumed > 0 {
+            self.pending.drain(..consumed);
+        }
+        Ok(())
+    }
+
+    /// Flushes one final unterminated event after the transport reaches EOF.
+    pub fn finish<E, F>(&mut self, missing_message: &'static str, mut on_event: F) -> Result<(), E>
+    where
+        E: From<SseParseError>,
+        F: FnMut(SseEvent) -> Result<(), E>,
+    {
+        if !self.pending.is_empty() {
+            let block = std::str::from_utf8(&self.pending).map_err(|_| SseParseError {
+                message: "provider SSE event is not valid UTF-8".to_string(),
+            })?;
+            if let Some(event) = parse_sse_event_block(block) {
+                self.event_count = self.event_count.saturating_add(1);
+                if self.event_count > self.max_events {
+                    return Err(SseParseError {
+                        message: "provider SSE event count exceeds configured limit".to_string(),
+                    }
+                    .into());
+                }
+                on_event(event)?;
+            }
+            self.pending.clear();
+        }
+        if self.event_count == 0 {
+            return Err(SseParseError {
+                message: missing_message.to_string(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Returns bytes retained solely because their event block is incomplete.
+    pub fn buffered_bytes(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Returns the cumulative number of emitted data-bearing events.
+    pub fn event_count(&self) -> usize {
+        self.event_count
+    }
+
+    fn emit_event<E, F>(&mut self, event: SseEvent, on_event: &mut F) -> Result<(), E>
+    where
+        E: From<SseParseError>,
+        F: FnMut(SseEvent) -> Result<(), E>,
+    {
+        self.event_count = self.event_count.saturating_add(1);
+        if self.event_count > self.max_events {
+            return Err(SseParseError {
+                message: "provider SSE event count exceeds configured limit".to_string(),
+            }
+            .into());
+        }
+        on_event(event)
+    }
+}
+
+/// Reports whether one parsed provider SSE event terminates the response stream.
+pub fn provider_sse_event_is_terminal(event: &SseEvent) -> bool {
+    let data = event.data.trim();
+    if data == "[DONE]" {
+        return true;
+    }
+    let event_name_is_terminal = matches!(
+        event.name.as_deref(),
+        Some("response.completed" | "response.failed" | "response.incomplete" | "message_stop")
+    );
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    event_name_is_terminal
+        || matches!(
+            value.get("type").and_then(serde_json::Value::as_str),
+            Some("response.completed" | "response.failed" | "response.incomplete" | "message_stop")
+        )
+}
+
+/// Parses one already-delimited SSE block into an owned data event.
+fn parse_sse_event_block(block: &str) -> Option<SseEvent> {
+    let mut name = None;
+    let mut data = String::new();
+    let mut has_data = false;
+    for raw_line in block.split('\n') {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            name = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            if has_data {
+                data.push('\n');
+            }
+            data.push_str(value.trim_start());
+            has_data = true;
+        }
+    }
+    has_data.then_some(SseEvent { name, data })
+}
+
 /// Incrementally detects terminal events in a buffered provider SSE body.
 ///
 /// The detector scans each completed event block at most once. Product-owned
@@ -397,7 +563,7 @@ fn sse_block_is_terminal(block: &str) -> bool {
     }
     let event_name_is_terminal = matches!(
         event_name,
-        Some("response.completed" | "response.failed" | "response.incomplete")
+        Some("response.completed" | "response.failed" | "response.incomplete" | "message_stop")
     );
     let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
         return false;
@@ -405,7 +571,7 @@ fn sse_block_is_terminal(block: &str) -> bool {
     event_name_is_terminal
         || matches!(
             value.get("type").and_then(serde_json::Value::as_str),
-            Some("response.completed" | "response.failed" | "response.incomplete")
+            Some("response.completed" | "response.failed" | "response.incomplete" | "message_stop")
         )
 }
 
@@ -436,9 +602,10 @@ fn sse_data_lines_equal(block: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError,
-        ProviderHttpErrorKind, ProviderHttpRequest, ProviderHttpResponse, ProviderHttpTimeoutPhase,
-        ProviderHttpTimeouts, ProviderSseTerminalDetector, parse_sse_events,
+        DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, IncrementalSseDecoder,
+        ProviderHttpError, ProviderHttpErrorKind, ProviderHttpRequest, ProviderHttpResponse,
+        ProviderHttpTimeoutPhase, ProviderHttpTimeouts, ProviderSseTerminalDetector, SseParseError,
+        parse_sse_events,
     };
     use std::collections::BTreeMap;
 
@@ -518,6 +685,51 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].name.as_deref(), Some("message"));
         assert_eq!(events[0].data, "{\"done\":true}");
+    }
+
+    /// Every possible byte boundary, including inside UTF-8 and CRLF framing,
+    /// produces the same events while completed blocks leave the retained
+    /// suffix immediately.
+    #[test]
+    fn incremental_sse_decoder_accepts_single_byte_chunks() {
+        let body = "event: delta\r\ndata: hé\r\n\r\nevent: done\ndata: [DONE]\n\n";
+        let mut decoder = IncrementalSseDecoder::default();
+        let mut events = Vec::new();
+        for byte in body.as_bytes() {
+            decoder
+                .push::<SseParseError, _>(std::slice::from_ref(byte), |event| {
+                    events.push(event);
+                    Ok(())
+                })
+                .unwrap();
+            if events.len() == 1 {
+                assert!(decoder.buffered_bytes() < body.len());
+            }
+        }
+        decoder
+            .finish::<SseParseError, _>("missing events", |event| {
+                events.push(event);
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].name.as_deref(), Some("delta"));
+        assert_eq!(events[0].data, "hé");
+        assert_eq!(events[1].data, "[DONE]");
+        assert_eq!(decoder.event_count(), 2);
+        assert_eq!(decoder.buffered_bytes(), 0);
+    }
+
+    /// Tiny-event floods are rejected independently of the cumulative byte cap.
+    #[test]
+    fn incremental_sse_decoder_enforces_event_limit() {
+        let mut decoder = IncrementalSseDecoder::with_event_limit(1);
+        let error = decoder
+            .push::<SseParseError, _>(b"data: one\n\ndata: two\n\n", |_| Ok(()))
+            .unwrap_err();
+
+        assert!(error.message().contains("event count exceeds"));
     }
 
     /// Complete terminal failures are recognized so transports can preserve

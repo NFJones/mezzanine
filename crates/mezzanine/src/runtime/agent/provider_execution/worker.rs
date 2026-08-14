@@ -95,9 +95,20 @@ impl RuntimeSessionService {
     /// Applies provider output progress through the transport-neutral transition contract.
     pub(crate) fn apply_agent_provider_output_progress_transition(
         &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
         pane_id: &str,
         lines: &[String],
     ) -> crate::runtime::RuntimeTransition {
+        let current = self.agent_turn_ledger().turns().iter().any(|turn| {
+            turn.turn_id == turn_id
+                && turn.agent_id == agent_id.as_str()
+                && turn.pane_id == pane_id
+                && turn.state == AgentTurnState::Running
+        });
+        if !current || !self.agent_provider_task_is_claimed(turn_id) {
+            return crate::runtime::RuntimeTransition::default();
+        }
         let _ = self.append_agent_shell_output_status_lines_to_terminal_buffer(pane_id, lines);
         crate::runtime::RuntimeTransition {
             applied: true,

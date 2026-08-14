@@ -202,10 +202,11 @@ pub use agent_shell_session::{
 };
 pub use anthropic::{
     ANTHROPIC_MESSAGES_ENDPOINT, AnthropicMessagesOptions, AnthropicMessagesResponse,
-    AnthropicResponseError, DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_PROMPT_CACHING,
-    DEFAULT_ANTHROPIC_VERSION, anthropic_messages_endpoint_for_base_url,
-    anthropic_messages_request_body, anthropic_provider_failure_json,
-    anthropic_request_requires_maap, parse_anthropic_messages_provider_body,
+    AnthropicMessagesStreamDecoder, AnthropicResponseError, DEFAULT_ANTHROPIC_MAX_TOKENS,
+    DEFAULT_ANTHROPIC_PROMPT_CACHING, DEFAULT_ANTHROPIC_VERSION,
+    anthropic_messages_endpoint_for_base_url, anthropic_messages_request_body,
+    anthropic_provider_failure_json, anthropic_request_requires_maap,
+    parse_anthropic_messages_provider_body,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use auto_sizing::{
@@ -273,8 +274,9 @@ pub use deepseek::{
     deepseek_should_retry_with_forced_maap,
 };
 pub use deepseek_response::{
-    DeepSeekResponse, DeepSeekResponseError, DeepSeekResponseResult,
-    deepseek_request_requires_maap, parse_deepseek_chat_completions_provider_body,
+    DeepSeekChatCompletionsStreamDecoder, DeepSeekResponse, DeepSeekResponseError,
+    DeepSeekResponseResult, deepseek_request_requires_maap,
+    parse_deepseek_chat_completions_provider_body,
 };
 pub use execution::{
     AsyncMcpActionExecutor, DEFAULT_AGENT_TURN_TIMEOUT_MS, LocalActionExecutor,
@@ -301,9 +303,11 @@ pub use harness::{
 pub use http::{
     DEFAULT_PROVIDER_CONNECT_TIMEOUT_MS, DEFAULT_PROVIDER_FIRST_BYTE_TIMEOUT_MS,
     DEFAULT_PROVIDER_INTER_CHUNK_TIMEOUT_MS, DEFAULT_PROVIDER_MAX_RESPONSE_BYTES,
-    DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError, ProviderHttpErrorKind, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderHttpResult, ProviderHttpTimeoutPhase, ProviderHttpTimeouts,
+    DEFAULT_PROVIDER_MAX_SSE_EVENTS, DEFAULT_PROVIDER_TIMEOUT_MS, IncrementalSseDecoder,
+    ProviderHttpError, ProviderHttpErrorKind, ProviderHttpRequest, ProviderHttpResponse,
+    ProviderHttpResult, ProviderHttpTimeoutPhase, ProviderHttpTimeouts,
     ProviderSseTerminalDetector, SseEvent, SseParseError, parse_sse_events, parse_sse_events_with,
+    provider_sse_event_is_terminal,
 };
 pub use local_action::{
     LocalActionKind, LocalActionPlan, LocalActionPlanningError, LocalActionPlanningResult,
@@ -368,8 +372,9 @@ pub use openai_request::{
     openai_responses_request_body, openai_responses_request_body_with_stream,
 };
 pub use openai_response::{
-    parse_openai_responses_http_body, parse_openai_responses_provider_body,
-    parse_openai_responses_stream_body,
+    OpenAiResponsesStreamDecoder, parse_openai_responses_http_body,
+    parse_openai_responses_provider_body, parse_openai_responses_stream_body,
+    parse_openai_responses_stream_events,
 };
 pub use openai_schema::openai_maap_current_action_batch_description;
 pub use permissions::{
