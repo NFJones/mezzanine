@@ -194,6 +194,9 @@ impl RuntimeSessionService {
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
         self.agent
+            .pending_agent_provider_persistence
+            .remove(turn_id);
+        self.agent
             .pending_approved_external_actions
             .retain(|(pending_turn_id, _)| pending_turn_id != turn_id);
         self.agent

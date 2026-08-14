@@ -119,6 +119,7 @@ mod presentation;
 mod provider_context;
 mod provider_events;
 mod provider_execution;
+pub(crate) use provider_execution::execute_agent_provider_persistence_work;
 mod provider_tasks;
 mod routed_workflow;
 mod sandbox_assessment;
@@ -278,6 +279,9 @@ pub(crate) struct RuntimeAgentComponent {
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Provider turns claimed by workers but not yet settled.
     claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
+    /// Provider turns whose actor-validated memory or issue actions are being
+    /// settled by the bounded persistence worker.
+    pending_agent_provider_persistence: BTreeSet<String>,
     /// Approved network and MCP actions waiting for external worker dispatch.
     pending_approved_external_actions: BTreeSet<(String, String)>,
     /// Approved external actions currently owned by async workers.
@@ -1500,6 +1504,27 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Option<RuntimeAgentProviderClaim> {
         self.agent.claimed_agent_provider_tasks.remove(turn_id)
+    }
+
+    /// Marks one validated provider turn as waiting on persistence settlement.
+    pub(crate) fn mark_agent_provider_persistence_pending(&mut self, turn_id: &str) -> bool {
+        self.agent
+            .pending_agent_provider_persistence
+            .insert(turn_id.to_string())
+    }
+
+    /// Clears one completed or cancelled provider persistence settlement.
+    pub(crate) fn clear_agent_provider_persistence_pending(&mut self, turn_id: &str) -> bool {
+        self.agent
+            .pending_agent_provider_persistence
+            .remove(turn_id)
+    }
+
+    /// Iterates over turns whose progress is owned by the persistence worker.
+    pub(crate) fn agent_provider_persistence_progress_turn_ids(
+        &self,
+    ) -> impl Iterator<Item = &String> {
+        self.agent.pending_agent_provider_persistence.iter()
     }
 
     /// Returns the complete rejected OpenAI request size owned by one claim.

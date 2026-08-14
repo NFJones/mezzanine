@@ -228,6 +228,26 @@ impl RuntimePersistenceComponent {
         std::mem::take(&mut self.queued_transcript_effects)
     }
 
+    /// Queues one durable token-accounting append.
+    pub(crate) fn queue_token_usage(&mut self, effect: RuntimeSideEffect) {
+        self.queued_token_usage_effects.push(effect);
+    }
+
+    /// Drains queued durable token-accounting appends in settlement order.
+    pub(crate) fn take_token_usage_effects(&mut self) -> Vec<RuntimeSideEffect> {
+        std::mem::take(&mut self.queued_token_usage_effects)
+    }
+
+    /// Queues one actor-validated provider persistence settlement.
+    pub(crate) fn queue_provider_settlement(&mut self, effect: RuntimeSideEffect) {
+        self.queued_provider_settlement_effects.push(effect);
+    }
+
+    /// Drains provider persistence settlements in actor-validation order.
+    pub(crate) fn take_provider_settlement_effects(&mut self) -> Vec<RuntimeSideEffect> {
+        std::mem::take(&mut self.queued_provider_settlement_effects)
+    }
+
     /// Queues one configuration persistence effect.
     pub(crate) fn queue_config(&mut self, effect: RuntimeSideEffect) {
         self.queued_config_effects.push(effect);

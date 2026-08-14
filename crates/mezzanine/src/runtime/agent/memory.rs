@@ -79,113 +79,25 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
     ) -> Result<ActionResult> {
-        if !self.runtime_persistent_memory_enabled() {
-            return Ok(ActionResult::failed(
-                turn,
-                action,
-                ActionStatus::Failed,
-                "memory_disabled",
-                "memory actions require memory.enabled to be true; continue with current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
-            )?);
-        }
-        let Some(config_root) = self
-            .integration
-            .config_root()
-            .map(|path| path.to_path_buf())
-        else {
-            return Ok(ActionResult::failed(
-                turn,
-                action,
-                ActionStatus::Failed,
-                "memory_store_unavailable",
-                "persistent memory actions require a configured config root; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
-            )?);
-        };
-        let store = crate::storage::memory::PersistentMemoryStore::under_config_root(config_root);
-        match &action.payload {
-            AgentActionPayload::MemorySearch { query, limit } => {
-                let limit = memory_action_limit(*limit);
-                let scopes = self.memory_action_search_scopes(turn);
-                match search_runtime_memory_scopes(&store, query, &scopes, limit) {
-                    Ok(results) => {
-                        let presentation = results
-                            .iter()
-                            .map(|result| MemorySearchActionRecord {
-                                record: &result.record,
-                                score: result.score,
-                                reason: &result.reason,
-                            })
-                            .collect::<Vec<_>>();
-                        Ok(memory_search_action_result(
-                            turn,
-                            action,
-                            query,
-                            &presentation,
-                        ))
-                    }
-                    Err(error) => Ok(ActionResult::failed(
-                        turn,
-                        action,
-                        ActionStatus::Failed,
-                        runtime_mezzanine_error_code(error.kind()),
-                        error.message().to_string(),
-                    )?),
-                }
-            }
-            AgentActionPayload::MemoryStore {
-                kind,
-                priority,
-                scope,
-                keywords,
-                content,
-                expires_in_days,
-            } => {
-                let result = memory_store_record(
-                    turn,
-                    action,
-                    MemoryStoreRecordRequest {
-                        kind,
-                        priority: *priority,
-                        scope: self.memory_action_scope(turn, scope.as_deref()),
-                        keywords,
-                        content,
-                        expires_in_days: *expires_in_days,
-                        now_unix_seconds: current_unix_seconds(),
-                        default_ttl_days: self.runtime_memory_default_ttl_days(),
-                    },
-                )
-                .map_err(MezError::from);
-                let record = match result {
-                    Ok(record) => record,
-                    Err(error) => {
-                        return Ok(ActionResult::failed(
-                            turn,
-                            action,
-                            ActionStatus::Failed,
-                            runtime_mezzanine_error_code(error.kind()),
-                            error.message().to_string(),
-                        )?);
-                    }
-                };
-                match store.upsert(record.clone()) {
-                    Ok(()) => Ok(memory_store_action_result(turn, action, &record)),
-                    Err(error) => Ok(ActionResult::failed(
-                        turn,
-                        action,
-                        ActionStatus::Failed,
-                        runtime_mezzanine_error_code(error.kind()),
-                        error.message().to_string(),
-                    )?),
-                }
-            }
-            _ => Err(MezError::invalid_args(
-                "memory execution requires a memory action",
-            )),
-        }
+        let enabled = self.runtime_persistent_memory_enabled();
+        let store = self.integration.config_root().map(|config_root| {
+            crate::storage::memory::PersistentMemoryStore::under_config_root(
+                config_root.to_path_buf(),
+            )
+        });
+        let scopes = self.memory_action_search_scopes(turn);
+        execute_memory_action_with_context(
+            turn,
+            action,
+            enabled,
+            store.as_ref(),
+            &scopes,
+            self.runtime_memory_default_ttl_days(),
+        )
     }
 
     /// Returns the runtime-visible persistent scopes for a memory search.
-    fn memory_action_search_scopes(
+    pub(crate) fn memory_action_search_scopes(
         &self,
         turn: &AgentTurnRecord,
     ) -> Vec<mez_agent::memory::MemoryScope> {
@@ -206,20 +118,129 @@ impl RuntimeSessionService {
             }
         })
     }
+}
 
-    /// Chooses the durable scope for a memory action.
-    fn memory_action_scope(
-        &self,
-        turn: &AgentTurnRecord,
-        scope: Option<&str>,
-    ) -> mez_agent::memory::MemoryScope {
-        match scope.unwrap_or("project") {
-            "global" => mez_agent::memory::MemoryScope::Global,
-            "project" => self
-                .memory_action_project_scope(&turn.pane_id)
-                .unwrap_or(mez_agent::memory::MemoryScope::Global),
-            _ => mez_agent::memory::MemoryScope::Global,
+/// Executes one persistent-memory action from immutable worker context.
+pub(crate) fn execute_memory_action_with_context(
+    turn: &AgentTurnRecord,
+    action: &AgentAction,
+    enabled: bool,
+    store: Option<&crate::storage::memory::PersistentMemoryStore>,
+    scopes: &[mez_agent::memory::MemoryScope],
+    default_ttl_days: u64,
+) -> Result<ActionResult> {
+    if !enabled {
+        return Ok(ActionResult::failed(
+            turn,
+            action,
+            ActionStatus::Failed,
+            "memory_disabled",
+            "memory actions require memory.enabled to be true; continue with current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
+        )?);
+    }
+    let Some(store) = store else {
+        return Ok(ActionResult::failed(
+            turn,
+            action,
+            ActionStatus::Failed,
+            "memory_store_unavailable",
+            "persistent memory actions require a configured config root; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
+        )?);
+    };
+    match &action.payload {
+        AgentActionPayload::MemorySearch { query, limit } => {
+            let limit = memory_action_limit(*limit);
+            match search_runtime_memory_scopes(store, query, scopes, limit) {
+                Ok(results) => {
+                    let presentation = results
+                        .iter()
+                        .map(|result| MemorySearchActionRecord {
+                            record: &result.record,
+                            score: result.score,
+                            reason: &result.reason,
+                        })
+                        .collect::<Vec<_>>();
+                    Ok(memory_search_action_result(
+                        turn,
+                        action,
+                        query,
+                        &presentation,
+                    ))
+                }
+                Err(error) => Ok(ActionResult::failed(
+                    turn,
+                    action,
+                    ActionStatus::Failed,
+                    runtime_mezzanine_error_code(error.kind()),
+                    error.message().to_string(),
+                )?),
+            }
         }
+        AgentActionPayload::MemoryStore {
+            kind,
+            priority,
+            scope,
+            keywords,
+            content,
+            expires_in_days,
+        } => {
+            let result = memory_store_record(
+                turn,
+                action,
+                MemoryStoreRecordRequest {
+                    kind,
+                    priority: *priority,
+                    scope: memory_scope_from_context(scopes, scope.as_deref()),
+                    keywords,
+                    content,
+                    expires_in_days: *expires_in_days,
+                    now_unix_seconds: current_unix_seconds(),
+                    default_ttl_days,
+                },
+            )
+            .map_err(MezError::from);
+            let record = match result {
+                Ok(record) => record,
+                Err(error) => {
+                    return Ok(ActionResult::failed(
+                        turn,
+                        action,
+                        ActionStatus::Failed,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message().to_string(),
+                    )?);
+                }
+            };
+            match store.upsert(record.clone()) {
+                Ok(()) => Ok(memory_store_action_result(turn, action, &record)),
+                Err(error) => Ok(ActionResult::failed(
+                    turn,
+                    action,
+                    ActionStatus::Failed,
+                    runtime_mezzanine_error_code(error.kind()),
+                    error.message().to_string(),
+                )?),
+            }
+        }
+        _ => Err(MezError::invalid_args(
+            "memory execution requires a memory action",
+        )),
+    }
+}
+
+/// Resolves one requested memory scope from worker-visible search scopes.
+fn memory_scope_from_context(
+    scopes: &[mez_agent::memory::MemoryScope],
+    scope: Option<&str>,
+) -> mez_agent::memory::MemoryScope {
+    match scope.unwrap_or("project") {
+        "global" => mez_agent::memory::MemoryScope::Global,
+        "project" => scopes
+            .iter()
+            .find(|scope| matches!(scope, mez_agent::memory::MemoryScope::Project { .. }))
+            .cloned()
+            .unwrap_or(mez_agent::memory::MemoryScope::Global),
+        _ => mez_agent::memory::MemoryScope::Global,
     }
 }
 

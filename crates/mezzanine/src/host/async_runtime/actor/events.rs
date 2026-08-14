@@ -599,6 +599,11 @@ impl AsyncRuntimeSessionActor {
             .collect();
         turn_ids.extend(self.service.approved_external_action_progress_turn_ids());
         turn_ids.extend(self.service.agent_compaction_resume_turn_ids());
+        turn_ids.extend(
+            self.service
+                .agent_provider_persistence_progress_turn_ids()
+                .cloned(),
+        );
         turn_ids
     }
 
@@ -956,6 +961,39 @@ impl AsyncRuntimeSessionActor {
                         .extend(self.pending_provider_dispatch_side_effects()?);
                 }
                 transition.side_effects.extend(claim_cancellations);
+                Ok(transition)
+            }
+            AgentProviderEvent::PersistenceSettled { outcome } => {
+                let mut transition = self
+                    .service
+                    .apply_agent_provider_persistence_settled_transition(*outcome)
+                    .await?;
+                if transition.applied {
+                    transition
+                        .side_effects
+                        .extend(self.pending_provider_dispatch_side_effects()?);
+                }
+                Ok(transition)
+            }
+            AgentProviderEvent::PersistenceFailed {
+                turn_id,
+                provider_id,
+                kind,
+                message,
+            } => {
+                let mut transition = self
+                    .service
+                    .apply_agent_provider_persistence_failed_transition(
+                        &turn_id,
+                        &provider_id,
+                        &kind,
+                        &message,
+                    )?;
+                if transition.applied {
+                    transition
+                        .side_effects
+                        .extend(self.pending_provider_dispatch_side_effects()?);
+                }
                 Ok(transition)
             }
         }

@@ -55,6 +55,16 @@ impl RuntimeSessionService {
         self.persistence.enable_transcript_adapter();
     }
 
+    /// Assigns durable provider token accounting to the external persistence adapter.
+    pub(crate) fn use_token_usage_effect_adapter(&mut self) {
+        self.persistence.enable_token_usage_adapter();
+    }
+
+    /// Assigns provider memory and issue settlement to the persistence adapter.
+    pub(crate) fn use_provider_settlement_effect_adapter(&mut self) {
+        self.persistence.enable_provider_settlement_adapter();
+    }
+
     /// Assigns session-registry persistence to the external effect adapter.
     pub(crate) fn use_registry_effect_adapter(&mut self) {
         self.persistence.enable_registry_adapter();

@@ -1,12 +1,14 @@
 //! Provider request execution and model dispatch.
 
-use super::super::{AgentId, AgentTurnExecution, Result, RuntimeSessionService};
+use super::super::{
+    AgentId, AgentTurnExecution, AgentTurnState, MezError, Result, RuntimeSessionService,
+};
 #[cfg(test)]
 use super::super::{
-    AgentTurnLedger, AgentTurnState, HookEvent, MezError, ModelProfile,
-    RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT, RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT,
-    assemble_model_request, runtime_agent_turn_start_hook_payload,
-    runtime_execute_auto_sizing_with_provider, runtime_mezzanine_error_code,
+    AgentTurnLedger, HookEvent, ModelProfile, RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT,
+    RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT, assemble_model_request,
+    runtime_agent_turn_start_hook_payload, runtime_execute_auto_sizing_with_provider,
+    runtime_mezzanine_error_code,
 };
 #[cfg(test)]
 use crate::integrations::agent::actions::AgentTurnRunner;
@@ -115,6 +117,90 @@ impl RuntimeSessionService {
             .await?;
         Ok(self.runtime_transition_with_render(
             applied,
+            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+        ))
+    }
+
+    /// Applies worker-settled provider persistence through actor-owned state.
+    pub(crate) async fn apply_agent_provider_persistence_settled_transition(
+        &mut self,
+        outcome: crate::runtime::RuntimeAgentProviderPersistenceOutcome,
+    ) -> Result<crate::runtime::RuntimeTransition> {
+        let turn_id = outcome.turn.turn_id.clone();
+        if !self.clear_agent_provider_persistence_pending(&turn_id) {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        }
+        let current = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id);
+        let current_execution_owns_turn = current.is_some_and(|turn| {
+            turn.state == AgentTurnState::Running
+                && turn.agent_id == outcome.turn.agent_id
+                && turn.conversation_id == outcome.turn.conversation_id
+                && turn.pane_id == outcome.turn.pane_id
+        });
+        let conversation_still_owns_pane = self
+            .agent_shell_store()
+            .get(&outcome.turn.pane_id)
+            .is_some_and(|session| session.session_id == outcome.turn.conversation_id);
+        if !current_execution_owns_turn || !conversation_still_owns_pane {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        }
+        let turn = outcome.turn.clone();
+        let model_profile = outcome.model_profile.clone();
+        let provider_id = outcome.provider_id.clone();
+        let applied = match self.apply_agent_provider_persistence_outcome(outcome).await {
+            Ok(_) => true,
+            Err(error) => {
+                self.fail_agent_turn_after_provider_completion_application_error(
+                    &turn,
+                    &provider_id,
+                    Some(&model_profile),
+                    &error,
+                );
+                true
+            }
+        };
+        Ok(self.runtime_transition_with_render(
+            applied,
+            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+        ))
+    }
+
+    /// Contains a provider-persistence worker failure to the affected turn.
+    pub(crate) fn apply_agent_provider_persistence_failed_transition(
+        &mut self,
+        turn_id: &str,
+        provider_id: &str,
+        kind: &str,
+        message: &str,
+    ) -> Result<crate::runtime::RuntimeTransition> {
+        if !self.clear_agent_provider_persistence_pending(turn_id) {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        }
+        let Some(turn) = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)
+            .cloned()
+        else {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        };
+        let model_profile = self.agent.agent_turn_model_profiles.get(turn_id).cloned();
+        let error = MezError::invalid_state(format!(
+            "provider persistence settlement failed ({kind}): {message}"
+        ));
+        self.fail_agent_turn_after_provider_completion_application_error(
+            &turn,
+            provider_id,
+            model_profile.as_ref(),
+            &error,
+        );
+        Ok(self.runtime_transition_with_render(
+            true,
             Some(crate::runtime::RenderInvalidationReason::FullRedraw),
         ))
     }

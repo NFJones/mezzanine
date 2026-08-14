@@ -9,6 +9,9 @@
 mod completion;
 mod context;
 mod loop_control;
+mod persistence;
 mod result_apply;
 mod result_apply_async;
 mod worker;
+
+pub(crate) use persistence::execute_agent_provider_persistence_work;

@@ -76,6 +76,147 @@ async fn async_persistence_side_effect_service_writes_bytes_and_reports_completi
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Verifies durable provider usage is appended by the persistence worker and
+/// reported through typed actor ingress instead of touching SQLite in actor
+/// settlement.
+#[tokio::test(flavor = "current_thread")]
+async fn async_persistence_side_effect_service_appends_token_usage() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-token-usage-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = crate::storage::token_usage::TokenUsageStore::new(root.join("token-usage.sqlite"));
+    store.initialize(100).unwrap();
+    let event = crate::storage::token_usage::TokenUsageEvent {
+        id: "provider-settlement-usage".to_string(),
+        observed_at_unix_seconds: 100,
+        model: mez_agent::ModelTokenUsageKey::new("openai", "gpt-test"),
+        usage: mez_agent::ModelTokenUsage {
+            input_tokens: 7,
+            output_tokens: 3,
+            ..Default::default()
+        },
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTokenUsage {
+                store: store.clone(),
+                event,
+            }])
+            .await
+            .unwrap();
+        let report = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.drained, 1);
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failed, 0);
+        let totals = store.aggregate_windows(100, &[7]).unwrap();
+        let key = mez_agent::ModelTokenUsageKey::new("openai", "gpt-test");
+        assert_eq!(totals[&7][&key].input_tokens, 7);
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    let events = exit
+        .service
+        .event_log()
+        .unwrap()
+        .replay_for(&EventAudience::Primary);
+    assert!(events.iter().any(|event| {
+        event.payload.contains(r#""target":"token_usage""#)
+            && event.payload.contains(r#""state":"completed""#)
+    }));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies SQLite writer contention remains isolated to the blocking
+/// persistence worker while the serialized actor continues serving lifecycle
+/// heartbeats. Releasing the lock then allows the queued accounting append to
+/// complete without losing the durable event.
+#[tokio::test(flavor = "current_thread")]
+async fn async_token_usage_lock_contention_does_not_block_actor_heartbeats() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-async-token-usage-lock-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = crate::storage::token_usage::TokenUsageStore::new(root.join("token-usage.sqlite"));
+    store.initialize(100).unwrap();
+    let lock = rusqlite::Connection::open(store.path()).unwrap();
+    lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let event = crate::storage::token_usage::TokenUsageEvent {
+        id: "provider-settlement-lock".to_string(),
+        observed_at_unix_seconds: 100,
+        model: mez_agent::ModelTokenUsageKey::new("openai", "gpt-test"),
+        usage: mez_agent::ModelTokenUsage {
+            input_tokens: 11,
+            ..Default::default()
+        },
+    };
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTokenUsage {
+                store: store.clone(),
+                event,
+            }])
+            .await
+            .unwrap();
+        let worker = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        );
+        let heartbeat = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let lifecycle =
+                tokio::time::timeout(Duration::from_millis(50), handle.lifecycle_state())
+                    .await
+                    .expect("actor heartbeat must not wait for the SQLite writer lock")
+                    .unwrap();
+            lock.execute_batch("COMMIT").unwrap();
+            lifecycle
+        };
+
+        let (report, lifecycle) = tokio::join!(worker, heartbeat);
+        let report = report.unwrap();
+        assert_eq!(lifecycle, RuntimeLifecycleState::Running);
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failed, 0);
+        let totals = store.aggregate_windows(100, &[7]).unwrap();
+        let key = mez_agent::ModelTokenUsageKey::new("openai", "gpt-test");
+        assert_eq!(totals[&7][&key].input_tokens, 11);
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _exit) = tokio::join!(client, actor.run());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Verifies that an idle persistence worker wakes on actor lifecycle
 /// notifications before its bounded idle probe interval elapses. This covers
 /// the shared side-effect worker wait primitive used by persistence, hooks,

@@ -291,6 +291,8 @@ impl AsyncRuntimeSessionActor {
                         | RuntimeSideEffect::PersistTranscriptEntries { .. }
                         | RuntimeSideEffect::PersistPromptHistory { .. }
                         | RuntimeSideEffect::PersistCommandPromptHistory { .. }
+                        | RuntimeSideEffect::PersistTokenUsage { .. }
+                        | RuntimeSideEffect::SettleAgentProviderPersistence { .. }
                         | RuntimeSideEffect::PersistRegistry { .. }
                 )
             {

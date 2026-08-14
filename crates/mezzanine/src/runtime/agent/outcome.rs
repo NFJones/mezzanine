@@ -39,7 +39,7 @@ impl RuntimeTerminalActionObservations {
 
     /// Observes one actor-boundary result projection without using action-array
     /// order as a substitute for prior observation order.
-    fn observe_results(&mut self, results: &[ActionResult]) {
+    pub(super) fn observe_results(&mut self, results: &[ActionResult]) {
         for result in results {
             if result.is_terminal() && self.action_ids.insert(result.action_id.clone()) {
                 self.results.push(result.clone());

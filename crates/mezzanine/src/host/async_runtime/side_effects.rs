@@ -889,6 +889,52 @@ where
                         }));
                     }
                 },
+                RuntimeSideEffect::PersistTokenUsage { store, event } => {
+                    let path = store.path().to_path_buf();
+                    match persist_token_usage_event(store, event).await {
+                        Ok(()) => {
+                            report.completed = report.completed.saturating_add(1);
+                            batch.push(RuntimeEvent::Persistence(PersistenceEvent::Completed {
+                                target: PersistenceTarget::TokenUsage,
+                                path,
+                                bytes: 0,
+                            }));
+                        }
+                        Err(error) => {
+                            report.failed = report.failed.saturating_add(1);
+                            batch.push(RuntimeEvent::Persistence(PersistenceEvent::Failed {
+                                target: PersistenceTarget::TokenUsage,
+                                path,
+                                error: error.message().to_string(),
+                            }));
+                        }
+                    }
+                }
+                RuntimeSideEffect::SettleAgentProviderPersistence { work } => {
+                    let turn_id = work.turn.turn_id.clone();
+                    let provider_id = work.provider_id.clone();
+                    match settle_agent_provider_persistence(work).await {
+                        Ok(outcome) => {
+                            report.completed = report.completed.saturating_add(1);
+                            batch.push(RuntimeEvent::AgentProvider(
+                                super::AgentProviderEvent::PersistenceSettled {
+                                    outcome: Box::new(outcome),
+                                },
+                            ));
+                        }
+                        Err(error) => {
+                            report.failed = report.failed.saturating_add(1);
+                            batch.push(RuntimeEvent::AgentProvider(
+                                super::AgentProviderEvent::PersistenceFailed {
+                                    turn_id,
+                                    provider_id,
+                                    kind: "persistence".to_string(),
+                                    message: error.message().to_string(),
+                                },
+                            ));
+                        }
+                    }
+                }
                 RuntimeSideEffect::PersistPromptHistory {
                     store,
                     path,
@@ -1317,6 +1363,7 @@ fn persistence_file_policy(target: PersistenceTarget) -> PersistenceFilePolicy {
     match target {
         PersistenceTarget::AuditLog
         | PersistenceTarget::Transcript
+        | PersistenceTarget::TokenUsage
         | PersistenceTarget::Snapshot
         | PersistenceTarget::Config
         | PersistenceTarget::Registry => PersistenceFilePolicy {
@@ -1396,6 +1443,34 @@ async fn persist_side_effect_bytes(
         file.sync_all().await?;
     }
     Ok(())
+}
+
+/// Appends one idempotent provider token-usage event on Tokio's blocking pool.
+async fn persist_token_usage_event(
+    store: crate::storage::token_usage::TokenUsageStore,
+    event: crate::storage::token_usage::TokenUsageEvent,
+) -> Result<()> {
+    tokio::task::spawn_blocking(move || store.append(&event))
+        .await
+        .map_err(|error| {
+            MezError::invalid_state(format!(
+                "token-usage persistence worker join failed: {error}"
+            ))
+        })??;
+    Ok(())
+}
+
+/// Settles actor-validated provider memory and issue work on Tokio's blocking pool.
+async fn settle_agent_provider_persistence(
+    work: Box<crate::runtime::RuntimeAgentProviderPersistenceWork>,
+) -> Result<crate::runtime::RuntimeAgentProviderPersistenceOutcome> {
+    tokio::task::spawn_blocking(move || {
+        crate::runtime::execute_agent_provider_persistence_work(*work)
+    })
+    .await
+    .map_err(|error| {
+        MezError::invalid_state(format!("provider persistence worker join failed: {error}"))
+    })?
 }
 
 /// Atomically replaces one persistence target with a sibling temp-file rename.

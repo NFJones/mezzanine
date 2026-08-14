@@ -12,6 +12,8 @@ use super::{
     SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::integrations::agent::provider::AnthropicMessagesProvider;
+use crate::storage::issues::IssueStore;
+use crate::storage::memory::PersistentMemoryStore;
 use mez_agent::{
     AutoSizingRoutingSelection, McpPromptTool, ModelContextCompactionPlan, PreparedModelContext,
 };
@@ -258,6 +260,64 @@ pub enum RuntimeAgentProviderWorkerOutcome {
     Execution(Box<AgentTurnExecution>),
     /// A routing decision ready for policy-specific application by the runtime actor.
     RoutingSelected(Box<AutoSizingRoutingSelection>),
+}
+
+/// Immutable actor-validated SQLite work for one provider completion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAgentProviderPersistenceWork {
+    /// Running turn that owns every action in the execution.
+    pub turn: AgentTurnRecord,
+    /// Effective model profile selected for this execution.
+    pub model_profile: ModelProfile,
+    /// Provider identity retained for trace and failure reporting.
+    pub provider_id: String,
+    /// Provider execution whose running memory and issue results need settling.
+    pub execution: AgentTurnExecution,
+    /// Whether persistent-memory actions were enabled for this execution.
+    pub memory_enabled: bool,
+    /// Persistent-memory repository when memory actions are available.
+    pub memory_store: Option<PersistentMemoryStore>,
+    /// Runtime-visible memory scopes for this turn.
+    pub memory_scopes: Vec<MemoryScope>,
+    /// Default retention applied to memory records without an explicit expiry.
+    pub memory_default_ttl_days: u64,
+    /// Whether local issue actions were enabled for this execution.
+    pub issues_enabled: bool,
+    /// Local issue repository when issue actions are available.
+    pub issue_store: Option<IssueStore>,
+    /// Stable project key used by every issue action in this batch.
+    pub issue_project: String,
+    /// Successful query fingerprints already observed during this logical turn.
+    pub issue_query_freshness: std::collections::BTreeMap<String, String>,
+    /// Non-persistence actions settled before the actor deferred SQLite work.
+    pub actions_executed_before_persistence: usize,
+    /// Terminal action results observed before the SQLite family boundary.
+    pub settled_action_results_before_persistence: Vec<mez_agent::ActionResult>,
+}
+
+/// Actor-side metadata produced while settling provider persistence actions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAgentProviderPersistenceOutcome {
+    /// Running turn that owned the validated persistence work.
+    pub turn: AgentTurnRecord,
+    /// Effective model profile selected for this execution.
+    pub model_profile: ModelProfile,
+    /// Provider identity retained for trace and failure reporting.
+    pub provider_id: String,
+    /// Original execution retained until actor-owned family boundaries apply results.
+    pub execution: AgentTurnExecution,
+    /// Memory results keyed by their original execution result indexes.
+    pub memory_results: Vec<(usize, mez_agent::ActionResult)>,
+    /// Issue results keyed by their original execution result indexes.
+    pub issue_results: Vec<(usize, mez_agent::ActionResult)>,
+    /// Final successful issue-query fingerprints after ordered batch execution.
+    pub issue_query_freshness: std::collections::BTreeMap<String, String>,
+    /// Whether an issue mutation changed selector-visible records.
+    pub issue_records_changed: bool,
+    /// Non-persistence actions settled before the actor deferred SQLite work.
+    pub actions_executed_before_persistence: usize,
+    /// Terminal action results observed before the SQLite family boundary.
+    pub settled_action_results_before_persistence: Vec<mez_agent::ActionResult>,
 }
 
 /// Identifies the role of one runtime turn owned by a `/loop` command.

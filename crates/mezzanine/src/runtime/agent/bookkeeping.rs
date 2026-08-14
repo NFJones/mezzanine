@@ -648,7 +648,7 @@ impl RuntimeSessionService {
     /// Best-effort records one settled provider usage delta without affecting
     /// provider response settlement or retry behavior.
     fn record_durable_token_usage(
-        &self,
+        &mut self,
         model: &ModelTokenUsageKey,
         usage: ModelTokenUsage,
         observed_at_unix_seconds: u64,
@@ -662,6 +662,11 @@ impl RuntimeSessionService {
             model: model.clone(),
             usage,
         };
+        if self.persistence.token_usage_uses_adapter() {
+            self.persistence
+                .queue_token_usage(RuntimeSideEffect::PersistTokenUsage { store, event });
+            return;
+        }
         match store.append(&event) {
             Ok(_) => self.persistence.clear_token_usage_health_error(),
             Err(_) => self.persistence.set_token_usage_health_error(

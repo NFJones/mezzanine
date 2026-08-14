@@ -349,6 +349,169 @@ async fn async_actor_applies_agent_provider_completion_events() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies provider-produced issue writes cross the actor-validation,
+/// blocking persistence, and typed actor-resume boundaries in order.
+///
+/// The issue database must remain untouched after provider event ingress and
+/// appear only after the persistence worker drains the validated settlement.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_defers_provider_issue_actions_to_persistence_worker() {
+    let config_root = std::env::temp_dir().join(format!(
+        "mez-provider-issue-settlement-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&config_root);
+    let mut service = test_service();
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "record the issue")
+        .unwrap();
+    let task = service.pending_agent_provider_tasks()[0].clone();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == task.turn_id)
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "issue-add-1".to_string(),
+        rationale: "persist one issue".to_string(),
+        payload: mez_agent::AgentActionPayload::IssueAdd {
+            kind: "task".to_string(),
+            state: None,
+            title: "Deferred provider persistence".to_string(),
+            body: None,
+            notes: None,
+            depends_on: Vec::new(),
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: mez_agent::ModelRequest {
+            provider: task.model_profile.provider.clone(),
+            model: task.model_profile.model.clone(),
+            reasoning_effort: task
+                .model_profile
+                .provider_options
+                .get("reasoning_effort")
+                .cloned()
+                .or_else(|| task.model_profile.reasoning_profile.clone()),
+            thinking_enabled: task.model_profile.thinking_enabled(),
+            latency_preference: task.model_profile.latency_preference.clone(),
+            prompt_cache_retention: task
+                .model_profile
+                .provider_options
+                .get("prompt_cache_retention")
+                .cloned(),
+            max_output_tokens: task.model_profile.max_output_tokens(),
+            temperature: None,
+            stop: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: task.turn_id.clone(),
+            agent_id: task.agent_id.clone(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: true,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::Issues,
+            ),
+            recovery_input: None,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                content: "record the issue".to_string(),
+            }],
+        },
+        response: mez_agent::ModelResponse {
+            provider: task.model_profile.provider.clone(),
+            model: task.model_profile.model.clone(),
+            raw_text: "issue action".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "persist one issue".to_string(),
+                thought: None,
+                turn_id: task.turn_id.clone(),
+                agent_id: task.agent_id.clone(),
+                actions: vec![action.clone()],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::running(
+            &turn,
+            &action,
+            vec!["issue action accepted".to_string()],
+            Some(r#"{"state":"pending_persistence"}"#.to_string()),
+        )],
+        final_turn: true,
+        terminal_state: mez_agent::AgentTurnState::Running,
+    };
+    let database_path = config_root.join("issues.sqlite");
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
+            agent_id: AgentId::opaque(task.agent_id).unwrap(),
+            turn_id: task.turn_id,
+            execution: Box::new(execution),
+        }));
+        let ingress = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(ingress.applied, 1);
+        assert!(!database_path.exists());
+
+        let persistence = run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 2,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            |polls, _| polls >= 2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(persistence.drained, 1);
+        assert_eq!(persistence.completed, 1);
+        assert_eq!(persistence.failed, 0);
+        assert_eq!(persistence.applied_events, 1);
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    let connection = rusqlite::Connection::open(&database_path).unwrap();
+    let count = connection
+        .query_row("SELECT COUNT(*) FROM issues", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(!exit.service.agent_turn_is_running(&turn.turn_id));
+    exit.service.terminate_all_pane_processes().unwrap();
+    let _ = std::fs::remove_dir_all(config_root);
+}
+
 /// Verifies that provider completions queue durable transcript entries for the
 /// persistence worker when a transcript store is configured. The actor assigns
 /// transcript sequence numbers and records the pane reference immediately, while

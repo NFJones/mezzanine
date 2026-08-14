@@ -689,6 +689,22 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Drains durable token-accounting appends through one runtime transition.
+    pub(crate) fn drain_token_usage_persistence_transition(&mut self) -> RuntimeTransition {
+        RuntimeTransition {
+            applied: false,
+            side_effects: self.persistence.take_token_usage_effects(),
+        }
+    }
+
+    /// Drains actor-validated provider persistence through one runtime transition.
+    pub(crate) fn drain_provider_settlement_transition(&mut self) -> RuntimeTransition {
+        RuntimeTransition {
+            applied: false,
+            side_effects: self.persistence.take_provider_settlement_effects(),
+        }
+    }
+
     /// Drains configuration persistence through one transport-neutral runtime transition.
     pub(crate) fn drain_config_persistence_transition(&mut self) -> RuntimeTransition {
         RuntimeTransition {
@@ -704,6 +720,8 @@ impl RuntimeSessionService {
         let mut side_effects = self.drain_pane_io_transition().side_effects;
         side_effects.extend(self.drain_audit_persistence_transition().side_effects);
         side_effects.extend(self.drain_transcript_persistence_transition().side_effects);
+        side_effects.extend(self.drain_token_usage_persistence_transition().side_effects);
+        side_effects.extend(self.drain_provider_settlement_transition().side_effects);
         side_effects.extend(self.drain_config_persistence_transition().side_effects);
         side_effects.extend(self.drain_pane_pipe_persistence_transition().side_effects);
         side_effects.extend(self.drain_program_hook_transition().side_effects);

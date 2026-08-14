@@ -389,6 +389,10 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::Persist { .. } => "persist",
         RuntimeSideEffect::PersistAuditLog { .. } => "persist-audit-log",
         RuntimeSideEffect::PersistTranscriptEntries { .. } => "persist-transcript",
+        RuntimeSideEffect::PersistTokenUsage { .. } => "persist-token-usage",
+        RuntimeSideEffect::SettleAgentProviderPersistence { .. } => {
+            "settle-agent-provider-persistence"
+        }
         RuntimeSideEffect::PersistPromptHistory { .. } => "persist-prompt-history",
         RuntimeSideEffect::PersistCommandPromptHistory { .. } => "persist-command-prompt-history",
         RuntimeSideEffect::PersistRegistry { .. } => "persist-registry",

@@ -39,14 +39,19 @@ impl RuntimeSessionService {
                 target,
                 path,
                 bytes,
-            } => serde_json::json!({
-                "worker": "async-persistence",
-                "target": target.as_str(),
-                "path": path.to_string_lossy(),
-                "state": "completed",
-                "bytes": bytes,
-            })
-            .to_string(),
+            } => {
+                if target == crate::runtime::PersistenceTarget::TokenUsage {
+                    self.persistence.clear_token_usage_health_error();
+                }
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": target.as_str(),
+                    "path": path.to_string_lossy(),
+                    "state": "completed",
+                    "bytes": bytes,
+                })
+                .to_string()
+            }
             crate::runtime::PersistenceEvent::Failed {
                 target,
                 path,
@@ -55,6 +60,11 @@ impl RuntimeSessionService {
                 if target == crate::runtime::PersistenceTarget::PanePipe {
                     let _ =
                         self.stop_file_pane_pipes_for_path(path.as_path(), "persistence-failed")?;
+                }
+                if target == crate::runtime::PersistenceTarget::TokenUsage {
+                    self.persistence.set_token_usage_health_error(
+                        "persistent token accounting is degraded after a storage write failure",
+                    );
                 }
                 serde_json::json!({
                     "worker": "async-persistence",

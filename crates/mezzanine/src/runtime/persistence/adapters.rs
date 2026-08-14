@@ -33,6 +33,26 @@ impl RuntimePersistenceComponent {
         self.transcript_effects_use_adapter
     }
 
+    /// Assigns durable token accounting to the external persistence adapter.
+    pub(crate) fn enable_token_usage_adapter(&mut self) {
+        self.token_usage_effects_use_adapter = true;
+    }
+
+    /// Reports whether durable token accounting is adapter-owned.
+    pub(crate) fn token_usage_uses_adapter(&self) -> bool {
+        self.token_usage_effects_use_adapter
+    }
+
+    /// Assigns provider memory and issue settlement to the persistence adapter.
+    pub(crate) fn enable_provider_settlement_adapter(&mut self) {
+        self.provider_settlement_effects_use_adapter = true;
+    }
+
+    /// Reports whether provider persistence settlement is adapter-owned.
+    pub(crate) fn provider_settlement_uses_adapter(&self) -> bool {
+        self.provider_settlement_effects_use_adapter
+    }
+
     /// Assigns session-registry persistence to the external effect adapter.
     pub(crate) fn enable_registry_adapter(&mut self) {
         self.registry_effects_use_adapter = true;

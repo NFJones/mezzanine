@@ -3,10 +3,12 @@
 use super::super::outcome::RuntimeTerminalActionObservations;
 use super::super::{
     AgentTurnExecution, AgentTurnRecord, AgentTurnState, EventKind, ModelProfile,
-    ModelTokenUsageKey, Result, RuntimeSessionService, TaskState, json_escape,
+    ModelTokenUsageKey, Result, RuntimeSessionService, RuntimeSideEffect, TaskState, json_escape,
     runtime_agent_execution_failure_error, runtime_agent_execution_prompt_display_lines,
-    runtime_agent_turn_state_name, runtime_execution_ready_for_provider_continuation,
+    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
+    runtime_execution_ready_for_provider_continuation,
 };
+use crate::runtime::{RuntimeAgentProviderPersistenceOutcome, RuntimeAgentProviderPersistenceWork};
 
 impl RuntimeSessionService {
     /// Runs the apply agent provider execution async operation for this subsystem.
@@ -115,12 +117,225 @@ impl RuntimeSessionService {
         let config_actions_executed =
             self.execute_running_config_change_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
+        let actions_executed_before_persistence = skill_actions_executed
+            .saturating_add(message_actions_executed)
+            .saturating_add(network_actions_executed)
+            .saturating_add(mcp_actions_executed)
+            .saturating_add(spawn_actions_executed)
+            .saturating_add(config_actions_executed);
+        let persistence_actions_pending = execution.terminal_state == AgentTurnState::Running
+            && execution.action_results.iter().any(|result| {
+                result.status == super::super::ActionStatus::Running
+                    && matches!(
+                        result.action_type,
+                        "memory_search"
+                            | "memory_store"
+                            | "issue_add"
+                            | "issue_update"
+                            | "issue_query"
+                            | "issue_delete"
+                    )
+            });
+        if defer_external_actions
+            && self.persistence.provider_settlement_uses_adapter()
+            && persistence_actions_pending
+        {
+            let config_root = self.integration.config_root().map(ToOwned::to_owned);
+            let memory_store = config_root.as_ref().map(|root| {
+                crate::storage::memory::PersistentMemoryStore::under_config_root(root.clone())
+            });
+            let issue_store = config_root.as_ref().map(|root| {
+                crate::storage::issues::IssueStore::from_database_path(
+                    super::super::issues::runtime_issue_database_path(self, root),
+                )
+            });
+            let issue_project = config_root
+                .as_ref()
+                .map(|root| super::super::issues::issue_action_project(self, turn, root))
+                .unwrap_or_default();
+            let work = RuntimeAgentProviderPersistenceWork {
+                turn: turn.clone(),
+                model_profile: model_profile.clone(),
+                provider_id: provider_id.to_string(),
+                execution: execution.clone(),
+                memory_enabled: self.runtime_persistent_memory_enabled(),
+                memory_store,
+                memory_scopes: self.memory_action_search_scopes(turn),
+                memory_default_ttl_days: self.runtime_memory_default_ttl_days(),
+                issues_enabled: super::super::issues::runtime_issues_enabled(self),
+                issue_store,
+                issue_project,
+                issue_query_freshness: self
+                    .agent
+                    .agent_turn_issue_query_freshness
+                    .get(turn_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                actions_executed_before_persistence,
+                settled_action_results_before_persistence: terminal_observations.results().to_vec(),
+            };
+            self.mark_agent_provider_persistence_pending(turn_id);
+            self.persistence.queue_provider_settlement(
+                RuntimeSideEffect::SettleAgentProviderPersistence {
+                    work: Box::new(work),
+                },
+            );
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                "provider persistence queued reason=memory_or_issue_actions",
+            )?;
+            return Ok(execution);
+        }
         let memory_actions_executed =
             self.execute_running_memory_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
         let _issue_actions_executed =
             self.execute_running_issue_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
+        self.finalize_agent_provider_execution_after_persistence(
+            turn,
+            model_profile,
+            provider_id,
+            execution,
+            terminal_observations,
+            actions_executed_before_persistence.saturating_add(memory_actions_executed),
+        )
+        .await
+    }
+
+    /// Applies worker-settled memory and issue results, then resumes ordinary settlement.
+    pub(super) async fn apply_agent_provider_persistence_outcome(
+        &mut self,
+        outcome: RuntimeAgentProviderPersistenceOutcome,
+    ) -> Result<AgentTurnExecution> {
+        let RuntimeAgentProviderPersistenceOutcome {
+            turn,
+            model_profile,
+            provider_id,
+            mut execution,
+            memory_results,
+            issue_results,
+            issue_query_freshness,
+            issue_records_changed,
+            actions_executed_before_persistence,
+            settled_action_results_before_persistence,
+        } = outcome;
+        let batch = execution.response.action_batch.clone().ok_or_else(|| {
+            super::super::MezError::invalid_state(
+                "provider persistence outcome has no action batch",
+            )
+        })?;
+        let mut terminal_observations = RuntimeTerminalActionObservations::default();
+        terminal_observations.observe_results(&settled_action_results_before_persistence);
+        let memory_actions_executed = memory_results.len();
+        for (index, result) in memory_results {
+            let pending = execution.action_results.get(index).ok_or_else(|| {
+                super::super::MezError::invalid_state(
+                    "provider memory result index is outside execution results",
+                )
+            })?;
+            let action = batch
+                .actions
+                .iter()
+                .find(|action| action.id == pending.action_id)
+                .cloned()
+                .ok_or_else(|| {
+                    super::super::MezError::invalid_state(
+                        "provider memory result does not match an action",
+                    )
+                })?;
+            if !self
+                .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
+            {
+                self.append_agent_status_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    &format!(
+                        "agent: {}",
+                        super::super::runtime_agent_action_summary(&action)
+                            .unwrap_or_else(|| "memory action".to_string())
+                    ),
+                )?;
+            }
+            let audit_outcome = format!("{:?}", result.status).to_ascii_lowercase();
+            self.append_agent_memory_action_audit(&turn, &action, &audit_outcome)?;
+            execution.action_results[index] = result;
+        }
+        execution.terminal_state = runtime_agent_turn_state_from_action_results(
+            &execution.action_results,
+            execution.final_turn,
+        );
+        terminal_observations.observe(&execution);
+        if execution.terminal_state == AgentTurnState::Running {
+            for (index, result) in issue_results {
+                let pending = execution.action_results.get(index).ok_or_else(|| {
+                    super::super::MezError::invalid_state(
+                        "provider issue result index is outside execution results",
+                    )
+                })?;
+                let action = batch
+                    .actions
+                    .iter()
+                    .find(|action| action.id == pending.action_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        super::super::MezError::invalid_state(
+                            "provider issue result does not match an action",
+                        )
+                    })?;
+                if !self
+                    .append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, &action)?
+                {
+                    self.append_agent_status_text_to_terminal_buffer(
+                        &turn.pane_id,
+                        &format!(
+                            "agent: {}",
+                            super::super::runtime_agent_action_summary(&action)
+                                .unwrap_or_else(|| "issue action".to_string())
+                        ),
+                    )?;
+                }
+                execution.action_results[index] = result;
+            }
+            execution.terminal_state = runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                execution.final_turn,
+            );
+        }
+        terminal_observations.observe(&execution);
+        self.agent
+            .agent_turn_issue_query_freshness
+            .remove(&turn.turn_id);
+        if !issue_query_freshness.is_empty() {
+            self.agent
+                .agent_turn_issue_query_freshness
+                .insert(turn.turn_id.clone(), issue_query_freshness);
+        }
+        if issue_records_changed {
+            self.invalidate_agent_prompt_selector_extra_candidates();
+        }
+        self.finalize_agent_provider_execution_after_persistence(
+            &turn,
+            &model_profile,
+            &provider_id,
+            execution,
+            terminal_observations,
+            actions_executed_before_persistence.saturating_add(memory_actions_executed),
+        )
+        .await
+    }
+
+    /// Completes actor-owned action families after memory and issue settlement.
+    async fn finalize_agent_provider_execution_after_persistence(
+        &mut self,
+        turn: &AgentTurnRecord,
+        model_profile: &ModelProfile,
+        provider_id: &str,
+        mut execution: AgentTurnExecution,
+        mut terminal_observations: RuntimeTerminalActionObservations,
+        actions_executed_before_shell: usize,
+    ) -> Result<AgentTurnExecution> {
+        let turn_id = turn.turn_id.as_str();
         let shell_actions_dispatched =
             self.dispatch_running_shell_actions_to_panes(turn, &mut execution)?;
         terminal_observations.observe(&execution);
@@ -279,13 +494,7 @@ impl RuntimeSessionService {
                 json_escape(provider_id),
                 execution.action_results.len(),
                 shell_actions_dispatched
-                    .saturating_add(mcp_actions_executed)
-                    .saturating_add(skill_actions_executed)
-                    .saturating_add(network_actions_executed)
-                    .saturating_add(message_actions_executed)
-                    .saturating_add(spawn_actions_executed)
-                    .saturating_add(config_actions_executed)
-                    .saturating_add(memory_actions_executed),
+                    .saturating_add(actions_executed_before_shell),
                 persisted_transcript_entries
             ),
         )?;
@@ -295,14 +504,7 @@ impl RuntimeSessionService {
                 turn_id,
                 provider_id,
                 &execution,
-                shell_actions_dispatched
-                    .saturating_add(mcp_actions_executed)
-                    .saturating_add(skill_actions_executed)
-                    .saturating_add(network_actions_executed)
-                    .saturating_add(message_actions_executed)
-                    .saturating_add(spawn_actions_executed)
-                    .saturating_add(config_actions_executed)
-                    .saturating_add(memory_actions_executed),
+                shell_actions_dispatched.saturating_add(actions_executed_before_shell),
                 persisted_transcript_entries,
             ),
         )?;

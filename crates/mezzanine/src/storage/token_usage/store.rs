@@ -49,7 +49,6 @@ impl TokenUsageStore {
     }
 
     /// Returns the configured database path.
-    #[cfg(test)]
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }

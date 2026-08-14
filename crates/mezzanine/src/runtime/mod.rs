@@ -353,6 +353,7 @@ mod status_pills;
 /// Exposes transport-neutral runtime event, transition, and side-effect types.
 mod transitions;
 
+pub(crate) use agent::execute_agent_provider_persistence_work;
 pub use agent_state::{
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
     RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch,
@@ -360,6 +361,7 @@ pub use agent_state::{
     RuntimeAgentProviderWorkerOutcome, RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
 };
 pub(crate) use agent_state::{
+    RuntimeAgentProviderPersistenceOutcome, RuntimeAgentProviderPersistenceWork,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome,
     RuntimeApprovedMcpActionDispatch,
 };

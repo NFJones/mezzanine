@@ -10,6 +10,7 @@ use crate::integrations::hooks::{HookExecutionPlan, HookExecutionResult};
 use crate::runtime::RuntimeRegistryUpdatePlan;
 use crate::security::audit::AuditRetentionPolicy;
 use crate::storage::registry::SessionRegistry;
+use crate::storage::token_usage::{TokenUsageEvent, TokenUsageStore};
 use crate::storage::transcript::AgentTranscriptStore;
 use mez_agent::transcript::TranscriptEntry;
 use mez_agent::{AgentTurnExecution, ModelResponse};
@@ -313,6 +314,22 @@ pub enum AgentProviderEvent {
         /// Provider-produced turn execution to apply through actor-owned state
         /// transition logic.
         execution: Box<AgentTurnExecution>,
+    },
+    /// Actor-validated memory and issue persistence settled outside the actor.
+    PersistenceSettled {
+        /// Typed execution and persistence results ready for actor application.
+        outcome: Box<crate::runtime::RuntimeAgentProviderPersistenceOutcome>,
+    },
+    /// Actor-validated persistence work failed before producing typed results.
+    PersistenceFailed {
+        /// Turn whose persistence phase failed.
+        turn_id: String,
+        /// Provider identity retained for failure diagnostics.
+        provider_id: String,
+        /// Stable runtime error kind.
+        kind: String,
+        /// Human-readable worker failure.
+        message: String,
     },
     /// A native local action produced a bounded output preview while still
     /// running in an async provider worker.
@@ -714,6 +731,18 @@ pub enum RuntimeSideEffect {
         /// Pane whose active context should be memorized.
         pane_id: String,
     },
+    /// Append one provider token-usage event through the persistence worker.
+    PersistTokenUsage {
+        /// Cloneable token-accounting repository handle.
+        store: TokenUsageStore,
+        /// Immutable idempotent usage event to append.
+        event: TokenUsageEvent,
+    },
+    /// Settle actor-validated provider memory and issue actions on a blocking worker.
+    SettleAgentProviderPersistence {
+        /// Immutable repositories, action context, and execution state.
+        work: Box<crate::runtime::RuntimeAgentProviderPersistenceWork>,
+    },
     /// Execute a standalone program hook outside the actor.
     RunProgramHook {
         /// Original hook plan to execute.
@@ -839,6 +868,8 @@ pub enum PersistenceTarget {
     AuditLog,
     /// Agent transcript storage.
     Transcript,
+    /// Durable provider token accounting.
+    TokenUsage,
     /// Snapshot repository.
     #[allow(
         dead_code,
@@ -863,6 +894,7 @@ impl PersistenceTarget {
         match self {
             Self::AuditLog => "audit_log",
             Self::Transcript => "transcript",
+            Self::TokenUsage => "token_usage",
             Self::Snapshot => "snapshot",
             Self::Config => "config",
             Self::Registry => "registry",

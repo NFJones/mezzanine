@@ -97,6 +97,8 @@ impl AsyncRuntimeSessionActor {
         service.use_audit_effect_adapter();
         service.use_pane_pipe_effect_adapter();
         service.use_transcript_effect_adapter();
+        service.use_token_usage_effect_adapter();
+        service.use_provider_settlement_effect_adapter();
         service.use_registry_effect_adapter();
         service.use_config_effect_adapter();
         service.use_hook_effect_adapter();

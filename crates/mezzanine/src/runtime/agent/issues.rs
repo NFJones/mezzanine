@@ -8,7 +8,7 @@
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, MezError, PathBuf, Result, RuntimeSessionService,
+    AgentTurnRecord, AgentTurnState, BTreeMap, MezError, PathBuf, Result, RuntimeSessionService,
     current_unix_seconds, runtime_agent_action_summary,
     runtime_agent_turn_state_from_action_results, runtime_mezzanine_error_code,
 };
@@ -78,200 +78,254 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
     ) -> Result<ActionResult> {
-        if !runtime_issues_enabled(self) {
-            return Ok(ActionResult::failed(
+        let enabled = runtime_issues_enabled(self);
+        let config_root = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf());
+        let store = config_root.as_ref().map(|config_root| {
+            crate::storage::issues::IssueStore::from_database_path(runtime_issue_database_path(
+                self,
+                config_root,
+            ))
+        });
+        let project = config_root
+            .as_ref()
+            .map(|config_root| issue_action_project(self, turn, config_root))
+            .unwrap_or_default();
+        let mut freshness = self
+            .agent
+            .agent_turn_issue_query_freshness
+            .remove(&turn.turn_id)
+            .unwrap_or_default();
+        let (result, records_changed) = execute_issue_action_with_context(
+            turn,
+            action,
+            enabled,
+            store.as_ref(),
+            &project,
+            &mut freshness,
+        )?;
+        if !freshness.is_empty() {
+            self.agent
+                .agent_turn_issue_query_freshness
+                .insert(turn.turn_id.clone(), freshness);
+        }
+        if records_changed {
+            self.invalidate_agent_prompt_selector_extra_candidates();
+        }
+        Ok(result)
+    }
+}
+
+/// Executes one issue action from immutable worker context.
+pub(crate) fn execute_issue_action_with_context(
+    turn: &AgentTurnRecord,
+    action: &AgentAction,
+    enabled: bool,
+    store: Option<&crate::storage::issues::IssueStore>,
+    project: &str,
+    freshness: &mut BTreeMap<String, String>,
+) -> Result<(ActionResult, bool)> {
+    if !enabled {
+        return Ok((
+            ActionResult::failed(
                 turn,
                 action,
                 ActionStatus::Failed,
                 "issues_disabled",
                 "issue actions require issues.enabled to be true".to_string(),
-            )?);
-        }
-        let Some(config_root) = self
-            .integration
-            .config_root()
-            .map(|path| path.to_path_buf())
-        else {
-            return Ok(ActionResult::failed(
+            )?,
+            false,
+        ));
+    }
+    let Some(store) = store else {
+        return Ok((
+            ActionResult::failed(
                 turn,
                 action,
                 ActionStatus::Failed,
                 "issue_store_unavailable",
                 "issue actions require a configured config root".to_string(),
-            )?);
-        };
-        let store = crate::storage::issues::IssueStore::from_database_path(
-            runtime_issue_database_path(self, &config_root),
-        );
-        let project = issue_action_project(self, turn, &config_root);
-        match &action.payload {
-            AgentActionPayload::IssueAdd {
-                kind,
-                state,
-                title,
-                body,
-                notes,
-                depends_on,
-            } => {
-                let result = store.add_issue_with_dependencies(
-                    mez_agent::issues::NewIssueRecord {
-                        project,
-                        kind: mez_agent::issues::IssueKind::parse(kind)?,
-                        state: state
-                            .as_deref()
-                            .map(mez_agent::issues::IssueState::parse)
-                            .transpose()?,
-                        title: title.clone(),
-                        body: body.clone(),
-                        notes: notes.clone(),
-                        depends_on: depends_on.clone(),
-                    },
-                    current_unix_seconds(),
-                );
-                match result {
-                    Ok(record) => {
-                        self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
-                        self.invalidate_agent_prompt_selector_extra_candidates();
-                        Ok(issue_record_action_result(turn, action, "added", &record))
-                    }
-                    Err(error) => Ok(ActionResult::failed(
+            )?,
+            false,
+        ));
+    };
+    match &action.payload {
+        AgentActionPayload::IssueAdd {
+            kind,
+            state,
+            title,
+            body,
+            notes,
+            depends_on,
+        } => {
+            let result = store.add_issue_with_dependencies(
+                mez_agent::issues::NewIssueRecord {
+                    project: project.to_string(),
+                    kind: mez_agent::issues::IssueKind::parse(kind)?,
+                    state: state
+                        .as_deref()
+                        .map(mez_agent::issues::IssueState::parse)
+                        .transpose()?,
+                    title: title.clone(),
+                    body: body.clone(),
+                    notes: notes.clone(),
+                    depends_on: depends_on.clone(),
+                },
+                current_unix_seconds(),
+            );
+            match result {
+                Ok(record) => {
+                    freshness.clear();
+                    Ok((
+                        issue_record_action_result(turn, action, "added", &record),
+                        true,
+                    ))
+                }
+                Err(error) => Ok((
+                    ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         runtime_mezzanine_error_code(error.kind()),
                         error.message().to_string(),
-                    )?),
-                }
+                    )?,
+                    false,
+                )),
             }
-            AgentActionPayload::IssueUpdate {
-                id,
-                kind,
-                state,
-                title,
-                body,
-                clear_body,
-                notes,
-                clear_notes,
-                depends_on,
-                clear_depends_on,
-            } => {
-                let result = store.update_issue(
-                    project,
-                    id.clone(),
-                    mez_agent::issues::IssueUpdate {
-                        kind: kind
-                            .as_deref()
-                            .map(mez_agent::issues::IssueKind::parse)
-                            .transpose()?,
-                        state: state
-                            .as_deref()
-                            .map(mez_agent::issues::IssueState::parse)
-                            .transpose()?,
-                        title: title.clone(),
-                        body: body.clone(),
-                        clear_body: *clear_body,
-                        notes: notes.clone(),
-                        clear_notes: *clear_notes,
-                        depends_on: depends_on.clone(),
-                        clear_depends_on: *clear_depends_on,
-                    },
-                    current_unix_seconds(),
-                );
-                match result {
-                    Ok(result) => {
-                        if result.updated {
-                            self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
-                            self.invalidate_agent_prompt_selector_extra_candidates();
-                        }
-                        Ok(issue_update_action_result(turn, action, &result))
+        }
+        AgentActionPayload::IssueUpdate {
+            id,
+            kind,
+            state,
+            title,
+            body,
+            clear_body,
+            notes,
+            clear_notes,
+            depends_on,
+            clear_depends_on,
+        } => {
+            let result = store.update_issue(
+                project.to_string(),
+                id.clone(),
+                mez_agent::issues::IssueUpdate {
+                    kind: kind
+                        .as_deref()
+                        .map(mez_agent::issues::IssueKind::parse)
+                        .transpose()?,
+                    state: state
+                        .as_deref()
+                        .map(mez_agent::issues::IssueState::parse)
+                        .transpose()?,
+                    title: title.clone(),
+                    body: body.clone(),
+                    clear_body: *clear_body,
+                    notes: notes.clone(),
+                    clear_notes: *clear_notes,
+                    depends_on: depends_on.clone(),
+                    clear_depends_on: *clear_depends_on,
+                },
+                current_unix_seconds(),
+            );
+            match result {
+                Ok(result) => {
+                    if result.updated {
+                        freshness.clear();
                     }
-                    Err(error) => Ok(ActionResult::failed(
+                    let updated = result.updated;
+                    Ok((issue_update_action_result(turn, action, &result), updated))
+                }
+                Err(error) => Ok((
+                    ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         runtime_mezzanine_error_code(error.kind()),
                         error.message().to_string(),
-                    )?),
-                }
+                    )?,
+                    false,
+                )),
             }
-            AgentActionPayload::IssueQuery {
+        }
+        AgentActionPayload::IssueQuery {
+            kind,
+            state,
+            text,
+            limit,
+            refresh,
+        } => {
+            let kind = kind
+                .as_deref()
+                .map(mez_agent::issues::IssueKind::parse)
+                .transpose()?;
+            let state = state
+                .as_deref()
+                .map(mez_agent::issues::IssueState::parse)
+                .transpose()?;
+            let limit = limit.and_then(|value| usize::try_from(value).ok());
+            let query = mez_agent::issues::IssueQuery::new_with_state(
+                project.to_string(),
                 kind,
-                state,
-                text,
+                state.or(Some(mez_agent::issues::IssueState::Open)),
+                text.clone(),
                 limit,
-                refresh,
-            } => {
-                let kind = kind
-                    .as_deref()
-                    .map(mez_agent::issues::IssueKind::parse)
-                    .transpose()?;
-                let state = state
-                    .as_deref()
-                    .map(mez_agent::issues::IssueState::parse)
-                    .transpose()?;
-                let limit = limit.and_then(|value| usize::try_from(value).ok());
-                let query = mez_agent::issues::IssueQuery::new_with_state(
-                    project,
-                    kind,
-                    state.or(Some(mez_agent::issues::IssueState::Open)),
-                    text.clone(),
-                    limit,
-                )?;
-                let freshness_key = issue_query_freshness_key(&query);
-                if !*refresh
-                    && let Some(reused_action_id) = self
-                        .agent
-                        .agent_turn_issue_query_freshness
-                        .get(&turn.turn_id)
-                        .and_then(|queries| queries.get(&freshness_key))
-                {
-                    return Ok(issue_query_freshness_skip_action_result(
+            )?;
+            let freshness_key = issue_query_freshness_key(&query);
+            if !*refresh && let Some(reused_action_id) = freshness.get(&freshness_key) {
+                return Ok((
+                    issue_query_freshness_skip_action_result(
                         turn,
                         action,
                         &query,
                         reused_action_id,
-                    ));
+                    ),
+                    false,
+                ));
+            }
+            match store.query_issues(&query) {
+                Ok(records) => {
+                    let result = issue_query_action_result(turn, action, &query, &records);
+                    freshness.insert(freshness_key, action.id.clone());
+                    Ok((result, false))
                 }
-                match store.query_issues(&query) {
-                    Ok(records) => {
-                        let result = issue_query_action_result(turn, action, &query, &records);
-                        self.agent
-                            .agent_turn_issue_query_freshness
-                            .entry(turn.turn_id.clone())
-                            .or_default()
-                            .insert(freshness_key, action.id.clone());
-                        Ok(result)
-                    }
-                    Err(error) => Ok(ActionResult::failed(
+                Err(error) => Ok((
+                    ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         runtime_mezzanine_error_code(error.kind()),
                         error.message().to_string(),
-                    )?),
-                }
+                    )?,
+                    false,
+                )),
             }
-            AgentActionPayload::IssueDelete { id } => match store.delete_issue(project, id.clone())
-            {
+        }
+        AgentActionPayload::IssueDelete { id } => {
+            match store.delete_issue(project.to_string(), id.clone()) {
                 Ok(result) => {
                     if result.deleted {
-                        self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
-                        self.invalidate_agent_prompt_selector_extra_candidates();
+                        freshness.clear();
                     }
-                    Ok(issue_delete_action_result(turn, action, &result))
+                    let deleted = result.deleted;
+                    Ok((issue_delete_action_result(turn, action, &result), deleted))
                 }
-                Err(error) => Ok(ActionResult::failed(
-                    turn,
-                    action,
-                    ActionStatus::Failed,
-                    runtime_mezzanine_error_code(error.kind()),
-                    error.message().to_string(),
-                )?),
-            },
-            _ => Err(MezError::invalid_args(
-                "issue execution requires an issue action",
-            )),
+                Err(error) => Ok((
+                    ActionResult::failed(
+                        turn,
+                        action,
+                        ActionStatus::Failed,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message().to_string(),
+                    )?,
+                    false,
+                )),
+            }
         }
+        _ => Err(MezError::invalid_args(
+            "issue execution requires an issue action",
+        )),
     }
 }
 
@@ -286,7 +340,7 @@ pub(super) fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
         .unwrap_or(true)
 }
 
-fn runtime_issue_database_path(
+pub(crate) fn runtime_issue_database_path(
     service: &RuntimeSessionService,
     config_root: &PathBuf,
 ) -> crate::storage::issues::IssueDatabasePath {
@@ -301,7 +355,7 @@ fn runtime_issue_database_path(
     crate::storage::issues::issue_database_location(config_root, configured.as_deref())
 }
 
-fn issue_action_project(
+pub(crate) fn issue_action_project(
     service: &RuntimeSessionService,
     turn: &AgentTurnRecord,
     config_root: &Path,

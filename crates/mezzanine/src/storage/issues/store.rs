@@ -593,8 +593,26 @@ fn load_issue_dependencies(
     project: &str,
     records: &mut [IssueRecord],
 ) -> Result<()> {
-    for record in records {
-        record.depends_on = issue_dependencies_for_record(connection, project, &record.id)?;
+    if records.is_empty() {
+        return Ok(());
+    }
+    let record_indexes = records
+        .iter()
+        .enumerate()
+        .map(|(index, record)| (record.id.clone(), index))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut statement = connection.prepare(
+        "SELECT issue_id, depends_on_id FROM issue_dependencies
+         WHERE project = ?1 ORDER BY issue_id ASC, depends_on_id ASC",
+    )?;
+    let dependencies = statement.query_map([project], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for dependency in dependencies {
+        let (issue_id, depends_on_id) = dependency?;
+        if let Some(index) = record_indexes.get(issue_id.as_str()).copied() {
+            records[index].depends_on.push(depends_on_id);
+        }
     }
     Ok(())
 }
