@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use mez_agent::{
@@ -81,6 +82,28 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReqwestProviderHttpTransport;
 
+/// Maximum distinct reqwest connection policies retained process-wide.
+const MAX_PROVIDER_HTTP_CLIENT_POLICIES: usize = 16;
+
+/// Maximum idle provider connections retained for one origin.
+const MAX_PROVIDER_HTTP_IDLE_CONNECTIONS_PER_HOST: usize = 4;
+
+/// Process-wide provider client cache shared by zero-sized transport adapters.
+static PROVIDER_HTTP_CLIENTS: OnceLock<Mutex<ProviderHttpClientCache>> = OnceLock::new();
+
+/// Connection policy that affects reqwest client construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ProviderHttpClientPolicy {
+    plaintext_http: bool,
+    connect_timeout_ms: u64,
+}
+
+/// Bounded reusable reqwest clients keyed by construction policy.
+#[derive(Debug, Default)]
+struct ProviderHttpClientCache {
+    clients: BTreeMap<ProviderHttpClientPolicy, reqwest::Client>,
+}
+
 /// Builds the reqwest client used for provider calls.
 ///
 /// Provider responses are expected to be UTF-8 JSON or event-stream text.
@@ -98,6 +121,8 @@ fn provider_http_client_builder(
 ) -> reqwest::ClientBuilder {
     let builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(timeouts.connect_timeout_ms))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(MAX_PROVIDER_HTTP_IDLE_CONNECTIONS_PER_HOST)
         .no_gzip()
         .no_brotli()
         .no_deflate()
@@ -107,6 +132,44 @@ fn provider_http_client_builder(
     } else {
         builder
     }
+}
+
+/// Returns one reusable reqwest client for the request connection policy.
+fn provider_http_client(
+    timeouts: ProviderHttpTimeouts,
+    scheme: &str,
+) -> ProviderHttpResult<reqwest::Client> {
+    let policy = ProviderHttpClientPolicy {
+        plaintext_http: scheme == "http",
+        connect_timeout_ms: timeouts.connect_timeout_ms,
+    };
+    let cache =
+        PROVIDER_HTTP_CLIENTS.get_or_init(|| Mutex::new(ProviderHttpClientCache::default()));
+    if let Some(client) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clients
+        .get(&policy)
+        .cloned()
+    {
+        return Ok(client);
+    }
+
+    let client = provider_http_client_builder(timeouts, scheme)
+        .build()
+        .map_err(|error| {
+            ProviderHttpError::invalid_state(format!("provider HTTP client setup failed: {error}"))
+        })?;
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(existing) = cache.clients.get(&policy) {
+        return Ok(existing.clone());
+    }
+    if cache.clients.len() < MAX_PROVIDER_HTTP_CLIENT_POLICIES {
+        cache.clients.insert(policy, client.clone());
+    }
+    Ok(client)
 }
 
 /// Adds provider transport headers that keep response handling deterministic.
@@ -293,13 +356,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
             }
             apply_provider_transport_default_headers(&mut headers);
 
-            let client = provider_http_client_builder(request.timeouts, url.scheme())
-                .build()
-                .map_err(|error| {
-                    ProviderHttpError::invalid_state(format!(
-                        "provider HTTP client setup failed: {error}"
-                    ))
-                })?;
+            let client = provider_http_client(request.timeouts, url.scheme())?;
             let (send_deadline, total_limited) =
                 provider_http_bounded_deadline(first_byte_deadline, total_deadline);
             let mut response = tokio::time::timeout_at(
@@ -511,6 +568,62 @@ mod provider_transport_tests {
             headers.get(reqwest::header::ACCEPT_ENCODING).unwrap(),
             "gzip"
         );
+    }
+
+    /// Verifies sequential provider requests reuse one HTTP/1.1 connection.
+    ///
+    /// The server accepts exactly one TCP stream and serves two complete
+    /// requests on it. A transport that constructs a fresh reqwest client for
+    /// the second request cannot complete because no second accept is driven.
+    #[tokio::test]
+    async fn provider_transport_reuses_keep_alive_connections() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            for _ in 0..2 {
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert!(read > 0, "provider connection closed before both requests");
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok",
+                    )
+                    .await
+                    .unwrap();
+                stream.flush().await.unwrap();
+            }
+        });
+        let request = ProviderHttpRequest {
+            method: "GET".to_string(),
+            url: format!("http://{address}/reuse"),
+            headers: BTreeMap::new(),
+            body: String::new(),
+            timeouts: ProviderHttpTimeouts::from_total(1_000),
+            max_response_bytes: None,
+        };
+
+        let first = ReqwestProviderHttpTransport
+            .send_async(&request)
+            .await
+            .unwrap();
+        let second = ReqwestProviderHttpTransport
+            .send_async(&request)
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        assert_eq!(first.body, "ok");
+        assert_eq!(second.body, "ok");
     }
 
     /// Verifies event-stream provider responses complete when a terminal SSE
