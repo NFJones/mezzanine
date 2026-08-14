@@ -268,6 +268,10 @@ impl RuntimeSessionService {
         if bytes.is_empty() {
             return Vec::new();
         }
+        let exit_echo_visible = self.visible_agent_subshell_exit_echo_bytes(pane_id, bytes);
+        if exit_echo_visible.is_empty() {
+            return Vec::new();
+        }
         let active_transaction = self
             .process
             .running_shell_transactions
@@ -276,14 +280,14 @@ impl RuntimeSessionService {
         let filter_commands = self.mez_wrapper_filter_commands_for_pane(pane_id);
         if self.agent_trace_enabled(pane_id)
             || (filter_commands.is_empty()
-                && !mez_wrapper_filter_bytes_may_contain_boilerplate(bytes))
+                && !mez_wrapper_filter_bytes_may_contain_boilerplate(&exit_echo_visible))
         {
             let mut visible = self
                 .process
                 .pane_mez_wrapper_filter_pending
                 .remove(pane_id)
                 .unwrap_or_default();
-            visible.extend_from_slice(bytes);
+            visible.extend_from_slice(&exit_echo_visible);
             if !active_transaction {
                 self.tick_mez_wrapper_filter_retention(pane_id);
             }
@@ -295,7 +299,7 @@ impl RuntimeSessionService {
             .pane_mez_wrapper_filter_pending
             .remove(pane_id)
             .unwrap_or_default();
-        pending.extend_from_slice(bytes);
+        pending.extend_from_slice(&exit_echo_visible);
         let mut visible = Vec::with_capacity(pending.len());
         let mut filtered_wrapper_echo = false;
         let mut line_start = 0usize;
@@ -519,6 +523,47 @@ impl RuntimeSessionService {
             pane_id.to_string(),
             RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS,
         );
+    }
+
+    /// Marks the next child-shell `exit` echo for pane-log suppression.
+    ///
+    /// The echo can be split across PTY reads. Its line ending is retained so
+    /// the parent prompt keeps its terminal position, while its text never
+    /// enters the pane screen or scrollback.
+    pub(crate) fn remember_agent_subshell_exit_echo(&mut self, pane_id: &str) {
+        self.process
+            .pane_agent_subshell_exit_echo_pending
+            .insert(pane_id.to_string(), Vec::new());
+    }
+
+    /// Filters the one expected child-shell `exit` echo before general wrapper filtering.
+    fn visible_agent_subshell_exit_echo_bytes(&mut self, pane_id: &str, bytes: &[u8]) -> Vec<u8> {
+        let Some(mut pending) = self
+            .process
+            .pane_agent_subshell_exit_echo_pending
+            .remove(pane_id)
+        else {
+            return bytes.to_vec();
+        };
+        pending.extend_from_slice(bytes);
+        for terminator in [
+            b"exit\r\n".as_slice(),
+            b"exit\n".as_slice(),
+            b"exit\r".as_slice(),
+        ] {
+            if pending.starts_with(terminator) {
+                let mut visible = terminator[4..].to_vec();
+                visible.extend_from_slice(&pending[terminator.len()..]);
+                return visible;
+            }
+        }
+        if b"exit\r\n".starts_with(&pending) || b"exit\n".starts_with(&pending) {
+            self.process
+                .pane_agent_subshell_exit_echo_pending
+                .insert(pane_id.to_string(), pending);
+            return Vec::new();
+        }
+        pending
     }
 
     /// Clears retained shell-output filters for explicit foreground input.

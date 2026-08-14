@@ -624,6 +624,8 @@ pub(crate) struct RuntimeProcessComponent {
     pane_shell_output_render_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Partial wrapper-filter bytes keyed by pane id.
     pane_mez_wrapper_filter_pending: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Pending child-shell exit echo fragments keyed by pane id.
+    pane_agent_subshell_exit_echo_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Precomputed bounded wrapper-filter commands keyed by pane id.
     pane_mez_wrapper_filter_recent_commands:
         std::collections::BTreeMap<String, std::sync::Arc<[String]>>,
@@ -3027,6 +3029,9 @@ impl RuntimeSessionService {
             .pane_shell_output_render_pending
             .remove(pane_id);
         self.process.pane_mez_wrapper_filter_pending.remove(pane_id);
+        self.process
+            .pane_agent_subshell_exit_echo_pending
+            .remove(pane_id);
         self.process
             .pane_mez_wrapper_filter_recent_commands
             .remove(pane_id);

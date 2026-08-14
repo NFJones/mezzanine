@@ -136,6 +136,26 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         ),
         "Ctrl+D must restore the process surface immediately"
     );
+    let pane_log_before_exit_echo = service
+        .process_pane_screen(&pane_id)
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    service
+        .apply_pane_output_bytes(pane_id.clone(), b"ex".to_vec())
+        .unwrap();
+    service
+        .apply_pane_output_bytes(pane_id.clone(), b"it\r\n".to_vec())
+        .unwrap();
+    assert_eq!(
+        service
+            .process_pane_screen(&pane_id)
+            .unwrap()
+            .normal_content_lines()
+            .join("\n"),
+        pane_log_before_exit_echo,
+        "the child-shell EOF echo must not enter the pane log"
+    );
     service
         .apply_pane_output_bytes(pane_id.clone(), b"\x1b]133;A\x1b\\user@host".to_vec())
         .unwrap();
