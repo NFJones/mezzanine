@@ -54,7 +54,7 @@ pub(crate) use style::AgentTerminalPresentationStyle;
 pub(crate) use text::{
     agent_display_lines_are_error, agent_display_lines_are_low_level_status,
     agent_prompt_error_display_lines, overlay_styled_lines,
-    render_command_markdown_body_lines_for_width, sanitized_agent_terminal_line,
+    render_command_markdown_body_lines_for_width,
 };
 #[cfg(test)]
 pub(crate) use text::{

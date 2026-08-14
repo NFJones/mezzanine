@@ -154,6 +154,38 @@ fn runtime_primary_display_overlay_preserves_unwrapped_plain_content() {
     assert_eq!(overlay.lines, vec!["alpha beta gamma"]);
 }
 
+/// Verifies terminal command feedback that does not need the pager uses the
+/// window status line and never mutates the active pane's retained log.
+#[test]
+fn runtime_non_pager_command_feedback_stays_out_of_pane_log() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .apply_pane_output_bytes(pane_id.clone(), b"prompt$ ".to_vec())
+        .unwrap();
+    let before = service
+        .pane_screen(&pane_id)
+        .unwrap()
+        .normal_content_lines();
+
+    service
+        .execute_attached_display_command(&primary, "refresh-client")
+        .unwrap();
+
+    assert!(service.primary_display_overlay().is_none());
+    assert!(service.primary_error_status_overlay().is_some());
+    assert_eq!(
+        service
+            .pane_screen(&pane_id)
+            .unwrap()
+            .normal_content_lines(),
+        before
+    );
+}
+
 /// Verifies keyboard movement inside a primary command-output pager refreshes
 /// through the retained-frame diff path.
 ///

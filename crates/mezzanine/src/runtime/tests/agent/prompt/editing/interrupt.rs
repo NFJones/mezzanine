@@ -3,11 +3,12 @@
 use super::*;
 
 /// Verifies that agent-mode prompt submissions convert runtime errors into a
-/// pane-local error log instead of letting the attached terminal step fail.
+/// window status error instead of letting the attached terminal step fail.
 /// Invalid-state errors previously bubbled out of this path and could terminate
-/// the foreground client instead of leaving the agent prompt usable.
+/// the foreground client instead of leaving the agent prompt usable. Command
+/// failures must not be retained in the pane log.
 #[test]
-fn runtime_attached_agent_prompt_logs_invalid_state_errors_non_modally() {
+fn runtime_attached_agent_prompt_reports_invalid_state_errors_in_status_line() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -42,15 +43,20 @@ fn runtime_attached_agent_prompt_logs_invalid_state_errors_non_modally() {
     assert_eq!(prompt_state.prompt.buffer.line(), "");
     let pane_text = service
         .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
+        .map(|screen| screen.normal_content_lines().join("\n"))
+        .unwrap_or_default();
     assert!(
-        pane_text.contains("agent command error: agent shell session has no running turn"),
+        service
+            .primary_error_status_overlay()
+            .is_some_and(|status| status
+                .contains("agent command error: agent shell session has no running turn")),
+        "{:?}",
+        service.primary_error_status_overlay()
+    );
+    assert!(
+        !pane_text.contains("agent command error:") && !pane_text.contains("(invalid_state)"),
         "{pane_text}"
     );
-    let compact_pane_text = pane_text.replace("\n▐ ", "");
-    assert!(compact_pane_text.contains("(invalid_state)"), "{pane_text}");
 }
 
 /// Verifies that Ctrl+D from a visible agent prompt restores the parent shell
@@ -509,8 +515,9 @@ fn runtime_agent_prompt_escape_keeps_empty_idle_shell_visible() {
 /// Verifies idle Ctrl+C requires confirmation before exiting agent mode.
 ///
 /// Ctrl+C is easy to hit accidentally while editing a prompt. The first press
-/// should show a pane-local status message and keep the prompt visible; the
-/// second press within the confirmation window exits.
+/// should show a transient window status message without changing pane history
+/// and keep the prompt visible; the second press within the confirmation
+/// window exits.
 #[test]
 fn runtime_agent_prompt_ctrl_c_requires_second_press_when_idle() {
     let mut service = test_runtime_service();
@@ -547,13 +554,16 @@ fn runtime_agent_prompt_ctrl_c_requires_second_press_when_idle() {
     );
     let pane_text = service
         .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
+        .map(|screen| screen.normal_content_lines().join("\n"))
+        .unwrap_or_default();
     assert!(
-        pane_text.contains("press ctrl-c again within 3s to exit agent mode"),
-        "{pane_text}"
+        service.primary_error_status_overlay().is_some_and(
+            |status| status.contains("press ctrl-c again within 3s to exit agent mode")
+        ),
+        "{:?}",
+        service.primary_error_status_overlay()
     );
+    assert!(!pane_text.contains("press ctrl-c again"), "{pane_text}");
 
     let second = service
         .apply_attached_terminal_step_plan(
@@ -581,7 +591,8 @@ fn runtime_agent_prompt_ctrl_c_requires_second_press_when_idle() {
 }
 
 /// Verifies idle Ctrl+C clears a nonempty pane-local agent prompt before using
-/// the double-confirm exit path for an already empty prompt.
+/// the double-confirm exit path for an already empty prompt. Confirmation
+/// feedback must use the window status line rather than pane history.
 #[test]
 fn runtime_agent_prompt_ctrl_c_clears_nonempty_buffer_when_idle() {
     let mut service = test_runtime_service();
@@ -669,13 +680,17 @@ fn runtime_agent_prompt_ctrl_c_clears_nonempty_buffer_when_idle() {
         Some(AgentShellVisibility::Visible)
     );
     assert!(
-        service
-            .pane_screen("%1")
-            .unwrap()
-            .normal_content_lines()
-            .join("\n")
-            .contains("press ctrl-c again within 3s to exit agent mode")
+        service.primary_error_status_overlay().is_some_and(
+            |status| status.contains("press ctrl-c again within 3s to exit agent mode")
+        ),
+        "{:?}",
+        service.primary_error_status_overlay()
     );
+    let pane_text = service
+        .pane_screen("%1")
+        .map(|screen| screen.normal_content_lines().join("\n"))
+        .unwrap_or_default();
+    assert!(!pane_text.contains("press ctrl-c again"), "{pane_text}");
 }
 
 /// Verifies Ctrl+L clears the live viewport while keeping the pane-local agent

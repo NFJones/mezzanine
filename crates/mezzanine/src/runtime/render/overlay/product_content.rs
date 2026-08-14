@@ -100,7 +100,7 @@ pub(crate) enum RuntimeAgentShellDisplayOutput {
     TransientStatus(Vec<String>),
     /// One-line recoverable command failure rendered through the error status bar.
     TransientErrorStatus(Vec<String>),
-    /// Preformatted display lines for plain text and diagnostic responses.
+    /// Preformatted command feedback rendered through a transient status bar.
     Lines(Vec<String>),
     /// Display content rendered through the command overlay pager.
     Overlay(RuntimeCommandDisplayOverlayContent),

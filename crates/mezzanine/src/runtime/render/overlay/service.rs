@@ -1113,36 +1113,6 @@ impl RuntimeSessionService {
         self.presentation.primary_display_overlay.take().is_some()
     }
 
-    /// Appends terminal-command display output to the active pane buffer.
-    ///
-    /// Short acknowledgement-style command output should remain in the pane
-    /// transcript instead of forcing a modal command-output overlay. The bytes
-    /// are fed through the same pane-screen ingestion path as process output so
-    /// rendering state, scrollback, and observers stay consistent.
-    fn append_runtime_command_display_lines_to_active_pane(
-        &mut self,
-        lines: &[String],
-    ) -> Result<()> {
-        let visible_lines = lines
-            .iter()
-            .map(|line| sanitized_agent_terminal_line(line))
-            .filter(|line| !line.trim().is_empty())
-            .take(200)
-            .collect::<Vec<_>>();
-        if visible_lines.is_empty() {
-            return Ok(());
-        }
-        let pane_id = self.active_pane_id()?.to_string();
-        let mut bytes = Vec::new();
-        for line in visible_lines {
-            bytes.extend_from_slice(b"\r\nmez: ");
-            bytes.extend_from_slice(line.as_bytes());
-        }
-        bytes.extend_from_slice(b"\r\n");
-        self.apply_pane_output_bytes(pane_id, bytes)?;
-        Ok(())
-    }
-
     /// Presents terminal command display content according to its feedback policy.
     pub(crate) fn present_runtime_command_display_content(
         &mut self,
@@ -1170,7 +1140,7 @@ impl RuntimeSessionService {
         if let Some(line) = runtime_command_display_transient_status_line(&content) {
             return self.show_primary_notice_overlay(vec![line]);
         }
-        self.append_runtime_command_display_lines_to_active_pane(&content.lines)
+        self.show_primary_notice_overlay(content.lines)
     }
 
     /// Runs the apply primary display overlay terminal action operation for this subsystem.

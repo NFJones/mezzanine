@@ -596,10 +596,7 @@ impl RuntimeSessionService {
         let body = match self.execute_agent_shell_command(primary_client_id, &command) {
             Ok(body) => body,
             Err(error) => {
-                self.set_agent_prompt_display_lines(
-                    pane_id,
-                    agent_prompt_error_display_lines(&error),
-                )?;
+                self.show_primary_error_overlay(agent_prompt_error_display_lines(&error))?;
                 return Ok(true);
             }
         };
@@ -611,10 +608,7 @@ impl RuntimeSessionService {
         ) {
             Ok(display_output) => self.set_agent_prompt_display_output(pane_id, display_output)?,
             Err(error) => {
-                self.set_agent_prompt_display_lines(
-                    pane_id,
-                    agent_prompt_error_display_lines(&error),
-                )?;
+                self.show_primary_error_overlay(agent_prompt_error_display_lines(&error))?;
             }
         }
         if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {

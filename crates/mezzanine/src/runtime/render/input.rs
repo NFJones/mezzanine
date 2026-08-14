@@ -14,7 +14,6 @@ use super::{
     agent_prompt_error_display_lines, agent_shell_mcp_display_state_name, current_unix_millis,
     default_runtime_agent_prompt_input, runtime_agent_shell_display_output,
     runtime_agent_shell_visibility, runtime_command_display_overlay_content,
-    runtime_command_display_should_open_overlay,
 };
 use crate::runtime::service_state::RuntimeRecordBrowserOverlayState;
 use mez_mux::readline::{ReadlineDecodedInput, readline_input_is_ctrl_v};
@@ -344,10 +343,9 @@ impl RuntimeSessionService {
                     let body = match self.execute_agent_shell_command(primary_client_id, &command) {
                         Ok(body) => body,
                         Err(error) => {
-                            self.set_agent_prompt_display_lines(
-                                pane_id,
-                                agent_prompt_error_display_lines(&error),
-                            )?;
+                            self.show_primary_error_overlay(agent_prompt_error_display_lines(
+                                &error,
+                            ))?;
                             continue;
                         }
                     };
@@ -361,10 +359,9 @@ impl RuntimeSessionService {
                             self.set_agent_prompt_display_output(pane_id, display_output)?;
                         }
                         Err(error) => {
-                            self.set_agent_prompt_display_lines(
-                                pane_id,
-                                agent_prompt_error_display_lines(&error),
-                            )?;
+                            self.show_primary_error_overlay(agent_prompt_error_display_lines(
+                                &error,
+                            ))?;
                         }
                     }
                     if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
@@ -383,10 +380,9 @@ impl RuntimeSessionService {
                     ) {
                         Ok(body) => body,
                         Err(error) => {
-                            self.set_agent_prompt_display_lines(
-                                pane_id,
-                                agent_prompt_error_display_lines(&error),
-                            )?;
+                            self.show_primary_error_overlay(agent_prompt_error_display_lines(
+                                &error,
+                            ))?;
                             continue;
                         }
                     };
@@ -400,10 +396,9 @@ impl RuntimeSessionService {
                             self.set_agent_prompt_display_output(pane_id, display_output)?;
                         }
                         Err(error) => {
-                            self.set_agent_prompt_display_lines(
-                                pane_id,
-                                agent_prompt_error_display_lines(&error),
-                            )?;
+                            self.show_primary_error_overlay(agent_prompt_error_display_lines(
+                                &error,
+                            ))?;
                         }
                     }
                     if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
@@ -457,10 +452,9 @@ impl RuntimeSessionService {
             self.presentation.settings.terminal_agent_wrap_column_cap,
         ) {
             Ok(display_output) => self.set_agent_prompt_display_output(pane_id, display_output)?,
-            Err(error) => self.set_agent_prompt_display_lines(
-                pane_id,
-                agent_prompt_error_display_lines(&error),
-            )?,
+            Err(error) => {
+                self.show_primary_error_overlay(agent_prompt_error_display_lines(&error))?
+            }
         }
         if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
             self.remove_agent_prompt_input(pane_id);
@@ -508,10 +502,9 @@ impl RuntimeSessionService {
         if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id) {
             state.pending_ctrl_c_exit_at_unix_ms = Some(now);
         }
-        self.set_agent_prompt_display_lines(
-            pane_id,
-            vec!["press ctrl-c again within 3s to exit agent mode".to_string()],
-        )?;
+        self.show_primary_notice_overlay(vec![
+            "press ctrl-c again within 3s to exit agent mode".to_string(),
+        ])?;
         Ok(true)
     }
 
@@ -1040,10 +1033,19 @@ impl RuntimeSessionService {
                 state.display_lines.clear();
             }
             RuntimeAgentShellDisplayOutput::Lines(display_lines) => {
-                self.set_agent_prompt_display_lines(pane_id, display_lines)?;
+                if agent_display_lines_are_error(&display_lines) {
+                    self.show_primary_error_overlay(display_lines)?;
+                } else {
+                    self.show_primary_notice_overlay(display_lines)?;
+                }
+                let state = self
+                    .presentation
+                    .agent_prompt_inputs
+                    .entry(pane_id.to_string())
+                    .or_insert_with(default_runtime_agent_prompt_input);
+                state.display_lines.clear();
             }
             RuntimeAgentShellDisplayOutput::Overlay(content) => {
-                let should_open_overlay = runtime_command_display_should_open_overlay(&content);
                 let record_browser = content.command.as_ref().and_then(|command| {
                     let key = (pane_id.to_string(), command.clone());
                     let source = self
@@ -1066,24 +1068,20 @@ impl RuntimeSessionService {
                             stack,
                         })
                 });
-                if should_open_overlay {
-                    self.show_primary_display_overlay_inner(
-                        content.lines,
-                        content.line_style_spans,
-                        content.line_copy_texts,
-                        content.selections,
-                        false,
-                    )?;
-                    if let (Some(overlay), Some(record_browser)) = (
-                        self.presentation.primary_display_overlay.as_mut(),
-                        record_browser,
-                    ) {
-                        overlay.record_browser = Some(record_browser);
-                    }
-                    self.reflow_primary_record_browser_overlay();
-                } else {
-                    self.set_agent_prompt_display_lines(pane_id, content.lines)?;
+                self.show_primary_display_overlay_inner(
+                    content.lines,
+                    content.line_style_spans,
+                    content.line_copy_texts,
+                    content.selections,
+                    false,
+                )?;
+                if let (Some(overlay), Some(record_browser)) = (
+                    self.presentation.primary_display_overlay.as_mut(),
+                    record_browser,
+                ) {
+                    overlay.record_browser = Some(record_browser);
                 }
+                self.reflow_primary_record_browser_overlay();
                 let state = self
                     .presentation
                     .agent_prompt_inputs

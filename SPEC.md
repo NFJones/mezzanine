@@ -1433,11 +1433,12 @@ Terminal commands whose successful effect is immediately observable, such as
 prefix forwarding, theme changes, option changes, binding changes, and source or
 refresh operations, SHOULD take effect without opening a modal display overlay
 that the user must dismiss. Commands that do not produce useful output SHOULD
-avoid durable display output entirely. Short acknowledgement output from such
-commands SHOULD be rendered as a transient window status-bar notice rather than
-being appended to the active pane transcript. Commands that return reference
-information, selector choices, or diagnostics SHOULD continue to use the display
-overlay. Display overlay scrolling MUST clamp to the available content range;
+avoid durable display output entirely. Command feedback MUST NOT be appended to
+the active pane transcript. Short acknowledgements and command errors MUST be
+rendered as transient window status-bar notices. Commands that return reference
+information, selector choices, or diagnostics MUST use the display overlay.
+Pager output is the only command output presented outside the window status
+line. Display overlay scrolling MUST clamp to the available content range;
 PageDown, mouse wheel scrolling, and selection navigation MUST NOT leave the
 overlay scrolled past its final rendered content.
 
