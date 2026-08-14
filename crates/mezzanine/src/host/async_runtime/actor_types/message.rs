@@ -283,6 +283,17 @@ where
                 }
                 continue;
             }
+            joined = tasks.join_next(), if !tasks.is_empty() => {
+                let Some(joined) = joined else {
+                    continue;
+                };
+                joined.map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "async message connection task failed: {error}"
+                    ))
+                })??;
+                continue;
+            }
         };
         let connection_handle = handle.clone();
         let connection_now_base = base_now_ms.saturating_add(accepted);

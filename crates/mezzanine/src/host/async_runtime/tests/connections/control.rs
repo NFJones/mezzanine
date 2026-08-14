@@ -177,6 +177,57 @@ async fn async_control_listener_serves_stateful_connection_until_client_closes()
     let _ = std::fs::remove_file(&path);
 }
 
+/// Verifies a completed control connection failure is reaped while the
+/// listener remains open instead of being retained until accept-loop shutdown.
+#[tokio::test(flavor = "current_thread")]
+async fn async_control_listener_reaps_failed_connection_tasks_during_accept() {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::{UnixListener, UnixStream};
+
+    let path = std::env::temp_dir().join(format!(
+        "mez-async-control-listener-{}-reap.sock",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
+        .build()
+        .unwrap();
+
+    let client = async {
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        stream
+            .write_all(b"Content-Length: invalid\r\n\r\n")
+            .await
+            .unwrap();
+    };
+    let server = async {
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            serve_async_runtime_control_listener(
+                &listener,
+                &handle,
+                AsyncRuntimeControlConnectionConfig::new(4096, current_effective_uid()).unwrap(),
+                |_, _| false,
+            ),
+        )
+        .await
+        .expect("failed control task should be reaped before another accept")
+        .unwrap_err();
+        assert!(
+            error.message().contains("invalid Content-Length"),
+            "{error}"
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), (), _exit) = tokio::join!(client, server, actor.run());
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Verifies the control listener can accept an observer while another control
 /// connection remains open. Observer attachment uses a long-lived control
 /// socket, so the accept loop must dispatch each connection independently or a

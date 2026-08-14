@@ -221,6 +221,17 @@ where
                 }
                 continue;
             }
+            joined = tasks.join_next(), if !tasks.is_empty() => {
+                let Some(joined) = joined else {
+                    continue;
+                };
+                joined.map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "async control connection task failed: {error}"
+                    ))
+                })??;
+                continue;
+            }
         };
         let connection_handle = handle.clone();
         let connection_snapshots = snapshots.clone();
