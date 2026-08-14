@@ -84,6 +84,63 @@ async fn async_render_side_effect_service_composes_flush_effects() {
     assert!(modes.cursor_visible);
 }
 
+/// Verifies a fully static window status template does not schedule periodic
+/// status refreshes after rendering. Static text changes only through config
+/// updates, so a recurring timer would cause unnecessary idle redraws.
+#[tokio::test(flavor = "current_thread")]
+async fn async_render_side_effect_service_skips_static_status_refresh_timer() {
+    let mut service = test_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[frames.window]\nright_status = \"ready\"\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::RenderClient {
+                client_id: primary,
+                reason: RenderInvalidationReason::PaneOutput,
+            }])
+            .await
+            .unwrap();
+        let report = run_async_render_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: 1,
+                drain_limit: 8,
+                idle_interval: Duration::from_millis(1),
+            },
+            TerminalClientLoopConfig::default(),
+            |_, _| Ok(None),
+            |_| Ok(()),
+            |_, _| false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.applied, 1);
+        assert!(handle.drain_timer_side_effects(8).await.unwrap().is_empty());
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.commands_processed > 0);
+}
+
 /// Verifies that active agent pane status can drive status refresh timers even
 /// when the window status line is disabled. The running status pill has an
 /// animated scan background, so pane-frame-only configurations need the

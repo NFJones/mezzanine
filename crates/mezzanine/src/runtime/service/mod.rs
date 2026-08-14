@@ -53,6 +53,14 @@ use super::{
 /// Default interval for status-only terminal refreshes.
 const DEFAULT_STATUS_REFRESH_INTERVAL_MS: u64 = 1_000;
 
+/// Returns whether a window status template contains a clock-derived field.
+///
+/// Other supported fields change through runtime events or status-pill
+/// completions and therefore do not require an idle periodic redraw.
+fn runtime_window_status_template_requires_periodic_refresh(template: &str) -> bool {
+    template.contains("#{system.uptime}") || template.contains("#{datetime.local}")
+}
+
 /// Returns whether the resolved terminal configuration needs periodic status refreshes.
 fn runtime_status_refresh_required_by_config(config: &TerminalClientLoopConfig) -> bool {
     let window_status_requires_refresh = config.window_frames_enabled
@@ -60,7 +68,9 @@ fn runtime_status_refresh_required_by_config(config: &TerminalClientLoopConfig) 
             .frame_context
             .window_status
             .as_ref()
-            .is_some_and(|status| !status.template.trim().is_empty());
+            .is_some_and(|status| {
+                runtime_window_status_template_requires_periodic_refresh(&status.template)
+            });
     let agent_status_requires_refresh = config.frame_context.panes.values().any(|pane| {
         let active = matches!(
             pane.agent_status.as_deref(),
