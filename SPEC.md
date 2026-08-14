@@ -2496,6 +2496,14 @@ filename SHOULD be `config.toml`. The created file SHOULD use Unix mode `0600`
 or the nearest host equivalent. If directory or file creation fails, Mezzanine
 MUST fail with an actionable diagnostic.
 
+The generated default primary configuration MUST enumerate and annotate every
+supported non-provider setting. Built-in values MUST be active, while optional
+settings and dynamic-map examples MUST remain commented out so generation does
+not enable external commands, integrations, or additional authority. Provider
+connections, model profiles, and provider presets that are materialized by
+`mez auth login` MUST be excluded from first-launch generation and added only
+after the corresponding provider authenticates successfully.
+
 If more than one supported primary user configuration file exists and no
 explicit primary file was selected, Mezzanine MUST fail configuration loading
 with an actionable diagnostic rather than merging ambiguous primary files.

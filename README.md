@@ -73,7 +73,9 @@ Cargo normally installs `mez` in `~/.cargo/bin`. Ensure that directory is on
 
 From a checkout of this repository, optionally create and inspect the baseline
 configuration before authenticating and starting in a working directory.
-Starting a session also creates the default configuration when none exists:
+Starting a session also creates the default configuration when none exists. The
+generated file lists annotated built-in defaults and commented optional
+settings; provider catalogs are added separately after successful login:
 
 ```sh
 mez config init

@@ -343,7 +343,8 @@ fn display_safe_pending_command_defaults() {
         .unwrap(),
     );
     assert!(options.contains("source=default live_mutation=not-connected"));
-    assert!(options.contains("[history]\nlines = 10000"));
+    assert!(options.contains("[history]"));
+    assert!(options.contains("lines = 10000"));
 
     let copy_mode = display_body(
         execute_command(

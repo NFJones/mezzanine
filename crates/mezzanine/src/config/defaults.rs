@@ -116,19 +116,34 @@ fn retain_named_tables(
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
+# Active settings below materialize Mezzanine's built-in defaults. Optional
+# settings and dynamic-map examples remain commented so the first launch is
+# behaviorally unchanged while the complete configuration surface is visible.
+# Provider connections, model profiles, and provider presets are intentionally
+# absent from first-launch output; `mez auth login` adds those after login.
+# Schema version used for migrations. Change only through a supported migration.
 version = 62
 
+# Process-wide runtime sizing. Changes require a restart.
 [runtime]
 # Tokio worker threads available to the daemon and foreground services.
 cpu_count = 2
 
+# Terminal emulation, pane startup, clipboard, rendering, and cursor behavior.
 [terminal]
+# Terminal compatibility profile advertised to pane applications.
 profile = "xterm-compatible"
+# TERM value exported to pane processes.
 term = "xterm-256color"
+# New panes start in the user home directory; use "same-directory" to inherit.
 pane_spawn_directory = "home"
+# New panes open a shell; use "agent" to open the agent view.
 pane_spawn_view = "shell"
+# Advertise and render 24-bit color.
 true_color = true
+# Forward mouse input using terminal mouse protocols.
 mouse = true
+# Preserve bracketed-paste boundaries for applications.
 bracketed_paste = true
 # OSC 52 writes: "external" stores internally and attempts a host copy;
 # "internal" stores only in the internal buffer; "disabled" rejects writes.
@@ -137,36 +152,88 @@ clipboard = "external"
 # stdin; paste commands return clipboard text on stdout.
 # clipboard_copy_command = "xclip -selection clipboard"
 # clipboard_paste_command = "xclip -selection clipboard -out"
+# Maximum time to wait for a host clipboard read.
 clipboard_read_timeout_ms = 250
+# Maximum bytes accepted from a host clipboard read.
 clipboard_read_max_bytes = 1048576
+# Support the terminal alternate-screen buffer.
 alternate_screen = true
+# Forward terminal focus-in and focus-out events.
 focus_events = true
+# Detect nested multiplexers automatically; alternatives are "enabled" and "disabled".
 nested_multiplexer = "auto"
+# Keep terminal escape sequences contained instead of passing them through.
 passthrough = false
+# Treat emoji/status glyphs as wide; use "narrow" for one-column terminals.
 emoji_width = "wide"
+# Disable optional motion and animation when true.
 reduced_motion = false
 # Opt in to enhanced keyboard reporting only while a Mez readline prompt owns input.
 enhanced_keyboard_reporting = false
 # Whether completion-attention title pills alternate their attention color.
 completion_attention_flashing = true
+# Coalesce terminal resize events for this many milliseconds.
 resize_debounce_ms = 200
+# Maximum attached-terminal redraw rate.
 render_rate_limit_fps = 30
+# Shell-action result previews retain this many output lines.
 shell_output_preview_lines = 5
+# Maximum display width for Mezzanine-owned agent rows.
 agent_wrap_column_cap = 120
+# Cursor shape: "block", "underline", or "bar".
 cursor_style = "block"
+# Keep the terminal cursor steady by default.
 cursor_blink = false
+# Cursor blink period when blinking is enabled.
 cursor_blink_interval_ms = 500
 
 # `escape` is the prefix key. Optional direct key settings below cover actions
 # without generated default prefix equivalents.
 [keys]
 escape = "C-a"
+# Direct bindings are disabled by default; uncomment any desired chord.
+# split_vertical = "A-\\"
+# split_horizontal = "A--"
+# new_window = "A-="
+# new_group = "A-S-="
+# agent_shell = "A-]"
+# focus_up = "C-A-Up"
+# focus_down = "C-A-Down"
+# focus_left = "C-A-Left"
+# focus_right = "C-A-Right"
+# focus_previous_window = "C-A-PageUp"
+# focus_next_window = "C-A-PageDown"
+# focus_previous_group = "C-A-S-PageUp"
+# focus_next_group = "C-A-S-PageDown"
 
+# Map arbitrary key chords to command-prompt command sequences.
 [keys.command_bindings]
+# "A-t" = "new-window"
 
+# Select a built-in or user-defined key preset.
 [key_preset]
 active = "default"
 
+# Optional custom presets inherit omitted bindings from the default preset.
+# [key_presets.custom]
+# escape = "C-a"
+# split_vertical = "A-\\"
+# split_horizontal = "A--"
+# new_window = "A-="
+# new_group = "A-S-="
+# agent_shell = "A-]"
+# focus_up = "C-A-Up"
+# focus_down = "C-A-Down"
+# focus_left = "C-A-Left"
+# focus_right = "C-A-Right"
+# focus_previous_window = "C-A-PageUp"
+# focus_next_window = "C-A-PageDown"
+# focus_previous_group = "C-A-S-PageUp"
+# focus_next_group = "C-A-S-PageDown"
+# [key_presets.custom.command_bindings]
+# "A-t" = "new-window"
+
+# Window status frame shown at the bottom of the terminal.
 [frames.window]
 enabled = true
 position = "bottom"
@@ -176,17 +243,32 @@ style = "default"
 visible_fields = ["window.list", "window.index", "window.name", "window.id", "pane.index", "pane.title", "pane.id", "window.pane_count", "window.buttons", "pane.pwd", "system.uptime", "datetime.local"]
 
 [frames.window.pills]
+# Optional asynchronously refreshed right-status pill.
+# [frames.window.pills.example]
+# label = "Build"
+# command = "git status --short"
+# interval_seconds = 30
+# initial = "checking"
+# timeout_ms = 2000
+# empty_behavior = "hide"
+# error_behavior = "show_error"
+# max_output_chars = 80
+# style = "default"
 
+# Pane title frame rendered on each pane border.
 [frames.pane]
+# Toggle pane frames and choose their placement, content, and style.
 enabled = true
 position = "border"
 template = " #{pane.index} #{pane.title} "
 style = "default"
 visible_fields = ["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 
+# Select the active built-in or custom theme.
 [theme]
 active = "acid_lime"
 
+# Reusable color aliases referenced by concrete UI color slots.
 [theme.aliases]
 primary = "#bfff00"
 secondary = "#7fbf3f"
@@ -282,25 +364,49 @@ syntax_number_bg = "surface"
 syntax_operator_fg = "muted"
 syntax_operator_bg = "surface"
 
+# Optional custom themes inherit omitted aliases and slots from deepforest.
+# [themes.custom.aliases]
+# primary = "#88ccff"
+# secondary = "#6699cc"
+# [themes.custom.colors]
+# window_active_bg = "primary"
+# pane_border_active_fg = "secondary"
+
+# Terminal scrollback, rotation, saved-agent-session retention, and persistence.
 [history]
+# Maximum retained scrollback lines per terminal.
 lines = 10000
+# Number of oldest lines removed when history exceeds its limit.
 rotate_lines = 1000
+# Maximum saved agent conversations retained on disk.
 saved_sessions_limit = 100
+# Persist history and saved conversations across launches.
 persist = true
 
+# Durable model-facing memory storage and pruning limits.
 [memory]
+# Enable the memory store and memory actions.
 enabled = true
+# Maximum records retained before pruning.
 max_records = 5000
+# Maximum aggregate stored bytes before pruning.
 max_bytes = 10485760
+# Maintain the full-text search index.
 fts_enabled = true
+# Archive records before pruning them from the active store.
 archive_before_prune = true
+# Default lifetime for records without an explicit retention period.
 default_ttl_days = 180
 
+# Local project issue/task tracking.
 [issues]
 enabled = true
+# Empty uses the default database beneath the Mezzanine config directory.
 database_path = ""
 
+# Global agent defaults, limits, routing, and subagent scheduling.
 [agents]
+# Provider/profile names resolve to runtime fallbacks until auth login adds a catalog.
 default_provider = "openai"
 default_model_profile = "default"
 # Disabled by default. `system` inhibits automatic idle system sleep only while
@@ -309,24 +415,37 @@ default_model_profile = "default"
 # runs. Backends are best-effort and never override explicit sleep, lid-close,
 # thermal, or critical-battery safeguards.
 active_turn_sleep_inhibition = "disabled"
+# Restrict agent terminal work to the shell-mediated action surface.
 shell_only = true
+# Percentage of the raw conversation tail retained after compaction.
 compaction_raw_retention_percent = 10
+# Disable automatic model sizing until explicitly enabled.
 routing = false
+# Maximum recovery attempts after action execution failures.
 action_failure_retry_limit = 5
+# Default bounded iteration count used by /loop.
 loop_limit = 8
+# User-owned system prompt text appended to the built-in prompt.
 custom_system_prompt = ""
+# Empty selects no personality profile.
 default_personality = ""
+# MCP server ids exposed on every applicable model turn.
 always_exposed_mcp_servers = []
+# Place spawned subagents in a new window by default.
 subagent_placement = "new-window"
+# Global running-agent and scheduler queue limits.
 max_concurrent_agents = 4
 max_queued_turns = 256
 max_queued_bytes = 4194304
+# Per-tree subagent fan-out, pane, wait, and depth limits.
 max_root_subagents = 4
 max_subagents_per_subagent = 2
 max_subagent_panes_per_window = 4
 subagent_wait_policy = "join"
 max_depth = 2
 
+# Automatic model-size routing. First launch uses the synthesized default profile;
+# auth login replaces these references with provider-specific profiles.
 [agents.auto_sizing]
 root_routing_policy = "subagent"
 router_model_profile = "auto-size-router"
@@ -336,7 +455,29 @@ large_model_profile = "auto-size-large"
 allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
 fallback_policy = "use-default-profile"
 
+# Named subagent profiles. Built-in roles remain available when this table is empty.
 [subagents]
+# [subagents.reviewer]
+# name = "Reviewer"
+# description = "Reviews changes without modifying files."
+# developer_instructions = "Focus on correctness, regressions, and missing tests."
+# model_profile = "default"
+# permission_preset = "read-only"
+# mcp_servers = []
+# default_cooperation_mode = "explore-only"
+# default_read_scopes = ["."]
+# default_write_scopes = []
+# [subagents.reviewer.shell_env]
+# REVIEW_MODE = "strict"
+
+# Optional named prompt/style profiles are selectable by agents.default_personality.
+# [personalities.concise]
+# name = "Concise"
+# system_prompt = "Prefer direct answers and compact status reports."
+# response_style = "concise"
+# model_profile = "default"
+# planning_enabled = false
+# routing_enabled = false
 
 [personalities]
 
@@ -611,6 +752,8 @@ allowed_reasoning_efforts = ["high"]
 # Sandbox, scope, network, and approval settings are also primary-user-only;
 # trusted project overlays may not change this execution boundary.
 approval_policy = "ask"
+# Optional named permission preset applied before explicit settings.
+# preset = "default"
 # policy-only performs approval classification and auditing but provides no OS
 # filesystem or shell-network confinement. Select bubblewrap for enforcement.
 sandbox = "policy-only"
@@ -621,9 +764,16 @@ sandbox = "policy-only"
 # Installed SDKs use the same generic authority. Every required loader or
 # library root must be listed explicitly; read scopes never grant write access.
 # read_scopes = ["/opt/acme-sdk"]
+# Writable host paths projected into Bubblewrap; omitted by default.
+# write_scopes = ["."]
 # Optional sanitized Git identity for Bubblewrap commits. Configure both fields;
 # Mezzanine never imports the host global Git configuration.
 # [permissions.bubblewrap]
+# Absolute Bubblewrap executable and fail-closed isolation defaults.
+# executable = "/usr/bin/bwrap"
+# unavailable = "fail"
+# network = "isolated"
+# environment = "minimal"
 # Exact host supplementary groups to project. The primary group is automatic;
 # an empty list strips all ambient supplementary groups.
 # group_whitelist = []
@@ -633,19 +783,65 @@ sandbox = "policy-only"
 # env_whitelist = ["ACME_HOME"]
 # git_user_name = "Your Name"
 # git_user_email = "you@example.invalid"
+# Command-rule arrays are empty by default. A rule may classify matching shell
+# commands and declare their complete effects for deterministic authorization.
 command_rules = []
 session_command_rules = []
 global_command_rules = []
+# [[permissions.command_rules]]
+# id = "cargo-check"
+# pattern = "cargo check"
+# decision = "allow"
+# scope = "managed"
+# shell_classification = "simple"
+# justification = "Permit the bounded Rust type-check command."
+# examples = ["cargo check --workspace"]
+# match_examples = ["cargo check"]
+# not_match_examples = ["cargo clean"]
+# [permissions.command_rules.effects]
+# completeness = "complete"
+# read_scopes = ["."]
+# write_scopes = ["target"]
+# network = false
+# credentials = false
+# process_control = true
 # Under policy-only this affects approval classification only. Under Bubblewrap,
 # deny keeps shell actions network-isolated; allow connects every shell action;
 # prompt connects only authorized network actions. Brokered web and MCP actions
 # are controller-gated.
 network_policy = "prompt"
+# Prompt before destructive actions not already covered by a stronger rule.
 destructive_action_policy = "prompt"
+# Approval bypass cannot be enabled from config; false documents the safe default.
 bypass_mode = false
 
+# Named MCP server definitions. No server is configured by default.
 [mcp_servers]
-# Example per-server model-visible MCP guidance:
+# Example stdio server; use url instead of command/args for streamable HTTP.
+# [mcp_servers.example]
+# name = "Example tools"
+# command = "example-mcp-server"
+# args = ["--stdio"]
+# url = "https://example.invalid/mcp"
+# env_vars = ["EXAMPLE_TOKEN"]
+# cwd = "."
+# bearer_token_env = "EXAMPLE_TOKEN"
+# enabled_tools = ["read_file"]
+# disabled_tools = ["delete_file"]
+# Timeout aliases accept seconds or milliseconds; configure only one form.
+# startup_timeout_sec = 10
+# startup_timeout_ms = 10000
+# tool_timeout_sec = 60
+# tool_timeout_ms = 60000
+# enabled = true
+# approval = "prompt"
+# [mcp_servers.example.env]
+# LOG_LEVEL = "info"
+# [mcp_servers.example.http_headers]
+# X_Client = "mez"
+# [mcp_servers.example.tool_approvals]
+# read_file = "allow"
+# Model-visible purpose and safety metadata for effects outside shell mediation.
 # [mcp_servers.example.external_capability]
 # purpose = "Issue and pull request operations"
 # usage_instructions = "Use for issue triage and pull request review tasks."
@@ -653,26 +849,68 @@ bypass_mode = false
 # executes_processes_outside_shell = false
 # accesses_credentials_outside_shell = false
 
+# Authentication refresh policy. Credentials themselves are never stored here.
 [auth]
 provider_refresh_leeway_seconds = 86400
 
+# Repository instruction-file discovery and context-size policy.
 [instructions]
+# Additional global instruction files loaded for every project.
 global_files = []
+# Instruction filenames searched from the project hierarchy.
 project_filenames = ["AGENTS.md"]
+# Maximum instruction bytes loaded before applying on_truncation.
 max_bytes = 32768
+# Skip hidden directories during instruction discovery by default.
 include_hidden_directories = false
+# Truncation policy: summarize oversized instruction context.
 on_truncation = "summarize"
 
+# Named lifecycle hooks. No external command executes by default.
 [hooks]
+# [hooks.example]
+# event = "post_shell_command"
+# events = ["post_shell_command"]
+# program = "/usr/bin/logger"
+# command = "printf hook"
+# args = ["mez hook completed"]
+# shell = "focused"
+# kind = "program"
+# enabled = true
+# required = false
+# agent_hook = false
+# timeout_sec = 5
+# timeout_ms = 5000
+# on_failure = "warn"
+# cwd = "."
+# working_directory = "."
+# inject_instructions = ""
+# mutates_policy = false
+# alters_action = false
+# [hooks.example.env]
+# HOOK_MODE = "audit"
+# [hooks.example.match]
+# path = "action_type"
+# equals = "shell_command"
+# `matches` accepts an array of matcher groups when one group is insufficient.
+# matches = [{ path = "status", equals = "failed" }]
 
+# Append-only security audit log and retention policy.
 [audit]
+# Enable audit persistence.
 enabled = true
+# Relative paths resolve beneath the Mezzanine config directory.
 path = "audit.jsonl"
+# Audit serialization format; only jsonl is currently supported.
 format = "jsonl"
+# Delete audit records older than this many days.
 retention_days = 30
+# Chain audit records cryptographically when enabled.
 hash_chain = false
+# Fail protected operations when audit persistence is unavailable.
 required = false
 
+# Reserved namespaced extension configuration for integrations.
 [extensions]
 "##;
 

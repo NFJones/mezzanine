@@ -177,6 +177,99 @@ fn default_config_matches_documented_example() {
     assert_eq!(initial_config_toml().unwrap().trim(), documented.trim());
 }
 
+/// Verifies first-launch configuration documents every supported non-provider
+/// surface while keeping provider catalogs reserved for successful auth login.
+///
+/// Active defaults and optional examples must both remain discoverable in the
+/// generated file, and every section must explain its purpose rather than
+/// presenting an unexplained collection of settings.
+#[test]
+fn initial_config_is_complete_annotated_and_provider_free() {
+    let config = initial_config_toml().unwrap();
+
+    for excluded in ["[providers.", "[model_profiles.", "[model_presets."] {
+        assert!(
+            !config.contains(excluded),
+            "unexpected {excluded} in:\n{config}"
+        );
+    }
+
+    for section in [
+        "[runtime]",
+        "[terminal]",
+        "[keys]",
+        "[keys.command_bindings]",
+        "[key_preset]",
+        "# [key_presets.custom]",
+        "[frames.window]",
+        "[frames.window.pills]",
+        "# [frames.window.pills.example]",
+        "[frames.pane]",
+        "[theme]",
+        "[theme.aliases]",
+        "[theme.colors]",
+        "# [themes.custom.aliases]",
+        "# [themes.custom.colors]",
+        "[history]",
+        "[memory]",
+        "[issues]",
+        "[agents]",
+        "[agents.auto_sizing]",
+        "[subagents]",
+        "# [subagents.reviewer]",
+        "[personalities]",
+        "# [personalities.concise]",
+        "[permissions]",
+        "# [permissions.bubblewrap]",
+        "# [[permissions.command_rules]]",
+        "[mcp_servers]",
+        "# [mcp_servers.example]",
+        "[auth]",
+        "[instructions]",
+        "[hooks]",
+        "# [hooks.example]",
+        "[audit]",
+        "[extensions]",
+    ] {
+        assert!(config.contains(section), "missing {section} in:\n{config}");
+    }
+
+    for setting in [
+        "# split_vertical =",
+        "# focus_next_group =",
+        "# clipboard_copy_command =",
+        "# read_scopes =",
+        "# write_scopes =",
+        "# preset =",
+        "# executable =",
+        "# unavailable =",
+        "# group_whitelist =",
+        "# git_user_email =",
+        "# default_cooperation_mode =",
+        "# planning_enabled =",
+        "# startup_timeout_sec =",
+        "# startup_timeout_ms =",
+        "# tool_timeout_sec =",
+        "# tool_timeout_ms =",
+        "# read_file =",
+        "# timeout_sec =",
+        "# inject_instructions =",
+        "# mutates_policy =",
+        "# alters_action =",
+    ] {
+        assert!(config.contains(setting), "missing {setting} in:\n{config}");
+    }
+
+    let annotation_count = config
+        .lines()
+        .filter(|line| line.trim_start().starts_with('#'))
+        .count();
+    assert!(
+        annotation_count >= 100,
+        "expected comprehensive annotations, found {annotation_count}"
+    );
+}
+
 /// Verifies generated defaults include the built-in Anthropic provider entry
 /// and Claude model list used by runtime fallback catalog behavior.
 ///
