@@ -1061,6 +1061,11 @@ fn runtime_agent_shell_slash_exit_stops_running_turn_before_hiding() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
+    let pane_text_before_exit = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
 
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-exit","method":"agent/shell/command","params":{"idempotency_key":"agent-exit-stop","input":"/exit"}}"#,
@@ -1079,7 +1084,7 @@ fn runtime_agent_shell_slash_exit_stops_running_turn_before_hiding() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert!(pane_text.contains("Stopped after"), "{pane_text}");
+    assert_eq!(pane_text, pane_text_before_exit, "{pane_text}");
 }
 
 /// Verifies ordinary pane input is consumed while an agent-shell hide request

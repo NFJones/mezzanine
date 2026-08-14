@@ -179,10 +179,6 @@ impl RuntimeSessionService {
             .get(pane_id)
             .and_then(|session| session.running_turn_id.clone());
         if running_turn_id.is_some() {
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                "agent: stopping active turn before exiting agent shell; pane input is blocked until stop completes",
-            )?;
             self.agent_shell_store_mut()
                 .request_hide_pending_task_completion(pane_id)?;
             let stopped = self.stop_agent_turn_for_pane(pane_id)?;

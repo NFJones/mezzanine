@@ -102,8 +102,15 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
             .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+        let suppress_exit_output = self
+            .agent_shell_store()
+            .get(pane_id)
+            .is_some_and(|session| {
+                session.visibility == AgentShellVisibility::HidePendingTaskCompletion
+            });
 
-        if state == AgentTurnState::Failed
+        if !suppress_exit_output
+            && state == AgentTurnState::Failed
             && let Some(execution) = self.agent_turn_executions().get(turn_id).cloned()
             && execution.terminal_state == AgentTurnState::Failed
         {
@@ -124,7 +131,9 @@ impl RuntimeSessionService {
         {
             self.emit_subagent_task_result_for_state(&turn, state)?;
         }
-        if let Some(footer) = runtime_agent_finished_footer_line(&turn, state) {
+        if !suppress_exit_output
+            && let Some(footer) = runtime_agent_finished_footer_line(&turn, state)
+        {
             self.append_agent_status_text_to_terminal_buffer(pane_id, &footer)?;
         }
         let previous_state = turn.state;
@@ -146,7 +155,14 @@ impl RuntimeSessionService {
         if state == AgentTurnState::Interrupted {
             self.persist_interrupted_agent_turn_transcript(&turn, "agent turn stopped")?;
         }
-        self.append_agent_trace_turn_transition(&turn, previous_state, state, "finish_agent_turn")?;
+        if !suppress_exit_output {
+            self.append_agent_trace_turn_transition(
+                &turn,
+                previous_state,
+                state,
+                "finish_agent_turn",
+            )?;
+        }
         self.clear_terminal_agent_turn_runtime_state(turn_id);
         let finished = self
             .agent_shell_store_mut()
