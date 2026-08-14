@@ -59,10 +59,28 @@ jobs:
         include:
           - name: Linux
             os: ubuntu-latest
-            artifact: linux
+            artifact: linux-workers-1
+            workers: 1
+          - name: Linux
+            os: ubuntu-latest
+            artifact: linux-workers-2
+            workers: 2
+          - name: Linux
+            os: ubuntu-latest
+            artifact: linux-workers-4
+            workers: 4
           - name: macOS
             os: macos-latest
-            artifact: macos
+            artifact: macos-workers-1
+            workers: 1
+          - name: macOS
+            os: macos-latest
+            artifact: macos-workers-2
+            workers: 2
+          - name: macOS
+            os: macos-latest
+            artifact: macos-workers-4
+            workers: 4
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -73,6 +91,7 @@ jobs:
       - name: Run release responsiveness workload
         env:
           MEZ_RELEASE_LOAD_REPORT: ${{ github.workspace }}/target/release-load/${{ matrix.artifact }}.json
+          MEZ_RELEASE_LOAD_WORKERS: ${{ matrix.workers }}
         run: cargo test -p mezzanine --release --lib --all-features --quiet host::async_runtime::tests::services::release_load::release_load_reports_cross_platform_pty_responsiveness -- --exact --ignored --nocapture --test-threads=1
       - name: Upload responsiveness report
         if: always()

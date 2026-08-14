@@ -14,14 +14,27 @@ just release-load-check
 
 The default report path is
 `target/release-load/<platform>.json`. Set `MEZ_RELEASE_LOAD_REPORT` to choose a
-different path. CI uploads one `release-load-<platform>` artifact per matrix
-entry.
+different path. The workload uses the product default of two Tokio worker
+threads; set `MEZ_RELEASE_LOAD_WORKERS` to measure another positive count. CI
+runs 1, 2, and 4 workers on each supported platform and uploads one
+`release-load-<platform>-workers-<count>` artifact per matrix entry.
+
+Compare several worker counts with:
+
+```text
+just release-load-sweep
+```
+
+The default sweep is `1 2 4`. Override the whitespace-separated list with
+`MEZ_RELEASE_LOAD_WORKER_SWEEP`. Each run writes a separate report named with
+its worker count.
 
 ## Report contract
 
 The JSON report includes:
 
-- platform, architecture, schema version, and release-profile identity;
+- platform, architecture, schema version, release-profile identity, and Tokio
+  worker count;
 - workload dimensions and exact output/input counts;
 - total duration, PTY throughput, CPU time, and peak resident memory;
 - actor command, event, and side-effect queue counters; and
@@ -45,3 +58,13 @@ when workload dimensions or measurement semantics change.
 Keep macOS functional tests serial. The release-load job is isolated so its
 measurements are not mixed with the functional suite and so a load failure does
 not hide ordinary correctness results.
+
+## Current tuning decision
+
+The product default remains two Tokio worker threads, and the workspace does
+not set release-profile overrides. Initial Linux measurements found no stable
+responsiveness benefit from increasing the worker count: one, two, and four
+workers had similar throughput, CPU, memory, and mixed tail-latency results.
+Release-profile experiments also exposed tradeoffs rather than one universal
+winner. Keep these settings configurable and collect the cross-platform CI
+artifacts before changing defaults.

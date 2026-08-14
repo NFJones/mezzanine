@@ -18,6 +18,8 @@ const MAX_WORKLOAD_ITERATIONS: usize = 4096;
 const OUTPUT_COMPLETE_MARKER: &[u8] = b"release-load-output-done";
 /// Marker emitted after the child receives the final input record.
 const INPUT_COMPLETE_MARKER: &[u8] = b"ack:done";
+/// Product-aligned worker count used when the load check has no override.
+const DEFAULT_RELEASE_LOAD_WORKERS: usize = 2;
 
 /// Process resource counters sampled around one release-load execution.
 #[derive(Debug, Clone, Copy)]
@@ -120,6 +122,23 @@ fn write_release_load_report(report: &serde_json::Value) {
     println!("{}", serde_json::to_string(report).unwrap());
 }
 
+/// Returns the explicit Tokio worker count selected for this load run.
+fn release_load_worker_threads() -> usize {
+    let worker_threads = std::env::var("MEZ_RELEASE_LOAD_WORKERS")
+        .ok()
+        .map_or(Ok(DEFAULT_RELEASE_LOAD_WORKERS), |value| {
+            value.parse::<usize>().map_err(|_| value)
+        })
+        .unwrap_or_else(|value| {
+            panic!("MEZ_RELEASE_LOAD_WORKERS must be a positive integer, got {value:?}")
+        });
+    assert!(
+        worker_threads > 0,
+        "MEZ_RELEASE_LOAD_WORKERS must be greater than zero"
+    );
+    worker_threads
+}
+
 /// Exercises an identical live PTY output flood, mixed pane input, frame
 /// rendering, and process-metadata sampling workload on Linux and macOS.
 ///
@@ -127,10 +146,17 @@ fn write_release_load_report(report: &serde_json::Value) {
 /// p50/p95/p99 phase latency as JSON. Assertions protect workload integrity,
 /// not host-specific performance; CI remains report-only until repeated
 /// samples establish stable platform baselines and tolerances.
-#[tokio::test(flavor = "current_thread")]
+#[test]
 #[ignore = "release-mode cross-platform load check; run with `just release-load-check`"]
-async fn release_load_reports_cross_platform_pty_responsiveness() {
-    let workload = async {
+fn release_load_reports_cross_platform_pty_responsiveness() {
+    let worker_threads = release_load_worker_threads();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let workload = async {
         let mut service = test_service();
         service
             .attach_primary("release-load", true, Size::new(120, 40).unwrap(), 20_000)
@@ -165,6 +191,7 @@ async fn release_load_reports_cross_platform_pty_responsiveness() {
             let mut output_samples = Vec::new();
             let mut metadata_samples = Vec::new();
             let mut metadata_observations = 0usize;
+            let mut output_complete_seen = false;
             let mut done_sent = false;
             let mut workload_complete = false;
 
@@ -230,10 +257,10 @@ async fn release_load_reports_cross_platform_pty_responsiveness() {
                     metadata_samples.push(elapsed_micros(metadata_started));
                 }
 
-                let output_complete = output_tail
+                output_complete_seen |= output_tail
                     .windows(OUTPUT_COMPLETE_MARKER.len())
                     .any(|window| window == OUTPUT_COMPLETE_MARKER);
-                if output_complete && input_records == INPUT_RECORDS && !done_sent {
+                if output_complete_seen && input_records == INPUT_RECORDS && !done_sent {
                     let event = driver.write_input_event(b"done\n").await;
                     assert!(matches!(
                         event,
@@ -309,6 +336,7 @@ async fn release_load_reports_cross_platform_pty_responsiveness() {
             "platform": std::env::consts::OS,
             "architecture": std::env::consts::ARCH,
             "profile": "release",
+            "runtime_worker_threads": worker_threads,
             "report_only": true,
             "workload": {
                 "minimum_output_bytes": MINIMUM_OUTPUT_BYTES,
@@ -343,7 +371,8 @@ async fn release_load_reports_cross_platform_pty_responsiveness() {
         write_release_load_report(&report);
     };
 
-    tokio::time::timeout(Duration::from_secs(30), workload)
-        .await
-        .expect("release load workload exceeded 30 seconds");
+        tokio::time::timeout(Duration::from_secs(30), workload)
+            .await
+            .expect("release load workload exceeded 30 seconds");
+    });
 }
