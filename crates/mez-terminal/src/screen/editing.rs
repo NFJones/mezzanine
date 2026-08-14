@@ -181,33 +181,35 @@ impl TerminalScreen {
             return;
         }
         let count = count.min(bottom.saturating_sub(top).saturating_add(1));
-        for _ in 0..count {
-            if top == 0
-                && bottom == self.max_row()
-                && self.alternate.should_record_scroll_off_to_history()
-            {
-                self.normal_viewport_detached_from_history = false;
+        if count == 0 {
+            return;
+        }
+        if top == 0
+            && bottom == self.max_row()
+            && self.alternate.should_record_scroll_off_to_history()
+        {
+            self.normal_viewport_detached_from_history = false;
+            for row in top..top.saturating_add(count) {
                 self.history.push_styled_line_with_wrap(
                     styled_line_from_row_with_copy_text(
-                        &self.cells[0],
-                        &self.renditions[0],
-                        self.line_copy_texts.first().cloned().flatten(),
+                        &self.cells[row],
+                        &self.renditions[row],
+                        self.line_copy_texts[row].clone(),
                         self.emoji_width,
                     ),
-                    self.line_wraps.first().copied().unwrap_or(false),
+                    self.line_wraps[row],
                 );
             }
-            self.cells.remove(top);
-            self.renditions.remove(top);
-            self.line_wraps.remove(top);
-            self.line_copy_texts.remove(top);
-            self.cells.insert(bottom, blank_row(self.size.columns));
-            self.renditions.insert(
-                bottom,
-                blank_rendition_row(self.size.columns, self.graphic_rendition),
-            );
-            self.line_wraps.insert(bottom, false);
-            self.line_copy_texts.insert(bottom, None);
+        }
+        self.cells[top..=bottom].rotate_left(count);
+        self.renditions[top..=bottom].rotate_left(count);
+        self.line_wraps[top..=bottom].rotate_left(count);
+        self.line_copy_texts[top..=bottom].rotate_left(count);
+        for row in bottom.saturating_add(1).saturating_sub(count)..=bottom {
+            self.cells[row] = blank_row(self.size.columns);
+            self.renditions[row] = blank_rendition_row(self.size.columns, self.graphic_rendition);
+            self.line_wraps[row] = false;
+            self.line_copy_texts[row] = None;
         }
     }
 
@@ -221,18 +223,18 @@ impl TerminalScreen {
             return;
         }
         let count = count.min(bottom.saturating_sub(top).saturating_add(1));
-        for _ in 0..count {
-            self.cells.remove(bottom);
-            self.renditions.remove(bottom);
-            self.line_wraps.remove(bottom);
-            self.line_copy_texts.remove(bottom);
-            self.cells.insert(top, blank_row(self.size.columns));
-            self.renditions.insert(
-                top,
-                blank_rendition_row(self.size.columns, self.graphic_rendition),
-            );
-            self.line_wraps.insert(top, false);
-            self.line_copy_texts.insert(top, None);
+        if count == 0 {
+            return;
+        }
+        self.cells[top..=bottom].rotate_right(count);
+        self.renditions[top..=bottom].rotate_right(count);
+        self.line_wraps[top..=bottom].rotate_right(count);
+        self.line_copy_texts[top..=bottom].rotate_right(count);
+        for row in top..top.saturating_add(count) {
+            self.cells[row] = blank_row(self.size.columns);
+            self.renditions[row] = blank_rendition_row(self.size.columns, self.graphic_rendition);
+            self.line_wraps[row] = false;
+            self.line_copy_texts[row] = None;
         }
     }
 
@@ -255,11 +257,13 @@ impl TerminalScreen {
         {
             self.clear_cell_footprint(row, column, self.graphic_rendition);
         }
-        for _ in 0..count {
-            self.cells[row].insert(column, TerminalScreenCell::blank());
-            self.renditions[row].insert(column, self.graphic_rendition);
-            self.cells[row].truncate(width);
-            self.renditions[row].truncate(width);
+        if count > 0 {
+            self.cells[row][column..width].rotate_right(count);
+            self.renditions[row][column..width].rotate_right(count);
+            for target in column..column.saturating_add(count) {
+                self.cells[row][target] = TerminalScreenCell::blank();
+                self.renditions[row][target] = self.graphic_rendition;
+            }
         }
         self.repair_row_continuations(row);
     }
@@ -283,11 +287,13 @@ impl TerminalScreen {
         {
             self.clear_cell_footprint(row, column, self.graphic_rendition);
         }
-        for _ in 0..count {
-            self.cells[row].remove(column);
-            self.renditions[row].remove(column);
-            self.cells[row].push(TerminalScreenCell::blank());
-            self.renditions[row].push(self.graphic_rendition);
+        if count > 0 {
+            self.cells[row][column..width].rotate_left(count);
+            self.renditions[row][column..width].rotate_left(count);
+            for target in width.saturating_sub(count)..width {
+                self.cells[row][target] = TerminalScreenCell::blank();
+                self.renditions[row][target] = self.graphic_rendition;
+            }
         }
         self.repair_row_continuations(row);
     }
@@ -324,19 +330,18 @@ impl TerminalScreen {
             return;
         }
         let count = count.min(bottom.saturating_sub(self.cursor.row).saturating_add(1));
-        for _ in 0..count {
-            self.cells
-                .insert(self.cursor.row, blank_row(self.size.columns));
-            self.renditions.insert(
-                self.cursor.row,
-                blank_rendition_row(self.size.columns, self.graphic_rendition),
-            );
-            self.line_wraps.insert(self.cursor.row, false);
-            self.line_copy_texts.insert(self.cursor.row, None);
-            self.cells.remove(bottom.saturating_add(1));
-            self.renditions.remove(bottom.saturating_add(1));
-            self.line_wraps.remove(bottom.saturating_add(1));
-            self.line_copy_texts.remove(bottom.saturating_add(1));
+        if count == 0 {
+            return;
+        }
+        self.cells[self.cursor.row..=bottom].rotate_right(count);
+        self.renditions[self.cursor.row..=bottom].rotate_right(count);
+        self.line_wraps[self.cursor.row..=bottom].rotate_right(count);
+        self.line_copy_texts[self.cursor.row..=bottom].rotate_right(count);
+        for row in self.cursor.row..self.cursor.row.saturating_add(count) {
+            self.cells[row] = blank_row(self.size.columns);
+            self.renditions[row] = blank_rendition_row(self.size.columns, self.graphic_rendition);
+            self.line_wraps[row] = false;
+            self.line_copy_texts[row] = None;
         }
     }
 
@@ -352,18 +357,18 @@ impl TerminalScreen {
             return;
         }
         let count = count.min(bottom.saturating_sub(self.cursor.row).saturating_add(1));
-        for _ in 0..count {
-            self.cells.remove(self.cursor.row);
-            self.renditions.remove(self.cursor.row);
-            self.line_wraps.remove(self.cursor.row);
-            self.line_copy_texts.remove(self.cursor.row);
-            self.cells.insert(bottom, blank_row(self.size.columns));
-            self.renditions.insert(
-                bottom,
-                blank_rendition_row(self.size.columns, self.graphic_rendition),
-            );
-            self.line_wraps.insert(bottom, false);
-            self.line_copy_texts.insert(bottom, None);
+        if count == 0 {
+            return;
+        }
+        self.cells[self.cursor.row..=bottom].rotate_left(count);
+        self.renditions[self.cursor.row..=bottom].rotate_left(count);
+        self.line_wraps[self.cursor.row..=bottom].rotate_left(count);
+        self.line_copy_texts[self.cursor.row..=bottom].rotate_left(count);
+        for row in bottom.saturating_add(1).saturating_sub(count)..=bottom {
+            self.cells[row] = blank_row(self.size.columns);
+            self.renditions[row] = blank_rendition_row(self.size.columns, self.graphic_rendition);
+            self.line_wraps[row] = false;
+            self.line_copy_texts[row] = None;
         }
     }
 

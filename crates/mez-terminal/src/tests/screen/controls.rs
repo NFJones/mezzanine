@@ -341,6 +341,21 @@ fn terminal_screen_handles_insertion_deletion_and_scroll_regions() {
     assert!(screen.history().is_empty());
 }
 
+/// Verifies multi-line insertion and deletion use one bounded region shift
+/// while preserving rows above the cursor and blanking the vacated suffix.
+#[test]
+fn terminal_screen_bulk_line_edits_preserve_partial_scroll_region() {
+    let mut screen = TerminalScreen::new(Size::new(8, 5).unwrap(), 10).unwrap();
+    screen.feed(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
+
+    screen.feed(b"\x1b[2;5r\x1b[3;1H\x1b[2L");
+    assert_eq!(screen.visible_lines(), vec!["one", "two", "", "", "three"]);
+
+    screen.feed(b"\x1b[3;1H\x1b[2M");
+    assert_eq!(screen.visible_lines(), vec!["one", "two", "three", "", ""]);
+    assert!(screen.history().is_empty());
+}
+
 /// Verifies ANSI insert/replace mode shifts existing cells while applications
 /// paint inserted text, then immediately returns to overwrite behavior once
 /// mode 4 is reset. Nano uses this sequence for ordinary buffer insertion.
