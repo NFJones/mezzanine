@@ -922,6 +922,17 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
     assert_eq!(exit_inputs[2].pane_input_parts().1, b"exit\n");
     assert!(!service.agent_subshell_is_active(&pane_id));
     assert!(!service.agent_subshell_command_exit_is_pending_for_tests(&pane_id));
+    service
+        .apply_pane_output_bytes(pane_id.clone(), b"exit\r\n".to_vec())
+        .unwrap();
+    let pane_text = service
+        .pane_screen(&pane_id)
+        .map(|screen| screen.normal_content_lines().join("\n"))
+        .unwrap_or_default();
+    assert!(
+        !pane_text.contains("exit"),
+        "the agent-owned child-shell exit echo must not enter pane history: {pane_text}"
+    );
     let _ = process.terminate(Duration::from_millis(10));
 }
 

@@ -1222,7 +1222,11 @@ impl RuntimeSessionService {
         }
         self.clear_shell_output_filters_for_foreground_input(pane_id);
         self.clear_agent_subshell_shell_identity(pane_id);
-        let exit_input = if self.take_agent_subshell_command_exit(pane_id) {
+        let command_exit = self.take_agent_subshell_command_exit(pane_id);
+        if command_exit {
+            self.remember_mez_wrapper_filter_command(pane_id, "exit");
+        }
+        let exit_input = if command_exit {
             b"exit\n".as_slice()
         } else {
             b"\x04".as_slice()
