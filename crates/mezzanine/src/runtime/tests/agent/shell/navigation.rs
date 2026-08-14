@@ -261,7 +261,7 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     let mut parent_prompt_output = exit_marker;
     parent_prompt_output.extend_from_slice(b"\r$ ");
     let simple_prompt_repaint = service.visible_pane_output_bytes(&pane_id, &parent_prompt_output);
-    assert_eq!(simple_prompt_repaint, b"\r$ ");
+    assert_eq!(simple_prompt_repaint, b"\r\r$ ");
     let prompt_repaint = service.renderable_pane_output_bytes(&pane_id, b"user@host ~/repo $ ");
     assert_eq!(prompt_repaint, b"user@host ~/repo $ ");
     service

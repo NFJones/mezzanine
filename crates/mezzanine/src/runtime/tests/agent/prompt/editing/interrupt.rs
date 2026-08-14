@@ -141,6 +141,10 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
+    let cursor_before_exit_echo = service
+        .process_pane_screen(&pane_id)
+        .unwrap()
+        .cursor_state();
     let exit_marker = service
         .agent_subshell_exit_marker_for_tests(&pane_id)
         .unwrap()
@@ -174,7 +178,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         "a fragmented parent boundary must not enter the pane log"
     );
     let mut completed_boundary = exit_marker[marker_split..].to_vec();
-    completed_boundary.extend_from_slice(b"\x1b]133;A\x1b\\user@host");
+    completed_boundary.extend_from_slice(b"\x1b]133;A\x1b\\parent$ ");
     service
         .apply_pane_output_bytes(pane_id.clone(), completed_boundary)
         .unwrap();
@@ -190,8 +194,21 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         "readline cleanup and the child-shell EOF echo must not enter the pane log: {pane_log_after_exit_echo:?}"
     );
     assert!(
-        pane_log_after_exit_echo.contains("user@host"),
+        pane_log_after_exit_echo.contains("parent$"),
         "parent prompt bytes following the suppressed exit must remain visible: {pane_log_after_exit_echo:?}"
+    );
+    assert!(
+        !pane_log_after_exit_echo.contains("parent$ parent$ "),
+        "the restored parent prompt must overwrite the retained prompt instead of appending at its stale cursor: {pane_log_after_exit_echo:?}; cursor_before_exit={cursor_before_exit_echo:?}"
+    );
+    assert_eq!(
+        service
+            .process_pane_screen(&pane_id)
+            .unwrap()
+            .cursor_state()
+            .column,
+        "parent$ ".chars().count(),
+        "the restored prompt cursor must follow exactly one prompt"
     );
     assert_eq!(
         service.visible_pane_output_bytes(&pane_id, b"ordinary parent output\r\n"),
@@ -227,7 +244,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(view.cursor_column, "user@host ~/repo $ ".chars().count());
+    assert_eq!(view.cursor_column, "parent$  ~/repo $ ".chars().count());
     let _ = process.terminate(Duration::from_millis(10));
 }
 

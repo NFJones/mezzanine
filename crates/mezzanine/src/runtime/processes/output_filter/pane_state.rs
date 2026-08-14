@@ -543,7 +543,9 @@ impl RuntimeSessionService {
     ///
     /// The parent wrapper emits an opaque marker after the child exits and
     /// cleanup completes. PTY bytes before that marker are never pane content;
-    /// bytes after it are the restored parent shell and remain visible.
+    /// bytes after it are the restored parent shell and remain visible. The
+    /// restored prompt is returned to column zero because the suppressed child
+    /// teardown also contains the cursor movement that normally precedes it.
     fn visible_agent_subshell_exit_echo_bytes(&mut self, pane_id: &str, bytes: &[u8]) -> Vec<u8> {
         let Some(mut pending) = self
             .process
@@ -565,7 +567,11 @@ impl RuntimeSessionService {
             self.process
                 .pane_agent_subshell_exit_markers
                 .remove(pane_id);
-            return pending[start + marker.len()..].to_vec();
+            let parent_output = &pending[start + marker.len()..];
+            let mut visible = Vec::with_capacity(parent_output.len() + 1);
+            visible.push(b'\r');
+            visible.extend_from_slice(parent_output);
+            return visible;
         }
         let suffix_length = (1..marker.len().min(pending.len() + 1))
             .rev()
