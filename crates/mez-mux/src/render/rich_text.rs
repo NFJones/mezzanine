@@ -404,30 +404,20 @@ fn take_rich_text_display_segment_with_overflow_policy(
     if text.is_empty() {
         return None;
     }
-    if terminal_text_width(text) <= display_width {
-        return Some(RichTextDisplaySegment {
-            text: text.to_string(),
-            bytes_consumed: text.len(),
-            start_column,
-            end_column: start_column.saturating_add(terminal_text_width(text)),
-        });
-    }
-    if let Some((_, grapheme)) = UnicodeSegmentation::grapheme_indices(text, true).next()
-        && terminal_grapheme_width(grapheme) > display_width
-    {
-        return Some(RichTextDisplaySegment {
-            text: "…".to_string(),
-            bytes_consumed: grapheme.len(),
-            start_column,
-            end_column: start_column.saturating_add(1),
-        });
-    }
     let mut width = 0usize;
     let mut boundary_consumed = 0usize;
     let mut boundary_width = 0usize;
     let mut last_space_break: Option<(usize, usize, usize)> = None;
     for (index, grapheme) in UnicodeSegmentation::grapheme_indices(text, true) {
         let grapheme_width = terminal_grapheme_width(grapheme);
+        if boundary_consumed == 0 && grapheme_width > display_width {
+            return Some(RichTextDisplaySegment {
+                text: "…".to_string(),
+                bytes_consumed: grapheme.len(),
+                start_column,
+                end_column: start_column.saturating_add(1),
+            });
+        }
         if width > 0 && width.saturating_add(grapheme_width) > display_width {
             break;
         }
@@ -446,22 +436,23 @@ fn take_rich_text_display_segment_with_overflow_policy(
             break;
         }
     }
-    if last_space_break.is_none() && boundary_consumed < text.len() && !hard_split_unbreakable {
-        if let Some((_, grapheme)) = UnicodeSegmentation::grapheme_indices(text, true).next()
-            && terminal_grapheme_width(grapheme) > display_width
-        {
-            return Some(RichTextDisplaySegment {
-                text: "…".to_string(),
-                bytes_consumed: grapheme.len(),
-                start_column,
-                end_column: start_column.saturating_add(1),
-            });
-        }
+    if boundary_consumed == text.len() {
         return Some(RichTextDisplaySegment {
             text: text.to_string(),
             bytes_consumed: text.len(),
             start_column,
-            end_column: start_column.saturating_add(terminal_text_width(text)),
+            end_column: start_column.saturating_add(boundary_width),
+        });
+    }
+    if last_space_break.is_none() && boundary_consumed < text.len() && !hard_split_unbreakable {
+        let suffix_width = terminal_text_width(&text[boundary_consumed..]);
+        return Some(RichTextDisplaySegment {
+            text: text.to_string(),
+            bytes_consumed: text.len(),
+            start_column,
+            end_column: start_column
+                .saturating_add(boundary_width)
+                .saturating_add(suffix_width),
         });
     }
     let (text_end, consumed, width) =
@@ -2531,6 +2522,33 @@ mod tests {
             wrapped[1].copy_text.as_deref(),
             Some(COPY_WRAP_CONTINUATION)
         );
+    }
+
+    /// Verifies a long breakable Unicode line advances monotonically through
+    /// source columns while keeping every physical row within the target.
+    #[test]
+    fn rich_text_wrapping_handles_long_unicode_lines_incrementally() {
+        let text = "alpha 中 e\u{301} ".repeat(2_000);
+        let line = RichTextLine {
+            display: text,
+            style_spans: Vec::new(),
+            copy_text: None,
+            kind: RichTextLineKind::Normal,
+        };
+
+        let wrapped = wrap_rich_text_line_to_width_with_source_ranges(line, 12);
+
+        assert!(wrapped.len() > 1_000, "{}", wrapped.len());
+        assert!(wrapped.iter().all(|row| {
+            terminal_text_width(row.line.display.as_str()) <= 12
+                && row.source_start_column <= row.source_end_column
+        }));
+        assert!(
+            wrapped
+                .windows(2)
+                .all(|rows| { rows[0].source_end_column <= rows[1].source_start_column })
+        );
+        assert!(wrapped.last().unwrap().source_end_column > 20_000);
     }
 
     /// Verifies fixed-width modal wrapping preserves an unbreakable token by
