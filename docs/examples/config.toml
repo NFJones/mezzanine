@@ -212,10 +212,10 @@ max_depth = 2
 
 [agents.auto_sizing]
 root_routing_policy = "subagent"
-router_model_profile = "auto-size-router"
-small_model_profile = "auto-size-small"
-medium_model_profile = "auto-size-medium"
-large_model_profile = "auto-size-large"
+router_model_profile = "default"
+small_model_profile = "default"
+medium_model_profile = "default"
+large_model_profile = "default"
 allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
 fallback_policy = "use-default-profile"
 

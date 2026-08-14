@@ -59,6 +59,37 @@ fn default_config_disables_active_turn_sleep_inhibition() {
     );
 }
 
+/// Verifies the first-run configuration does not retain references to model
+/// profiles that are deliberately withheld until provider authentication.
+///
+/// The runtime synthesizes the `default` OpenAI profile before a provider
+/// catalog exists. Routing must therefore use that resolvable profile rather
+/// than a provider-specific auto-sizing profile that is absent from the
+/// generated first-run document.
+#[test]
+fn initial_config_uses_resolvable_auto_sizing_profiles() {
+    let parsed: toml::Value = toml::from_str(&initial_config_toml().unwrap()).unwrap();
+    let auto_sizing = parsed
+        .get("agents")
+        .and_then(toml::Value::as_table)
+        .and_then(|agents| agents.get("auto_sizing"))
+        .and_then(toml::Value::as_table)
+        .unwrap();
+
+    for key in [
+        "router_model_profile",
+        "small_model_profile",
+        "medium_model_profile",
+        "large_model_profile",
+    ] {
+        assert_eq!(
+            auto_sizing.get(key).and_then(toml::Value::as_str),
+            Some("default"),
+            "{key} must resolve before provider defaults are materialized"
+        );
+    }
+}
+
 /// Verifies that first-run default config creation can run on Tokio filesystem
 /// APIs while preserving the same selected path and default text as the
 /// synchronous setup path.

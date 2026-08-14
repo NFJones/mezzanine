@@ -22,6 +22,24 @@ pub(crate) fn initial_config_toml() -> crate::error::Result<String> {
     root.remove("providers");
     root.remove("model_profiles");
     root.remove("model_presets");
+    let auto_sizing = root
+        .get_mut("agents")
+        .and_then(toml_edit::Item::as_table_mut)
+        .and_then(|agents| agents.get_mut("auto_sizing"))
+        .and_then(toml_edit::Item::as_table_mut)
+        .ok_or_else(|| {
+            crate::error::MezError::config(
+                "built-in default config is missing `agents.auto_sizing` table",
+            )
+        })?;
+    for key in [
+        "router_model_profile",
+        "small_model_profile",
+        "medium_model_profile",
+        "large_model_profile",
+    ] {
+        auto_sizing.insert(key, toml_edit::value("default"));
+    }
     Ok(document.to_string())
 }
 
