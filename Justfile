@@ -41,6 +41,10 @@ test-real-bubblewrap:
     test "$(uname -s)" = Linux
     timeout 120s cargo test -p mezzanine --lib --all-features --quiet -- --exact host::async_runtime::tests::services::providers::async_routed_subagent_settles_with_real_bubblewrap --ignored --nocapture
 
+# Run the report-only cross-platform responsiveness workload in release mode.
+release-load-check:
+    report="${MEZ_RELEASE_LOAD_REPORT:-target/release-load/$(uname -s | tr '[:upper:]' '[:lower:]').json}"; case "$report" in /*) ;; *) report="$(pwd)/$report";; esac; mkdir -p "$(dirname "$report")"; MEZ_RELEASE_LOAD_REPORT="$report" cargo test -p mezzanine --release --lib --all-features --quiet host::async_runtime::tests::services::release_load::release_load_reports_cross_platform_pty_responsiveness -- --exact --ignored --nocapture --test-threads=1
+
 # Clean build artifacts
 clean:
     cargo clean

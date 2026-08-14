@@ -50,3 +50,34 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
         run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet -- --test-threads=1
+  release-load:
+    name: "Release load: ${{ matrix.name }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            artifact: linux
+          - name: macOS
+            os: macos-latest
+            artifact: macos
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Run release responsiveness workload
+        env:
+          MEZ_RELEASE_LOAD_REPORT: ${{ github.workspace }}/target/release-load/${{ matrix.artifact }}.json
+        run: cargo test -p mezzanine --release --lib --all-features --quiet host::async_runtime::tests::services::release_load::release_load_reports_cross_platform_pty_responsiveness -- --exact --ignored --nocapture --test-threads=1
+      - name: Upload responsiveness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-load-${{ matrix.artifact }}
+          path: target/release-load/${{ matrix.artifact }}.json
+          if-no-files-found: error

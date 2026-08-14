@@ -8,6 +8,7 @@ mod pane_service;
 mod pane_supervision;
 mod persistence;
 mod providers;
+mod release_load;
 mod rendering;
 #[cfg(target_os = "macos")]
 mod semantic_patch;
