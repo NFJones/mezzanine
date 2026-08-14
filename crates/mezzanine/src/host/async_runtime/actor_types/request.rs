@@ -19,6 +19,32 @@ use crate::runtime::PaneInputDispatch;
 use crate::runtime::PaneProcessInstance;
 use crate::runtime::RuntimeAgentPromptProviderInfoRefresh;
 use crate::runtime::{RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork};
+use std::time::Instant;
+
+/// Timestamped command envelope accepted by the serialized runtime actor.
+pub(in crate::host::async_runtime) struct AsyncRuntimeRequestEnvelope {
+    /// Fixed request family captured without allocating a dynamic label.
+    pub(in crate::host::async_runtime) family:
+        crate::host::async_runtime::AsyncRuntimeRequestFamily,
+    /// Whether this command contributes actor queue and handler observations.
+    pub(in crate::host::async_runtime) record_actor_latency: bool,
+    /// Monotonic enqueue timestamp used to measure dequeue latency.
+    pub(in crate::host::async_runtime) enqueued_at: Instant,
+    /// Typed actor command payload.
+    pub(in crate::host::async_runtime) request: AsyncRuntimeRequest,
+}
+
+impl AsyncRuntimeRequestEnvelope {
+    /// Captures one request's fixed family and monotonic enqueue timestamp.
+    pub(in crate::host::async_runtime) fn new(request: AsyncRuntimeRequest) -> Self {
+        Self {
+            family: request.family(),
+            record_actor_latency: request.records_actor_latency(),
+            enqueued_at: Instant::now(),
+            request,
+        }
+    }
+}
 
 /// Carries Async Runtime Request state for this subsystem.
 ///
@@ -50,6 +76,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<AsyncRuntimeActorMetrics>,
+    },
+    /// Records one fixed worker-phase latency without a dynamic label.
+    RecordLatencyPhase {
+        /// Fixed phase receiving this observation.
+        phase: crate::host::async_runtime::AsyncRuntimeLatencyPhase,
+        /// Saturated elapsed milliseconds for the phase.
+        elapsed_ms: u64,
     },
     /// Sends bytes directly to one process-owned pane for boundary tests.
     #[cfg(test)]
@@ -925,4 +958,92 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<RuntimeLifecycleState>,
     },
+}
+
+impl AsyncRuntimeRequest {
+    /// Returns whether this command should observe its own actor latency.
+    const fn records_actor_latency(&self) -> bool {
+        !matches!(self, Self::Metrics { .. } | Self::RecordLatencyPhase { .. })
+    }
+
+    /// Maps every command to one fixed, allocation-free diagnostics family.
+    pub(super) const fn family(&self) -> crate::host::async_runtime::AsyncRuntimeRequestFamily {
+        use crate::host::async_runtime::AsyncRuntimeRequestFamily as Family;
+
+        match self {
+            Self::LifecycleState { .. } | Self::Metrics { .. } | Self::Shutdown { .. } => {
+                Family::Lifecycle
+            }
+            Self::RecordLatencyPhase { phase, .. } => match phase {
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::EventBatchApply
+                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::EventReconciliation => {
+                    Family::Event
+                }
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::RenderComposition
+                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::RenderEncoding
+                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::OutputFlush => {
+                    Family::Render
+                }
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTtfb
+                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderChunkInterval
+                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal => {
+                    Family::Provider
+                }
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::PersistenceOperation
+                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::PersistenceBatch
+                | crate::host::async_runtime::AsyncRuntimeLatencyPhase::SideEffectQueueAge => {
+                    Family::SideEffect
+                }
+            },
+            Self::RenderClientView { .. }
+            | Self::RenderClientFrame { .. }
+            | Self::RenderClientSideEffect { .. }
+            | Self::EnsureClientRenderTimers { .. }
+            | Self::TerminalClientLoopConfigSnapshot { .. } => Family::Render,
+            Self::HandleControlInput { .. }
+            | Self::HandleControlInputWithSnapshots { .. }
+            | Self::CompleteSnapshotControlInput { .. } => Family::Control,
+            Self::HandleMessageInput { .. }
+            | Self::MessageFanoutReadyFor { .. }
+            | Self::AcknowledgeMessageFanout { .. }
+            | Self::EventWakeups { .. } => Family::Message,
+            #[cfg(test)]
+            Self::WriteInputToPane { .. } => Family::Terminal,
+            Self::ApplyAttachedTerminalStep { .. }
+            | Self::ResizeAttachedPrimaryTerminal { .. }
+            | Self::ExecuteTerminalCommand { .. }
+            | Self::ShowPrimaryDisplayOverlay { .. }
+            | Self::ShowPrimaryErrorOverlay { .. }
+            | Self::TakeRunningPaneProcessesForAdapter { .. } => Family::Terminal,
+            Self::RefreshProviderInfo { .. }
+            | Self::CompleteProviderInfoRefresh { .. }
+            | Self::ExecuteAgentShellCommand { .. }
+            | Self::CompleteAgentShellMcpDiscovery { .. }
+            | Self::CompleteAgentShellProviderInfoRefresh { .. }
+            | Self::CompleteAgentPromptProviderInfoRefresh { .. }
+            | Self::PendingAgentProviderTasks { .. }
+            | Self::AgentTurnIsRunning { .. }
+            | Self::QueueProviderPollTimerIfNeeded { .. }
+            | Self::PrepareConfiguredAgentProviderTask { .. }
+            | Self::ClaimConfiguredAgentProviderTask { .. }
+            | Self::ClaimApprovedExternalAction { .. }
+            | Self::CompleteApprovedExternalAction { .. }
+            | Self::ClaimAgentCompactionTask { .. }
+            | Self::ClaimAgentRememberTask { .. } => Family::Provider,
+            Self::SubmitRuntimeEvents { .. } => Family::Event,
+            Self::DrainRuntimeSideEffects { .. }
+            | Self::QueueRuntimeSideEffects { .. }
+            | Self::DrainAgentProviderDispatchSideEffects { .. }
+            | Self::DrainRenderSideEffects { .. }
+            | Self::DrainRenderSideEffectsForClient { .. }
+            | Self::DrainClientOutputFlushSideEffects { .. }
+            | Self::DrainTimerSideEffects { .. }
+            | Self::DrainPersistenceSideEffects { .. }
+            | Self::DrainHookSideEffects { .. }
+            | Self::DrainHostClipboardSideEffects { .. }
+            | Self::DrainStatusPillSideEffects { .. }
+            | Self::DrainPaneIoSideEffects { .. }
+            | Self::DrainPaneProcessIoSideEffects { .. } => Family::SideEffect,
+        }
+    }
 }

@@ -2,8 +2,8 @@
 
 use super::{
     AgentId, AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult,
-    AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeSessionHandle,
-    AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
+    AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope,
+    AsyncRuntimeSessionHandle, AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
     AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientId, ClientViewRole,
     ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection, MezError,
     PaneResizeUpdate, Result, RuntimeAgentProviderDispatch, RuntimeApprovedExternalActionDispatch,
@@ -41,6 +41,17 @@ impl AsyncRuntimeSessionHandle {
     pub async fn metrics(&self) -> Result<crate::host::async_runtime::AsyncRuntimeActorMetrics> {
         self.request(|reply| AsyncRuntimeRequest::Metrics { reply })
             .await
+    }
+
+    /// Best-effort records one fixed worker-phase latency observation.
+    pub(crate) fn record_latency_phase(
+        &self,
+        phase: crate::host::async_runtime::AsyncRuntimeLatencyPhase,
+        elapsed_ms: u64,
+    ) {
+        let _ = self.sender.try_send(AsyncRuntimeRequestEnvelope::new(
+            AsyncRuntimeRequest::RecordLatencyPhase { phase, elapsed_ms },
+        ));
     }
 
     /// Sends bytes directly to a process-owned pane without visible-surface routing.
@@ -794,7 +805,7 @@ impl AsyncRuntimeSessionHandle {
     ) -> Result<T> {
         let (reply, response) = oneshot::channel();
         self.sender
-            .send(build_request(reply))
+            .send(AsyncRuntimeRequestEnvelope::new(build_request(reply)))
             .await
             .map_err(|_| MezError::invalid_state("async runtime session actor is closed"))?;
         response

@@ -133,6 +133,9 @@ impl AsyncRuntimeSessionActor {
         for effect in side_effects {
             self.enqueue_runtime_side_effect(effect);
         }
+        if self.side_effect_queue_nonempty_since.is_none() && !self.side_effects.is_empty() {
+            self.side_effect_queue_nonempty_since = Some(std::time::Instant::now());
+        }
         if should_notify {
             self.metrics.runtime_side_effects_queued = self
                 .metrics

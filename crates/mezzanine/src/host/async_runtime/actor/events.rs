@@ -81,6 +81,7 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         batch: RuntimeEventBatch,
     ) -> Result<RuntimeEventIngressReport> {
+        let batch_started = std::time::Instant::now();
         let mut report = batch.ingress_report();
         let mut registry_persistence_queued = false;
         let mut registry_persistence_required = false;
@@ -102,6 +103,7 @@ impl AsyncRuntimeSessionActor {
         }
         let mut batch_side_effects = Vec::new();
         if report.applied > 0 {
+            let reconciliation_started = std::time::Instant::now();
             self.metrics.runtime_event_reconciliation_passes = self
                 .metrics
                 .runtime_event_reconciliation_passes
@@ -121,6 +123,10 @@ impl AsyncRuntimeSessionActor {
             batch_side_effects.extend(self.cancel_stale_shell_transaction_timer_side_effects());
             batch_side_effects.extend(self.shell_transaction_timer_side_effects());
             batch_side_effects.extend(self.idle_cleanup_timer_side_effects());
+            self.metrics.record_phase_latency(
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::EventReconciliation,
+                u64::try_from(reconciliation_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            );
         }
         batch_side_effects.extend(self.deferred_service_side_effects_from_service());
         registry_persistence_queued = registry_persistence_queued
@@ -156,6 +162,10 @@ impl AsyncRuntimeSessionActor {
         self.metrics
             .runtime_event_batch_sizes
             .record(u64::try_from(report.accepted).unwrap_or(u64::MAX));
+        self.metrics.record_phase_latency(
+            crate::host::async_runtime::AsyncRuntimeLatencyPhase::EventBatchApply,
+            u64::try_from(batch_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
         Ok(report)
     }
 

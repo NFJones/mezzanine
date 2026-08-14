@@ -5,7 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AgentId, Arc, AsyncRuntimeRequest, ControlConnectionState,
+    AgentId, Arc, AsyncRuntimeRequestEnvelope, ControlConnectionState,
     DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH, DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION,
     DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, Duration, EventAudience, FanoutBatch, HashMap, HashSet,
     MessageConnection, MezError, Notify, PaneProcessInstance, Result, RuntimeLifecycleState,
@@ -120,6 +120,137 @@ impl RuntimeHistogram {
         }
     }
 }
+/// Fixed, allocation-free actor request families used for latency attribution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum AsyncRuntimeRequestFamily {
+    /// Lifecycle probes, metrics snapshots, and shutdown.
+    Lifecycle,
+    /// Client view, frame, and render-timer work.
+    Render,
+    /// Framed control dispatch and asynchronous control settlement.
+    Control,
+    /// Message ingress, fanout, acknowledgements, and event wakeups.
+    Message,
+    /// Attached-terminal mutation and terminal command work.
+    Terminal,
+    /// Provider, approval, compaction, and durable-memory work.
+    Provider,
+    /// Typed runtime event batch application.
+    Event,
+    /// Runtime side-effect queue and drain work.
+    SideEffect,
+}
+
+impl AsyncRuntimeRequestFamily {
+    /// Every request family in stable diagnostics order.
+    pub const ALL: [Self; 8] = [
+        Self::Lifecycle,
+        Self::Render,
+        Self::Control,
+        Self::Message,
+        Self::Terminal,
+        Self::Provider,
+        Self::Event,
+        Self::SideEffect,
+    ];
+
+    /// Returns this fixed family index without allocating a label.
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Returns the stable diagnostics label for this family.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Lifecycle => "lifecycle",
+            Self::Render => "render",
+            Self::Control => "control",
+            Self::Message => "message",
+            Self::Terminal => "terminal",
+            Self::Provider => "provider",
+            Self::Event => "event",
+            Self::SideEffect => "side_effect",
+        }
+    }
+}
+
+/// Queue-wait and handler-duration histograms for one actor request family.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AsyncRuntimeRequestLatency {
+    /// Milliseconds from enqueue until the actor starts handling the request.
+    pub queue_wait_ms: RuntimeHistogram,
+    /// Milliseconds spent handling the request on the serialized actor.
+    pub handler_duration_ms: RuntimeHistogram,
+}
+
+/// Fixed runtime phases used for bounded latency attribution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum AsyncRuntimeLatencyPhase {
+    /// Applying one prioritized runtime event batch.
+    EventBatchApply,
+    /// Once-per-batch runtime reconciliation.
+    EventReconciliation,
+    /// Composing a rendered client view.
+    RenderComposition,
+    /// Encoding a composed view into styled presentation lines.
+    RenderEncoding,
+    /// Time until the first decoded provider progress chunk.
+    ProviderTtfb,
+    /// Time between decoded provider progress chunks.
+    ProviderChunkInterval,
+    /// Total provider worker execution time.
+    ProviderTotal,
+    /// One persistence operation or compatible audit batch.
+    PersistenceOperation,
+    /// One drained persistence worker batch.
+    PersistenceBatch,
+    /// One bounded attached-terminal output flush attempt.
+    OutputFlush,
+    /// Age of the current continuously non-empty side-effect queue generation.
+    SideEffectQueueAge,
+}
+
+impl AsyncRuntimeLatencyPhase {
+    /// Every phase in stable diagnostics order.
+    pub const ALL: [Self; 11] = [
+        Self::EventBatchApply,
+        Self::EventReconciliation,
+        Self::RenderComposition,
+        Self::RenderEncoding,
+        Self::ProviderTtfb,
+        Self::ProviderChunkInterval,
+        Self::ProviderTotal,
+        Self::PersistenceOperation,
+        Self::PersistenceBatch,
+        Self::OutputFlush,
+        Self::SideEffectQueueAge,
+    ];
+
+    /// Returns this fixed phase index without allocating a label.
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Returns the stable diagnostics label for this phase.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::EventBatchApply => "event_batch_apply_ms",
+            Self::EventReconciliation => "event_reconciliation_ms",
+            Self::RenderComposition => "render_composition_ms",
+            Self::RenderEncoding => "render_encoding_ms",
+            Self::ProviderTtfb => "provider_ttfb_ms",
+            Self::ProviderChunkInterval => "provider_chunk_interval_ms",
+            Self::ProviderTotal => "provider_total_ms",
+            Self::PersistenceOperation => "persistence_operation_ms",
+            Self::PersistenceBatch => "persistence_batch_ms",
+            Self::OutputFlush => "output_flush_ms",
+            Self::SideEffectQueueAge => "side_effect_queue_age_ms",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AsyncRuntimeActorMetrics {
     /// Number of actor requests processed in serialized order.
@@ -178,6 +309,60 @@ pub struct AsyncRuntimeActorMetrics {
     pub side_effect_delivery_notifications: u64,
     /// Lifecycle-state notifications emitted by actor mutations.
     pub lifecycle_state_notifications: u64,
+    /// Heap-owned fixed request-family latency histograms in stable enum order.
+    ///
+    /// Keeping this cold diagnostics payload behind one pointer prevents actor
+    /// and daemon construction futures from inheriting the full histogram
+    /// storage in their stack frames.
+    request_latencies: Box<[AsyncRuntimeRequestLatency; 8]>,
+    /// Heap-owned fixed runtime-phase latency histograms in stable enum order.
+    ///
+    /// Phase storage follows the same layout rule as request-family storage so
+    /// cloning or moving actor metrics does not inflate async worker frames.
+    phase_latencies: Box<[RuntimeHistogram; 11]>,
+}
+
+impl AsyncRuntimeActorMetrics {
+    /// Returns latency histograms for one fixed request family.
+    pub fn request_latency(
+        &self,
+        family: AsyncRuntimeRequestFamily,
+    ) -> &AsyncRuntimeRequestLatency {
+        &self.request_latencies[family.index()]
+    }
+
+    /// Records one actor queue-wait and handler-duration observation.
+    pub(crate) fn record_request_latency(
+        &mut self,
+        family: AsyncRuntimeRequestFamily,
+        queue_wait_ms: u64,
+        handler_duration_ms: u64,
+    ) {
+        let latency = &mut self.request_latencies[family.index()];
+        latency.queue_wait_ms.record(queue_wait_ms);
+        latency.handler_duration_ms.record(handler_duration_ms);
+    }
+
+    /// Returns the latency histogram for one fixed runtime phase.
+    pub fn phase_latency(&self, phase: AsyncRuntimeLatencyPhase) -> &RuntimeHistogram {
+        &self.phase_latencies[phase.index()]
+    }
+
+    /// Records one fixed runtime-phase latency observation.
+    pub(crate) fn record_phase_latency(
+        &mut self,
+        phase: AsyncRuntimeLatencyPhase,
+        elapsed_ms: u64,
+    ) {
+        self.phase_latencies[phase.index()].record(elapsed_ms);
+    }
+
+    /// Clears latency histograms while preserving counters and volume metrics.
+    #[cfg(test)]
+    pub fn reset_latency_histograms(&mut self) {
+        *self.request_latencies = Default::default();
+        *self.phase_latencies = Default::default();
+    }
 }
 
 /// Adapter-owned desired and active runtime timer state.
@@ -215,12 +400,12 @@ pub struct AsyncRuntimeSessionActor {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) sender: mpsc::Sender<AsyncRuntimeRequest>,
+    pub(super) sender: mpsc::Sender<AsyncRuntimeRequestEnvelope>,
     /// Stores the receiver value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) receiver: mpsc::Receiver<AsyncRuntimeRequest>,
+    pub(super) receiver: mpsc::Receiver<AsyncRuntimeRequestEnvelope>,
     /// Stores the message delivery notify value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -255,6 +440,8 @@ pub struct AsyncRuntimeSessionActor {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) side_effects: VecDeque<RuntimeSideEffect>,
+    /// Start of the current continuously non-empty side-effect queue generation.
+    pub(super) side_effect_queue_nonempty_since: Option<std::time::Instant>,
     /// Active transaction input leases keyed by exact pane process generation.
     pub(super) pane_input_leases: HashMap<PaneProcessInstance, String>,
     /// Adapter-owned timer scheduling and stale-generation state.
@@ -286,7 +473,7 @@ pub struct AsyncRuntimeSessionHandle {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) sender: mpsc::Sender<AsyncRuntimeRequest>,
+    pub(super) sender: mpsc::Sender<AsyncRuntimeRequestEnvelope>,
     /// Stores the message delivery notify value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

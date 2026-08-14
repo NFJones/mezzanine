@@ -15,7 +15,7 @@ use super::{
     runtime_execute_auto_sizing_with_async_provider, sleep, watch,
 };
 use crate::runtime::RuntimeAgentProviderWorkerOutcome;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Runs the run async agent provider service operation for this subsystem.
 ///
@@ -88,6 +88,52 @@ where
 }
 
 type AsyncAgentProviderWorkerResult = Option<(RuntimeEvent, bool)>;
+
+/// Monotonic timing state for one provider worker execution.
+struct ProviderLatencyTracker {
+    /// Time at which provider-owned execution began.
+    started_at: Instant,
+    /// Time at which the most recent streaming progress chunk arrived.
+    last_progress_at: Option<Instant>,
+}
+
+impl ProviderLatencyTracker {
+    /// Starts one provider latency timeline at the supplied monotonic instant.
+    fn new(started_at: Instant) -> Self {
+        Self {
+            started_at,
+            last_progress_at: None,
+        }
+    }
+
+    /// Returns the phase and elapsed milliseconds for one progress chunk.
+    fn observe_progress(
+        &mut self,
+        observed_at: Instant,
+    ) -> (crate::host::async_runtime::AsyncRuntimeLatencyPhase, u64) {
+        let (phase, previous) = if let Some(last_progress_at) = self.last_progress_at {
+            (
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderChunkInterval,
+                last_progress_at,
+            )
+        } else {
+            (
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTtfb,
+                self.started_at,
+            )
+        };
+        self.last_progress_at = Some(observed_at);
+        (
+            phase,
+            u64::try_from(observed_at.duration_since(previous).as_millis()).unwrap_or(u64::MAX),
+        )
+    }
+
+    /// Returns total provider execution milliseconds at completion or cancellation.
+    fn total_elapsed_ms(&self, finished_at: Instant) -> u64 {
+        u64::try_from(finished_at.duration_since(self.started_at).as_millis()).unwrap_or(u64::MAX)
+    }
+}
 
 /// Drains provider workers that completed without blocking new dispatch claims.
 async fn drain_completed_agent_provider_workers(
@@ -335,6 +381,7 @@ async fn monitor_runtime_agent_provider_dispatch(
     }
     let pane_id = dispatch.turn.pane_id.clone();
     let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::channel(32);
+    let mut latency = ProviderLatencyTracker::new(Instant::now());
     let mut worker = tokio::spawn(execute_runtime_agent_provider_dispatch(
         dispatch,
         Some(progress_sender),
@@ -342,9 +389,15 @@ async fn monitor_runtime_agent_provider_dispatch(
     loop {
         tokio::select! {
             result = &mut worker => {
+                handle.record_latency_phase(
+                    crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
+                    latency.total_elapsed_ms(Instant::now()),
+                );
                 return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
             }
             Some(text) = progress_receiver.recv() => {
+                let (phase, elapsed_ms) = latency.observe_progress(Instant::now());
+                handle.record_latency_phase(phase, elapsed_ms);
                 let mut batch = RuntimeEventBatch::new();
                 batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::OutputProgress {
                     agent_id: agent_id.clone(),
@@ -361,6 +414,10 @@ async fn monitor_runtime_agent_provider_dispatch(
             }
             changed = lifecycle.changed() => {
                 if changed.is_err() {
+                    handle.record_latency_phase(
+                        crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
+                        latency.total_elapsed_ms(Instant::now()),
+                    );
                     return Ok(None);
                 }
             }
@@ -368,6 +425,10 @@ async fn monitor_runtime_agent_provider_dispatch(
         let lifecycle_state = *lifecycle.borrow();
         if is_terminal_runtime_lifecycle_state(lifecycle_state) {
             worker.abort();
+            handle.record_latency_phase(
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
+                latency.total_elapsed_ms(Instant::now()),
+            );
             return Ok(None);
         }
         if !classify_provider_monitor_liveness(
@@ -375,6 +436,10 @@ async fn monitor_runtime_agent_provider_dispatch(
             &lifecycle,
         )? {
             worker.abort();
+            handle.record_latency_phase(
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
+                latency.total_elapsed_ms(Instant::now()),
+            );
             return Ok(None);
         }
     }
@@ -1064,6 +1129,33 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies provider progress latency is attributed first to TTFB and then
+    /// to bounded inter-chunk intervals using deterministic monotonic instants.
+    #[test]
+    fn provider_latency_tracker_attributes_progress_phases() {
+        let started_at = Instant::now();
+        let mut tracker = ProviderLatencyTracker::new(started_at);
+
+        assert_eq!(
+            tracker.observe_progress(started_at + Duration::from_millis(7)),
+            (
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTtfb,
+                7,
+            )
+        );
+        assert_eq!(
+            tracker.observe_progress(started_at + Duration::from_millis(11)),
+            (
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderChunkInterval,
+                4,
+            )
+        );
+        assert_eq!(
+            tracker.total_elapsed_ms(started_at + Duration::from_millis(20)),
+            20
+        );
+    }
 
     /// Verifies a provider execution panic becomes a failed-turn event rather
     /// than escaping the monitor task that owns daemon service supervision.

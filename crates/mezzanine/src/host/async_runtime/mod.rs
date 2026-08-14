@@ -147,9 +147,9 @@ pub use config::{
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncControlInputResult,
     AsyncMessageFanout, AsyncMessageInputResult, AsyncRuntimeActorConfig, AsyncRuntimeActorExit,
     AsyncRuntimeActorMetrics, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
-    AsyncRuntimeDaemonListeners, AsyncRuntimeEventConnectionConfig,
-    AsyncRuntimeMessageConnectionConfig, AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle,
-    RuntimeHistogram,
+    AsyncRuntimeDaemonListeners, AsyncRuntimeEventConnectionConfig, AsyncRuntimeLatencyPhase,
+    AsyncRuntimeMessageConnectionConfig, AsyncRuntimeRequestFamily, AsyncRuntimeSessionActor,
+    AsyncRuntimeSessionHandle, RuntimeHistogram,
 };
 pub use daemon::build_async_runtime_daemon_services;
 #[cfg(test)]
@@ -210,7 +210,7 @@ pub use terminal_io::{
     AsyncTerminalOutputWriteReport, DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
 };
 
-use actor_types::AsyncRuntimeRequest;
+use actor_types::{AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope};
 use provider::{
     empty_attached_terminal_loop_report, is_terminal_runtime_lifecycle_state,
     merge_attached_terminal_loop_report,

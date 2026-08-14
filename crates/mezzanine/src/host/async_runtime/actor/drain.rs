@@ -51,6 +51,17 @@ impl AsyncRuntimeSessionActor {
         self.metrics
             .side_effect_queue_depth_samples
             .record(u64::try_from(self.side_effects.len()).unwrap_or(u64::MAX));
+        if let Some(nonempty_since) = self.side_effect_queue_nonempty_since
+            && (drained > 0 || self.side_effects.is_empty())
+        {
+            self.metrics.record_phase_latency(
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::SideEffectQueueAge,
+                u64::try_from(nonempty_since.elapsed().as_millis()).unwrap_or(u64::MAX),
+            );
+        }
+        if self.side_effects.is_empty() {
+            self.side_effect_queue_nonempty_since = None;
+        }
         if drained > 0 && !self.side_effects.is_empty() {
             self.notify_side_effect_delivery();
         }
@@ -613,10 +624,15 @@ impl AsyncRuntimeSessionActor {
             ClientViewRole::Observer
         };
         let config = self.service.terminal_client_loop_config(config)?;
-        let Some(view) =
-            self.service
-                .render_client_view_with_resolved_config(role, client_size, &config)?
-        else {
+        let composition_started = std::time::Instant::now();
+        let view = self
+            .service
+            .render_client_view_with_resolved_config(role, client_size, &config);
+        self.metrics.record_phase_latency(
+            crate::host::async_runtime::AsyncRuntimeLatencyPhase::RenderComposition,
+            u64::try_from(composition_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
+        let Some(view) = view? else {
             return Ok(None);
         };
         let status_pill_effects = self
@@ -631,8 +647,13 @@ impl AsyncRuntimeSessionActor {
         let cursor_column = view.cursor_column;
         let application_keypad = view.application_keypad;
         let bracketed_paste = view.bracketed_paste;
+        let encoding_started = std::time::Instant::now();
         let (lines, line_style_spans) =
             compose_client_presentation_with_styles(&view, status.as_ref());
+        self.metrics.record_phase_latency(
+            crate::host::async_runtime::AsyncRuntimeLatencyPhase::RenderEncoding,
+            u64::try_from(encoding_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
         let flush = AsyncRenderedClientFlush {
             client_id,
             lines,

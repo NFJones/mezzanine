@@ -638,6 +638,23 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
     ] {
         lines.extend(runtime_metrics_histogram_lines(name, histogram));
     }
+    for family in crate::host::async_runtime::AsyncRuntimeRequestFamily::ALL {
+        let latency = metrics.request_latency(family);
+        lines.extend(runtime_metrics_histogram_lines(
+            &format!("actor_{}_queue_wait_ms", family.name()),
+            &latency.queue_wait_ms,
+        ));
+        lines.extend(runtime_metrics_histogram_lines(
+            &format!("actor_{}_handler_duration_ms", family.name()),
+            &latency.handler_duration_ms,
+        ));
+    }
+    for phase in crate::host::async_runtime::AsyncRuntimeLatencyPhase::ALL {
+        lines.extend(runtime_metrics_histogram_lines(
+            phase.name(),
+            metrics.phase_latency(phase),
+        ));
+    }
     lines.join("\n")
 }
 

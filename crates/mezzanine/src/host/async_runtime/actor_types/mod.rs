@@ -54,4 +54,4 @@ pub(in crate::host::async_runtime) use render::AsyncTerminalClientConfigInput;
 pub use render::{
     AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncTerminalClientConfigSnapshot,
 };
-pub(super) use request::AsyncRuntimeRequest;
+pub(super) use request::{AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope};

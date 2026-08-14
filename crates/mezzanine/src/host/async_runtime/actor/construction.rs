@@ -149,6 +149,7 @@ impl AsyncRuntimeSessionActor {
                 terminal_config_generation: 0,
                 terminal_config_generation_tx,
                 side_effects: VecDeque::with_capacity(config.side_effect_buffer),
+                side_effect_queue_nonempty_since: None,
                 pane_input_leases: Default::default(),
                 timers: Default::default(),
                 side_effect_buffer: config.side_effect_buffer,
@@ -164,14 +165,27 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub async fn run(mut self) -> AsyncRuntimeActorExit {
-        while let Some(request) = self.receiver.recv().await {
+        while let Some(envelope) = self.receiver.recv().await {
+            let queue_wait_ms =
+                u64::try_from(envelope.enqueued_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let handler_started = std::time::Instant::now();
             self.commands_processed += 1;
             self.metrics.commands_processed = self.commands_processed;
             self.sync_metrics_snapshot_to_service();
-            if self.handle_request(request).await {
-                break;
+            let should_shutdown = self.handle_request(envelope.request).await;
+            let handler_duration_ms =
+                u64::try_from(handler_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            if envelope.record_actor_latency {
+                self.metrics.record_request_latency(
+                    envelope.family,
+                    queue_wait_ms,
+                    handler_duration_ms,
+                );
             }
             self.sync_metrics_snapshot_to_service();
+            if should_shutdown {
+                break;
+            }
         }
 
         AsyncRuntimeActorExit {

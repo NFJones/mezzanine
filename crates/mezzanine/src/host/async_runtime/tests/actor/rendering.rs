@@ -650,6 +650,92 @@ async fn async_actor_metrics_track_render_and_terminal_control_requests() {
     exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies actor latency metrics use fixed request families and reset without
+/// changing previously returned snapshots.
+///
+/// Queue wait and handler duration are recorded at the actor command boundary,
+/// so render and control requests must be attributed without dynamic labels.
+/// Resetting one cloned snapshot must clear every bounded family histogram
+/// while leaving the actor-owned snapshot and its request counters unchanged.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_metrics_track_and_reset_request_family_latencies() {
+    use crate::control::encode_control_body;
+
+    let mut service = test_service_with_event_log();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        handle
+            .render_client_frame(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+                true,
+            )
+            .await
+            .unwrap();
+        handle
+            .render_client_view(
+                ClientViewRole::Primary,
+                Size::new(80, 24).unwrap(),
+                TerminalClientLoopConfig::default(),
+            )
+            .await
+            .unwrap();
+        handle
+            .handle_control_input_for_connection(
+                encode_control_body(
+                    r#"{"jsonrpc":"2.0","id":"view","method":"terminal/view","params":{"client_size":{"columns":80,"rows":24}}}"#,
+                ),
+                1024 * 1024,
+                ControlConnectionState::trusted_existing_client(primary),
+            )
+            .await
+            .unwrap();
+
+        let metrics = handle.metrics().await.unwrap();
+        let render = metrics.request_latency(AsyncRuntimeRequestFamily::Render);
+        assert_eq!(render.queue_wait_ms.observations, 2);
+        assert_eq!(render.handler_duration_ms.observations, 2);
+        let control = metrics.request_latency(AsyncRuntimeRequestFamily::Control);
+        assert_eq!(control.queue_wait_ms.observations, 1);
+        assert_eq!(control.handler_duration_ms.observations, 1);
+
+        let mut reset = metrics.clone();
+        reset.reset_latency_histograms();
+        assert_eq!(reset.commands_processed, metrics.commands_processed);
+        for family in AsyncRuntimeRequestFamily::ALL {
+            let latency = reset.request_latency(family);
+            assert_eq!(latency.queue_wait_ms.observations, 0, "{family:?}");
+            assert_eq!(latency.handler_duration_ms.observations, 0, "{family:?}");
+        }
+        assert_eq!(
+            metrics
+                .request_latency(AsyncRuntimeRequestFamily::Render)
+                .queue_wait_ms
+                .observations,
+            2
+        );
+        assert_eq!(
+            handle.shutdown().await.unwrap(),
+            RuntimeLifecycleState::Running
+        );
+    };
+
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert_eq!(
+        exit.metrics
+            .request_latency(AsyncRuntimeRequestFamily::Render)
+            .handler_duration_ms
+            .observations,
+        2
+    );
+}
+
 /// Verifies async actor serializes lifecycle render and shutdown.
 ///
 /// This regression scenario documents the behavior being protected so a

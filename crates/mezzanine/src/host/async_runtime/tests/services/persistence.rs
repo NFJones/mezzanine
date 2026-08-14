@@ -53,6 +53,19 @@ async fn async_persistence_side_effect_service_writes_bytes_and_reports_completi
             std::fs::read_to_string(&path).unwrap(),
             "{\"event\":\"worker\"}\n"
         );
+        let metrics = handle.metrics().await.unwrap();
+        assert_eq!(
+            metrics
+                .phase_latency(AsyncRuntimeLatencyPhase::PersistenceOperation)
+                .observations,
+            1
+        );
+        assert_eq!(
+            metrics
+                .phase_latency(AsyncRuntimeLatencyPhase::PersistenceBatch)
+                .observations,
+            1
+        );
         #[cfg(unix)]
         {
             assert_eq!(unix_mode(&root), 0o700);

@@ -819,7 +819,9 @@ where
             .saturating_add(u64::try_from(effects.len()).unwrap_or(u64::MAX));
         let mut batch = RuntimeEventBatch::new();
         let mut effects = effects.into_iter().peekable();
+        let persistence_batch_started = std::time::Instant::now();
         while let Some(effect) = effects.next() {
+            let persistence_operation_started = std::time::Instant::now();
             match effect {
                 RuntimeSideEffect::Persist {
                     target,
@@ -1059,7 +1061,16 @@ where
                 }
                 _ => {}
             }
+            handle.record_latency_phase(
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::PersistenceOperation,
+                u64::try_from(persistence_operation_started.elapsed().as_millis())
+                    .unwrap_or(u64::MAX),
+            );
         }
+        handle.record_latency_phase(
+            crate::host::async_runtime::AsyncRuntimeLatencyPhase::PersistenceBatch,
+            u64::try_from(persistence_batch_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
         if !batch.events.is_empty() {
             let ingress = handle.submit_runtime_events(batch).await?;
             report.submitted_events = report.submitted_events.saturating_add(ingress.accepted);
@@ -1245,9 +1256,15 @@ where
             .await?;
         if effects.is_empty() {
             if io.pending_output_bytes() > 0 {
-                let write_report = io
+                let flush_started = std::time::Instant::now();
+                let write_result = io
                     .flush_pending_output(DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES)
-                    .await?;
+                    .await;
+                handle.record_latency_phase(
+                    crate::host::async_runtime::AsyncRuntimeLatencyPhase::OutputFlush,
+                    u64::try_from(flush_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                );
+                let write_report = write_result?;
                 report.bytes_written = report
                     .bytes_written
                     .saturating_add(write_report.bytes_written);
@@ -1287,15 +1304,20 @@ where
             else {
                 continue;
             };
-            match io
+            let flush_started = std::time::Instant::now();
+            let write_result = io
                 .write_owned_styled_output_with_modes_bounded(
                     lines,
                     line_style_spans,
                     modes,
                     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
                 )
-                .await
-            {
+                .await;
+            handle.record_latency_phase(
+                crate::host::async_runtime::AsyncRuntimeLatencyPhase::OutputFlush,
+                u64::try_from(flush_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            );
+            match write_result {
                 Ok(write_report) => {
                     report.bytes_written = report
                         .bytes_written

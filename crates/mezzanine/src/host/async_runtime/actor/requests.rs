@@ -3,9 +3,10 @@
 use super::construction::execute_snapshot_control_async_work;
 use super::{
     AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult, AsyncRenderedClientFrame,
-    AsyncRuntimeRequest, AsyncRuntimeSessionActor, AsyncTerminalClientConfigInput,
-    AsyncTerminalClientConfigSnapshot, DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS, RuntimeSessionService,
-    decode_control_frame, delivery_batch_json, encode_control_body, encode_mmp_body,
+    AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope, AsyncRuntimeSessionActor,
+    AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
+    DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS, RuntimeSessionService, decode_control_frame,
+    delivery_batch_json, encode_control_body, encode_mmp_body,
 };
 
 impl AsyncRuntimeSessionActor {
@@ -50,6 +51,10 @@ impl AsyncRuntimeSessionActor {
                 let mut metrics = self.metrics.clone();
                 metrics.side_effect_queue_depth = self.side_effects.len();
                 let _ = reply.send(metrics);
+                false
+            }
+            AsyncRuntimeRequest::RecordLatencyPhase { phase, elapsed_ms } => {
+                self.metrics.record_phase_latency(phase, elapsed_ms);
                 false
             }
             #[cfg(test)]
@@ -215,17 +220,19 @@ impl AsyncRuntimeSessionActor {
                                 let outcome =
                                     execute_snapshot_control_async_work(&snapshots, &work).await;
                                 let _ = sender
-                                    .send(AsyncRuntimeRequest::CompleteSnapshotControlInput {
-                                        consumed_prefix,
-                                        output_prefix,
-                                        remaining_input,
-                                        max_content_length,
-                                        snapshots,
-                                        connection,
-                                        work,
-                                        outcome: Box::new(outcome),
-                                        reply,
-                                    })
+                                    .send(AsyncRuntimeRequestEnvelope::new(
+                                        AsyncRuntimeRequest::CompleteSnapshotControlInput {
+                                            consumed_prefix,
+                                            output_prefix,
+                                            remaining_input,
+                                            max_content_length,
+                                            snapshots,
+                                            connection,
+                                            work,
+                                            outcome: Box::new(outcome),
+                                            reply,
+                                        },
+                                    ))
                                     .await;
                             });
                             std::mem::drop(join_handle);
@@ -242,21 +249,22 @@ impl AsyncRuntimeSessionActor {
                                 self.notify_event_delivery();
                             } else {
                                 let sender = self.sender.clone();
-                                let join_handle =
-                                    tokio::spawn(async move {
-                                        let _ = sender
-                                        .send(AsyncRuntimeRequest::HandleControlInputWithSnapshots {
-                                            input: remaining_input,
-                                            output_prefix,
-                                            consumed_prefix,
-                                            record_metrics: false,
-                                            max_content_length,
-                                            connection,
-                                            snapshots,
-                                            reply,
-                                        })
+                                let join_handle = tokio::spawn(async move {
+                                    let _ = sender
+                                        .send(AsyncRuntimeRequestEnvelope::new(
+                                            AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                                                input: remaining_input,
+                                                output_prefix,
+                                                consumed_prefix,
+                                                record_metrics: false,
+                                                max_content_length,
+                                                connection,
+                                                snapshots,
+                                                reply,
+                                            },
+                                        ))
                                         .await;
-                                    });
+                                });
                                 std::mem::drop(join_handle);
                             }
                             return false;
@@ -302,16 +310,18 @@ impl AsyncRuntimeSessionActor {
                         let consumed_prefix = consumed_prefix.saturating_add(consumed);
                         let join_handle = tokio::spawn(async move {
                             let _ = sender
-                                .send(AsyncRuntimeRequest::HandleControlInputWithSnapshots {
-                                    input: remaining_input,
-                                    output_prefix,
-                                    consumed_prefix,
-                                    record_metrics: false,
-                                    max_content_length,
-                                    connection,
-                                    snapshots,
-                                    reply,
-                                })
+                                .send(AsyncRuntimeRequestEnvelope::new(
+                                    AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                                        input: remaining_input,
+                                        output_prefix,
+                                        consumed_prefix,
+                                        record_metrics: false,
+                                        max_content_length,
+                                        connection,
+                                        snapshots,
+                                        reply,
+                                    },
+                                ))
                                 .await;
                         });
                         std::mem::drop(join_handle);
@@ -356,16 +366,18 @@ impl AsyncRuntimeSessionActor {
                     let sender = self.sender.clone();
                     let join_handle = tokio::spawn(async move {
                         let _ = sender
-                            .send(AsyncRuntimeRequest::HandleControlInputWithSnapshots {
-                                input: remaining_input,
-                                output_prefix,
-                                consumed_prefix,
-                                record_metrics: false,
-                                max_content_length,
-                                connection,
-                                snapshots,
-                                reply,
-                            })
+                            .send(AsyncRuntimeRequestEnvelope::new(
+                                AsyncRuntimeRequest::HandleControlInputWithSnapshots {
+                                    input: remaining_input,
+                                    output_prefix,
+                                    consumed_prefix,
+                                    record_metrics: false,
+                                    max_content_length,
+                                    connection,
+                                    snapshots,
+                                    reply,
+                                },
+                            ))
                             .await;
                     });
                     std::mem::drop(join_handle);
@@ -471,12 +483,12 @@ impl AsyncRuntimeSessionActor {
                                 let outcome =
                                     RuntimeSessionService::execute_provider_info_refresh(work).await;
                                 let _ = sender
-                                    .send(
+                                    .send(AsyncRuntimeRequestEnvelope::new(
                                         AsyncRuntimeRequest::CompleteAgentPromptProviderInfoRefresh {
                                             refresh,
                                             outcome,
                                         },
-                                    )
+                                    ))
                                     .await;
                             });
                             std::mem::drop(join_handle);
@@ -541,10 +553,12 @@ impl AsyncRuntimeSessionActor {
                             let outcome =
                                 RuntimeSessionService::execute_provider_info_refresh(work).await;
                             let _ = sender
-                                .send(AsyncRuntimeRequest::CompleteProviderInfoRefresh {
-                                    outcome,
-                                    reply,
-                                })
+                                .send(AsyncRuntimeRequestEnvelope::new(
+                                    AsyncRuntimeRequest::CompleteProviderInfoRefresh {
+                                        outcome,
+                                        reply,
+                                    },
+                                ))
                                 .await;
                         });
                         std::mem::drop(join_handle);
@@ -585,12 +599,14 @@ impl AsyncRuntimeSessionActor {
                             let outcome =
                                 RuntimeSessionService::execute_provider_info_refresh(work).await;
                             let _ = sender
-                                .send(AsyncRuntimeRequest::CompleteAgentShellProviderInfoRefresh {
-                                    primary_client_id,
-                                    input,
-                                    outcome,
-                                    reply,
-                                })
+                                .send(AsyncRuntimeRequestEnvelope::new(
+                                    AsyncRuntimeRequest::CompleteAgentShellProviderInfoRefresh {
+                                        primary_client_id,
+                                        input,
+                                        outcome,
+                                        reply,
+                                    },
+                                ))
                                 .await;
                         });
                         std::mem::drop(join_handle);
@@ -613,12 +629,14 @@ impl AsyncRuntimeSessionActor {
                                 RuntimeSessionService::execute_agent_provider_preparation(work)
                                     .await;
                             let _ = sender
-                                .send(AsyncRuntimeRequest::CompleteAgentShellMcpDiscovery {
-                                    primary_client_id,
-                                    input,
-                                    preparation,
-                                    reply,
-                                })
+                                .send(AsyncRuntimeRequestEnvelope::new(
+                                    AsyncRuntimeRequest::CompleteAgentShellMcpDiscovery {
+                                        primary_client_id,
+                                        input,
+                                        preparation,
+                                        reply,
+                                    },
+                                ))
                                 .await;
                         });
                         std::mem::drop(join_handle);

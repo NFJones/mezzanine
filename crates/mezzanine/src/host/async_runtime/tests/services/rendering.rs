@@ -398,6 +398,13 @@ async fn async_client_output_flush_service_writes_styled_flush_effects() {
         );
         assert_eq!(io.written_frames[0].line_style_spans.len(), 2);
         assert_eq!(io.written_frames[0].modes.cursor_column, 2);
+        let metrics = handle.metrics().await.unwrap();
+        assert_eq!(
+            metrics
+                .phase_latency(AsyncRuntimeLatencyPhase::OutputFlush)
+                .observations,
+            1
+        );
         let retained = handle
             .drain_client_output_flush_side_effects(Some(other_client), 8)
             .await
