@@ -5,7 +5,6 @@
 //! styled/plain pane composition in one place so the facade does not carry the
 //! whole rendering pipeline.
 
-#[cfg(test)]
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -175,6 +174,23 @@ pub fn render_window_with_pane_frame_template(
         },
     )
     .ok_or_else(|| MezError::invalid_state("cannot render a window with no panes"))?;
+    let panes_by_source_index = window
+        .panes()
+        .iter()
+        .map(|pane| (pane.index, pane))
+        .collect::<BTreeMap<_, _>>();
+    let mut inputs_by_pane_id = BTreeMap::new();
+    for input in pane_inputs {
+        if inputs_by_pane_id
+            .insert(input.pane_id.as_str(), input.lines.as_slice())
+            .is_some()
+        {
+            return Err(MezError::invalid_state(format!(
+                "duplicate pane render input for {}",
+                input.pane_id
+            )));
+        }
+    }
     let geometries = plan
         .panes
         .iter()
@@ -184,17 +200,15 @@ pub fn render_window_with_pane_frame_template(
         .panes
         .iter()
         .map(|render_plan| {
-            let pane = window
-                .panes()
-                .iter()
-                .find(|pane| pane.index == render_plan.source_index)
+            let pane = panes_by_source_index
+                .get(&render_plan.source_index)
+                .copied()
                 .ok_or_else(|| {
                     MezError::invalid_state("presentation plan references a missing pane")
                 })?;
-            let lines = pane_inputs
-                .iter()
-                .find(|input| input.pane_id == pane.id.to_string())
-                .map(|input| input.lines.as_slice())
+            let lines = inputs_by_pane_id
+                .get(pane.id.as_str())
+                .copied()
                 .unwrap_or(&[]);
             let mut display_pane = pane.clone();
             display_pane.size = render_plan.render_region_size;
@@ -274,6 +288,23 @@ pub(super) fn render_styled_window_with_pane_frame_template(
         },
     )
     .ok_or_else(|| MezError::invalid_state("cannot render a window with no panes"))?;
+    let panes_by_source_index = window
+        .panes()
+        .iter()
+        .map(|pane| (pane.index, pane))
+        .collect::<BTreeMap<_, _>>();
+    let mut inputs_by_pane_id = BTreeMap::new();
+    for input in pane_inputs {
+        if inputs_by_pane_id
+            .insert(input.pane_id.as_str(), input.lines.as_ref())
+            .is_some()
+        {
+            return Err(MezError::invalid_state(format!(
+                "duplicate styled pane render input for {}",
+                input.pane_id
+            )));
+        }
+    }
     let geometries = plan
         .panes
         .iter()
@@ -283,17 +314,15 @@ pub(super) fn render_styled_window_with_pane_frame_template(
         .panes
         .iter()
         .map(|render_plan| {
-            let pane = window
-                .panes()
-                .iter()
-                .find(|pane| pane.index == render_plan.source_index)
+            let pane = panes_by_source_index
+                .get(&render_plan.source_index)
+                .copied()
                 .ok_or_else(|| {
                     MezError::invalid_state("presentation plan references a missing pane")
                 })?;
-            let lines = pane_inputs
-                .iter()
-                .find(|input| input.pane_id == pane.id.to_string())
-                .map(|input| input.lines.as_ref())
+            let lines = inputs_by_pane_id
+                .get(pane.id.as_str())
+                .copied()
                 .unwrap_or(&[]);
             let mut display_pane = pane.clone();
             display_pane.size = render_plan.render_region_size;

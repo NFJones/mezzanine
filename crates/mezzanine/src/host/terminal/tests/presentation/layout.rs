@@ -498,6 +498,56 @@ fn render_window_composes_vertical_split_side_by_side() {
     assert_eq!(rendered[0], "pane\u{2502}pane1");
 }
 
+/// Verifies pane render inputs are matched by stable identity rather than
+/// caller order and that a genuinely missing input retains blank-pane behavior.
+#[test]
+fn render_window_indexes_reordered_and_missing_pane_inputs() {
+    let mut ids = IdFactory::default();
+    let mut window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    window
+        .split_active(&mut ids, SplitDirection::Vertical)
+        .unwrap();
+    let inputs = vec![
+        PaneRenderInput {
+            pane_id: window.panes()[1].id.to_string(),
+            lines: vec!["right".to_string()],
+        },
+        PaneRenderInput {
+            pane_id: window.panes()[0].id.to_string(),
+            lines: vec!["left".to_string()],
+        },
+    ];
+
+    let reordered = render_window(&window, &inputs, false).unwrap();
+    let missing = render_window(&window, &inputs[1..], false).unwrap();
+
+    assert_eq!(reordered[0], "left\u{2502}right");
+    assert_eq!(missing[0], "left\u{2502}     ");
+}
+
+/// Verifies duplicate pane identities are rejected while building the
+/// frame-local input index instead of silently selecting one by scan order.
+#[test]
+fn render_window_rejects_duplicate_pane_inputs() {
+    let mut ids = IdFactory::default();
+    let window = Window::new(&mut ids, 0, "main", Size::new(10, 3).unwrap());
+    let pane_id = window.panes()[0].id.to_string();
+    let inputs = vec![
+        PaneRenderInput {
+            pane_id: pane_id.clone(),
+            lines: vec!["first".to_string()],
+        },
+        PaneRenderInput {
+            pane_id,
+            lines: vec!["second".to_string()],
+        },
+    ];
+
+    let error = render_window(&window, &inputs, false).unwrap_err();
+
+    assert!(error.message().contains("duplicate pane render input"));
+}
+
 /// Verifies wide glyphs in pane content do not shift divider placement.
 ///
 /// Pane composition is cell based. A double-width glyph immediately before a
