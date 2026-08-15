@@ -1481,6 +1481,21 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Installs one same-conversation streaming screen without disturbing the reader's viewport.
+    fn update_agent_streaming_screen(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        screen: TerminalScreen,
+    ) -> Result<()> {
+        if self.update_agent_pane_screen_preserving_interaction(pane_id, conversation_id, screen) {
+            return Ok(());
+        }
+        Err(MezError::invalid_state(
+            "streaming presentation screen conversation changed",
+        ))
+    }
+
     /// Appends one existing styled prefix for a provisional plain-text source.
     fn append_agent_streaming_plain_started(
         &mut self,
@@ -1515,8 +1530,7 @@ impl RuntimeSessionService {
             &self.presentation.settings.ui_theme,
         );
         Self::feed_agent_terminal_screen(&mut candidate, bytes.as_bytes(), context)?;
-        self.set_agent_pane_screen(pane_id, conversation_id, candidate);
-        Ok(())
+        self.update_agent_streaming_screen(pane_id, &conversation_id, candidate)
     }
 
     /// Atomically appends the literal assistant label for a newly started action.
@@ -1551,8 +1565,7 @@ impl RuntimeSessionService {
             bytes.as_bytes(),
             "starting streaming say literal source",
         )?;
-        self.set_agent_pane_screen(pane_id, conversation_id, candidate);
-        Ok(())
+        self.update_agent_streaming_screen(pane_id, &conversation_id, candidate)
     }
 
     /// Captures one immutable dirty generation for an external renderer.
@@ -1847,15 +1860,11 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        if !self.update_agent_pane_screen_preserving_interaction(
+        self.update_agent_streaming_screen(
             &result.pane_id,
             &result.conversation_id,
             result.screen,
-        ) {
-            return Err(MezError::invalid_state(
-                "streaming say projection screen conversation changed",
-            ));
-        }
+        )?;
         let presentation = self
             .presentation
             .agent_streaming_say_presentations
@@ -1987,11 +1996,11 @@ impl RuntimeSessionService {
             .get(pane_id)
             .is_some_and(|session| session.session_id == presentation.conversation_id)
         {
-            self.set_agent_pane_screen(
+            self.update_agent_streaming_screen(
                 pane_id,
-                presentation.conversation_id,
+                &presentation.conversation_id,
                 presentation.baseline_screen.as_ref().clone(),
-            );
+            )?;
         }
         Ok(true)
     }
@@ -2101,11 +2110,11 @@ impl RuntimeSessionService {
                 .agent_promoted_streaming_say_actions
                 .remove(&(pane_id.to_string(), turn_id.to_string()));
             if conversation_matches {
-                self.set_agent_pane_screen(
+                self.update_agent_streaming_screen(
                     pane_id,
-                    presentation.conversation_id,
+                    &presentation.conversation_id,
                     presentation.baseline_screen.as_ref().clone(),
-                );
+                )?;
             }
             return Ok(std::collections::BTreeSet::new());
         }
@@ -2121,11 +2130,11 @@ impl RuntimeSessionService {
             self.presentation
                 .agent_promoted_streaming_say_actions
                 .remove(&(pane_id.to_string(), turn_id.to_string()));
-            self.set_agent_pane_screen(
+            self.update_agent_streaming_screen(
                 pane_id,
-                presentation.conversation_id,
+                &presentation.conversation_id,
                 presentation.baseline_screen.as_ref().clone(),
-            );
+            )?;
             return Ok(std::collections::BTreeSet::new());
         }
 
@@ -2136,11 +2145,11 @@ impl RuntimeSessionService {
             presentation.projected_revision == Some(presentation.revision)
                 && projection_context_is_current
         }) else {
-            self.set_agent_pane_screen(
+            self.update_agent_streaming_screen(
                 pane_id,
-                presentation.conversation_id,
+                &presentation.conversation_id,
                 presentation.baseline_screen.as_ref().clone(),
-            );
+            )?;
             return Ok(std::collections::BTreeSet::new());
         };
         let mut promoted = std::collections::BTreeSet::new();

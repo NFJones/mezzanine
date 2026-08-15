@@ -442,18 +442,11 @@ fn runtime_streaming_say_projection_preserves_agent_copy_mode() {
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 120).unwrap();
     screen.feed(b"history one\r\nhistory two\r\nhistory three\r\nhistory four\r\nhistory five");
     set_agent_pane_screen_for_test(&mut service, "%1", screen);
-
     service
-        .apply_agent_streaming_say_event_to_terminal_buffer(
-            "%1",
-            "turn-1",
-            &mez_agent::StreamingSayEvent::Started {
-                action_index: 0,
-                status: mez_agent::SayStatus::Final,
-                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
-            },
-        )
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
         .unwrap();
+
     let retained_viewport = {
         let copy_mode = ensure_agent_copy_mode_for_test(&mut service, "%1");
         copy_mode.scroll_to_top();
@@ -469,6 +462,30 @@ fn runtime_streaming_say_projection_preserves_agent_copy_mode() {
             copy_mode.visible_lines().to_vec(),
         )
     };
+    service.mark_presented_surface_scrollback_copy_mode("%1");
+
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Final,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .active_copy_mode_for_presented_surface("%1")
+            .map(|copy_mode| (
+                copy_mode.scroll_top(),
+                copy_mode.selection(),
+                copy_mode.visible_lines().to_vec(),
+            )),
+        Some(retained_viewport.clone())
+    );
+    assert!(service.presented_surface_uses_scrollback_copy_mode("%1"));
 
     service
         .apply_agent_streaming_say_event_to_terminal_buffer(
@@ -511,6 +528,7 @@ fn runtime_streaming_say_projection_preserves_agent_copy_mode() {
             )),
         Some(retained_viewport)
     );
+    assert!(service.presented_surface_uses_scrollback_copy_mode("%1"));
 }
 
 /// Verifies streamed rationale and command source use the existing prefixes,
