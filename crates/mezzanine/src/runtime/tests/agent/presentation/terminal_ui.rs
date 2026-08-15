@@ -427,6 +427,92 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
     );
 }
 
+/// Verifies streaming projection updates retain an active agent copy viewport.
+///
+/// A projection replaces the backing agent terminal screen while an operator
+/// may be reading older output. The retained copy-mode snapshot, viewport, and
+/// selection must remain intact so the next render does not pull the operator
+/// to the streaming tail.
+#[test]
+fn runtime_streaming_say_projection_preserves_agent_copy_mode() {
+    let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
+    service
+        .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 120).unwrap();
+    screen.feed(b"history one\r\nhistory two\r\nhistory three\r\nhistory four\r\nhistory five");
+    set_agent_pane_screen_for_test(&mut service, "%1", screen);
+
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Final,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        )
+        .unwrap();
+    let retained_viewport = {
+        let copy_mode = ensure_agent_copy_mode_for_test(&mut service, "%1");
+        copy_mode.scroll_to_top();
+        copy_mode
+            .select_range(
+                CopyPosition { line: 0, column: 0 },
+                CopyPosition { line: 0, column: 7 },
+            )
+            .unwrap();
+        (
+            copy_mode.scroll_top(),
+            copy_mode.selection(),
+            copy_mode.visible_lines().to_vec(),
+        )
+    };
+
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: "streaming tail".to_string(),
+            },
+        )
+        .unwrap();
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .expect("streaming text should produce projection work");
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work)
+        .expect("streaming text should render off actor");
+
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap()
+    );
+    let projected_screen = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(
+        projected_screen.contains("streaming") && projected_screen.contains("tail"),
+        "{projected_screen}"
+    );
+    assert_eq!(
+        service
+            .active_copy_mode_for_presented_surface("%1")
+            .map(|copy_mode| (
+                copy_mode.scroll_top(),
+                copy_mode.selection(),
+                copy_mode.visible_lines().to_vec(),
+            )),
+        Some(retained_viewport)
+    );
+}
+
 /// Verifies streamed rationale and command source use the existing prefixes,
 /// converge through the ordinary static renderers, and remain provisional.
 ///

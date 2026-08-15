@@ -1847,11 +1847,15 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        self.set_agent_pane_screen(
+        if !self.update_agent_pane_screen_preserving_interaction(
             &result.pane_id,
-            result.conversation_id.clone(),
+            &result.conversation_id,
             result.screen,
-        );
+        ) {
+            return Err(MezError::invalid_state(
+                "streaming say projection screen conversation changed",
+            ));
+        }
         let presentation = self
             .presentation
             .agent_streaming_say_presentations

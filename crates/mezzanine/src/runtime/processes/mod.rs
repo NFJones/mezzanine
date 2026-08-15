@@ -1111,6 +1111,27 @@ impl RuntimeSessionService {
         );
     }
 
+    /// Replaces a current conversation's agent screen without interrupting its interaction state.
+    ///
+    /// Returns `false` when the pane has no retained agent screen for the
+    /// requested conversation, preventing a delayed projection from updating a
+    /// different conversation's presentation.
+    pub(crate) fn update_agent_pane_screen_preserving_interaction(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        screen: TerminalScreen,
+    ) -> bool {
+        let Some(current) = self.process.agent_pane_screens.get_mut(pane_id) else {
+            return false;
+        };
+        if current.conversation_id != conversation_id {
+            return false;
+        }
+        current.screen = screen;
+        true
+    }
+
     /// Removes one pane's retained agent screen during replacement rollback.
     pub(crate) fn remove_agent_pane_screen(&mut self, pane_id: &str) {
         self.clear_interaction_state_for_surface(pane_id, PaneSurfaceKind::Agent);
