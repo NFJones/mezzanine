@@ -698,10 +698,7 @@ pub(crate) fn append_styled_agent_terminal_rendered_line(
             bytes.push_str(grapheme);
             continue;
         }
-        let rendition = if column < indicator_width
-            || (style == AgentTerminalPresentationStyle::AssistantPreview
-                && line.style_spans.is_empty())
-        {
+        let rendition = if column < indicator_width {
             label_rendition
         } else {
             rendered_line_rendition_at(&line.style_spans, column)

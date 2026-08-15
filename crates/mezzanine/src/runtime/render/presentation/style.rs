@@ -68,7 +68,7 @@ impl AgentTerminalPresentationStyle {
         match self {
             Self::UserPrompt => ui_theme.colors.agent_transcript_user,
             Self::Assistant => ui_theme.colors.agent_transcript_assistant,
-            Self::AssistantPreview => ui_theme.colors.agent_transcript_status,
+            Self::AssistantPreview => ui_theme.colors.agent_transcript_assistant,
             Self::Status => ui_theme.colors.agent_transcript_status,
             Self::Error => ui_theme.colors.agent_transcript_error,
             Self::Command => ui_theme.colors.agent_transcript_command,
