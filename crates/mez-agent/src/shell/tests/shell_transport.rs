@@ -62,6 +62,40 @@ fn agent_subshell_enter_command_suppresses_shell_startup_hooks() {
 }
 
 #[test]
+/// Verifies a managed zsh child receives immutable startup state and starts as
+/// one direct login-interactive process.
+///
+/// The parent startup shim removes its temporary managed-directory variable
+/// before agent admission. The handoff must therefore embed the runtime-owned
+/// directory rather than expand that expired variable, and it must execute a
+/// login shell so the managed `.zlogin` installs the child receiver.
+fn managed_zsh_agent_subshell_uses_runtime_owned_login_startup() {
+    let token = marker();
+    let managed = ManagedZshShell::new(token.clone(), "/tmp/mez-managed-zsh").unwrap();
+    let transport = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
+        Path::new("/bin/zsh"),
+        ShellClassification::Zsh,
+        Some(&token),
+        Some(&managed),
+        None,
+        None,
+        None,
+        Some("bootstrap-marker"),
+        None,
+    )
+    .unwrap();
+    let source = decoded_posix_wrapper_source(&transport);
+
+    assert!(
+        source.contains("ZDOTDIR='/tmp/mez-managed-zsh'"),
+        "{source}"
+    );
+    assert!(source.contains("'/bin/zsh' -l -i"), "{source}");
+    assert!(!source.contains("$MEZ_ZSH_MANAGED_ZDOTDIR"), "{source}");
+    assert!(!source.contains("'/bin/zsh' -c"), "{source}");
+}
+
+#[test]
 /// Verifies persistent-subshell handoffs remain safe for canonical Unix PTYs.
 ///
 /// Darwin accepts substantially shorter canonical input lines than Linux. The
@@ -128,6 +162,7 @@ fn agent_subshell_exit_boundary_follows_child_cleanup_for_every_shell() {
             Path::new(path),
             classification,
             (classification == ShellClassification::Zsh).then_some(&exit_marker),
+            None,
             managed_bash.then_some(Path::new("/tmp/mez-managed-bashrc")),
             managed_bash.then_some("bootstrap-marker"),
             (classification == ShellClassification::Fish)

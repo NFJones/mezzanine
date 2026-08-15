@@ -471,7 +471,7 @@ pub use sensitive_text::sanitize_hidden_model_note;
 pub use shell::{
     AgentShellValidationError, AgentShellValidationErrorKind, AgentShellValidationResult,
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentGroup,
-    EnvironmentSignature, MarkerToken, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
+    EnvironmentSignature, ManagedZshShell, MarkerToken, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
     SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES, ShellChildArgument, ShellChildLaunch,
     ShellClassification, ShellIdentityProbeResult, ShellTransaction, ShellTransactionInput,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory, ToolProbe,

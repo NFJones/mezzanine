@@ -2034,6 +2034,18 @@ impl RuntimeSessionService {
             .map(zsh_compat::ManagedZshCompatibility::token)
     }
 
+    /// Returns immutable managed-zsh startup state for one pane.
+    pub(super) fn managed_zsh_shell_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<Option<mez_agent::ManagedZshShell>> {
+        self.process
+            .pane_zsh_compatibility
+            .get(pane_id)
+            .map(zsh_compat::ManagedZshCompatibility::shell_descriptor)
+            .transpose()
+    }
+
     /// Returns the managed Bash receiver rcfile for one pane when installed.
     pub(super) fn bash_receiver_rcfile_for_pane(&self, pane_id: &str) -> Option<&Path> {
         self.process

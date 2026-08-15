@@ -33,7 +33,7 @@ pub use path_resolution::{
     parse_pane_path_resolution_output,
 };
 pub use transaction::{
-    DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, MarkerToken,
+    DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, ManagedZshShell, MarkerToken,
     SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES,
     SHELL_TRANSACTION_SIDECAR_FRAME_BYTES, ShellChildArgument, ShellChildLaunch,
     ShellClassification, ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport,

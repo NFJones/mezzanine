@@ -555,6 +555,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some((&receiver_token, bootstrap_marker)),
             None,
             None,
@@ -654,6 +655,7 @@ mod tests {
         let handoff = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
             &fish,
             ShellClassification::Fish,
+            None,
             None,
             None,
             None,

@@ -1135,6 +1135,7 @@ impl RuntimeSessionService {
         }
         self.finish_agent_subshell_input_clear(pane_id);
         let zsh_history_token = self.zsh_history_token_for_pane(pane_id).cloned();
+        let managed_zsh = self.managed_zsh_shell_for_pane(pane_id)?;
         let bash_receiver_rcfile = self
             .bash_receiver_rcfile_for_pane(pane_id)
             .map(std::path::Path::to_path_buf);
@@ -1155,6 +1156,7 @@ impl RuntimeSessionService {
             shell_identity.shell_path(),
             classification,
             zsh_history_token.as_ref(),
+            managed_zsh.as_ref(),
             bash_receiver_rcfile.as_deref(),
             bash_receiver_install_marker,
             fish_receiver_token.as_ref().zip(

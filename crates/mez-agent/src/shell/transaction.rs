@@ -11,7 +11,7 @@ use crate::{
 };
 use base64::Engine;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{validate_resolved_shell_path, validate_shell_marker_token};
 
@@ -184,6 +184,52 @@ impl MarkerToken {
     /// on duplicated control-flow logic.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Immutable runtime-owned startup state for one managed zsh pane.
+///
+/// The descriptor keeps the child launch independent from mutable variables in
+/// the already-running parent shell. In particular, the managed startup
+/// directory is rendered directly into the handoff instead of being recovered
+/// from `MEZ_ZSH_MANAGED_ZDOTDIR` after startup cleanup has unset it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedZshShell {
+    /// Pane-scoped token authenticating private receiver events.
+    token: MarkerToken,
+    /// Owner-only directory containing the managed zsh startup files.
+    startup_directory: PathBuf,
+}
+
+impl ManagedZshShell {
+    /// Creates a managed-zsh launch descriptor from runtime-owned state.
+    ///
+    /// Returns an invalid-arguments error when the startup directory is not
+    /// absolute because a relative `ZDOTDIR` would depend on mutable pane state.
+    pub fn new(
+        token: MarkerToken,
+        startup_directory: impl Into<PathBuf>,
+    ) -> AgentShellValidationResult<Self> {
+        let startup_directory = startup_directory.into();
+        if !startup_directory.is_absolute() {
+            return Err(AgentShellValidationError::invalid_args(
+                "managed zsh startup directory must be absolute",
+            ));
+        }
+        Ok(Self {
+            token,
+            startup_directory,
+        })
+    }
+
+    /// Returns the pane-scoped private receiver token.
+    pub fn token(&self) -> &MarkerToken {
+        &self.token
+    }
+
+    /// Returns the runtime-owned startup directory used by managed children.
+    pub fn startup_directory(&self) -> &Path {
+        &self.startup_directory
     }
 }
 
@@ -1647,6 +1693,33 @@ fn posix_agent_subshell_env_word_list_for_classification(
     words
 }
 
+/// Formats environment words for a managed zsh child from immutable runtime state.
+fn managed_zsh_agent_subshell_env_word_list(managed_zsh: &ManagedZshShell) -> Vec<String> {
+    let mut words = AGENT_SHELL_STARTUP_ENV_UNSETS
+        .iter()
+        .filter(|key| **key != "ZDOTDIR")
+        .map(|key| format!("-u {key}"))
+        .collect::<Vec<_>>();
+    words.push(format!(
+        "ZDOTDIR={}",
+        shell_quote(&managed_zsh.startup_directory().to_string_lossy())
+    ));
+    words.push("MEZ_ZSH_PRESERVE_STARTUP_CONTEXT=1".to_string());
+    words.push("MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET=\"$MEZ_ZSH_USER_ZDOTDIR_WAS_SET\"".to_string());
+    words.push("MEZ_ZSH_ORIGINAL_ZDOTDIR=\"$MEZ_ZSH_USER_ZDOTDIR\"".to_string());
+    words.extend(
+        AGENT_SUBSHELL_PROMPT_ENV
+            .iter()
+            .map(|(key, value)| format!("{key}={}", shell_quote(value))),
+    );
+    words
+}
+
+/// Renders one direct login-interactive managed zsh child invocation.
+fn managed_zsh_interactive_invocation_words(shell_path: &str) -> String {
+    format!("{} -l -i", shell_quote(shell_path))
+}
+
 /// Renders a Fish command word sequence that starts the persistent agent-mode
 /// child shell without user startup files.
 ///
@@ -2597,6 +2670,7 @@ pub fn agent_subshell_enter_command_with_shell_compatibility(
         shell_path,
         classification,
         zsh_history_token,
+        None,
         bash_receiver_rcfile,
         bash_receiver_install_marker,
         None,
@@ -2632,6 +2706,7 @@ pub fn agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
     shell_path: &Path,
     classification: ShellClassification,
     zsh_history_token: Option<&MarkerToken>,
+    managed_zsh: Option<&ManagedZshShell>,
     bash_receiver_rcfile: Option<&Path>,
     bash_receiver_install_marker: Option<&str>,
     fish_receiver_install: Option<(&MarkerToken, &str)>,
@@ -2669,7 +2744,10 @@ end
             shell_invocation = shell_invocation,
         )
     } else if classification == ShellClassification::Zsh && zsh_history_token.is_some() {
-        let mut env_words = posix_agent_subshell_env_word_list_for_classification(classification);
+        let mut env_words = managed_zsh.map_or_else(
+            || posix_agent_subshell_env_word_list_for_classification(classification),
+            managed_zsh_agent_subshell_env_word_list,
+        );
         if let Some(marker) = zsh_receiver_install_marker {
             env_words.push(format!(
                 "MEZ_ZSH_RECEIVER_INSTALL_MARKER={}",
@@ -2677,10 +2755,15 @@ end
             ));
         }
         let env_words = env_words.join(" \\\n  ");
-        let shell_invocation = posix_shell_interactive_invocation_words_with_startup_suppression(
-            &shell,
-            classification,
-            false,
+        let shell_invocation = managed_zsh.map_or_else(
+            || {
+                posix_shell_interactive_invocation_words_with_startup_suppression(
+                    &shell,
+                    classification,
+                    false,
+                )
+            },
+            |_| managed_zsh_interactive_invocation_words(&shell),
         );
         format!(
             "{history_start}__mez_agent_subshell_handoff() {{

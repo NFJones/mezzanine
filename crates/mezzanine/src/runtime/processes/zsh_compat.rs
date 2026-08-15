@@ -391,6 +391,12 @@ impl ManagedZshCompatibility {
         &self.token
     }
 
+    /// Returns immutable startup state for a managed login-interactive child.
+    pub(super) fn shell_descriptor(&self) -> Result<mez_agent::ManagedZshShell> {
+        mez_agent::ManagedZshShell::new(self.token.clone(), self.directory.clone())
+            .map_err(|error| MezError::invalid_state(error.to_string()))
+    }
+
     #[cfg(test)]
     /// Returns the managed startup directory for permission and cleanup tests.
     pub(super) fn directory(&self) -> &Path {
