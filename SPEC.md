@@ -2086,22 +2086,28 @@ established supported `say` action as the canonical assistant presentation, not
 as a command-style preview. It MUST display `mez> ` before the first text
 character, decode and apply every source character in order without dropping or
 truncating deltas, and MUST NOT apply `terminal.shell_output_preview_lines` to
-streamed `say` output. Physical client redraws MAY be coalesced by the global
-render-rate limit, but the terminal model MUST receive every decoded character.
-Mezzanine MUST render accumulated `text/plain`, Markdown, and unified-diff source
-according to the action's normalized `content_type`. Incomplete source MUST
-remain visible literally, and when additional characters make a rich projection
-parseable, Mezzanine MUST replace the same source-backed region with that
-projection instead of appending another block. Raw provider fields other than a
-structurally established `say.text`, including rationale and non-`say` action
-payloads, MUST NOT become visible through this streaming path.
+streamed `say` output. Provider deltas and physical client redraws MAY be
+coalesced at bounded sequence points, but the canonical source model MUST accept
+every decoded character exactly once and in order. Incomplete source MUST remain
+visible as one literal provisional component. Rich Markdown or unified-diff
+content MUST be built outside the serialized runtime actor from an immutable
+source generation and MUST replace the source-backed region only as one complete
+screen generation. Rendering budgets and cancellation MAY pause or discard
+private work, but MUST NOT publish a partial rich component, a partial terminal
+screen, or rows from mixed generations. Results captured before a source,
+conversation, geometry, or theme change MUST be rejected. Raw provider fields
+other than a structurally established `say.text`, including rationale and
+non-`say` action payloads, MUST NOT become visible through this streaming path.
 After provider completion, an exactly matching validated action index, status,
-content type, and raw text MUST promote the existing live region in place,
-persist its semantic source once, and suppress ordinary immediate or deferred
-replay. A mismatch MUST restore the pre-stream pane state and present only the
-validated action through the normal renderer. Provider failure, cancellation,
-retry, stale completion, claim loss, or pane/session replacement MUST discard
-unvalidated live state and restore that pre-stream state.
+content type, and raw text MUST promote the matching atomically published rich
+generation in place, persist its semantic source once, and suppress ordinary
+immediate or deferred replay. If rich projection fails or is unavailable, the
+validated action MUST fall back to ordinary complete presentation rather than
+promoting provisional literal rows. A mismatch MUST restore the pre-stream pane
+state and present only the validated action through the normal renderer.
+Provider failure, cancellation, retry, stale completion, claim loss, or
+pane/session replacement MUST discard unvalidated live state and restore that
+pre-stream state.
 Mezzanine MUST NOT impose a total per-turn automatic shell dispatch count cap,
 because broad but finite inspection batches are ordinary agent work. Mezzanine
 MUST still prevent provably duplicate file mutations from replaying after the

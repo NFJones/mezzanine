@@ -56,7 +56,7 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
     fn send_async_with_sse_events<'a>(
         &'a self,
         request: &'a ProviderHttpRequest,
-        on_event: &'a mut (dyn FnMut(SseEvent) + Send),
+        on_event: &'a mut (dyn FnMut(SseEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
         Box::pin(async move {
             let response = self.send_async(request).await?;
@@ -67,7 +67,7 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
                 )
                 .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
                 for event in events {
-                    on_event(event);
+                    on_event(event).await;
                 }
             }
             Ok(response)
@@ -309,6 +309,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                         event_body.push('\n');
                     }
                     event_body.push('\n');
+                    Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send>>
                 };
                 self.send_async_with_sse_events(request, &mut collect_event)
                     .await?
@@ -324,7 +325,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
     fn send_async_with_sse_events<'a>(
         &'a self,
         request: &'a ProviderHttpRequest,
-        on_event: &'a mut (dyn FnMut(SseEvent) + Send),
+        on_event: &'a mut (dyn FnMut(SseEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send),
     ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
         Box::pin(async move {
             request.timeouts.validate()?;
@@ -464,14 +465,18 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                     body.extend_from_slice(&chunk);
                 }
                 if let Some(decoder) = event_decoder.as_mut() {
+                    let mut decoded_events = Vec::new();
                     decoder
                         .push::<SseParseError, _>(&chunk, |event| {
                             terminal_event_seen =
                                 terminal_event_seen || provider_sse_event_is_terminal(&event);
-                            on_event(event);
+                            decoded_events.push(event);
                             Ok(())
                         })
                         .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
+                    for event in decoded_events {
+                        on_event(event).await;
+                    }
                 }
                 if expects_event_stream
                     && (terminal_event_seen
@@ -485,15 +490,19 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                     + Duration::from_millis(request.timeouts.inter_chunk_timeout_ms);
             }
             if let Some(decoder) = event_decoder.as_mut() {
+                let mut decoded_events = Vec::new();
                 decoder
                     .finish::<SseParseError, _>(
                         "provider stream response did not contain SSE data events",
                         |event| {
-                            on_event(event);
+                            decoded_events.push(event);
                             Ok(())
                         },
                     )
                     .map_err(|error| ProviderHttpError::invalid_state(error.message()))?;
+                for event in decoded_events {
+                    on_event(event).await;
+                }
             }
             if body_truncated {
                 response_headers.insert("x-mez-body-truncated".to_string(), "true".to_string());
@@ -760,6 +769,7 @@ mod provider_transport_tests {
         let client = tokio::spawn(async move {
             let mut on_event = move |event| {
                 let _ = progress_tx.try_send(event);
+                Box::pin(async {}) as std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
             };
             ReqwestProviderHttpTransport
                 .send_async_with_sse_events(&request, &mut on_event)

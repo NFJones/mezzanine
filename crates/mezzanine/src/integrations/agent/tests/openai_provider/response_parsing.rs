@@ -625,13 +625,18 @@ async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
         transport,
     )
     .unwrap();
-    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(32);
 
-    let response = provider
-        .send_request_async_with_progress(&request, Some(sender))
-        .await
-        .unwrap();
-    let events = std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>();
+    let provider_task = tokio::spawn(async move {
+        provider
+            .send_request_async_with_progress(&request, Some(sender))
+            .await
+    });
+    let mut events = Vec::new();
+    while let Some(event) = receiver.recv().await {
+        events.push(event);
+    }
+    let response = provider_task.await.unwrap().unwrap();
 
     assert!(matches!(
         events.first(),

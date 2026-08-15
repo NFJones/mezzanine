@@ -10,8 +10,9 @@
 use super::{
     AsyncModelProvider, AsyncProviderHttpTransport, DEFAULT_PROVIDER_TIMEOUT_MS, ExposeSecret,
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderModelCatalog, Result, SecretString, parse_openai_models_http_body,
-    provider_maap_stream_fragment, provider_quota_usage_from_headers, validate_non_empty,
+    ProviderModelCatalog, Result, SecretString, bounded_streaming_say_events,
+    parse_openai_models_http_body, provider_maap_stream_fragment,
+    provider_quota_usage_from_headers, validate_non_empty,
 };
 #[cfg(test)]
 use super::{ModelProvider, ProviderHttpTransport};
@@ -408,7 +409,7 @@ where
     fn send_request_async_with_progress<'a>(
         &'a self,
         request: &'a ModelRequest,
-        progress: Option<tokio::sync::mpsc::UnboundedSender<mez_agent::StreamingSayEvent>>,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         Box::pin(async move {
             if request.provider != AsyncModelProvider::provider_id(self) {
@@ -431,20 +432,30 @@ where
             let mut stream_error = None;
             let response = if let Some(decoder) = stream_decoder.as_mut() {
                 let mut on_event = |event| {
+                    let mut progress_events = Vec::new();
                     if stream_error.is_none() {
                         match decoder.push_event(&event) {
                             Ok(Some(_)) => {}
                             Ok(None) => {}
                             Err(error) => stream_error = Some(error),
                         }
-                        if let Some(fragment) = provider_maap_stream_fragment(&event)
-                            && let Some(progress) = progress.as_ref()
-                        {
-                            for event in streaming_say_extractor.push_delta(&fragment) {
-                                let _ = progress.send(event);
-                            }
+                        if let Some(fragment) = provider_maap_stream_fragment(&event) {
+                            progress_events = bounded_streaming_say_events(
+                                streaming_say_extractor.push_delta(&fragment),
+                            );
                         }
                     }
+                    let progress = progress.clone();
+                    Box::pin(async move {
+                        let Some(progress) = progress else {
+                            return;
+                        };
+                        for event in progress_events {
+                            if progress.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                    }) as Pin<Box<dyn Future<Output = ()> + Send>>
                 };
                 self.transport
                     .send_async_with_sse_events(&http_request, &mut on_event)

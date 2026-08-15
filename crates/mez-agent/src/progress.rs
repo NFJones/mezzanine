@@ -50,6 +50,13 @@ struct EmittedStreamingSay {
     complete: bool,
 }
 
+/// Cursor into one established but incomplete direct `say.text` JSON string.
+#[derive(Debug, Clone)]
+struct ActiveStreamingSay {
+    action_index: usize,
+    raw_cursor: usize,
+}
+
 /// Fail-closed extractor for ordered source events from direct or fenced MAAP.
 ///
 /// The provider HTTP response limit remains the resource bound. This extractor
@@ -58,7 +65,10 @@ struct EmittedStreamingSay {
 pub struct StreamingSayExtractor {
     input: String,
     emitted: Vec<EmittedStreamingSay>,
+    active: Option<ActiveStreamingSay>,
     disabled: bool,
+    #[cfg(test)]
+    structural_scans: usize,
 }
 
 impl StreamingSayExtractor {
@@ -68,8 +78,45 @@ impl StreamingSayExtractor {
             return Vec::new();
         }
         self.input.push_str(delta);
+        let mut events = Vec::new();
+        if let Some(mut active) = self.active.take() {
+            match decode_json_string_suffix(&self.input, active.raw_cursor) {
+                JsonStringSuffix::Incomplete { text, raw_cursor } => {
+                    if !self.append_active_text(&active, text, &mut events) {
+                        self.disable();
+                        return Vec::new();
+                    }
+                    active.raw_cursor = raw_cursor;
+                    self.active = Some(active);
+                    return events;
+                }
+                JsonStringSuffix::Complete { text, .. } => {
+                    if !self.append_active_text(&active, text, &mut events) {
+                        self.disable();
+                        return Vec::new();
+                    }
+                    let Some(state) = self.emitted.get_mut(active.action_index) else {
+                        self.disable();
+                        return Vec::new();
+                    };
+                    state.complete = true;
+                    events.push(StreamingSayEvent::TextComplete {
+                        action_index: active.action_index,
+                    });
+                }
+                JsonStringSuffix::Invalid => {
+                    self.disable();
+                    return Vec::new();
+                }
+            }
+        }
+
+        #[cfg(test)]
+        {
+            self.structural_scans = self.structural_scans.saturating_add(1);
+        }
         let Some(actions) = streaming_say_actions(&self.input) else {
-            return Vec::new();
+            return events;
         };
         let required_states = actions
             .last()
@@ -79,7 +126,7 @@ impl StreamingSayExtractor {
                 .resize_with(required_states, EmittedStreamingSay::default);
         }
 
-        let mut events = Vec::new();
+        let mut next_active = None;
         for action in actions {
             let state = &mut self.emitted[action.action_index];
             if !state.started {
@@ -107,8 +154,38 @@ impl StreamingSayExtractor {
                     action_index: action.action_index,
                 });
             }
+            if !action.complete {
+                next_active = Some(ActiveStreamingSay {
+                    action_index: action.action_index,
+                    raw_cursor: action.text_raw_cursor,
+                });
+            }
         }
+        self.active = next_active;
         events
+    }
+
+    /// Appends one incrementally decoded suffix to established action state.
+    fn append_active_text(
+        &mut self,
+        active: &ActiveStreamingSay,
+        text: String,
+        events: &mut Vec<StreamingSayEvent>,
+    ) -> bool {
+        let Some(state) = self.emitted.get_mut(active.action_index) else {
+            return false;
+        };
+        if !state.started || state.complete {
+            return false;
+        }
+        if !text.is_empty() {
+            state.text.push_str(&text);
+            events.push(StreamingSayEvent::TextDelta {
+                action_index: active.action_index,
+                text,
+            });
+        }
+        true
     }
 
     /// Permanently suppresses extraction for the current provider response.
@@ -116,6 +193,7 @@ impl StreamingSayExtractor {
         self.disabled = true;
         self.input.clear();
         self.emitted.clear();
+        self.active = None;
     }
 }
 
@@ -126,6 +204,7 @@ struct StreamingSayAction {
     content_type: String,
     text: String,
     complete: bool,
+    text_raw_cursor: usize,
 }
 
 /// Extracts all structurally established supported `say` actions.
@@ -149,13 +228,15 @@ fn streaming_say_actions(input: &str) -> Option<Vec<StreamingSayAction>> {
             continue;
         }
         let text_start = direct_json_field_value_start(action, "text")?.trim_start();
-        let (text, complete) = decode_incomplete_json_string(text_start)?;
+        let (text, complete, raw_cursor) = decode_incomplete_json_string(text_start)?;
+        let text_raw_cursor = text_start.as_ptr() as usize - input.as_ptr() as usize + raw_cursor;
         extracted.push(StreamingSayAction {
             action_index,
             status,
             content_type,
             text,
             complete,
+            text_raw_cursor,
         });
     }
     Some(extracted)
@@ -263,38 +344,130 @@ fn json_string_field(input: &str, key: &str) -> Option<String> {
     serde_json::from_str(&value[..end]).ok()
 }
 
-/// Decodes the longest valid prefix and reports whether the string has closed.
-fn decode_incomplete_json_string(input: &str) -> Option<(String, bool)> {
-    let input = input.strip_prefix('"')?;
-    let mut escaped = false;
-    let mut complete_end = None;
-    for (index, character) in input.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match character {
-            '\\' => escaped = true,
-            '"' => {
-                complete_end = Some(index);
-                break;
+/// Result of decoding newly available bytes from one JSON string.
+enum JsonStringSuffix {
+    /// The string remains open at the end of currently available input.
+    Incomplete { text: String, raw_cursor: usize },
+    /// The closing quote was consumed.
+    Complete { text: String, raw_cursor: usize },
+    /// The available bytes cannot form a valid JSON string.
+    Invalid,
+}
+
+/// Decodes one incomplete JSON string and returns its next safe raw cursor.
+fn decode_incomplete_json_string(input: &str) -> Option<(String, bool, usize)> {
+    input.strip_prefix('"')?;
+    match decode_json_string_suffix(input, 1) {
+        JsonStringSuffix::Incomplete { text, raw_cursor } => Some((text, false, raw_cursor)),
+        JsonStringSuffix::Complete { text, raw_cursor } => Some((text, true, raw_cursor)),
+        JsonStringSuffix::Invalid => None,
+    }
+}
+
+/// Decodes complete Unicode scalars from one established JSON string suffix.
+fn decode_json_string_suffix(input: &str, mut raw_cursor: usize) -> JsonStringSuffix {
+    let bytes = input.as_bytes();
+    let mut text = String::new();
+    while raw_cursor < bytes.len() {
+        match bytes[raw_cursor] {
+            b'"' => {
+                return JsonStringSuffix::Complete {
+                    text,
+                    raw_cursor: raw_cursor.saturating_add(1),
+                };
             }
-            _ => {}
+            b'\\' => {
+                let escape_start = raw_cursor;
+                let Some(escaped) = bytes.get(raw_cursor.saturating_add(1)).copied() else {
+                    return JsonStringSuffix::Incomplete {
+                        text,
+                        raw_cursor: escape_start,
+                    };
+                };
+                match escaped {
+                    b'"' => text.push('"'),
+                    b'\\' => text.push('\\'),
+                    b'/' => text.push('/'),
+                    b'b' => text.push('\u{0008}'),
+                    b'f' => text.push('\u{000c}'),
+                    b'n' => text.push('\n'),
+                    b'r' => text.push('\r'),
+                    b't' => text.push('\t'),
+                    b'u' => {
+                        let Some(first) = decode_json_hex_quad(bytes, raw_cursor + 2) else {
+                            if bytes.len() < raw_cursor.saturating_add(6) {
+                                return JsonStringSuffix::Incomplete {
+                                    text,
+                                    raw_cursor: escape_start,
+                                };
+                            }
+                            return JsonStringSuffix::Invalid;
+                        };
+                        if (0xd800..=0xdbff).contains(&first) {
+                            if bytes.len() < raw_cursor.saturating_add(12) {
+                                return JsonStringSuffix::Incomplete {
+                                    text,
+                                    raw_cursor: escape_start,
+                                };
+                            }
+                            if bytes.get(raw_cursor + 6..raw_cursor + 8) != Some(b"\\u") {
+                                return JsonStringSuffix::Invalid;
+                            }
+                            let Some(second) = decode_json_hex_quad(bytes, raw_cursor + 8) else {
+                                return JsonStringSuffix::Invalid;
+                            };
+                            if !(0xdc00..=0xdfff).contains(&second) {
+                                return JsonStringSuffix::Invalid;
+                            }
+                            let scalar = 0x10000
+                                + ((u32::from(first) - 0xd800) << 10)
+                                + (u32::from(second) - 0xdc00);
+                            let Some(character) = char::from_u32(scalar) else {
+                                return JsonStringSuffix::Invalid;
+                            };
+                            text.push(character);
+                            raw_cursor += 12;
+                            continue;
+                        }
+                        if (0xdc00..=0xdfff).contains(&first) {
+                            return JsonStringSuffix::Invalid;
+                        }
+                        let Some(character) = char::from_u32(u32::from(first)) else {
+                            return JsonStringSuffix::Invalid;
+                        };
+                        text.push(character);
+                        raw_cursor += 6;
+                        continue;
+                    }
+                    _ => return JsonStringSuffix::Invalid,
+                }
+                raw_cursor += 2;
+            }
+            byte if byte < 0x20 => return JsonStringSuffix::Invalid,
+            _ => {
+                let Some(character) = input[raw_cursor..].chars().next() else {
+                    return JsonStringSuffix::Invalid;
+                };
+                text.push(character);
+                raw_cursor += character.len_utf8();
+            }
         }
     }
-    let candidate = &input[..complete_end.unwrap_or(input.len())];
-    for end in candidate
-        .char_indices()
-        .map(|(index, _)| index)
-        .chain(std::iter::once(candidate.len()))
-        .rev()
-    {
-        let encoded = format!("\"{}\"", &candidate[..end]);
-        if let Ok(decoded) = serde_json::from_str::<String>(&encoded) {
-            return Some((decoded, complete_end.is_some()));
-        }
-    }
-    None
+    JsonStringSuffix::Incomplete { text, raw_cursor }
+}
+
+/// Decodes exactly four ASCII hexadecimal digits at `start`.
+fn decode_json_hex_quad(bytes: &[u8], start: usize) -> Option<u16> {
+    let digits = bytes.get(start..start.saturating_add(4))?;
+    digits.iter().try_fold(0_u16, |value, byte| {
+        let digit = match byte {
+            b'0'..=b'9' => u16::from(byte - b'0'),
+            b'a'..=b'f' => u16::from(byte - b'a' + 10),
+            b'A'..=b'F' => u16::from(byte - b'A' + 10),
+            _ => return None,
+        };
+        Some((value << 4) | digit)
+    })
 }
 
 /// Returns the byte end immediately after one complete JSON string.
@@ -746,6 +919,43 @@ mod tests {
                 },
                 StreamingSayEvent::TextComplete { action_index: 0 },
             ]
+        );
+    }
+
+    /// Verifies established say text is decoded incrementally instead of
+    /// rescanning the complete provider response for every source fragment.
+    #[test]
+    fn streaming_say_extractor_scans_structure_only_at_sequence_points() {
+        let mut extractor = StreamingSayExtractor::default();
+        let prefix =
+            r#"{"actions":[{"type":"say","status":"final","content_type":"text/plain","text":""#;
+        let mut streamed = String::new();
+        assert!(extractor.push_delta(prefix).iter().any(|event| matches!(
+            event,
+            StreamingSayEvent::Started {
+                action_index: 0,
+                ..
+            }
+        )));
+
+        for character in "linear-source-".repeat(512).chars() {
+            for event in extractor.push_delta(&character.to_string()) {
+                if let StreamingSayEvent::TextDelta { text, .. } = event {
+                    streamed.push_str(&text);
+                }
+            }
+        }
+        let completed = extractor.push_delta(r#""}]}"#);
+
+        assert_eq!(streamed, "linear-source-".repeat(512));
+        assert_eq!(
+            completed,
+            vec![StreamingSayEvent::TextComplete { action_index: 0 }]
+        );
+        assert!(
+            extractor.structural_scans <= 2,
+            "structural_scans={}",
+            extractor.structural_scans
         );
     }
 

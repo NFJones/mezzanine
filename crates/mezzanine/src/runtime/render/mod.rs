@@ -356,9 +356,15 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     /// Conversation binding captured before the first streamed action.
     conversation_id: String,
     /// Exact pane state restored before each rich-source reprojection.
-    baseline_screen: TerminalScreen,
+    baseline_screen: std::sync::Arc<TerminalScreen>,
     /// Established streamed actions keyed by their MAAP array index.
     actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
+    /// Monotonic source generation used to fence worker projections.
+    revision: u64,
+    /// Newest complete projection atomically installed in the pane.
+    projected_revision: Option<u64>,
+    /// Worker-rendered action metadata retained for exact promotion.
+    projected_actions: Option<Vec<RuntimeStreamingSayProjectedAction>>,
 }
 
 /// Accumulated source and contract fields for one streamed `say` action.
@@ -372,6 +378,69 @@ pub(crate) struct RuntimeStreamingSayAction {
     text: String,
     /// Whether the JSON source string has closed.
     complete: bool,
+}
+
+/// Persistable metadata for one atomically projected streamed action.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeStreamingSayProjectedAction {
+    /// Original action position in the provider batch.
+    pub(crate) action_index: usize,
+    /// Stable presentation style name for every rendered line.
+    pub(crate) style: String,
+    /// Complete display lines published for this action.
+    pub(crate) rendered_lines: Vec<String>,
+    /// Complete raw-copy metadata associated with the rendered component.
+    pub(crate) copy_lines: Vec<String>,
+}
+
+/// Immutable input for one completed streaming-say projection worker.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeStreamingSayProjectionWork {
+    /// Pane that owns the source-backed presentation.
+    pub(crate) pane_id: String,
+    /// Provider turn that owns the streamed source.
+    pub(crate) turn_id: String,
+    /// Conversation binding captured when streaming began.
+    pub(crate) conversation_id: String,
+    /// Exact source generation represented by this work item.
+    pub(crate) revision: u64,
+    /// Pre-stream screen from which the complete candidate is rebuilt.
+    pub(crate) baseline_screen: std::sync::Arc<TerminalScreen>,
+    /// Complete action state captured for this generation.
+    pub(crate) actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
+    /// Available width inside the agent presentation gutter.
+    pub(crate) frame_width: usize,
+    /// Full terminal width used by table and fenced renderers.
+    pub(crate) table_width: usize,
+    /// Immutable theme generation captured for this projection.
+    pub(crate) ui_theme: mez_mux::theme::UiTheme,
+    /// Exact terminal geometry captured for this projection.
+    pub(crate) screen_size: Size,
+}
+
+/// Complete screen generation produced outside the serialized runtime actor.
+#[derive(Debug)]
+pub(crate) struct RuntimeStreamingSayProjectionResult {
+    /// Pane that owns the candidate screen.
+    pub(crate) pane_id: String,
+    /// Provider turn that owns the candidate screen.
+    pub(crate) turn_id: String,
+    /// Conversation binding captured by the worker input.
+    pub(crate) conversation_id: String,
+    /// Exact source generation represented by the candidate.
+    pub(crate) revision: u64,
+    /// Available width used to build the candidate.
+    pub(crate) frame_width: usize,
+    /// Full terminal width used to build tables and fenced content.
+    pub(crate) table_width: usize,
+    /// Immutable theme used to build the candidate.
+    pub(crate) ui_theme: mez_mux::theme::UiTheme,
+    /// Exact terminal geometry used to build the candidate.
+    pub(crate) screen_size: Size,
+    /// Complete per-action metadata built with the candidate screen.
+    pub(crate) projected_actions: Vec<RuntimeStreamingSayProjectedAction>,
+    /// Fully rendered candidate published only as one state replacement.
+    pub(crate) screen: TerminalScreen,
 }
 
 /// Pane-local presentation state restored when conversation resume fails.

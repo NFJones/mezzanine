@@ -369,7 +369,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
 /// Product effects supplied to the canonical lower production turn loop.
 struct ProductAgentTurnEnvironment<'runner, 'config, P> {
     runner: &'runner AgentTurnRunner<'config, P>,
-    progress: Option<tokio::sync::mpsc::UnboundedSender<mez_agent::StreamingSayEvent>>,
+    progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
 }
 
 impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment<'_, '_, P> {
@@ -533,7 +533,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         context: &AgentContext,
         allowed_actions: Option<AllowedActionSet>,
         interaction_kind: Option<mez_agent::ModelInteractionKind>,
-        progress: Option<tokio::sync::mpsc::UnboundedSender<mez_agent::StreamingSayEvent>>,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Result<AgentTurnExecution> {
         let environment = ProductAgentTurnEnvironment {
             runner: self,

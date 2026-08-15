@@ -841,6 +841,29 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
+            AsyncRuntimeRequest::TakeStreamingSayProjectionWork {
+                pane_id,
+                turn_id,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .take_agent_streaming_say_projection_work(&pane_id, &turn_id);
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::ApplyStreamingSayProjection { result, reply } => {
+                let applied = self
+                    .service
+                    .apply_agent_streaming_say_projection_result(result);
+                if applied.as_ref().is_ok_and(|applied| *applied) {
+                    let side_effects = self
+                        .render_side_effects(crate::runtime::RenderInvalidationReason::PaneOutput);
+                    let _ = self.queue_runtime_side_effects(side_effects);
+                }
+                let _ = reply.send(applied);
+                false
+            }
             AsyncRuntimeRequest::SubmitRuntimeEvents { batch, reply } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let result = self.apply_runtime_event_batch(batch).await;

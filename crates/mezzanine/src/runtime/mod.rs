@@ -327,7 +327,10 @@ pub(crate) use processes::{
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod render;
-pub(crate) use render::{RuntimePresentationComponent, RuntimePresentationSettings};
+pub(crate) use render::{
+    RuntimePresentationComponent, RuntimePresentationSettings, RuntimeStreamingSayProjectionResult,
+    RuntimeStreamingSayProjectionWork,
+};
 /// Exposes the service module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

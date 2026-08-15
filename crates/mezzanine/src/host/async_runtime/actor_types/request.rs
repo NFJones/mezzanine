@@ -709,6 +709,22 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Option<RuntimeAgentRememberDispatch>>>,
     },
+    /// Captures immutable completed streaming-say projection work.
+    TakeStreamingSayProjectionWork {
+        /// Pane whose completed literal source should be projected.
+        pane_id: String,
+        /// Provider turn that owns the source-backed presentation.
+        turn_id: String,
+        /// Returns generation-stamped worker input when projection is ready.
+        reply: oneshot::Sender<Result<Option<crate::runtime::RuntimeStreamingSayProjectionWork>>>,
+    },
+    /// Atomically installs one complete worker-rendered streaming generation.
+    ApplyStreamingSayProjection {
+        /// Generation-stamped complete candidate returned by the worker.
+        result: crate::runtime::RuntimeStreamingSayProjectionResult,
+        /// Reports whether current actor-owned state accepted the candidate.
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Represents the Submit Runtime Events case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1029,7 +1045,9 @@ impl AsyncRuntimeRequest {
             | Self::ClaimApprovedExternalAction { .. }
             | Self::CompleteApprovedExternalAction { .. }
             | Self::ClaimAgentCompactionTask { .. }
-            | Self::ClaimAgentRememberTask { .. } => Family::Provider,
+            | Self::ClaimAgentRememberTask { .. }
+            | Self::TakeStreamingSayProjectionWork { .. }
+            | Self::ApplyStreamingSayProjection { .. } => Family::Provider,
             Self::SubmitRuntimeEvents { .. } => Family::Event,
             Self::DrainRuntimeSideEffects { .. }
             | Self::QueueRuntimeSideEffects { .. }

@@ -560,6 +560,31 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Captures immutable completed streaming source for off-actor projection.
+    pub async fn take_streaming_say_projection_work(
+        &self,
+        pane_id: String,
+        turn_id: String,
+    ) -> Result<Option<crate::runtime::RuntimeStreamingSayProjectionWork>> {
+        self.request(
+            |reply| AsyncRuntimeRequest::TakeStreamingSayProjectionWork {
+                pane_id,
+                turn_id,
+                reply,
+            },
+        )
+        .await?
+    }
+
+    /// Installs a complete projection only when its captured generation is current.
+    pub async fn apply_streaming_say_projection(
+        &self,
+        result: crate::runtime::RuntimeStreamingSayProjectionResult,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::ApplyStreamingSayProjection { result, reply })
+            .await?
+    }
+
     /// Runs the submit runtime events operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

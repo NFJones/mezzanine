@@ -60,6 +60,9 @@ use openai_chat_completions::OpenAiChatCompletionsDialect;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
 
+/// Maximum decoded `say.text` bytes delivered in one progress event.
+pub(crate) const STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES: usize = 16 * 1024;
+
 /// Returns one MAAP-bearing text or native-argument fragment from an SSE event.
 pub(super) fn provider_maap_stream_fragment(event: &mez_agent::SseEvent) -> Option<String> {
     let value = serde_json::from_str::<serde_json::Value>(event.data.trim()).ok()?;
@@ -88,6 +91,82 @@ pub(super) fn provider_maap_stream_fragment(event: &mez_agent::SseEvent) -> Opti
         })
         .filter(|fragment| !fragment.is_empty())
         .map(str::to_string)
+}
+
+/// Splits oversized text deltas at UTF-8 boundaries while preserving barriers.
+fn bounded_streaming_say_events(
+    events: Vec<mez_agent::StreamingSayEvent>,
+) -> Vec<mez_agent::StreamingSayEvent> {
+    let mut bounded = Vec::new();
+    for event in events {
+        let mez_agent::StreamingSayEvent::TextDelta { action_index, text } = event else {
+            bounded.push(event);
+            continue;
+        };
+        let mut start = 0usize;
+        while start < text.len() {
+            let mut end = start
+                .saturating_add(STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES)
+                .min(text.len());
+            while end > start && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == start {
+                let Some(character) = text[start..].chars().next() else {
+                    break;
+                };
+                end = start.saturating_add(character.len_utf8());
+            }
+            bounded.push(mez_agent::StreamingSayEvent::TextDelta {
+                action_index,
+                text: text[start..end].to_string(),
+            });
+            start = end;
+        }
+    }
+    bounded
+}
+
+#[cfg(test)]
+mod streaming_say_progress_tests {
+    use super::*;
+
+    /// Verifies oversized deltas are split losslessly without cutting a
+    /// multi-byte scalar or moving lifecycle barriers around the text.
+    #[test]
+    fn bounded_streaming_say_events_preserve_utf8_and_order() {
+        let source = format!(
+            "{}😀{}",
+            "a".repeat(STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES - 1),
+            "b".repeat(STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES)
+        );
+        let events = bounded_streaming_say_events(vec![
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 3,
+                text: source.clone(),
+            },
+            mez_agent::StreamingSayEvent::TextComplete { action_index: 3 },
+        ]);
+
+        assert!(events.len() >= 3, "events={events:?}");
+        assert!(events[..events.len() - 1].iter().all(|event| matches!(
+            event,
+            mez_agent::StreamingSayEvent::TextDelta { text, .. }
+                if text.len() <= STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES
+        )));
+        assert!(matches!(
+            events.last(),
+            Some(mez_agent::StreamingSayEvent::TextComplete { action_index: 3 })
+        ));
+        let reconstructed = events
+            .iter()
+            .filter_map(|event| match event {
+                mez_agent::StreamingSayEvent::TextDelta { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert_eq!(reconstructed, source);
+    }
 }
 /// OpenAI organization routing header for multi-organization API keys.
 pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
@@ -153,7 +232,7 @@ pub trait AsyncModelProvider: Send + Sync {
     fn send_request_async_with_progress<'a>(
         &'a self,
         request: &'a ModelRequest,
-        _progress: Option<tokio::sync::mpsc::UnboundedSender<mez_agent::StreamingSayEvent>>,
+        _progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         self.send_request_async(request)
     }
@@ -893,7 +972,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
     fn send_request_async_with_progress<'a>(
         &'a self,
         request: &'a ModelRequest,
-        progress: Option<tokio::sync::mpsc::UnboundedSender<mez_agent::StreamingSayEvent>>,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         Box::pin(async move {
             if request.provider != AsyncModelProvider::provider_id(self) {
@@ -914,20 +993,30 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
             let mut stream_error = None;
             let response = if self.stream {
                 let mut on_event = |event| {
+                    let mut progress_events = Vec::new();
                     if stream_error.is_none() {
                         match stream_decoder.push_event(&event) {
                             Ok(Some(_)) => {}
                             Ok(None) => {}
                             Err(error) => stream_error = Some(error),
                         }
-                        if let Some(fragment) = provider_maap_stream_fragment(&event)
-                            && let Some(progress) = progress.as_ref()
-                        {
-                            for event in streaming_say_extractor.push_delta(&fragment) {
-                                let _ = progress.send(event);
-                            }
+                        if let Some(fragment) = provider_maap_stream_fragment(&event) {
+                            progress_events = bounded_streaming_say_events(
+                                streaming_say_extractor.push_delta(&fragment),
+                            );
                         }
                     }
+                    let progress = progress.clone();
+                    Box::pin(async move {
+                        let Some(progress) = progress else {
+                            return;
+                        };
+                        for event in progress_events {
+                            if progress.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                    }) as Pin<Box<dyn Future<Output = ()> + Send>>
                 };
                 self.transport
                     .send_async_with_sse_events(&http_request, &mut on_event)

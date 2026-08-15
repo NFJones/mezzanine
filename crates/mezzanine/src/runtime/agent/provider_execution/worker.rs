@@ -112,10 +112,9 @@ impl RuntimeSessionService {
         let applied = self
             .apply_agent_streaming_say_event_to_terminal_buffer(pane_id, turn_id, event)
             .is_ok();
-        self.runtime_transition_with_render(
-            applied,
-            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
-        )
+        let render_reason = (!matches!(event, mez_agent::StreamingSayEvent::TextComplete { .. }))
+            .then_some(crate::runtime::RenderInvalidationReason::PaneOutput);
+        self.runtime_transition_with_render(applied, render_reason)
     }
 
     /// Applies provider completion through the transport-neutral transition contract.

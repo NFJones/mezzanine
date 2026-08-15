@@ -14,8 +14,57 @@ use super::{
     is_terminal_runtime_lifecycle_state, provider_error_retry_class,
     runtime_execute_auto_sizing_with_async_provider, sleep, watch,
 };
+use crate::integrations::agent::provider::STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES;
 use crate::runtime::RuntimeAgentProviderWorkerOutcome;
 use std::time::{Duration, Instant};
+
+/// Maximum ordered streaming events buffered between a provider and the actor.
+const STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY: usize = 32;
+/// Maximum progress events submitted in one actor request after provider completion.
+const STREAMING_SAY_COMPLETION_BATCH_LIMIT: usize = 16;
+/// Appends one progress event while preserving lifecycle barriers.
+fn push_coalesced_streaming_say_event(
+    events: &mut Vec<mez_agent::StreamingSayEvent>,
+    event: mez_agent::StreamingSayEvent,
+) {
+    if let mez_agent::StreamingSayEvent::TextDelta { action_index, text } = event {
+        if let Some(mez_agent::StreamingSayEvent::TextDelta {
+            action_index: previous_action_index,
+            text: previous_text,
+        }) = events.last_mut()
+            && *previous_action_index == action_index
+            && previous_text.len().saturating_add(text.len())
+                <= STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES
+        {
+            previous_text.push_str(&text);
+            return;
+        }
+        events.push(mez_agent::StreamingSayEvent::TextDelta { action_index, text });
+        return;
+    }
+    events.push(event);
+}
+
+/// Converts coalesced provider progress into one bounded actor event batch.
+fn streaming_say_runtime_event_batch(
+    agent_id: &AgentId,
+    turn_id: &str,
+    pane_id: &str,
+    events: Vec<mez_agent::StreamingSayEvent>,
+) -> RuntimeEventBatch {
+    let mut batch = RuntimeEventBatch::new();
+    for event in events {
+        batch.push(RuntimeEvent::AgentProvider(
+            AgentProviderEvent::StreamingSay {
+                agent_id: agent_id.clone(),
+                turn_id: turn_id.to_string(),
+                pane_id: pane_id.to_string(),
+                event,
+            },
+        ));
+    }
+    batch
+}
 
 /// Runs the run async agent provider service operation for this subsystem.
 ///
@@ -380,7 +429,8 @@ async fn monitor_runtime_agent_provider_dispatch(
         return Ok(None);
     }
     let pane_id = dispatch.turn.pane_id.clone();
-    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (progress_sender, mut progress_receiver) =
+        tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let mut latency = ProviderLatencyTracker::new(Instant::now());
     let mut worker = tokio::spawn(execute_runtime_agent_provider_dispatch(
         dispatch,
@@ -393,30 +443,63 @@ async fn monitor_runtime_agent_provider_dispatch(
                     crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
                     latency.total_elapsed_ms(Instant::now()),
                 );
-                let mut batch = RuntimeEventBatch::new();
-                while let Ok(event) = progress_receiver.try_recv() {
-                    batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::StreamingSay {
-                        agent_id: agent_id.clone(),
-                        turn_id: turn_id.clone(),
-                        pane_id: pane_id.clone(),
-                        event,
-                    }));
-                }
-                if !batch.events.is_empty() {
+                loop {
+                    let mut events = Vec::new();
+                    let mut drained = 0usize;
+                    while drained < STREAMING_SAY_COMPLETION_BATCH_LIMIT {
+                        let Ok(event) = progress_receiver.try_recv() else {
+                            break;
+                        };
+                        push_coalesced_streaming_say_event(&mut events, event);
+                        drained = drained.saturating_add(1);
+                    }
+                    if events.is_empty() {
+                        break;
+                    }
+                    let batch = streaming_say_runtime_event_batch(
+                        &agent_id,
+                        &turn_id,
+                        &pane_id,
+                        events,
+                    );
                     handle.submit_runtime_events(batch).await?;
+                    tokio::task::yield_now().await;
+                }
+                if let Some(work) = handle
+                    .take_streaming_say_projection_work(pane_id.clone(), turn_id.clone())
+                    .await?
+                {
+                    let projection = tokio::task::spawn_blocking(move || {
+                        crate::runtime::RuntimeSessionService::build_agent_streaming_say_projection(
+                            work,
+                        )
+                    })
+                    .await;
+                    if let Ok(Ok(projection)) = projection {
+                        let _ = handle.apply_streaming_say_projection(projection).await?;
+                    }
                 }
                 return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
             }
             Some(event) = progress_receiver.recv() => {
                 let (phase, elapsed_ms) = latency.observe_progress(Instant::now());
                 handle.record_latency_phase(phase, elapsed_ms);
-                let mut batch = RuntimeEventBatch::new();
-                batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::StreamingSay {
-                    agent_id: agent_id.clone(),
-                    turn_id: turn_id.clone(),
-                    pane_id: pane_id.clone(),
-                    event,
-                }));
+                let mut events = Vec::new();
+                push_coalesced_streaming_say_event(&mut events, event);
+                let mut drained = 1usize;
+                while drained < STREAMING_SAY_COMPLETION_BATCH_LIMIT {
+                    let Ok(event) = progress_receiver.try_recv() else {
+                        break;
+                    };
+                    push_coalesced_streaming_say_event(&mut events, event);
+                    drained = drained.saturating_add(1);
+                }
+                let batch = streaming_say_runtime_event_batch(
+                    &agent_id,
+                    &turn_id,
+                    &pane_id,
+                    events,
+                );
                 handle.submit_runtime_events(batch).await?;
             }
             _ = handle.wait_for_event_delivery() => {}
@@ -676,9 +759,7 @@ fn remember_worker_event(
 /// on duplicated control-flow logic.
 async fn execute_runtime_agent_provider_dispatch(
     dispatch: RuntimeAgentProviderDispatch,
-    output_progress_sender: Option<
-        tokio::sync::mpsc::UnboundedSender<mez_agent::StreamingSayEvent>,
-    >,
+    output_progress_sender: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
 ) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
         turn,
@@ -1142,6 +1223,53 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies adjacent deltas for one action share a bounded actor sequence
+    /// point without crossing action or completion lifecycle barriers.
+    #[test]
+    fn streaming_say_progress_coalescing_preserves_barriers() {
+        let mut events = Vec::new();
+        push_coalesced_streaming_say_event(
+            &mut events,
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: "alpha ".to_string(),
+            },
+        );
+        push_coalesced_streaming_say_event(
+            &mut events,
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: "beta".to_string(),
+            },
+        );
+        push_coalesced_streaming_say_event(
+            &mut events,
+            mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+        );
+        push_coalesced_streaming_say_event(
+            &mut events,
+            mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 1,
+                text: "gamma".to_string(),
+            },
+        );
+
+        assert_eq!(
+            events,
+            vec![
+                mez_agent::StreamingSayEvent::TextDelta {
+                    action_index: 0,
+                    text: "alpha beta".to_string(),
+                },
+                mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+                mez_agent::StreamingSayEvent::TextDelta {
+                    action_index: 1,
+                    text: "gamma".to_string(),
+                },
+            ]
+        );
+    }
 
     /// Verifies provider progress latency is attributed first to TTFB and then
     /// to bounded inter-chunk intervals using deterministic monotonic instants.
