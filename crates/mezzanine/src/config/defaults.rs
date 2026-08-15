@@ -176,7 +176,7 @@ completion_attention_flashing = true
 resize_debounce_ms = 200
 # Maximum attached-terminal redraw rate.
 render_rate_limit_fps = 30
-# Shell-action result previews retain this many output lines.
+# Shell-output and streamed assistant previews retain this many visual rows.
 shell_output_preview_lines = 5
 # Maximum display width for Mezzanine-owned agent rows.
 agent_wrap_column_cap = 120

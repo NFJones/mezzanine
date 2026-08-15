@@ -719,7 +719,9 @@ pub(crate) fn agent_terminal_label_rendition(
 ) -> GraphicRendition {
     let mut rendition = agent_text_foreground_rendition(style.color_pair(ui_theme));
     match style {
-        AgentTerminalPresentationStyle::Status | AgentTerminalPresentationStyle::DiffContext => {
+        AgentTerminalPresentationStyle::Status
+        | AgentTerminalPresentationStyle::AssistantPreview
+        | AgentTerminalPresentationStyle::DiffContext => {
             rendition.dim = true;
         }
         AgentTerminalPresentationStyle::UserPrompt

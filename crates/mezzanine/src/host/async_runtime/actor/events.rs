@@ -946,12 +946,11 @@ impl AsyncRuntimeSessionActor {
                 agent_id,
                 turn_id,
                 pane_id,
-                action_id: _,
-                lines,
+                preview,
             } => Ok(self
                 .service
                 .apply_agent_provider_output_progress_transition(
-                    &agent_id, &turn_id, &pane_id, &lines,
+                    &agent_id, &turn_id, &pane_id, &preview,
                 )),
             AgentProviderEvent::Completed {
                 agent_id,

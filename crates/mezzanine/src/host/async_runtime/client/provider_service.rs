@@ -395,7 +395,7 @@ async fn monitor_runtime_agent_provider_dispatch(
                 );
                 return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
             }
-            Some(text) = progress_receiver.recv() => {
+            Some(preview) = progress_receiver.recv() => {
                 let (phase, elapsed_ms) = latency.observe_progress(Instant::now());
                 handle.record_latency_phase(phase, elapsed_ms);
                 let mut batch = RuntimeEventBatch::new();
@@ -403,8 +403,7 @@ async fn monitor_runtime_agent_provider_dispatch(
                     agent_id: agent_id.clone(),
                     turn_id: turn_id.clone(),
                     pane_id: pane_id.clone(),
-                    action_id: "provider-stream".to_string(),
-                    lines: vec![text],
+                    preview,
                 }));
                 handle.submit_runtime_events(batch).await?;
             }
@@ -665,7 +664,7 @@ fn remember_worker_event(
 /// on duplicated control-flow logic.
 async fn execute_runtime_agent_provider_dispatch(
     dispatch: RuntimeAgentProviderDispatch,
-    output_progress_sender: Option<tokio::sync::mpsc::Sender<String>>,
+    output_progress_sender: Option<tokio::sync::mpsc::Sender<mez_agent::ProvisionalSayPreview>>,
 ) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
         turn,

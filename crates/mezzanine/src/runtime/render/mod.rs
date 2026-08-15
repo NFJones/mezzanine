@@ -263,6 +263,8 @@ pub(crate) struct RuntimePresentationComponent {
         std::collections::BTreeMap<String, RuntimeAgentSelectorCandidateRefresh>,
     /// Pane-local transient shell-output status rows.
     agent_shell_output_status_lines: std::collections::BTreeMap<String, Vec<String>>,
+    /// Pane-local transient formatted provider `say` preview rows.
+    agent_provider_say_preview_lines: std::collections::BTreeMap<String, Vec<String>>,
     /// Panes replaying durable agent presentation entries.
     agent_presentation_replay_panes: std::collections::BTreeSet<String>,
     /// Newest pane size awaiting source-backed agent presentation replay.
@@ -347,6 +349,7 @@ pub(super) struct RuntimeAgentSelectorCandidateRefresh {
 pub(crate) struct RuntimeAgentResumePresentationSnapshot {
     prompt_input: Option<RuntimeAgentPromptInput>,
     shell_output_status_lines: Option<Vec<String>>,
+    provider_say_preview_lines: Option<Vec<String>>,
     projection: Option<(String, Size)>,
     pending_resize: Option<Size>,
     replay_active: bool,
@@ -407,6 +410,7 @@ impl RuntimePresentationComponent {
         self.agent_prompt_inputs.remove(pane_id);
         self.agent_prompt_selector_refreshes.remove(pane_id);
         self.agent_shell_output_status_lines.remove(pane_id);
+        self.agent_provider_say_preview_lines.remove(pane_id);
         self.agent_presentation_replay_panes.remove(pane_id);
         self.pending_agent_presentation_resize_sizes.remove(pane_id);
         self.agent_presentation_projection_cache.remove(pane_id);
@@ -424,6 +428,8 @@ impl RuntimePresentationComponent {
             .insert(pane_id.to_string(), default_runtime_agent_prompt_input());
         self.agent_shell_output_status_lines
             .insert(pane_id.to_string(), vec!["pending status".to_string()]);
+        self.agent_provider_say_preview_lines
+            .insert(pane_id.to_string(), vec!["pending preview".to_string()]);
         self.agent_presentation_replay_panes
             .insert(pane_id.to_string());
         self.pending_agent_presentation_resize_sizes
@@ -437,6 +443,7 @@ impl RuntimePresentationComponent {
     pub(crate) fn has_agent_presentation_state_for_tests(&self, pane_id: &str) -> bool {
         self.agent_prompt_inputs.contains_key(pane_id)
             || self.agent_shell_output_status_lines.contains_key(pane_id)
+            || self.agent_provider_say_preview_lines.contains_key(pane_id)
             || self.agent_presentation_replay_panes.contains(pane_id)
             || self
                 .pending_agent_presentation_resize_sizes
@@ -500,6 +507,11 @@ impl RuntimeSessionService {
             shell_output_status_lines: self
                 .presentation
                 .agent_shell_output_status_lines
+                .get(pane_id)
+                .cloned(),
+            provider_say_preview_lines: self
+                .presentation
+                .agent_provider_say_preview_lines
                 .get(pane_id)
                 .cloned(),
             projection: self
@@ -575,6 +587,14 @@ impl RuntimeSessionService {
         if let Some(value) = snapshot.shell_output_status_lines {
             self.presentation
                 .agent_shell_output_status_lines
+                .insert(pane_id.to_string(), value);
+        }
+        self.presentation
+            .agent_provider_say_preview_lines
+            .remove(pane_id);
+        if let Some(value) = snapshot.provider_say_preview_lines {
+            self.presentation
+                .agent_provider_say_preview_lines
                 .insert(pane_id.to_string(), value);
         }
         self.presentation

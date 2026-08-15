@@ -60,10 +60,34 @@ use openai_chat_completions::OpenAiChatCompletionsDialect;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
 
-/// Bounds one display-only provider stream delta before cross-task delivery.
-pub(super) fn bounded_provider_progress_text(text: &str) -> String {
-    const MAX_PROGRESS_CHARS: usize = 1_024;
-    text.chars().take(MAX_PROGRESS_CHARS).collect()
+/// Returns one MAAP-bearing text or native-argument fragment from an SSE event.
+pub(super) fn provider_maap_stream_fragment(event: &mez_agent::SseEvent) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(event.data.trim()).ok()?;
+    value
+        .get("delta")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            value
+                .pointer("/delta/content")
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .pointer("/delta/partial_json")
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .pointer("/choices/0/delta/content")
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .pointer("/choices/0/delta/tool_calls/0/function/arguments")
+                .and_then(serde_json::Value::as_str)
+        })
+        .filter(|fragment| !fragment.is_empty())
+        .map(str::to_string)
 }
 /// OpenAI organization routing header for multi-organization API keys.
 pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
@@ -129,7 +153,7 @@ pub trait AsyncModelProvider: Send + Sync {
     fn send_request_async_with_progress<'a>(
         &'a self,
         request: &'a ModelRequest,
-        _progress: Option<tokio::sync::mpsc::Sender<String>>,
+        _progress: Option<tokio::sync::mpsc::Sender<mez_agent::ProvisionalSayPreview>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         self.send_request_async(request)
     }
@@ -869,7 +893,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
     fn send_request_async_with_progress<'a>(
         &'a self,
         request: &'a ModelRequest,
-        progress: Option<tokio::sync::mpsc::Sender<String>>,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::ProvisionalSayPreview>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         Box::pin(async move {
             if request.provider != AsyncModelProvider::provider_id(self) {
@@ -886,19 +910,21 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 self.timeout_ms,
             )?;
             let mut stream_decoder = OpenAiResponsesStreamDecoder::default();
+            let mut preview_extractor = mez_agent::ProvisionalSayExtractor::default();
             let mut stream_error = None;
             let response = if self.stream {
                 let mut on_event = |event| {
                     if stream_error.is_none() {
                         match stream_decoder.push_event(&event) {
-                            Ok(Some(text)) => {
-                                if let Some(progress) = progress.as_ref() {
-                                    let _ =
-                                        progress.try_send(bounded_provider_progress_text(&text));
-                                }
-                            }
+                            Ok(Some(_)) => {}
                             Ok(None) => {}
                             Err(error) => stream_error = Some(error),
+                        }
+                        if let Some(fragment) = provider_maap_stream_fragment(&event)
+                            && let Some(preview) = preview_extractor.push_delta(&fragment)
+                            && let Some(progress) = progress.as_ref()
+                        {
+                            let _ = progress.try_send(preview);
                         }
                     }
                 };

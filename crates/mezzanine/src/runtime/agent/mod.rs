@@ -1561,8 +1561,23 @@ impl RuntimeSessionService {
 
     /// Clears all queued and claimed provider work for session replacement.
     pub(crate) fn clear_agent_provider_task_ownership(&mut self) {
+        let pane_ids = self
+            .agent
+            .claimed_agent_provider_tasks
+            .keys()
+            .filter_map(|turn_id| {
+                self.agent_turn_ledger()
+                    .turns()
+                    .iter()
+                    .find(|turn| &turn.turn_id == turn_id)
+                    .map(|turn| turn.pane_id.clone())
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         self.agent.pending_agent_provider_tasks.clear();
         self.agent.claimed_agent_provider_tasks.clear();
+        for pane_id in pane_ids {
+            let _ = self.clear_agent_shell_output_status_line(&pane_id);
+        }
     }
 
     /// Returns the effective model profile retained for one turn.

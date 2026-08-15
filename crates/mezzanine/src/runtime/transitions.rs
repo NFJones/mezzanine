@@ -331,8 +331,7 @@ pub enum AgentProviderEvent {
         /// Human-readable worker failure.
         message: String,
     },
-    /// A native local action produced a bounded output preview while still
-    /// running in an async provider worker.
+    /// A provider stream established a bounded provisional `say` preview.
     #[allow(
         dead_code,
         reason = "transition taxonomy is consumed by the serialized runtime actor"
@@ -344,10 +343,8 @@ pub enum AgentProviderEvent {
         turn_id: String,
         /// Pane that owns the visible agent log.
         pane_id: String,
-        /// Action identity whose shell output is being previewed.
-        action_id: String,
-        /// Latest output lines to display until the next action log update.
-        lines: Vec<String>,
+        /// Extractor-validated cumulative `say` text and media type.
+        preview: mez_agent::ProvisionalSayPreview,
     },
     /// Provider work failed before producing an execution.
     Failed {

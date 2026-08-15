@@ -18,6 +18,8 @@ pub(crate) enum AgentTerminalPresentationStyle {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Assistant,
+    /// Transient, nonpersistent assistant output derived from a provider stream.
+    AssistantPreview,
     /// Represents the Status case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -66,6 +68,7 @@ impl AgentTerminalPresentationStyle {
         match self {
             Self::UserPrompt => ui_theme.colors.agent_transcript_user,
             Self::Assistant => ui_theme.colors.agent_transcript_assistant,
+            Self::AssistantPreview => ui_theme.colors.agent_transcript_assistant,
             Self::Status => ui_theme.colors.agent_transcript_status,
             Self::Error => ui_theme.colors.agent_transcript_error,
             Self::Command => ui_theme.colors.agent_transcript_command,
@@ -93,7 +96,7 @@ impl AgentTerminalPresentationStyle {
     pub(super) fn sgr_prefix(self, ui_theme: &UiTheme) -> String {
         let mut rendition = agent_text_foreground_rendition(self.color_pair(ui_theme));
         match self {
-            Self::Status | Self::DiffContext => rendition.dim = true,
+            Self::Status | Self::AssistantPreview | Self::DiffContext => rendition.dim = true,
             Self::UserPrompt
             | Self::Assistant
             | Self::Error
@@ -114,6 +117,7 @@ impl AgentTerminalPresentationStyle {
         match self {
             Self::UserPrompt => Some("user> "),
             Self::Assistant => Some("mez> "),
+            Self::AssistantPreview => Some("mez> "),
             Self::Status
             | Self::Error
             | Self::Command
@@ -130,6 +134,7 @@ impl AgentTerminalPresentationStyle {
         match self {
             Self::UserPrompt => "user-prompt",
             Self::Assistant => "assistant",
+            Self::AssistantPreview => "assistant-preview",
             Self::Status => "status",
             Self::Error => "error",
             Self::Command => "command",
@@ -146,6 +151,7 @@ impl AgentTerminalPresentationStyle {
         match name {
             "user-prompt" => Some(Self::UserPrompt),
             "assistant" => Some(Self::Assistant),
+            "assistant-preview" => Some(Self::AssistantPreview),
             "status" => Some(Self::Status),
             "error" => Some(Self::Error),
             "command" => Some(Self::Command),

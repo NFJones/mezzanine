@@ -2081,6 +2081,17 @@ overwrite it. If a PTY read contains both a Mezzanine transaction-end marker and
 the parent shell's next prompt repaint, prompt bytes after the marker MUST NOT
 be considered command output for this transient preview. The transient preview
 SHOULD use the same muted foreground treatment as agent thinking or status text.
+While a provider response streams, Mezzanine MAY use that same visual-row limit
+for a transient assistant preview only after a bounded incremental MAAP parser
+has established one supported `say` action and decoded its `text/plain` or
+Markdown text. Raw provider deltas, rationale, non-`say` actions, malformed or
+ambiguous MAAP, unsupported content types, and oversized streams MUST NOT become
+visible previews. Accepted previews MUST use normal assistant wrapping and
+Markdown rendering with muted styling, MUST replace prior preview rows, MUST
+remain nonpersistent and non-copyable, and MUST be cleared on completion,
+failure, cancellation, retry, claim loss, or pane/session replacement. Final
+validated MAAP output remains authoritative and MUST produce exactly the normal
+durable assistant presentation independently of any transient preview.
 Mezzanine MUST NOT impose a total per-turn automatic shell dispatch count cap,
 because broad but finite inspection batches are ordinary agent work. Mezzanine
 MUST still prevent provably duplicate file mutations from replaying after the

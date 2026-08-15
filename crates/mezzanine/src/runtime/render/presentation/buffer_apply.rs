@@ -133,6 +133,9 @@ impl RuntimeSessionService {
                 .agent_shell_output_status_lines
                 .remove(pane_id);
             self.presentation
+                .agent_provider_say_preview_lines
+                .remove(pane_id);
+            self.presentation
                 .agent_presentation_projection_cache
                 .remove(pane_id);
         }
@@ -1147,6 +1150,82 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Replaces the transient provider `say` preview with formatted assistant rows.
+    ///
+    /// Preview rows reuse ordinary plain-text and Markdown rendering, but are
+    /// intentionally excluded from persistence and copy metadata. Only the
+    /// newest configured number of rendered visual rows remain visible.
+    pub(crate) fn append_agent_provider_say_preview_to_terminal_buffer(
+        &mut self,
+        pane_id: &str,
+        preview: &mez_agent::ProvisionalSayPreview,
+    ) -> Result<()> {
+        self.clear_agent_shell_output_status_line(pane_id)?;
+        let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
+        let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
+        let mut rendered_lines = if agent_output_content_type_is_markdown(&preview.content_type) {
+            let body = wrap_rich_text_lines_to_width(
+                render_agent_markdown_body_lines(
+                    &preview.text,
+                    &self.presentation.settings.ui_theme,
+                    table_width,
+                ),
+                frame_width,
+                table_width,
+            );
+            frame_markdown_lines(body, frame_width)
+        } else {
+            wrapped_prefixed_agent_terminal_lines("mez> ", &preview.text, frame_width)
+        };
+        let preview_limit = self.terminal_shell_output_preview_lines();
+        if rendered_lines.len() > preview_limit {
+            rendered_lines.drain(..rendered_lines.len() - preview_limit);
+        }
+        if rendered_lines.is_empty() {
+            return Ok(());
+        }
+        let ui_theme = self.presentation.settings.ui_theme.clone();
+        let screen = self.agent_pane_screen_mut(pane_id).ok_or_else(|| {
+            MezError::invalid_state("agent terminal presentation screen was not initialized")
+        })?;
+        let mut bytes = String::new();
+        let cursor = screen.cursor_state();
+        let current_line_has_content = screen
+            .visible_lines()
+            .get(cursor.row)
+            .is_some_and(|line| !line.trim().is_empty());
+        if cursor.column == 0 && !current_line_has_content {
+            bytes.push('\r');
+        } else {
+            bytes.push_str("\r\n");
+        }
+        for (index, line) in rendered_lines.iter().enumerate() {
+            if index > 0 {
+                bytes.push_str("\r\n");
+            }
+            append_styled_agent_terminal_rendered_line(
+                &mut bytes,
+                AgentTerminalPresentationStyle::AssistantPreview,
+                line,
+                &ui_theme,
+            );
+            bytes.push_str("\x1b[0m");
+        }
+        Self::feed_agent_terminal_screen(
+            screen,
+            bytes.as_bytes(),
+            "updating provider say preview",
+        )?;
+        self.presentation.agent_provider_say_preview_lines.insert(
+            pane_id.to_string(),
+            rendered_lines
+                .iter()
+                .map(|line| line.display.clone())
+                .collect(),
+        );
+        Ok(())
+    }
+
     /// Updates the transient status rows for a hidden running shell command.
     ///
     /// The preview intentionally has no trailing newline after its final row.
@@ -1227,18 +1306,25 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Clears transient shell-output status rows if one is active for a pane.
-    fn clear_agent_shell_output_status_line(&mut self, pane_id: &str) -> Result<()> {
-        let Some(lines) = self
+    /// Clears transient shell-output or provider-preview rows for one pane.
+    pub(crate) fn clear_agent_shell_output_status_line(&mut self, pane_id: &str) -> Result<()> {
+        let shell_line_count = self
             .presentation
             .agent_shell_output_status_lines
             .remove(pane_id)
-        else {
+            .map_or(0, |lines| lines.len());
+        let provider_line_count = self
+            .presentation
+            .agent_provider_say_preview_lines
+            .remove(pane_id)
+            .map_or(0, |lines| lines.len());
+        let line_count = shell_line_count.saturating_add(provider_line_count);
+        if line_count == 0 {
             return Ok(());
-        };
+        }
         if let Some(screen) = self.agent_pane_screen_mut(pane_id) {
             let mut bytes = String::new();
-            for index in 0..lines.len() {
+            for index in 0..line_count {
                 if index > 0 {
                     bytes.push_str("\x1b[1A");
                 }
@@ -1247,7 +1333,7 @@ impl RuntimeSessionService {
             Self::feed_agent_terminal_screen(
                 screen,
                 bytes.as_bytes(),
-                "clearing shell output status",
+                "clearing transient agent preview",
             )?;
         }
         Ok(())

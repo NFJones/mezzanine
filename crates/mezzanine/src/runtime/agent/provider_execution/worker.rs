@@ -98,7 +98,7 @@ impl RuntimeSessionService {
         agent_id: &AgentId,
         turn_id: &str,
         pane_id: &str,
-        lines: &[String],
+        preview: &mez_agent::ProvisionalSayPreview,
     ) -> crate::runtime::RuntimeTransition {
         let current = self.agent_turn_ledger().turns().iter().any(|turn| {
             turn.turn_id == turn_id
@@ -109,11 +109,13 @@ impl RuntimeSessionService {
         if !current || !self.agent_provider_task_is_claimed(turn_id) {
             return crate::runtime::RuntimeTransition::default();
         }
-        let _ = self.append_agent_shell_output_status_lines_to_terminal_buffer(pane_id, lines);
-        crate::runtime::RuntimeTransition {
-            applied: true,
-            side_effects: Vec::new(),
-        }
+        let applied = self
+            .append_agent_provider_say_preview_to_terminal_buffer(pane_id, preview)
+            .is_ok();
+        self.runtime_transition_with_render(
+            applied,
+            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+        )
     }
 
     /// Applies provider completion through the transport-neutral transition contract.
@@ -123,6 +125,15 @@ impl RuntimeSessionService {
         turn_id: &str,
         execution: AgentTurnExecution,
     ) -> Result<crate::runtime::RuntimeTransition> {
+        let pane_id = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .map(|turn| turn.pane_id.clone());
+        if let Some(pane_id) = pane_id {
+            self.clear_agent_shell_output_status_line(&pane_id)?;
+        }
         let applied = self
             .apply_agent_provider_completed_event(agent_id, turn_id, execution)
             .await?;

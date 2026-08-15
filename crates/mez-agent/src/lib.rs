@@ -384,11 +384,12 @@ pub use permissions::{
     PermissionPreset, RuleDecision,
 };
 pub use progress::{
-    RationaleSuppression, normalize_progress_say_entry, normalize_rationale_entry,
-    progress_say_entries_are_redundant, progress_say_entries_for_execution,
-    progress_say_significant_tokens, progress_say_stem_token, progress_say_token_is_stopword,
-    push_progress_say_token, rationale_entries_are_redundant, rationale_entries_for_execution,
-    rationale_entry_repeats_existing, suppress_redundant_batch_rationale, truncate_context_entry,
+    ProvisionalSayExtractor, ProvisionalSayPreview, RationaleSuppression,
+    normalize_progress_say_entry, normalize_rationale_entry, progress_say_entries_are_redundant,
+    progress_say_entries_for_execution, progress_say_significant_tokens, progress_say_stem_token,
+    progress_say_token_is_stopword, push_progress_say_token, rationale_entries_are_redundant,
+    rationale_entries_for_execution, rationale_entry_repeats_existing,
+    suppress_redundant_batch_rationale, truncate_context_entry,
 };
 pub use prompt::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptAssetSource,

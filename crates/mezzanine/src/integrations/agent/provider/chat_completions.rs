@@ -10,8 +10,8 @@
 use super::{
     AsyncModelProvider, AsyncProviderHttpTransport, DEFAULT_PROVIDER_TIMEOUT_MS, ExposeSecret,
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderModelCatalog, Result, SecretString, bounded_provider_progress_text,
-    parse_openai_models_http_body, provider_quota_usage_from_headers, validate_non_empty,
+    ProviderModelCatalog, Result, SecretString, parse_openai_models_http_body,
+    provider_maap_stream_fragment, provider_quota_usage_from_headers, validate_non_empty,
 };
 #[cfg(test)]
 use super::{ModelProvider, ProviderHttpTransport};
@@ -408,7 +408,7 @@ where
     fn send_request_async_with_progress<'a>(
         &'a self,
         request: &'a ModelRequest,
-        progress: Option<tokio::sync::mpsc::Sender<String>>,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::ProvisionalSayPreview>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         Box::pin(async move {
             if request.provider != AsyncModelProvider::provider_id(self) {
@@ -427,19 +427,21 @@ where
             } else {
                 None
             };
+            let mut preview_extractor = mez_agent::ProvisionalSayExtractor::default();
             let mut stream_error = None;
             let response = if let Some(decoder) = stream_decoder.as_mut() {
                 let mut on_event = |event| {
                     if stream_error.is_none() {
                         match decoder.push_event(&event) {
-                            Ok(Some(text)) => {
-                                if let Some(progress) = progress.as_ref() {
-                                    let _ =
-                                        progress.try_send(bounded_provider_progress_text(&text));
-                                }
-                            }
+                            Ok(Some(_)) => {}
                             Ok(None) => {}
                             Err(error) => stream_error = Some(error),
+                        }
+                        if let Some(fragment) = provider_maap_stream_fragment(&event)
+                            && let Some(preview) = preview_extractor.push_delta(&fragment)
+                            && let Some(progress) = progress.as_ref()
+                        {
+                            let _ = progress.try_send(preview);
                         }
                     }
                 };

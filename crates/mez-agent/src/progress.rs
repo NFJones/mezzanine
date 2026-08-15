@@ -16,6 +16,166 @@ const RATIONALE_ENTRY_CHAR_LIMIT: usize = 256;
 /// Minimum shared significant tokens for treating two progress updates as the
 /// same sequence point.
 const PROGRESS_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
+/// Maximum streamed MAAP characters retained while deriving one preview.
+const PROVISIONAL_SAY_INPUT_CHAR_LIMIT: usize = 16 * 1_024;
+/// Maximum visible characters exposed by one provisional preview.
+const PROVISIONAL_SAY_TEXT_CHAR_LIMIT: usize = 1_024;
+
+/// Display-safe provisional text extracted from an incomplete MAAP `say` action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvisionalSayPreview {
+    /// Normalized supported media type declared by the provisional action.
+    pub content_type: String,
+    /// Cumulative decoded text available at the current stream boundary.
+    pub text: String,
+}
+
+/// Bounded fail-closed extractor for streamed direct or fenced MAAP output.
+#[derive(Debug, Default)]
+pub struct ProvisionalSayExtractor {
+    input: String,
+    disabled: bool,
+}
+
+impl ProvisionalSayExtractor {
+    /// Appends one provider delta and returns the newest cumulative safe preview.
+    pub fn push_delta(&mut self, delta: &str) -> Option<ProvisionalSayPreview> {
+        if self.disabled {
+            return None;
+        }
+        if self
+            .input
+            .chars()
+            .count()
+            .saturating_add(delta.chars().count())
+            > PROVISIONAL_SAY_INPUT_CHAR_LIMIT
+        {
+            self.disabled = true;
+            self.input.clear();
+            return None;
+        }
+        self.input.push_str(delta);
+        provisional_say_preview(&self.input)
+    }
+
+    /// Permanently suppresses preview extraction for the current provider response.
+    pub fn disable(&mut self) {
+        self.disabled = true;
+        self.input.clear();
+    }
+}
+
+/// Extracts only a first-action `say` whose type and supported media type are
+/// already complete before its text field begins.
+fn provisional_say_preview(input: &str) -> Option<ProvisionalSayPreview> {
+    let object = provisional_maap_object(input)?;
+    let actions = json_key_value_start(object, "actions")?;
+    let action_start = actions
+        .trim_start()
+        .strip_prefix('[')?
+        .trim_start()
+        .strip_prefix('{')?;
+    if json_string_field(action_start, "type")?.as_str() != "say" {
+        return None;
+    }
+    let content_type = json_string_field(action_start, "content_type")?;
+    let content_type = crate::normalize_agent_output_content_type(Some(&content_type));
+    if !crate::agent_output_content_type_is_markdown(&content_type)
+        && content_type != crate::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+    {
+        return None;
+    }
+    let text_start = json_key_value_start(action_start, "text")?.trim_start();
+    let text = decode_incomplete_json_string(text_start)?;
+    if text.is_empty() {
+        return None;
+    }
+    Some(ProvisionalSayPreview {
+        content_type,
+        text: text.chars().take(PROVISIONAL_SAY_TEXT_CHAR_LIMIT).collect(),
+    })
+}
+
+/// Returns the direct JSON object or the body of one recognized MAAP fence.
+fn provisional_maap_object(input: &str) -> Option<&str> {
+    let trimmed = input.trim_start();
+    if trimmed.starts_with('{') {
+        return Some(trimmed);
+    }
+    let body = trimmed.strip_prefix("```mezzanine-action-json")?;
+    Some(body.trim_start_matches(['\r', '\n']))
+}
+
+/// Finds one complete JSON string key and returns its value suffix.
+fn json_key_value_start<'a>(input: &'a str, key: &str) -> Option<&'a str> {
+    let needle = serde_json::to_string(key).ok()?;
+    let mut search = input;
+    while let Some(index) = search.find(&needle) {
+        let suffix = &search[index + needle.len()..];
+        if let Some(value) = suffix.trim_start().strip_prefix(':') {
+            return Some(value);
+        }
+        search = &suffix[1.min(suffix.len())..];
+    }
+    None
+}
+
+/// Decodes one complete JSON string field.
+fn json_string_field(input: &str, key: &str) -> Option<String> {
+    let value = json_key_value_start(input, key)?.trim_start();
+    let end = complete_json_string_end(value)?;
+    serde_json::from_str(&value[..end]).ok()
+}
+
+/// Decodes the longest valid prefix of an incomplete JSON string.
+fn decode_incomplete_json_string(input: &str) -> Option<String> {
+    let input = input.strip_prefix('"')?;
+    let mut escaped = false;
+    let mut complete_end = None;
+    for (index, character) in input.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '\\' => escaped = true,
+            '"' => {
+                complete_end = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let candidate = &input[..complete_end.unwrap_or(input.len())];
+    for end in candidate
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(candidate.len()))
+        .rev()
+    {
+        let encoded = format!("\"{}\"", &candidate[..end]);
+        if let Ok(decoded) = serde_json::from_str::<String>(&encoded) {
+            return Some(decoded);
+        }
+    }
+    None
+}
+
+/// Returns the byte end immediately after one complete JSON string.
+fn complete_json_string_end(input: &str) -> Option<usize> {
+    let rest = input.strip_prefix('"')?;
+    let mut escaped = false;
+    for (index, character) in rest.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            return Some(index + character.len_utf8() + 1);
+        }
+    }
+    None
+}
 
 /// Rationale entries removed from one provider action batch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -350,6 +510,48 @@ pub fn progress_say_token_is_stopword(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies fragmented direct and fenced MAAP expose only established say text.
+    #[test]
+    fn provisional_say_extractor_handles_fragmented_direct_and_fenced_maap() {
+        for prefix in ["", "```mezzanine-action-json\n"] {
+            let mut extractor = ProvisionalSayExtractor::default();
+            assert_eq!(extractor.push_delta(prefix), None);
+            assert_eq!(
+                extractor.push_delta(
+                    r#"{"rationale":"stream","actions":[{"type":"say","status":"final","content_type":"text/markdown; charset=utf-8","text":"Hello "#,
+                ),
+                Some(ProvisionalSayPreview {
+                    content_type: crate::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+                    text: "Hello ".to_string(),
+                })
+            );
+            assert_eq!(
+                extractor
+                    .push_delta(r#"**wörld**\nnext"}] }"#)
+                    .unwrap()
+                    .text,
+                "Hello **wörld**\nnext"
+            );
+        }
+    }
+
+    /// Verifies non-say, unsupported, and oversized streams fail closed.
+    #[test]
+    fn provisional_say_extractor_rejects_unsafe_streams() {
+        for raw in [
+            r#"{"actions":[{"type":"shell_command","content_type":"text/plain","text":"secret"}]}"#,
+            r#"{"actions":[{"type":"say","content_type":"text/x-diff","text":"secret"}]}"#,
+        ] {
+            assert_eq!(ProvisionalSayExtractor::default().push_delta(raw), None);
+        }
+        let mut oversized = ProvisionalSayExtractor::default();
+        assert_eq!(
+            oversized.push_delta(&"x".repeat(PROVISIONAL_SAY_INPUT_CHAR_LIMIT + 1)),
+            None
+        );
+        assert_eq!(oversized.push_delta("safe"), None);
+    }
 
     /// Verifies normalization collapses whitespace and bounds progress entries.
     #[test]
