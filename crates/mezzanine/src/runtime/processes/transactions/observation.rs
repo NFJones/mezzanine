@@ -1238,6 +1238,23 @@ impl RuntimeSessionService {
                             )?);
                     }
                 }
+                TerminalOscEvent::ShellReceiverAwaiting { token } => {
+                    observed = observed.saturating_add(
+                        self.observe_zsh_shell_receiver_awaiting(output_pane_id, token)?,
+                    );
+                }
+                TerminalOscEvent::ShellParentRestored {
+                    token,
+                    marker,
+                    exit_code,
+                } => {
+                    observed = observed.saturating_add(self.observe_shell_receiver_complete(
+                        output_pane_id,
+                        token,
+                        marker,
+                        *exit_code,
+                    )?);
+                }
                 TerminalOscEvent::ShellReceiverReady { token, marker } => {
                     observed = observed.saturating_add(self.observe_shell_receiver_ready(
                         output_pane_id,

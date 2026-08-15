@@ -132,6 +132,7 @@ fn agent_subshell_exit_boundary_follows_child_cleanup_for_every_shell() {
             managed_bash.then_some("bootstrap-marker"),
             (classification == ShellClassification::Fish)
                 .then_some((&exit_marker, "bootstrap-marker")),
+            (classification == ShellClassification::Zsh).then_some("bootstrap-marker"),
             Some(&exit_marker),
         )
         .unwrap();

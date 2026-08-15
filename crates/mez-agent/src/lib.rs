@@ -482,7 +482,7 @@ pub use shell::{
     readiness_probe_command_for_classification, shell_command_contains_unquoted_heredoc,
     shell_identity_probe_command, shell_quote, tool_discovery_script,
     validate_agent_authored_shell_command, validate_resolved_shell_path,
-    validate_shell_marker_token,
+    validate_shell_marker_token, zsh_private_source_input,
 };
 pub use shell_read_observation::{
     ShellReadObservation, ShellReadObservationKind, ShellReadRange,

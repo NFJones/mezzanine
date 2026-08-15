@@ -225,6 +225,86 @@ impl RuntimeSessionService {
         Ok(1)
     }
 
+    /// Releases managed-Zsh private source records after ZLE accepts its fixed receiver.
+    pub(crate) fn observe_zsh_shell_receiver_awaiting(
+        &mut self,
+        output_pane_id: &str,
+        token: &str,
+    ) -> Result<usize> {
+        if self
+            .zsh_history_token_for_pane(output_pane_id)
+            .is_none_or(|expected| expected.as_str() != token)
+        {
+            return Ok(0);
+        }
+        let Some(marker) = self
+            .process
+            .pane_shell_handoffs
+            .get(output_pane_id)
+            .and_then(|handoff| handoff.bootstrap_marker.clone())
+        else {
+            return Ok(0);
+        };
+        let Some(transaction) = self
+            .process
+            .running_shell_transactions
+            .get(&marker)
+            .cloned()
+        else {
+            return Ok(0);
+        };
+        if transaction.pane_id != output_pane_id {
+            return self.fail_shell_transaction_protocol_violation(
+                &marker,
+                transaction,
+                "zsh-receiver-awaiting-pane-mismatch",
+                "Zsh receiver-awaiting event does not match the pending subshell handoff",
+            );
+        }
+        let payload = self
+            .process
+            .shell_receiver_pending_payloads
+            .get_mut(&marker)
+            .and_then(std::collections::VecDeque::pop_front);
+        let Some(payload) = payload else {
+            return self.fail_shell_transaction_protocol_violation(
+                &marker,
+                transaction,
+                "unexpected-zsh-receiver-awaiting",
+                "Zsh receiver emitted awaiting without pending private source records",
+            );
+        };
+        if self
+            .process
+            .shell_receiver_pending_payloads
+            .get(&marker)
+            .is_some_and(std::collections::VecDeque::is_empty)
+        {
+            self.process.shell_receiver_pending_payloads.remove(&marker);
+        }
+        let payload_len = payload.bytes.len();
+        if payload.receiver_acknowledgements {
+            let acknowledgement_count = payload
+                .bytes
+                .split_inclusive(|byte| *byte == b'\n')
+                .filter(|record| mez_mux::process::receiver_input_record_requires_ack(record))
+                .count();
+            self.process
+                .shell_transaction_receiver_acknowledgements
+                .insert(marker.clone(), acknowledgement_count);
+        }
+        if let Err(error) = self.write_runtime_pane_shell_delivery(output_pane_id, payload) {
+            self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
+            return Err(error);
+        }
+        self.append_agent_trace_turn_event(
+            output_pane_id,
+            &transaction.turn_id,
+            &format!("zsh_shell_receiver awaiting marker={marker} bytes={payload_len}"),
+        )?;
+        Ok(1)
+    }
+
     /// Releases a deferred agent-subshell bootstrap trigger after the managed
     /// child proves that its private receiver is installed and waiting.
     pub(crate) fn observe_shell_receiver_installed(
@@ -239,6 +319,9 @@ impl RuntimeSessionService {
         let fish_receiver_installed = self
             .fish_receiver_token_for_pane(output_pane_id)
             .is_some_and(|expected| expected.as_str() == token);
+        let zsh_receiver_installed = self
+            .zsh_history_token_for_pane(output_pane_id)
+            .is_some_and(|expected| expected.as_str() == token);
         let handoff_matches = self
             .process
             .pane_shell_handoffs
@@ -249,7 +332,8 @@ impl RuntimeSessionService {
             .is_some_and(|expected| expected.as_str() == token)
             || self
                 .fish_receiver_token_for_pane(output_pane_id)
-                .is_some_and(|expected| expected.as_str() == token);
+                .is_some_and(|expected| expected.as_str() == token)
+            || zsh_receiver_installed;
         if transaction.pane_id != output_pane_id || !receiver_token_matches || !handoff_matches {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
@@ -277,7 +361,7 @@ impl RuntimeSessionService {
             return Err(error);
         }
         self.enter_agent_subshell(output_pane_id);
-        if fish_receiver_installed {
+        if fish_receiver_installed || zsh_receiver_installed {
             self.mark_agent_subshell_command_exit(output_pane_id.to_string());
         } else {
             self.take_agent_subshell_command_exit(output_pane_id);

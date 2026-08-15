@@ -1158,6 +1158,9 @@ impl RuntimeSessionService {
                     .as_ref()
                     .map(|(marker, _)| marker.as_str()),
             ),
+            (classification == ShellClassification::Zsh)
+                .then_some(bash_receiver_install_marker)
+                .flatten(),
             Some(&exit_marker),
         )?;
         if let Some((marker, wrapper)) = prepared_bootstrap.as_ref() {
@@ -1210,6 +1213,27 @@ impl RuntimeSessionService {
                 ),
             );
             private_input.wrapper
+        } else if classification == ShellClassification::Zsh {
+            let (marker, _) = prepared_bootstrap.as_ref().ok_or_else(|| {
+                MezError::invalid_state(
+                    "managed Zsh subshell handoff requires a registered bootstrap owner",
+                )
+            })?;
+            let token = zsh_history_token.ok_or_else(|| {
+                MezError::invalid_state(
+                    "managed Zsh receiver is unavailable for agent subshell handoff",
+                )
+            })?;
+            let private_input = mez_agent::zsh_private_source_input(&shell_command, &token, marker);
+            self.prepend_zsh_shell_receiver_payload(
+                marker,
+                mez_mux::process::ShellInputDelivery::receiver_acknowledged(
+                    private_input.receiver_payload.into_bytes(),
+                    marker.clone(),
+                    true,
+                ),
+            );
+            private_input.wrapper
         } else {
             shell_command
         };
@@ -1221,7 +1245,9 @@ impl RuntimeSessionService {
                 );
                 if !matches!(
                     classification,
-                    ShellClassification::Bash | ShellClassification::Fish
+                    ShellClassification::Bash
+                        | ShellClassification::Fish
+                        | ShellClassification::Zsh
                 ) {
                     self.enter_agent_subshell(pane_id);
                     self.take_agent_subshell_command_exit(pane_id);

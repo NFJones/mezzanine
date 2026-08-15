@@ -508,6 +508,7 @@ mod tests {
             None,
             Some((&receiver_token, bootstrap_marker)),
             None,
+            None,
         )
         .unwrap();
         process.write_input(handoff.as_bytes()).unwrap();
@@ -608,6 +609,7 @@ mod tests {
             None,
             None,
             Some((&owner, bootstrap_marker)),
+            None,
             None,
         )
         .unwrap();

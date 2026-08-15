@@ -800,6 +800,22 @@ impl RuntimeSessionService {
             .push_front(payload);
     }
 
+    /// Prepends one persistent Zsh handoff stage released after ZLE admission.
+    pub(crate) fn prepend_zsh_shell_receiver_payload(
+        &mut self,
+        marker: &str,
+        payload: mez_mux::process::ShellInputDelivery,
+    ) {
+        self.process
+            .shell_receiver_pending_payloads
+            .entry(marker.to_string())
+            .or_default()
+            .push_front(payload);
+        self.process
+            .shell_receiver_completion_required
+            .insert(marker.to_string());
+    }
+
     /// Reports whether an agent action has a live shell transaction.
     pub(crate) fn agent_action_has_running_shell_transaction(
         &self,

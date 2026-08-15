@@ -136,7 +136,9 @@ function zshaddhistory() {
   # retains the original single-quoted assignment text.
   local mez_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE=${MEZ_ZSH_HISTORY_TOKEN}; printf '\036'"
   local mez_quoted_expected="fc -p && MEZ_ZSH_HISTORY_ACTIVE='${MEZ_ZSH_HISTORY_TOKEN}'; printf '\036'"
-  if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} ) ]]; then
+  if [[ -n ${MEZ_ZSH_HISTORY_TOKEN-} && \
+        ( ${mez_line} == ${mez_expected} || ${mez_line} == ${mez_quoted_expected} || \
+          ${mez_line} == __mez_zsh_private_receiver ) ]]; then
     return 1
   fi
   if (( ${+functions[__mez_user_zshaddhistory]} )); then
@@ -146,6 +148,149 @@ function zshaddhistory() {
   return 0
 }
 functions[__mez_zshaddhistory_guard]=$functions[zshaddhistory]
+typeset -g __MEZ_ZSH_SAVED_BUFFER=
+typeset -gi __MEZ_ZSH_SAVED_CURSOR=0
+typeset -gi __MEZ_ZSH_SAVED_MARK=0
+typeset -gi __MEZ_ZSH_SAVED_REGION_ACTIVE=0
+typeset -g __MEZ_ZSH_SAVED_KEYMAP=
+typeset -gi __MEZ_ZSH_RESTORE_PENDING=0
+typeset -g __MEZ_ZSH_RESTORE_MARKER=
+typeset -gi __MEZ_ZSH_RESTORE_STATUS=1
+typeset -g __MEZ_ZSH_USER_LINE_INIT_WIDGET=
+typeset -gi __MEZ_ZSH_ADMISSION_READY=1
+if [[ -n ${widgets[zle-line-init]-} && ${widgets[zle-line-init]} == user:* ]]; then
+  __MEZ_ZSH_USER_LINE_INIT_WIDGET=${widgets[zle-line-init]#user:}
+elif [[ -n ${widgets[zle-line-init]-} ]]; then
+  __MEZ_ZSH_ADMISSION_READY=0
+fi
+function __mez_zsh_private_receiver() {
+  emulate -L zsh
+  setopt localoptions extendedglob
+  local begin_record source_file encoded_file receive_status=0 source_status=1
+  local marker expected_length expected_digest expected_chunks sequence=0
+  command printf '\033]133;R;mez_receiver=awaiting;mez_token=%s\033\\' "$MEZ_ZSH_HISTORY_TOKEN"
+  IFS= read -r begin_record || receive_status=1
+  local -a begin_fields
+  begin_fields=(${=begin_record})
+  if (( receive_status != 0 || ${#begin_fields} != 6 )) || \
+     [[ ${begin_fields[1]-} != MEZ_ZSH_RX1_BEGIN || ${begin_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || \
+        ${begin_fields[4]-} != <-> || ${begin_fields[5]-} != [0-9a-f]## || ${#begin_fields[5]} != 64 || \
+        ${begin_fields[6]-} != <-> ]]; then
+    receive_status=1
+  else
+    marker=${begin_fields[3]}
+    expected_length=${begin_fields[4]}
+    expected_digest=${begin_fields[5]}
+    expected_chunks=${begin_fields[6]}
+    command printf '\036'
+  fi
+  source_file=$(mktemp) || receive_status=1
+  encoded_file=${source_file}.b64
+  (( receive_status == 0 )) && command printf '' >| "$encoded_file"
+  while (( receive_status == 0 && sequence < expected_chunks )); do
+    local data_record
+    IFS= read -r data_record || { receive_status=1; break; }
+    local -a data_fields
+    data_fields=(${=data_record})
+    if (( ${#data_fields} != 5 )) || [[ ${data_fields[1]-} != MEZ_ZSH_RX1_DATA || \
+         ${data_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${data_fields[3]-} != ${marker} || \
+         ${data_fields[4]-} != ${sequence} ]]; then
+      receive_status=1
+    else
+      command printf '%s' "${data_fields[5]}" >> "$encoded_file" || receive_status=1
+    fi
+    (( sequence++ ))
+    command printf '\036'
+  done
+  local end_record
+  (( receive_status == 0 )) && { IFS= read -r end_record || receive_status=1; }
+  if (( receive_status == 0 )); then
+    local -a end_fields
+    end_fields=(${=end_record})
+    if (( ${#end_fields} != 6 )) || [[ ${end_fields[1]-} != MEZ_ZSH_RX1_END || \
+         ${end_fields[2]-} != ${MEZ_ZSH_HISTORY_TOKEN-} || ${end_fields[3]-} != ${marker} || \
+         ${end_fields[4]-} != ${expected_chunks} || ${end_fields[5]-} != ${expected_length} || \
+         ${end_fields[6]-} != ${expected_digest} ]]; then
+      receive_status=1
+    fi
+    command printf '\036'
+  fi
+  if (( receive_status == 0 )); then
+    if command printf '' | base64 -d >/dev/null 2>&1; then
+      base64 -d < "$encoded_file" >| "$source_file" 2>/dev/null || receive_status=$?
+    else
+      base64 -D < "$encoded_file" >| "$source_file" || receive_status=$?
+    fi
+  fi
+  if (( receive_status == 0 )); then
+    local actual_length actual_digest
+    actual_length=$(wc -c < "$source_file" | tr -d '[:space:]')
+    if (( ${+commands[sha256sum]} )); then
+      actual_digest=$(sha256sum -- "$source_file" | awk '{print $1}')
+    elif (( ${+commands[shasum]} )); then
+      actual_digest=$(shasum -a 256 -- "$source_file" | awk '{print $1}')
+    else
+      receive_status=127
+    fi
+    if (( receive_status == 0 )) && [[ ${actual_length} == ${expected_length} && ${actual_digest} == ${expected_digest} ]]; then
+      builtin source "$source_file"
+      source_status=$?
+    fi
+  fi
+  command rm -f -- "$source_file" "$encoded_file" >/dev/null 2>&1 || true
+  __MEZ_ZSH_RESTORE_MARKER=${marker}
+  __MEZ_ZSH_RESTORE_STATUS=${source_status}
+  return ${source_status}
+}
+function __mez_zsh_private_widget() {
+  emulate -L zsh
+  if [[ -n ${PREBUFFER-} ]] || (( ${KEYS_QUEUED_COUNT:-0} != 0 || ! __MEZ_ZSH_ADMISSION_READY )); then
+    zle beep
+    return 1
+  fi
+  __MEZ_ZSH_SAVED_BUFFER=${BUFFER}
+  __MEZ_ZSH_SAVED_CURSOR=${CURSOR}
+  __MEZ_ZSH_SAVED_MARK=${MARK:-0}
+  __MEZ_ZSH_SAVED_REGION_ACTIVE=${REGION_ACTIVE:-0}
+  __MEZ_ZSH_SAVED_KEYMAP=${KEYMAP:-main}
+  __MEZ_ZSH_RESTORE_PENDING=1
+  BUFFER=__mez_zsh_private_receiver
+  CURSOR=${#BUFFER}
+  zle accept-line
+}
+function __mez_zsh_line_init() {
+  emulate -L zsh
+  if [[ -n ${__MEZ_ZSH_USER_LINE_INIT_WIDGET-} && ${__MEZ_ZSH_USER_LINE_INIT_WIDGET} != __mez_zsh_line_init ]]; then
+    if zle "${__MEZ_ZSH_USER_LINE_INIT_WIDGET}" 2>/dev/null; then
+      __MEZ_ZSH_ADMISSION_READY=1
+    else
+      __MEZ_ZSH_ADMISSION_READY=0
+    fi
+  fi
+  if (( __MEZ_ZSH_RESTORE_PENDING )); then
+    BUFFER=${__MEZ_ZSH_SAVED_BUFFER}
+    CURSOR=${__MEZ_ZSH_SAVED_CURSOR}
+    MARK=${__MEZ_ZSH_SAVED_MARK}
+    REGION_ACTIVE=${__MEZ_ZSH_SAVED_REGION_ACTIVE}
+    [[ -n ${__MEZ_ZSH_SAVED_KEYMAP} ]] && zle -K "${__MEZ_ZSH_SAVED_KEYMAP}" 2>/dev/null || true
+    __MEZ_ZSH_RESTORE_PENDING=0
+    if [[ -n ${__MEZ_ZSH_RESTORE_MARKER} ]]; then
+      command printf '\033]133;R;mez_parent=restored;mez_token=%s;mez_marker=%s;mez_status=%s\033\\' \
+        "$MEZ_ZSH_HISTORY_TOKEN" "$__MEZ_ZSH_RESTORE_MARKER" "$__MEZ_ZSH_RESTORE_STATUS"
+    fi
+    __MEZ_ZSH_RESTORE_MARKER=
+  fi
+  if [[ -n ${MEZ_ZSH_RECEIVER_INSTALL_MARKER-} ]]; then
+    command printf '\033]133;R;mez_receiver=installed;mez_token=%s;mez_marker=%s\033\\' \
+      "$MEZ_ZSH_HISTORY_TOKEN" "$MEZ_ZSH_RECEIVER_INSTALL_MARKER"
+    unset MEZ_ZSH_RECEIVER_INSTALL_MARKER
+  fi
+}
+zle -N __mez_zsh_private_widget
+zle -N zle-line-init __mez_zsh_line_init
+bindkey -M emacs '^[[27;9;109~' __mez_zsh_private_widget 2>/dev/null || __MEZ_ZSH_ADMISSION_READY=0
+bindkey -M viins '^[[27;9;109~' __mez_zsh_private_widget 2>/dev/null || __MEZ_ZSH_ADMISSION_READY=0
+bindkey -M vicmd '^[[27;9;109~' __mez_zsh_private_widget 2>/dev/null || __MEZ_ZSH_ADMISSION_READY=0
 ZDOTDIR=${MEZ_ZSH_USER_ZDOTDIR}
 unset MEZ_ZSH_MANAGED_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR MEZ_ZSH_ORIGINAL_ZDOTDIR_WAS_SET
 "#;
@@ -293,10 +438,94 @@ fn write_private_file(path: &Path, contents: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mez_mux::process::pane_command_plan;
+    use mez_mux::layout::Size;
+    use mez_mux::process::{
+        PaneProcess, PaneProcessEnvironment, pane_command_plan, spawn_pane_process,
+    };
     use std::process::{Command, Stdio};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    /// Builds the dependency-neutral pane environment for one Zsh PTY test.
+    fn test_environment() -> PaneProcessEnvironment {
+        PaneProcessEnvironment {
+            mez: "socket=/tmp/mez-test.sock;session=s1;window=w1;pane=p1;term=xterm-256color"
+                .to_string(),
+            session: "s1".to_string(),
+            window: "w1".to_string(),
+            pane: "p1".to_string(),
+            term: "xterm-256color".to_string(),
+        }
+    }
+
+    /// Drives one managed Zsh PTY through terminal query responses.
+    struct ManagedZshTestPane {
+        process: PaneProcess,
+        terminal: mez_terminal::TerminalScreen,
+    }
+
+    impl ManagedZshTestPane {
+        /// Reads output and returns terminal-generated responses to Zsh.
+        fn read_available_output(&mut self, max_bytes: usize) -> mez_mux::Result<Vec<u8>> {
+            let output = self.process.read_available_output(max_bytes)?;
+            self.terminal.feed(&output);
+            let responses = self.terminal.drain_terminal_response_bytes();
+            if !responses.is_empty() {
+                self.process.write_input(&responses)?;
+            }
+            Ok(output)
+        }
+
+        /// Writes user or managed input to the Zsh PTY.
+        fn write_input(&mut self, input: &[u8]) -> mez_mux::Result<()> {
+            self.process.write_input(input)
+        }
+
+        /// Terminates the managed Zsh process within the supplied deadline.
+        fn terminate(
+            &mut self,
+            timeout: Duration,
+        ) -> mez_mux::Result<mez_mux::process::PaneExitStatus> {
+            self.process.terminate(timeout)
+        }
+    }
+
+    /// Reads managed Zsh output until one expected boundary appears.
+    fn extend_zsh_output_until(
+        process: &mut ManagedZshTestPane,
+        output: &mut Vec<u8>,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            output.extend(
+                process
+                    .read_available_output(64 * 1024)
+                    .expect("managed Zsh output should remain readable"),
+            );
+            if predicate(output) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                let _ = process.terminate(Duration::from_millis(100));
+                panic!(
+                    "managed Zsh output did not reach its expected boundary: {:?}",
+                    String::from_utf8_lossy(output)
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Reads one managed Zsh PTY until one expected boundary appears.
+    fn read_zsh_output_until(
+        process: &mut ManagedZshTestPane,
+        predicate: impl Fn(&[u8]) -> bool,
+    ) -> Vec<u8> {
+        let mut output = Vec::new();
+        extend_zsh_output_until(process, &mut output, predicate);
+        output
+    }
 
     /// Verifies managed startup artifacts are owner-only and removed with the
     /// pane-scoped compatibility owner.
@@ -781,6 +1010,101 @@ function zshaddhistory() {{\n\
             assert!(!observed.contains("fc -p"), "{observed}");
         }
 
+        drop(compatibility);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies private Zsh admission executes managed source while preserving
+    /// a dirty editor draft until the user explicitly submits it afterward.
+    #[test]
+    fn managed_zsh_private_admission_preserves_dirty_draft() {
+        let zsh = Path::new("/bin/zsh");
+        if !zsh.exists() {
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-zsh-private-draft-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let user_zdotdir = root.join("user-zdotdir");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&user_zdotdir).unwrap();
+        fs::write(
+            user_zdotdir.join(".zshrc"),
+            "PS1='__MEZ_ZSH_PROMPT__>'\nRPS1=\n",
+        )
+        .unwrap();
+
+        let owner = MarkerToken::new("99999999999999999999999999999999").unwrap();
+        let compatibility = ManagedZshCompatibility::create(
+            &root.join("control.sock"),
+            "%1",
+            owner.clone(),
+            Some(user_zdotdir.as_os_str().to_os_string()),
+        )
+        .unwrap();
+        let launch = compatibility
+            .configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()))
+            .with_environment_variable("HOME", home.as_os_str());
+        let size = Size::new(80, 24).unwrap();
+        let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
+        let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
+        let mut process = ManagedZshTestPane { process, terminal };
+        let _ = read_zsh_output_until(&mut process, |output| {
+            output
+                .windows(b"__MEZ_ZSH_PROMPT__>".len())
+                .any(|window| window == b"__MEZ_ZSH_PROMPT__>")
+        });
+
+        process
+            .write_input(b"print -r -- '__MEZ_ZSH_DRAFT_EXECUTED__'")
+            .unwrap();
+        let marker = "zsh-private-draft-marker";
+        let admission = mez_agent::zsh_private_source_input(
+            "print -r -- '__MEZ_ZSH_SOURCE_EXECUTED__'\n",
+            &owner,
+            marker,
+        );
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
+        let mut output = read_zsh_output_until(&mut process, |output| {
+            output
+                .windows(awaiting.len())
+                .any(|window| window == awaiting.as_bytes())
+        });
+        assert!(!String::from_utf8_lossy(&output).contains("__MEZ_ZSH_DRAFT_EXECUTED__\r\n"));
+
+        process
+            .write_input(admission.receiver_payload.as_bytes())
+            .unwrap();
+        let restored = format!(
+            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=0",
+            owner.as_str()
+        );
+        extend_zsh_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(restored.len())
+                .any(|window| window == restored.as_bytes())
+        });
+        assert!(
+            String::from_utf8_lossy(&output).contains("__MEZ_ZSH_SOURCE_EXECUTED__"),
+            "{:?}",
+            String::from_utf8_lossy(&output)
+        );
+        assert!(!String::from_utf8_lossy(&output).contains("__MEZ_ZSH_DRAFT_EXECUTED__\r\n"));
+
+        process.write_input(b"\n").unwrap();
+        extend_zsh_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"__MEZ_ZSH_DRAFT_EXECUTED__\r\n".len())
+                .any(|window| window == b"__MEZ_ZSH_DRAFT_EXECUTED__\r\n")
+        });
+
+        process.terminate(Duration::from_millis(100)).unwrap();
         drop(compatibility);
         fs::remove_dir_all(root).unwrap();
     }

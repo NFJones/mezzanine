@@ -59,7 +59,17 @@ pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalO
                 });
             }
             let token = required_marker_field(&values, "mez_token")?;
+            if values.get("mez_receiver").copied() == Some("awaiting") {
+                return Some(TerminalOscEvent::ShellReceiverAwaiting { token });
+            }
             let marker = required_marker_field(&values, "mez_marker")?;
+            if values.get("mez_parent").copied() == Some("restored") {
+                return Some(TerminalOscEvent::ShellParentRestored {
+                    token,
+                    marker,
+                    exit_code: required_marker_field(&values, "mez_status")?.parse().ok()?,
+                });
+            }
             match values.get("mez_receiver").copied()? {
                 "ready" => Some(TerminalOscEvent::ShellReceiverReady { token, marker }),
                 "installed" => Some(TerminalOscEvent::ShellReceiverInstalled { token, marker }),
@@ -102,6 +112,12 @@ mod tests {
     #[test]
     fn bash_receiver_events_parse_authenticated_protocol_fields() {
         assert_eq!(
+            parse_mez_shell_transaction_osc("133;R;mez_receiver=awaiting;mez_token=pane-token"),
+            Some(TerminalOscEvent::ShellReceiverAwaiting {
+                token: "pane-token".to_string(),
+            })
+        );
+        assert_eq!(
             parse_mez_shell_transaction_osc(
                 "133;R;mez_receiver=ready;mez_token=pane-token;mez_marker=transaction-marker"
             ),
@@ -136,6 +152,7 @@ mod tests {
     #[test]
     fn bash_receiver_events_reject_malformed_protocol_fields() {
         for payload in [
+            "133;R;mez_receiver=awaiting;mez_token=",
             "133;R;mez_receiver=ready;mez_marker=transaction-marker",
             "133;R;mez_receiver=installed;mez_token=pane-token;mez_marker=",
             "133;R;mez_receiver=unknown;mez_token=pane-token;mez_marker=transaction-marker",

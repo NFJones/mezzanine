@@ -135,6 +135,11 @@ fn shell_transaction_control_osc_matches_marker(record: &[u8], marker: &str) -> 
         return false;
     };
     match event {
+        TerminalOscEvent::ShellReceiverAwaiting { .. } => false,
+        TerminalOscEvent::ShellParentRestored {
+            marker: event_marker,
+            ..
+        } => event_marker == marker,
         TerminalOscEvent::ShellReceiverReady {
             marker: event_marker,
             ..

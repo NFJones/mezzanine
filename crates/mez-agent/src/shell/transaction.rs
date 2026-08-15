@@ -1999,6 +1999,58 @@ pub fn fish_private_source_input(
     }
 }
 
+/// Renders a source-free ZLE trigger and deferred authenticated source frame.
+///
+/// Ctrl-G is consumed by the managed Zsh widget before it can become editable
+/// input. The widget saves the current editor state and accepts its fixed
+/// private receiver command before runtime releases the marker-bearing records.
+pub fn zsh_private_source_input(
+    source: &str,
+    token: &MarkerToken,
+    marker: &str,
+) -> ShellTransactionInput {
+    let digest = Sha256::digest(source.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
+    let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
+    let chunk_count = chunks.len();
+    let mut receiver_payload = format!(
+        "MEZ_ZSH_RX1_BEGIN {} {} {} {} {}\n",
+        token.as_str(),
+        marker,
+        source.len(),
+        digest,
+        chunk_count
+    );
+    for (sequence, chunk) in chunks.enumerate() {
+        let chunk = std::str::from_utf8(chunk)
+            .expect("standard base64 output should always be valid UTF-8");
+        receiver_payload.push_str(&format!(
+            "MEZ_ZSH_RX1_DATA {} {} {} {}\n",
+            token.as_str(),
+            marker,
+            sequence,
+            chunk
+        ));
+    }
+    receiver_payload.push_str(&format!(
+        "MEZ_ZSH_RX1_END {} {} {} {} {}\n",
+        token.as_str(),
+        marker,
+        chunk_count,
+        source.len(),
+        digest
+    ));
+    ShellTransactionInput {
+        wrapper: "\x1b[27;9;109~".to_string(),
+        receiver_payload,
+        payload: String::new(),
+        payload_receiver_acknowledgements: true,
+    }
+}
+
 /// Encodes a generated Fish wrapper as receiver-consumed base64 records.
 fn fish_shell_wrapper_transport(source: &str, marker: &str) -> String {
     let encoded = base64::engine::general_purpose::STANDARD.encode(source.as_bytes());
@@ -2540,6 +2592,7 @@ pub fn agent_subshell_enter_command_with_shell_compatibility(
         bash_receiver_install_marker,
         None,
         None,
+        None,
     )
 }
 
@@ -2565,6 +2618,7 @@ fn agent_subshell_exit_marker_command(marker: &MarkerToken) -> String {
 /// child shell and all handoff cleanup have completed. Runtime output filters
 /// use that opaque boundary to distinguish child teardown from the restored
 /// parent prompt without relying on shell-specific exit text.
+#[allow(clippy::too_many_arguments)]
 pub fn agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
     shell_path: &Path,
     classification: ShellClassification,
@@ -2572,6 +2626,7 @@ pub fn agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
     bash_receiver_rcfile: Option<&Path>,
     bash_receiver_install_marker: Option<&str>,
     fish_receiver_install: Option<(&MarkerToken, &str)>,
+    zsh_receiver_install_marker: Option<&str>,
     exit_marker: Option<&MarkerToken>,
 ) -> AgentShellValidationResult<String> {
     if !shell_path.is_absolute() {
@@ -2605,8 +2660,14 @@ end
             shell_invocation = shell_invocation,
         )
     } else if classification == ShellClassification::Zsh && zsh_history_token.is_some() {
-        let env_words =
-            posix_agent_subshell_env_word_list_for_classification(classification).join(" \\\n  ");
+        let mut env_words = posix_agent_subshell_env_word_list_for_classification(classification);
+        if let Some(marker) = zsh_receiver_install_marker {
+            env_words.push(format!(
+                "MEZ_ZSH_RECEIVER_INSTALL_MARKER={}",
+                shell_quote(marker)
+            ));
+        }
+        let env_words = env_words.join(" \\\n  ");
         let shell_invocation = posix_shell_interactive_invocation_words_with_startup_suppression(
             &shell,
             classification,

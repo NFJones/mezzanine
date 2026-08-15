@@ -43,7 +43,7 @@ pub use transaction::{
     bash_private_source_input, fish_private_source_input, fish_quote,
     fish_wrapper_receiver_init_command, posix_shell_history_suppression_finish,
     posix_shell_history_suppression_start, shell_command_contains_unquoted_heredoc,
-    validate_agent_authored_shell_command,
+    validate_agent_authored_shell_command, zsh_private_source_input,
 };
 
 /// Categorizes deterministic shell-source validation failures.

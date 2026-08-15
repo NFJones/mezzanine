@@ -119,6 +119,20 @@ pub enum TerminalOscEvent {
         /// Parsed process exit code, when supplied by the terminal program.
         exit_code: Option<i32>,
     },
+    /// A managed Zsh ZLE widget accepted its fixed private receiver command.
+    ShellReceiverAwaiting {
+        /// Pane-scoped receiver token installed at Zsh startup.
+        token: String,
+    },
+    /// A managed Zsh parent restored its saved editor state after admission.
+    ShellParentRestored {
+        /// Pane-scoped receiver token installed at Zsh startup.
+        token: String,
+        /// Unpredictable transaction marker whose parent state was restored.
+        marker: String,
+        /// Status returned by the admitted source.
+        exit_code: i32,
+    },
     /// A managed Bash receiver admitted one private source transaction.
     ShellReceiverReady {
         /// Pane-scoped receiver token installed at Bash startup.

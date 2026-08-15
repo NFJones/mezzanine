@@ -4190,9 +4190,23 @@ the owner. A transaction end marker emitted by evaluated source MUST NOT by
 itself release that lease. Receiver-complete MUST be emitted only after eval
 returns and callback cleanup begins, and must carry the pane token, transaction
 marker, and receiver status. User input and unrelated runtime input MUST remain
-deferred for the full interval. For `zsh`, Mezzanine SHOULD install
-a pane-scoped `zshaddhistory` hook after user startup processing that rejects
-only the authenticated Mezzanine control record which starts history isolation.
+deferred for the full interval. Managed `zsh` panes MUST install a pane-scoped
+ZLE admission widget in the `emacs`, `viins`, and `vicmd` keymaps without
+replacing existing user bindings. Admission MUST begin with a source-free
+trigger, save `BUFFER`, Unicode-correct `CURSOR`, `MARK`, `REGION_ACTIVE`, and
+the active keymap, accept only the fixed private receiver command, and release
+authenticated bounded source records only after the receiver emits its
+pane-token-authenticated awaiting boundary. Admission MUST fail closed for a
+continuation buffer, queued typeahead, failed keymap installation, or a
+`zle-line-init` widget that cannot be composed safely. The parent MUST restore
+the exact saved editor state before emitting its authenticated parent-restored
+boundary, and the restored draft MUST execute only after explicit user
+submission. Child ownership MUST transfer only after the managed child emits
+the authenticated receiver-installed event for the owning bootstrap marker.
+
+Managed `zsh` panes MUST also install a pane-scoped `zshaddhistory` hook after
+user startup processing that rejects only the fixed private receiver command
+and the authenticated Mezzanine control record which starts history isolation.
 That record SHOULD enter a private history context with `fc -p` before any
 transport framing is submitted, and the complete generated transport SHOULD
 remain private until `fc -P` restores the prior history context. Restoration
