@@ -160,6 +160,11 @@ typeset -g __MEZ_ZSH_USER_LINE_INIT_WIDGET=
 typeset -gi __MEZ_ZSH_ADMISSION_READY=1
 if [[ -n ${widgets[zle-line-init]-} && ${widgets[zle-line-init]} == user:* ]]; then
   __MEZ_ZSH_USER_LINE_INIT_WIDGET=${widgets[zle-line-init]#user:}
+  if (( ${+functions[${__MEZ_ZSH_USER_LINE_INIT_WIDGET}]} )); then
+    functions[__mez_zsh_user_line_init]=$functions[${__MEZ_ZSH_USER_LINE_INIT_WIDGET}]
+  else
+    __MEZ_ZSH_ADMISSION_READY=0
+  fi
 elif [[ -n ${widgets[zle-line-init]-} ]]; then
   __MEZ_ZSH_ADMISSION_READY=0
 fi
@@ -261,7 +266,7 @@ function __mez_zsh_private_widget() {
 function __mez_zsh_line_init() {
   emulate -L zsh
   if [[ -n ${__MEZ_ZSH_USER_LINE_INIT_WIDGET-} && ${__MEZ_ZSH_USER_LINE_INIT_WIDGET} != __mez_zsh_line_init ]]; then
-    if zle "${__MEZ_ZSH_USER_LINE_INIT_WIDGET}" 2>/dev/null; then
+    if __mez_zsh_user_line_init; then
       __MEZ_ZSH_ADMISSION_READY=1
     else
       __MEZ_ZSH_ADMISSION_READY=0
@@ -1033,9 +1038,13 @@ function zshaddhistory() {{\n\
         let user_zdotdir = root.join("user-zdotdir");
         fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(&user_zdotdir).unwrap();
+        let history = home.join("history");
         fs::write(
             user_zdotdir.join(".zshrc"),
-            "PS1='__MEZ_ZSH_PROMPT__>'\nRPS1=\n",
+            format!(
+                "PS1='__MEZ_ZSH_PROMPT__>'\nRPS1=\nHISTFILE={}\nHISTSIZE=100\nSAVEHIST=100\nsetopt INC_APPEND_HISTORY\nfunction __mez_test_user_line_init() {{ print -r -- line-init >> \"$HOME/line-init.log\" }}\nzle -N zle-line-init __mez_test_user_line_init\n",
+                shell_single_quote_path(&history),
+            ),
         )
         .unwrap();
 
@@ -1054,6 +1063,8 @@ function zshaddhistory() {{\n\
         let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
         let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
         let mut process = ManagedZshTestPane { process, terminal };
+        let parent_pid = process.process.primary_pid();
+        let parent_process_group = process.process.process_group_leader();
         let _ = read_zsh_output_until(&mut process, |output| {
             output
                 .windows(b"__MEZ_ZSH_PROMPT__>".len())
@@ -1103,6 +1114,120 @@ function zshaddhistory() {{\n\
                 .windows(b"__MEZ_ZSH_DRAFT_EXECUTED__\r\n".len())
                 .any(|window| window == b"__MEZ_ZSH_DRAFT_EXECUTED__\r\n")
         });
+        assert_eq!(process.process.primary_pid(), parent_pid);
+        assert_eq!(process.process.process_group_leader(), parent_process_group);
+        assert!(
+            fs::read_to_string(home.join("line-init.log"))
+                .unwrap()
+                .lines()
+                .count()
+                >= 2,
+            "the user zle-line-init widget should run before and after admission"
+        );
+
+        process.terminate(Duration::from_millis(100)).unwrap();
+        let persisted_history = fs::read_to_string(&history).unwrap();
+        assert!(
+            persisted_history.contains("__MEZ_ZSH_DRAFT_EXECUTED__"),
+            "{persisted_history}"
+        );
+        assert!(
+            !persisted_history.contains("__mez_zsh_private_receiver"),
+            "{persisted_history}"
+        );
+        drop(compatibility);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies malformed private frames restore the pending draft, while a
+    /// continuation prompt rejects admission without executing managed input.
+    #[test]
+    fn managed_zsh_private_admission_fails_closed_for_malformed_and_continuation_state() {
+        let zsh = Path::new("/bin/zsh");
+        if !zsh.exists() {
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-zsh-private-failure-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let user_zdotdir = root.join("user-zdotdir");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&user_zdotdir).unwrap();
+        fs::write(
+            user_zdotdir.join(".zshrc"),
+            "PS1='__MEZ_ZSH_PROMPT__>'\nPS2='__MEZ_ZSH_CONTINUATION__>'\nRPS1=\n",
+        )
+        .unwrap();
+
+        let owner = MarkerToken::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let compatibility = ManagedZshCompatibility::create(
+            &root.join("control.sock"),
+            "%1",
+            owner.clone(),
+            Some(user_zdotdir.as_os_str().to_os_string()),
+        )
+        .unwrap();
+        let launch = compatibility
+            .configure_launch(PaneProcessLaunch::new(zsh.to_path_buf()))
+            .with_environment_variable("HOME", home.as_os_str());
+        let size = Size::new(80, 24).unwrap();
+        let process = spawn_pane_process(&launch, None, &test_environment(), size).unwrap();
+        let terminal = mez_terminal::TerminalScreen::new(size, 1_000).unwrap();
+        let mut process = ManagedZshTestPane { process, terminal };
+        let _ = read_zsh_output_until(&mut process, |output| {
+            output
+                .windows(b"__MEZ_ZSH_PROMPT__>".len())
+                .any(|window| window == b"__MEZ_ZSH_PROMPT__>")
+        });
+
+        process
+            .write_input(b"print -r -- '__MEZ_ZSH_MALFORMED_DRAFT__'")
+            .unwrap();
+        let admission =
+            mez_agent::zsh_private_source_input("print -r -- SHOULD_NOT_RUN\n", &owner, "bad");
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let awaiting = format!("mez_receiver=awaiting;mez_token={}", owner.as_str());
+        let mut output = read_zsh_output_until(&mut process, |output| {
+            output
+                .windows(awaiting.len())
+                .any(|window| window == awaiting.as_bytes())
+        });
+        process
+            .write_input(b"MEZ_ZSH_RX1_BEGIN wrong-token bad 1 0 1\n")
+            .unwrap();
+        extend_zsh_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"__MEZ_ZSH_PROMPT__>".len())
+                .any(|window| window == b"__MEZ_ZSH_PROMPT__>")
+        });
+        process.write_input(b"\n").unwrap();
+        extend_zsh_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"__MEZ_ZSH_MALFORMED_DRAFT__\r\n".len())
+                .any(|window| window == b"__MEZ_ZSH_MALFORMED_DRAFT__\r\n")
+        });
+        assert!(!String::from_utf8_lossy(&output).contains("SHOULD_NOT_RUN"));
+
+        process.write_input(b"print -r -- '\n").unwrap();
+        let mut continuation = read_zsh_output_until(&mut process, |output| {
+            output
+                .windows(b"__MEZ_ZSH_CONTINUATION__>".len())
+                .any(|window| window == b"__MEZ_ZSH_CONTINUATION__>")
+        });
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        continuation.extend(process.read_available_output(64 * 1024).unwrap());
+        assert!(
+            !String::from_utf8_lossy(&continuation).contains("mez_receiver=awaiting"),
+            "{:?}",
+            String::from_utf8_lossy(&continuation)
+        );
+        process.write_input(b"\x03").unwrap();
 
         process.terminate(Duration::from_millis(100)).unwrap();
         drop(compatibility);
