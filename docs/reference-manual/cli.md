@@ -44,6 +44,28 @@ resume <snapshot-id> --serve` restores a snapshot as a foreground daemon; add
 client. Use `mez --help` and `mez <command> --help` for the current argument
 and target syntax.
 
+## Foreground service options
+
+`mez serve`, `mez snapshot resume --serve`, and `mez snapshot resume-latest
+--serve` accept the same service options:
+
+| Option | Behavior |
+| --- | --- |
+| `--message-socket PATH` | Bind the local message service at an explicit absolute path. |
+| `--event-socket PATH` | Bind the local event service at an explicit absolute path. |
+| `--no-aux-sockets` | Do not bind the default message and event sockets. |
+| `--attach-primary` | Attach the invoking interactive terminal as the primary client. |
+| `--max-control-connections N` | Limit concurrent control connections. |
+| `--max-message-connections N` | Limit concurrent message connections. |
+| `--max-event-connections N` | Limit concurrent event connections. |
+| `--max-event-batches-per-connection N` | Limit event batches served on one event connection. |
+
+By default, a foreground service derives separate message and event socket
+paths from the selected control socket. Explicit socket paths must be absolute,
+and every connection or batch limit must be greater than zero. A message or
+event connection limit requires the corresponding auxiliary socket to be
+enabled. Use `--no-aux-sockets` for an intentional control-only service.
+
 ## Snapshot forms
 
 Snapshots preserve recoverable session layout state, not running processes,
