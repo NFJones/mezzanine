@@ -464,11 +464,11 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
     assert!(trace.contains("\"immutable_token_estimate\""), "{trace}");
 }
 
-/// Verifies that the pane frame reports only the latest provider-backed input
-/// context percentage instead of replacing it with a local preflight estimate
-/// while another turn is running. This keeps the status pill tied to the same
-/// token accounting that the provider returns, while still allowing the runtime
-/// to use internal byte estimates for compaction decisions separately.
+/// Verifies the pane frame retains same-model provider context usage across an
+/// omitted sample but clears it when the selected provider/model is different.
+///
+/// This keeps the status pill tied to concrete provider accounting, preserves
+/// it while another turn runs, and prevents stale cross-model percentages.
 #[test]
 fn runtime_frame_context_reports_last_provider_context_usage() {
     let mut service = test_runtime_service();
@@ -497,6 +497,12 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
         .agent_shell_store_mut()
         .enter_or_resume(&pane_id)
         .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get(&pane_id)
+        .unwrap()
+        .session_id
+        .clone();
 
     let initial_config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
@@ -562,6 +568,40 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
     service.record_agent_provider_token_usage_with_profile(
         &pane_id,
         mez_agent::ModelTokenUsage {
+            input_tokens: 40,
+            output_tokens: 5,
+            ..mez_agent::ModelTokenUsage::default()
+        },
+        mez_agent::ModelTokenUsage::default(),
+        Some(&profile),
+    );
+    let omitted_config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let omitted_pane_context = omitted_config.frame_context.panes.get(&pane_id).unwrap();
+    assert_eq!(
+        omitted_pane_context.agent_context_usage.as_deref(),
+        Some("25%")
+    );
+    assert_eq!(
+        service
+            .agent_latest_request_usage(&conversation_id)
+            .unwrap()
+            .usage
+            .input_tokens,
+        251
+    );
+    assert_eq!(
+        service
+            .agent_context_usage_snapshot(&conversation_id)
+            .unwrap()
+            .input_tokens,
+        251
+    );
+
+    service.record_agent_provider_token_usage_with_profile(
+        &pane_id,
+        mez_agent::ModelTokenUsage {
             input_tokens: 1_500,
             output_tokens: 10,
             reasoning_tokens: 5,
@@ -600,6 +640,30 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
         running_pane_context.agent_context_usage.as_deref(),
         Some("100%")
     );
+
+    let mut incompatible_profile = profile.clone();
+    incompatible_profile.model = "gpt-other".to_string();
+    service.record_agent_provider_token_usage_with_profile(
+        &pane_id,
+        mez_agent::ModelTokenUsage {
+            input_tokens: 10,
+            output_tokens: 1,
+            ..mez_agent::ModelTokenUsage::default()
+        },
+        mez_agent::ModelTokenUsage::default(),
+        Some(&incompatible_profile),
+    );
+    let incompatible_config = service
+        .terminal_client_loop_config(TerminalClientLoopConfig::default())
+        .unwrap();
+    let incompatible_pane_context = incompatible_config
+        .frame_context
+        .panes
+        .get(&pane_id)
+        .unwrap();
+    assert_eq!(incompatible_pane_context.agent_context_usage, None);
+    assert_eq!(service.agent_latest_request_usage(&conversation_id), None);
+    assert_eq!(service.agent_context_usage_snapshot(&conversation_id), None);
 }
 
 /// Verifies provider context-window wording also triggers active-turn

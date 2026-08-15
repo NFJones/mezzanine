@@ -544,15 +544,6 @@ impl RuntimeSessionService {
             .unwrap_or_else(ModelTokenUsageKey::unknown);
         self.record_durable_token_usage(&token_usage_key, usage, current_unix_seconds());
         self.agent
-            .agent_latest_request_usage_by_conversation
-            .insert(
-                conversation_id.clone(),
-                mez_agent::LatestModelRequestUsage {
-                    model: token_usage_key.clone(),
-                    usage: latest_context_usage,
-                },
-            );
-        self.agent
             .agent_token_usage_by_conversation
             .entry(conversation_id.clone())
             .or_default()
@@ -567,8 +558,27 @@ impl RuntimeSessionService {
             .or_default()
             .add_assign(usage);
         if let Some(profile) = profile {
-            if let Some(snapshot) =
-                mez_agent::agent_context_usage_snapshot(profile, latest_context_usage)
+            let profile_key = ModelTokenUsageKey::new(&profile.provider, &profile.model);
+            let context_usage = if latest_context_usage.input_tokens > 0 {
+                self.agent
+                    .agent_latest_request_usage_by_conversation
+                    .insert(
+                        conversation_id.clone(),
+                        mez_agent::LatestModelRequestUsage {
+                            model: profile_key.clone(),
+                            usage: latest_context_usage,
+                        },
+                    );
+                Some(latest_context_usage)
+            } else {
+                self.agent
+                    .agent_latest_request_usage_by_conversation
+                    .get(&conversation_id)
+                    .filter(|sample| sample.model == profile_key)
+                    .map(|sample| sample.usage)
+            };
+            if let Some(snapshot) = context_usage
+                .and_then(|usage| mez_agent::agent_context_usage_snapshot(profile, usage))
             {
                 if let Some(display) = runtime_agent_provider_context_usage_display(snapshot) {
                     self.agent
@@ -579,6 +589,11 @@ impl RuntimeSessionService {
                     .agent_context_usage_snapshot_by_conversation
                     .insert(conversation_id, snapshot);
             } else {
+                if context_usage.is_none() {
+                    self.agent
+                        .agent_latest_request_usage_by_conversation
+                        .remove(&conversation_id);
+                }
                 self.agent
                     .agent_context_usage_by_conversation
                     .remove(&conversation_id);

@@ -21,12 +21,12 @@ pub struct AgentTurnExecution {
     pub request: ModelRequest,
     /// Structured `response` value carried by this API type.
     pub response: ModelResponse,
-    /// Provider token usage from the latest model response in this execution.
+    /// Provider token usage from the latest input-accounted model response.
     ///
     /// `response.usage` may carry cumulative usage across capability,
     /// execution, and repair provider calls. This field preserves the latest
-    /// single provider response so UI context-window percentages describe the
-    /// last prompt sent to the model instead of an accumulated turn total.
+    /// single response with positive provider input accounting so later
+    /// responses that omit usage do not erase UI context-window percentages.
     pub latest_response_usage: ModelTokenUsage,
     /// Provider token usage for auxiliary model calls made before the main
     /// turn request.

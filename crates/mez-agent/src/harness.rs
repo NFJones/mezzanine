@@ -213,7 +213,9 @@ impl<Request> AgentTurnNegotiation<Request> {
         self.response_progress.cumulative_usage()
     }
 
-    /// Returns usage from the latest completed provider response.
+    /// Returns usage from the latest response with provider input accounting.
+    ///
+    /// Later responses that omit input usage do not erase the concrete sample.
     pub fn latest_response_usage(&self) -> crate::ModelTokenUsage {
         self.response_progress.latest_response_usage()
     }

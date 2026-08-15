@@ -27,7 +27,10 @@ impl ProviderResponseProgress {
         latest_request_usage: Option<ModelTokenUsage>,
         quota_usage: &[ProviderQuotaUsage],
     ) {
-        self.latest_response_usage = Some(latest_request_usage.unwrap_or(usage));
+        let latest_response_usage = latest_request_usage.unwrap_or(usage);
+        if latest_response_usage.input_tokens > 0 {
+            self.latest_response_usage = Some(latest_response_usage);
+        }
         self.cumulative_usage.add_assign(usage);
         if !quota_usage.is_empty() {
             self.latest_quota_usage = quota_usage.to_vec();
@@ -39,10 +42,12 @@ impl ProviderResponseProgress {
         self.cumulative_usage
     }
 
-    /// Returns the usage from the latest observed provider response.
+    /// Returns usage from the latest response with provider input accounting.
     ///
-    /// A default value is returned before any response has been observed so
-    /// callers can keep error paths total without inventing a product error.
+    /// Responses that omit input usage do not erase an earlier concrete sample.
+    /// A default value is returned before any input-accounted response has been
+    /// observed so callers can keep error paths total without inventing a
+    /// product error.
     pub fn latest_response_usage(&self) -> ModelTokenUsage {
         self.latest_response_usage.unwrap_or_default()
     }
@@ -99,5 +104,52 @@ mod tests {
         assert_eq!(progress.latest_response_usage().input_tokens, 2);
         assert_eq!(progress.latest_response_usage().output_tokens, 3);
         assert_eq!(progress.latest_quota_usage(), &[quota]);
+    }
+
+    /// Verifies responses that omit input accounting cannot erase the latest
+    /// concrete request sample while their reported totals still accumulate.
+    ///
+    /// Providers may omit usage on capability continuations or repairs. Both
+    /// omission representations must preserve the sample used for context
+    /// display until a newer response reports a positive input-token count.
+    #[test]
+    fn provider_response_progress_retains_latest_input_usage_across_omissions() {
+        let mut progress = ProviderResponseProgress::default();
+        let concrete = ModelTokenUsage {
+            input_tokens: 251,
+            output_tokens: 30,
+            cached_input_tokens: Some(80),
+            ..ModelTokenUsage::default()
+        };
+
+        progress.observe(concrete, None, &[]);
+        progress.observe(
+            ModelTokenUsage {
+                output_tokens: 5,
+                ..ModelTokenUsage::default()
+            },
+            None,
+            &[],
+        );
+        progress.observe(
+            ModelTokenUsage {
+                output_tokens: 7,
+                ..ModelTokenUsage::default()
+            },
+            Some(ModelTokenUsage::default()),
+            &[],
+        );
+
+        assert_eq!(progress.cumulative_usage().input_tokens, 251);
+        assert_eq!(progress.cumulative_usage().output_tokens, 42);
+        assert_eq!(progress.latest_response_usage(), concrete);
+
+        let newer = ModelTokenUsage {
+            input_tokens: 300,
+            output_tokens: 9,
+            ..ModelTokenUsage::default()
+        };
+        progress.observe(newer, Some(newer), &[]);
+        assert_eq!(progress.latest_response_usage(), newer);
     }
 }

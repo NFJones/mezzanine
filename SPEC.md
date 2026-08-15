@@ -886,9 +886,14 @@ Pane frames MUST support the following fields:
   match one.
 - `agent.context_usage`: Last known provider input context-window usage
   percentage for the active pane-agent conversation, computed from the latest
-  provider response input-token count and Mezzanine's effective model
-  context-window token budget rather than cumulative conversation token usage
-  or a provider-supplied percentage, and saturated at `100%` for display.
+  provider response that supplied a positive input-token count and Mezzanine's
+  effective model context-window token budget rather than cumulative
+  conversation token usage or a provider-supplied percentage, and saturated at
+  `100%` for display. A response that omits input usage MUST NOT erase the last
+  known sample for the same provider/model. A sample from an incompatible
+  provider/model MUST NOT be displayed, and a retained sample MUST be
+  recomputed or hidden when its effective context-window budget changes or
+  becomes unavailable.
 - `policy.mode`: Active approval policy as `ask`, `auto-allow`, `full-access`,
   or `host-access`. `host-access` MUST use conspicuous warning styling.
 - `observer.pending_count`: Number of read-only observer attach requests

@@ -294,10 +294,12 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
 }
 
 #[test]
-/// Verifies that executable action surfaces are only exposed after the model
-/// asks for a coarse capability. This protects the state-machine boundary that
-/// keeps a greeting or other simple request from starting with shell or
-/// network actions before the model opts into those broader capabilities.
+/// Verifies executable action surfaces are exposed only after a capability
+/// request and omitted continuation usage retains the earlier concrete sample.
+///
+/// Capability continuations can omit provider accounting. The completed turn
+/// must still expose the granted action and preserve the input-bearing sample
+/// used for context-window display without inflating cumulative accounting.
 fn turn_runner_exposes_shell_actions_only_after_capability_request() {
     let turn = turn();
     let provider = SequencedProvider::new(vec![
@@ -329,20 +331,8 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             provider: "batch".to_string(),
             model: "test".to_string(),
             raw_text: "shell action".to_string(),
-            usage: ModelTokenUsage {
-                input_tokens: 1151,
-                output_tokens: 50,
-                reasoning_tokens: 12,
-                cached_input_tokens: Some(180),
-                cache_write_input_tokens: None,
-            },
-            latest_request_usage: Some(ModelTokenUsage {
-                input_tokens: 251,
-                output_tokens: 30,
-                reasoning_tokens: 7,
-                cached_input_tokens: Some(80),
-                cache_write_input_tokens: None,
-            }),
+            usage: ModelTokenUsage::default(),
+            latest_request_usage: None,
             quota_usage: Default::default(),
             action_batch: Some(MaapBatch {
                 protocol: "maap/1".to_string(),
@@ -397,16 +387,16 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    assert_eq!(execution.response.usage.input_tokens, 2051);
-    assert_eq!(execution.response.usage.output_tokens, 70);
-    assert_eq!(execution.response.usage.reasoning_tokens, 17);
-    assert_eq!(execution.response.usage.cached_input_tokens, Some(480));
-    assert_eq!(execution.latest_response_usage.input_tokens, 251);
-    assert_eq!(execution.latest_response_usage.output_tokens, 30);
-    assert_eq!(execution.latest_response_usage.reasoning_tokens, 7);
+    assert_eq!(execution.response.usage.input_tokens, 900);
+    assert_eq!(execution.response.usage.output_tokens, 20);
+    assert_eq!(execution.response.usage.reasoning_tokens, 5);
+    assert_eq!(execution.response.usage.cached_input_tokens, Some(300));
+    assert_eq!(execution.latest_response_usage.input_tokens, 900);
+    assert_eq!(execution.latest_response_usage.output_tokens, 20);
+    assert_eq!(execution.latest_response_usage.reasoning_tokens, 5);
     assert_eq!(
         execution.latest_response_usage.cached_input_tokens,
-        Some(80)
+        Some(300)
     );
     let requests = provider.requests();
     assert_eq!(requests.len(), 2);
