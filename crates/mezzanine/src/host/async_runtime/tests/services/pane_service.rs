@@ -883,6 +883,225 @@ async fn async_agent_subshell_bootstrap_certifies_with_fresh_worker_observation(
     actor_exit.service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies a managed Fish pane remains responsive when agent mode is entered
+/// with an unsubmitted draft and exited before any agent prompt is submitted.
+///
+/// This exercises the production actor and pane-worker ownership path rather
+/// than writing directly to the PTY. The restored draft must remain editable
+/// after the Fish callback publishes its authenticated parent-return event.
+#[tokio::test(flavor = "current_thread")]
+async fn async_fish_dirty_draft_no_prompt_exit_restores_responsive_parent() {
+    let Some(fish) = [
+        "/usr/bin/fish",
+        "/usr/local/bin/fish",
+        "/opt/homebrew/bin/fish",
+    ]
+    .into_iter()
+    .find(|path| Path::new(path).is_file()) else {
+        eprintln!("skipping async Fish draft regression because fish is unavailable");
+        return;
+    };
+
+    let executed_path = std::env::temp_dir().join(format!(
+        "mez-async-fish-no-prompt-executed-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&executed_path);
+    let draft = "builtin printf '__MEZ_ASYNC_FISH_PARENT_RESPONSIVE__\\n'; command stty -a > ";
+    let restored_input = format!(
+        "{}\n",
+        mez_agent::shell::fish_quote(executed_path.to_str().unwrap())
+    );
+    let mut service = test_service_with_shell(fish);
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let pane_worker_handle = handle.clone();
+    let client_handle = handle.clone();
+    let pane_worker_done = StdArc::new(AtomicBool::new(false));
+    let pane_worker_stop = StdArc::clone(&pane_worker_done);
+    let client_executed_path = executed_path.clone();
+
+    let pane_worker = async move {
+        run_async_pane_process_supervisor_service(
+            pane_worker_handle,
+            AsyncPaneProcessSupervisorServiceConfig {
+                max_polls: u64::MAX,
+                take_limit: 8,
+                idle_interval: Duration::from_millis(1),
+                pane_service: AsyncPaneProcessServiceConfig {
+                    max_polls: u64::MAX,
+                    output_drain_limit: 4,
+                    drain_limit: 8,
+                    idle_interval: Duration::from_millis(1),
+                    foreground_metadata_interval: Duration::from_millis(10),
+                },
+            },
+            move |_, state| {
+                pane_worker_stop.load(Ordering::SeqCst)
+                    || matches!(state, RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await
+    };
+
+    let client = async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        client_handle
+            .write_input_to_pane(
+                primary.clone(),
+                "%1",
+                b"fish_vi_key_bindings; builtin printf '__MEZ_ASYNC_FISH_VI_READY__\\n'\n".to_vec(),
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut draft_input = b"\x1bi".to_vec();
+        draft_input.extend_from_slice(draft.as_bytes());
+        client_handle
+            .write_input_to_pane(primary.clone(), "%1", draft_input)
+            .await
+            .unwrap();
+        let shown = client_handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ExecuteMux(
+                        MuxAction::ToggleAgentShell,
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(shown.mux_actions_applied, 1);
+        let child_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let (child_active, bootstrap_pending, restoration_pending) =
+                client_handle.fish_lifecycle_state("%1").await.unwrap();
+            if child_active && bootstrap_pending && restoration_pending {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < child_deadline,
+                "managed Fish child did not reach active bootstrap before exit: active={child_active} bootstrap_pending={bootstrap_pending} restoration_pending={restoration_pending}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let hidden = client_handle
+            .apply_attached_terminal_step_plan(
+                primary.clone(),
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ExecuteMux(
+                        MuxAction::ToggleAgentShell,
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(hidden.mux_actions_applied, 1);
+        let restoration_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let (child_active, bootstrap_pending, restoration_pending) =
+                client_handle.fish_lifecycle_state("%1").await.unwrap();
+            if !child_active && !bootstrap_pending && !restoration_pending {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < restoration_deadline,
+                "managed Fish parent did not finish restoration after no-prompt exit: active={child_active} bootstrap_pending={bootstrap_pending} restoration_pending={restoration_pending}"
+            );
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let input = client_handle
+            .apply_attached_terminal_step_plan(
+                primary,
+                AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(
+                        restored_input.into_bytes(),
+                    )],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(input.forwarded_bytes > 1);
+        let execution_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !client_executed_path.is_file() {
+            assert!(
+                tokio::time::Instant::now() < execution_deadline,
+                "restored Fish draft did not execute after no-prompt exit"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // File creation proves Fish executed the restored command, but its
+        // preceding terminal output can still be waiting in the PTY worker.
+        // Keep the production reader alive long enough to ingest that output
+        // before shutdown freezes the final pane snapshot used below.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        pane_worker_done.store(true, Ordering::SeqCst);
+        client_handle.shutdown().await.unwrap()
+    };
+
+    let (lifecycle, supervisor, mut actor_exit) =
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let (client, worker, actor) = tokio::join!(client, pane_worker, actor.run());
+            (client, worker, actor)
+        })
+        .await
+        .expect("dirty Fish no-prompt exit should not hang");
+    assert_eq!(lifecycle, RuntimeLifecycleState::Running);
+    if let Err(error) = supervisor {
+        assert!(
+            matches!(
+                error.message(),
+                "async runtime session actor is closed"
+                    | "async runtime session actor reply was dropped"
+            ),
+            "pane supervisor failed before actor shutdown: {error}"
+        );
+    }
+    let restored_terminal_state = std::fs::read_to_string(&executed_path).unwrap();
+    assert!(
+        !restored_terminal_state
+            .split(|character: char| character.is_whitespace() || character == ';')
+            .any(|field| field == "-echo"),
+        "Fish parent terminal echo remained disabled after no-prompt exit: {restored_terminal_state}"
+    );
+    let pane_text = actor_exit
+        .service
+        .pane_screen("%1")
+        .map(|screen| screen.normal_content_lines().join("\n"))
+        .unwrap_or_default();
+    assert!(
+        pane_text.contains("__MEZ_ASYNC_FISH_PARENT_RESPONSIVE__"),
+        "restored Fish parent output remained hidden after no-prompt exit: {pane_text:?}"
+    );
+    actor_exit.service.terminate_all_pane_processes().unwrap();
+    std::fs::remove_file(executed_path).unwrap();
+}
+
 /// Verifies that the async-owned pane path keeps the pane shell alive after the
 /// first agent shell command dispatch. This covers the production daemon shape:
 /// a real PTY shell is claimed by the Tokio pane worker, a provider completion

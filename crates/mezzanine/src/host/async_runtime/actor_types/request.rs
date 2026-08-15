@@ -96,6 +96,14 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Receives the queued pane-input dispatch metadata.
         reply: oneshot::Sender<Result<PaneInputDispatch>>,
     },
+    /// Reads the Fish child and restoration lifecycle for boundary tests.
+    #[cfg(test)]
+    FishLifecycleState {
+        /// Pane whose managed Fish handoff is observed.
+        pane_id: String,
+        /// Receives child-active, bootstrap-pending, and restoration-pending flags.
+        reply: oneshot::Sender<(bool, bool, bool)>,
+    },
     /// Represents the Render Client View case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1024,7 +1032,7 @@ impl AsyncRuntimeRequest {
             | Self::AcknowledgeMessageFanout { .. }
             | Self::EventWakeups { .. } => Family::Message,
             #[cfg(test)]
-            Self::WriteInputToPane { .. } => Family::Terminal,
+            Self::WriteInputToPane { .. } | Self::FishLifecycleState { .. } => Family::Terminal,
             Self::ApplyAttachedTerminalStep { .. }
             | Self::ResizeAttachedPrimaryTerminal { .. }
             | Self::ExecuteTerminalCommand { .. }

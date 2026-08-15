@@ -528,8 +528,8 @@ impl RuntimeSessionService {
             self.set_pane_readiness(output_pane_id, PaneReadinessState::PromptCandidate);
         }
 
+        self.clear_shell_output_filters_for_foreground_input(output_pane_id);
         if !restoration.pending_input.is_empty() {
-            self.clear_shell_output_filters_for_foreground_input(output_pane_id);
             self.write_runtime_pane_input(output_pane_id, &restoration.pending_input)?;
         }
         if resume_deferred_entry {
