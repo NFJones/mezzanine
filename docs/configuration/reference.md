@@ -477,8 +477,6 @@ description.
 | `agents.max_subagent_panes_per_window` | integer | `4` | Maximum subagent panes per window. |
 | `agents.subagent_wait_policy` | string | `"join"` | Default wait behavior for spawned subagents. |
 | `agents.max_depth` | integer | `2` | Maximum subagent tree depth. |
-| `agents.prompt_profile` | string | `"default"` | Agent system prompt profile id. |
-| `agents.default_agent_role` | string | `"default"` | Default subagent role/profile id. |
 
 ### `agents.auto_sizing`
 
