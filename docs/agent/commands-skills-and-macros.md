@@ -31,7 +31,7 @@ turning the command into an ordinary model request:
 | Goal | Commands |
 | --- | --- |
 | Inspect or change authority | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, and `/sandbox` |
-| Control the current task | `/plan`, `/directive`, `/stop`, `/new`, `/fork`, `/resume`, and `/name-session` |
+| Control the current task | `/plan`, `/directive`, `/loop`, `/stop`, `/new`, `/fork`, `/resume`, and `/name-session` |
 | Inspect or preserve context | `/compact`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, and `/list-modified-files` |
 | Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, and `/list-personalities` |
 | Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, and `/show-issues` |
@@ -52,6 +52,12 @@ conversation. Use `/copy-context` or `/copy-trace-log` only when the resulting
 diagnostic material can be handled safely. `/copy-patches` exports retained
 `apply_patch` payloads and statuses, while `/list-modified-files` reports files
 changed by the current conversation.
+
+`/loop [--fork|--new] [--limit <count>] [--goal <string>] <prompt>` repeats a
+bounded task until its completion condition or iteration limit is reached. Use
+it only when repeated autonomous work is appropriate; see
+[Subagents and messaging](subagents-and-messaging.md#use-routed-loops-sparingly)
+for its stopping rules and conversation modes.
 
 `/memory` controls persistent-memory availability, while `/issue` manages
 runtime-owned project issues rather than an external tracker. `/init` creates a
