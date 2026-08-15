@@ -363,7 +363,8 @@ pub use openai_cache::{
 };
 pub use openai_chat_completions::{
     ChatCompletionsResponseEnvelope, OpenAiChatCompletionsOptions, OpenAiChatCompletionsResponse,
-    OpenAiChatCompletionsResponseError, openai_chat_completions_request_body,
+    OpenAiChatCompletionsResponseError, OpenAiChatCompletionsStreamDecoder,
+    openai_chat_completions_request_body, openai_chat_completions_request_body_with_stream,
     parse_chat_completions_response_envelope, parse_openai_chat_completions_response_body,
 };
 pub use openai_continuity::{

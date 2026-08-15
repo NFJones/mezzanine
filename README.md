@@ -89,6 +89,13 @@ Choose an explicit provider and credential method when using another provider,
 an API key, or noninteractive authentication; [Getting started](docs/getting-started/README.md)
 documents those flows.
 
+The generic `openai-chat-completions` adapter supports standard SSE streaming
+as an explicit backend compatibility opt-in. Set
+`providers.<name>.options.streaming = "enabled"` only for a backend known to
+implement the OpenAI Chat Completions event shape; omission keeps unary JSON
+behavior. See the [configuration reference](docs/configuration/reference.md)
+for the complete contract.
+
 Press `Ctrl+A a` to open the focused pane's agent shell. Begin with a bounded
 task that asks for inspection and focused validation. Press `Ctrl+A d` to detach
 without normally stopping the session.

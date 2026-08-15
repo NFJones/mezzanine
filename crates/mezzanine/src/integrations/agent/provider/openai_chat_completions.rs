@@ -5,15 +5,16 @@
 //! avoids DeepSeek thinking fields, DeepSeek shim function names, hidden
 //! reasoning transcript replay, and DeepSeek retry policy.
 
-use super::chat_completions::ChatCompletionsDialect;
+use super::chat_completions::{ChatCompletionsDialect, ChatCompletionsStreamDecoder};
 use super::{
     MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse, Result,
     openai_models_endpoint_for_responses_endpoint, provider_quota_usage_from_headers,
     validate_non_empty,
 };
 use mez_agent::{
-    OpenAiChatCompletionsOptions, openai_chat_completions_request_body,
-    parse_openai_chat_completions_response_body,
+    OpenAiChatCompletionsOptions, OpenAiChatCompletionsResponse,
+    OpenAiChatCompletionsStreamDecoder, SseEvent, openai_chat_completions_request_body_with_stream,
+    parse_openai_chat_completions_response_body, parse_sse_events_with,
 };
 use std::collections::BTreeMap;
 
@@ -84,7 +85,16 @@ impl ChatCompletionsDialect for OpenAiChatCompletionsDialect {
     }
 
     fn effective_stream(&self, _request: &ModelRequest, _stream: bool) -> bool {
-        false
+        self.options.streaming_enabled()
+    }
+
+    fn stream_decoder(
+        &self,
+        _request: &ModelRequest,
+    ) -> Result<Option<Box<dyn ChatCompletionsStreamDecoder>>> {
+        Ok(Some(
+            Box::new(OpenAiChatCompletionsStreamDecoder::default()),
+        ))
     }
 
     fn build_models_request(
@@ -129,8 +139,8 @@ fn build_openai_chat_completions_http_request(
             "OpenAI-compatible provider timeout must be greater than zero",
         ));
     }
-    let stream = false;
-    let body = openai_chat_completions_request_body(request, options)?;
+    let stream = options.streaming_enabled();
+    let body = openai_chat_completions_request_body_with_stream(request, options, stream)?;
     let mut headers = BTreeMap::new();
     headers.insert(
         "Accept".to_string(),
@@ -196,12 +206,48 @@ fn parse_openai_chat_completions_http_response(
     stream: bool,
 ) -> Result<ModelResponse> {
     let ProviderHttpResponse { headers, body, .. } = response;
-    if stream {
-        return Err(MezError::invalid_state(
-            "OpenAI-compatible Chat Completions streaming responses are not yet supported",
-        ));
+    let parsed = if stream {
+        let mut decoder = OpenAiChatCompletionsStreamDecoder::default();
+        parse_sse_events_with(
+            &body,
+            "OpenAI-compatible Chat Completions stream contained no SSE events",
+            |name, data| {
+                decoder.push_event(&SseEvent {
+                    name: name.map(str::to_string),
+                    data: data.to_string(),
+                })?;
+                Ok::<(), mez_agent::OpenAiChatCompletionsResponseError>(())
+            },
+        )?;
+        decoder.finish(request)?
+    } else {
+        parse_openai_chat_completions_response_body(&body, request)?
+    };
+    openai_chat_completions_model_response(parsed, headers, provider_id)
+}
+
+impl ChatCompletionsStreamDecoder for OpenAiChatCompletionsStreamDecoder {
+    fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>> {
+        Ok(OpenAiChatCompletionsStreamDecoder::push_event(self, event)?)
     }
-    let parsed = parse_openai_chat_completions_response_body(&body, request)?;
+
+    fn finish(
+        self: Box<Self>,
+        headers: BTreeMap<String, String>,
+        request: &ModelRequest,
+        provider_id: &str,
+    ) -> Result<ModelResponse> {
+        let parsed = OpenAiChatCompletionsStreamDecoder::finish(*self, request)?;
+        openai_chat_completions_model_response(parsed, headers, provider_id)
+    }
+}
+
+/// Attaches product-owned provider identity and quota metadata to decoded output.
+fn openai_chat_completions_model_response(
+    parsed: OpenAiChatCompletionsResponse,
+    headers: BTreeMap<String, String>,
+    provider_id: &str,
+) -> Result<ModelResponse> {
     Ok(ModelResponse {
         provider: provider_id.to_string(),
         model: parsed.model,

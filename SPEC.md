@@ -3094,6 +3094,14 @@ For OpenAI-compatible Chat Completions profiles,
 `provider_options.developer_role` MAY be set to `developer` or `system` to
 control how Mezzanine developer messages are serialized. It MUST default to
 `system` for compatibility with older generic chat backends.
+`provider_options.streaming` MAY be set to the string `enabled`/`true` or
+`disabled`/`false` to declare support for standard OpenAI Chat Completions SSE.
+It MUST default to disabled. When enabled, Mezzanine MUST send `stream: true`
+and request `text/event-stream`, MUST accumulate content and indexed tool-call
+deltas until `[DONE]` or a non-null finish reason, and MUST validate MAAP only
+after stream finalization. Invalid JSON, provider error events, empty streams,
+and streams without a terminal condition MUST fail as provider compatibility
+errors. Mezzanine MUST NOT silently retry such failures as unary requests.
 For Anthropic profiles, `provider_options.prompt_caching` MAY be set to
 `enabled`/`true` or `disabled`/`false` to control Anthropic prompt-cache
 `cache_control` request markers. It MUST default to enabled. When enabled and a

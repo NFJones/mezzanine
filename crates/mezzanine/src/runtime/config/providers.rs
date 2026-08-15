@@ -478,3 +478,50 @@ pub(crate) fn runtime_recommended_model_for_provider(kind: &str) -> Result<&'sta
         .copied()
         .ok_or_else(|| MezError::config(format!("providers.{kind}.default_model is required")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_provider_config_from_config;
+
+    /// Verifies the generic streaming declaration survives provider config
+    /// extraction as the string-valued compatibility option consumed by the
+    /// OpenAI-compatible adapter.
+    #[test]
+    fn runtime_provider_config_preserves_generic_streaming_option() {
+        let config = runtime_provider_config_from_config(
+            "lmstudio",
+            &serde_json::json!({
+                "kind": "openai-compatible",
+                "api": "openai-chat-completions",
+                "options": { "streaming": "enabled" }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.options.get("streaming").map(String::as_str),
+            Some("enabled")
+        );
+    }
+
+    /// Verifies provider options remain string-only, so a bare TOML boolean
+    /// cannot silently change the established dynamic option-map contract.
+    #[test]
+    fn runtime_provider_config_rejects_boolean_streaming_option() {
+        let error = runtime_provider_config_from_config(
+            "lmstudio",
+            &serde_json::json!({
+                "kind": "openai-compatible",
+                "api": "openai-chat-completions",
+                "options": { "streaming": true }
+            }),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("providers.lmstudio.options.streaming must be a string")
+        );
+    }
+}

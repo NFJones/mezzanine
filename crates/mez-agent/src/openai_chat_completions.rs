@@ -27,6 +27,7 @@ pub struct OpenAiChatCompletionsOptions {
     output_token_field: OpenAiOutputTokenField,
     maap_surface: OpenAiMaapSurfaceMode,
     developer_role: OpenAiDeveloperRole,
+    streaming: OpenAiStreamingMode,
 }
 
 impl Default for OpenAiChatCompletionsOptions {
@@ -40,6 +41,7 @@ impl Default for OpenAiChatCompletionsOptions {
             output_token_field: OpenAiOutputTokenField::MaxTokens,
             maap_surface: OpenAiMaapSurfaceMode::CanonicalBatch,
             developer_role: OpenAiDeveloperRole::System,
+            streaming: OpenAiStreamingMode::Disabled,
         }
     }
 }
@@ -87,7 +89,17 @@ impl OpenAiChatCompletionsOptions {
         if let Some(value) = openai_chat_provider_option(provider_options, &["developer_role"]) {
             options.developer_role = OpenAiDeveloperRole::parse(&value)?;
         }
+        if let Some(value) =
+            openai_chat_provider_option(provider_options, &["streaming", "supports_streaming"])
+        {
+            options.streaming = OpenAiStreamingMode::parse(&value)?;
+        }
         Ok(options)
+    }
+
+    /// Returns whether this backend explicitly declares standard SSE support.
+    pub fn streaming_enabled(self) -> bool {
+        matches!(self.streaming, OpenAiStreamingMode::Enabled)
     }
 }
 
@@ -144,6 +156,25 @@ enum OpenAiMaapSurfaceMode {
 enum OpenAiDeveloperRole {
     System,
     Developer,
+}
+
+/// Explicit streaming compatibility declaration for a generic backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenAiStreamingMode {
+    Enabled,
+    Disabled,
+}
+
+impl OpenAiStreamingMode {
+    fn parse(value: &str) -> ProviderRequestAssemblyResult<Self> {
+        match openai_chat_normalized_option(value).as_str() {
+            "enabled" | "enable" | "true" | "yes" | "on" => Ok(Self::Enabled),
+            "disabled" | "disable" | "false" | "no" | "off" => Ok(Self::Disabled),
+            _ => Err(ProviderRequestAssemblyError::invalid_args(
+                "OpenAI-compatible provider option `streaming` must be enabled or disabled",
+            )),
+        }
+    }
 }
 
 impl OpenAiCompatibilitySwitch {
@@ -285,10 +316,19 @@ pub fn openai_chat_completions_request_body(
     request: &ModelRequest,
     options: OpenAiChatCompletionsOptions,
 ) -> ProviderRequestAssemblyResult<String> {
+    openai_chat_completions_request_body_with_stream(request, options, false)
+}
+
+/// Encodes one canonical request with an explicit effective streaming mode.
+pub fn openai_chat_completions_request_body_with_stream(
+    request: &ModelRequest,
+    options: OpenAiChatCompletionsOptions,
+    stream: bool,
+) -> ProviderRequestAssemblyResult<String> {
     let mut body = serde_json::json!({
         "model": request.model,
         "messages": openai_chat_completions_messages(request, options.developer_role),
-        "stream": false,
+        "stream": stream,
     });
     if let Some(max_output_tokens) = request.max_output_tokens.filter(|tokens| *tokens > 0) {
         let field = match options.output_token_field {
@@ -547,6 +587,12 @@ impl From<ProviderMalformedOutputError> for OpenAiChatCompletionsResponseError {
     }
 }
 
+impl From<crate::SseParseError> for OpenAiChatCompletionsResponseError {
+    fn from(error: crate::SseParseError) -> Self {
+        Self::Provider(ProviderResponseError::from(error))
+    }
+}
+
 /// Parses one non-streaming generic OpenAI-compatible response body.
 pub fn parse_openai_chat_completions_response_body(
     body: &str,
@@ -787,17 +833,210 @@ fn openai_chat_completions_usage(root: &serde_json::Value) -> ModelTokenUsage {
     }
 }
 
+/// Accumulated fields for one indexed OpenAI-compatible streamed tool call.
+#[derive(Debug, Default)]
+struct OpenAiChatCompletionsStreamToolCall {
+    id: String,
+    function_name: String,
+    arguments: String,
+}
+
+/// Incrementally decodes standard OpenAI Chat Completions SSE chunks.
+///
+/// The decoder only accumulates provider output. MAAP parsing and validation
+/// are deferred until [`Self::finish`], preventing partial tool arguments from
+/// reaching the action execution path.
+#[derive(Debug, Default)]
+pub struct OpenAiChatCompletionsStreamDecoder {
+    text_content: String,
+    reasoning_content: String,
+    tool_calls: BTreeMap<u64, OpenAiChatCompletionsStreamToolCall>,
+    model: Option<String>,
+    usage: Option<serde_json::Value>,
+    finish_reason: Option<String>,
+    valid_json_events: usize,
+    terminal: bool,
+}
+
+impl OpenAiChatCompletionsStreamDecoder {
+    /// Applies one complete SSE event and returns newly visible content.
+    ///
+    /// Empty data events are ignored. Every non-terminal data event must be a
+    /// standard JSON Chat Completions chunk; malformed or provider-error events
+    /// fail closed with a sanitized diagnostic.
+    pub fn push_event(
+        &mut self,
+        event: &crate::SseEvent,
+    ) -> Result<Option<String>, OpenAiChatCompletionsResponseError> {
+        let data = event.data.trim();
+        if data.is_empty() {
+            return Ok(None);
+        }
+        if data == "[DONE]" {
+            self.terminal = true;
+            return Ok(None);
+        }
+        let value: serde_json::Value = serde_json::from_str(data).map_err(|error| {
+            ProviderResponseError::invalid_state(format!(
+                "OpenAI-compatible Chat Completions stream event is invalid JSON: {error}"
+            ))
+        })?;
+        if value.get("error").is_some() {
+            return Err(ProviderResponseError::invalid_state(
+                "OpenAI-compatible Chat Completions stream reported a provider error",
+            )
+            .with_provider_failure_json(
+                serde_json::json!({"provider": "openai_chat_completions", "stream_error": true})
+                    .to_string(),
+            )
+            .into());
+        }
+        self.valid_json_events += 1;
+        if self.model.is_none() {
+            self.model = value
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+        if let Some(usage) = value.get("usage").filter(|usage| !usage.is_null()) {
+            self.usage = Some(usage.clone());
+        }
+        let choices = value
+            .get("choices")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| {
+                ProviderResponseError::invalid_state(
+                    "OpenAI-compatible Chat Completions stream event has no choices array",
+                )
+            })?;
+        let mut visible_progress = String::new();
+        for choice in choices {
+            if choice
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                != 0
+            {
+                continue;
+            }
+            if let Some(reason) = choice
+                .get("finish_reason")
+                .and_then(serde_json::Value::as_str)
+            {
+                self.finish_reason = Some(reason.to_string());
+                self.terminal = true;
+            }
+            let Some(delta) = choice.get("delta") else {
+                continue;
+            };
+            if let Some(content) = delta.get("content").and_then(serde_json::Value::as_str) {
+                self.text_content.push_str(content);
+                visible_progress.push_str(content);
+            }
+            if let Some(reasoning) = delta
+                .get("reasoning_content")
+                .and_then(serde_json::Value::as_str)
+            {
+                self.reasoning_content.push_str(reasoning);
+            }
+            if let Some(tool_deltas) = delta
+                .get("tool_calls")
+                .and_then(serde_json::Value::as_array)
+            {
+                for tool_delta in tool_deltas {
+                    let index = tool_delta
+                        .get("index")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    let accumulator = self.tool_calls.entry(index).or_default();
+                    if let Some(id) = tool_delta.get("id").and_then(serde_json::Value::as_str) {
+                        accumulator.id.push_str(id);
+                    }
+                    if let Some(function) = tool_delta.get("function") {
+                        if let Some(name) = function.get("name").and_then(serde_json::Value::as_str)
+                        {
+                            accumulator.function_name.push_str(name);
+                        }
+                        if let Some(arguments) = function
+                            .get("arguments")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            accumulator.arguments.push_str(arguments);
+                        }
+                    }
+                }
+            }
+        }
+        Ok((!visible_progress.is_empty()).then_some(visible_progress))
+    }
+
+    /// Finalizes a complete stream through the existing unary response parser.
+    pub fn finish(
+        self,
+        request: &ModelRequest,
+    ) -> Result<OpenAiChatCompletionsResponse, OpenAiChatCompletionsResponseError> {
+        if self.valid_json_events == 0 {
+            return Err(ProviderResponseError::invalid_state(
+                "OpenAI-compatible Chat Completions stream contained no JSON events",
+            )
+            .into());
+        }
+        if !self.terminal {
+            return Err(ProviderResponseError::invalid_state(
+                "OpenAI-compatible Chat Completions stream ended before a terminal event",
+            )
+            .into());
+        }
+        let tool_calls = self
+            .tool_calls
+            .into_values()
+            .map(|call| {
+                serde_json::json!({
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function_name,
+                        "arguments": call.arguments
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut message = serde_json::json!({
+            "role": "assistant",
+            "content": self.text_content,
+            "tool_calls": tool_calls
+        });
+        if !self.reasoning_content.is_empty() {
+            message["reasoning_content"] = serde_json::Value::String(self.reasoning_content);
+        }
+        let mut root = serde_json::json!({
+            "model": self.model.unwrap_or_else(|| request.model.clone()),
+            "choices": [{
+                "index": 0,
+                "message": message,
+                "finish_reason": self.finish_reason
+            }]
+        });
+        if let Some(usage) = self.usage {
+            root["usage"] = usage;
+        }
+        let body = serde_json::to_string(&root).map_err(|error| {
+            ProviderResponseError::invalid_state(format!(
+                "OpenAI-compatible Chat Completions stream finalization failed: {error}"
+            ))
+        })?;
+        parse_openai_chat_completions_response_body(&body, request)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage};
 
-    /// Verifies OpenAI-compatible Chat Completions can preserve the canonical
-    /// developer role on modern APIs while retaining the default system-role
-    /// fallback required by older compatible backends.
-    #[test]
-    fn openai_chat_completions_messages_support_configurable_developer_role() {
-        let request = ModelRequest {
+    /// Builds one action request used by generic Chat Completions unit tests.
+    fn test_request() -> ModelRequest {
+        ModelRequest {
             provider: "local-openai-chat".to_string(),
             model: "local-chat-model".to_string(),
             reasoning_effort: None,
@@ -824,7 +1063,15 @@ mod tests {
                 content: "Follow developer authority.".to_string(),
             }]
             .into(),
-        };
+        }
+    }
+
+    /// Verifies OpenAI-compatible Chat Completions can preserve the canonical
+    /// developer role on modern APIs while retaining the default system-role
+    /// fallback required by older compatible backends.
+    #[test]
+    fn openai_chat_completions_messages_support_configurable_developer_role() {
+        let request = test_request();
 
         let default_messages =
             openai_chat_completions_messages(&request, OpenAiDeveloperRole::System);
@@ -849,6 +1096,162 @@ mod tests {
             crate::ProviderRequestAssemblyErrorKind::InvalidArgs
         );
         assert!(error.message().contains("developer or system"));
+    }
+
+    /// Verifies generic streaming remains disabled by omission, accepts the
+    /// documented string aliases, and rejects automatic capability guessing.
+    #[test]
+    fn openai_chat_completions_streaming_option_is_explicit() {
+        let defaults = OpenAiChatCompletionsOptions::default();
+        assert!(!defaults.streaming_enabled());
+
+        for value in ["enabled", "enable", "true", "yes", "on"] {
+            let options = BTreeMap::from([("streaming".to_string(), value.to_string())]);
+            assert!(
+                OpenAiChatCompletionsOptions::from_provider_options(&options)
+                    .unwrap()
+                    .streaming_enabled()
+            );
+        }
+        for value in ["disabled", "disable", "false", "no", "off"] {
+            let options = BTreeMap::from([("streaming".to_string(), value.to_string())]);
+            assert!(
+                !OpenAiChatCompletionsOptions::from_provider_options(&options)
+                    .unwrap()
+                    .streaming_enabled()
+            );
+        }
+
+        let options = BTreeMap::from([("streaming".to_string(), "auto".to_string())]);
+        let error = OpenAiChatCompletionsOptions::from_provider_options(&options).unwrap_err();
+        assert!(error.message().contains("must be enabled or disabled"));
+    }
+
+    /// Verifies the stream-aware request builder changes only the explicit
+    /// wire streaming field while the legacy wrapper remains unary.
+    #[test]
+    fn openai_chat_completions_request_body_uses_effective_stream_mode() {
+        let request = test_request();
+        let options = OpenAiChatCompletionsOptions::default();
+
+        let unary: serde_json::Value =
+            serde_json::from_str(&openai_chat_completions_request_body(&request, options).unwrap())
+                .unwrap();
+        let streaming: serde_json::Value = serde_json::from_str(
+            &openai_chat_completions_request_body_with_stream(&request, options, true).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(unary["stream"], false);
+        assert_eq!(streaming["stream"], true);
+        assert!(streaming.get("stream_options").is_none());
+    }
+
+    /// Verifies standard SSE chunks can fragment a MAAP function name and
+    /// arguments without exposing or parsing the call before finalization.
+    #[test]
+    fn openai_chat_completions_stream_accumulates_fragmented_tool_call() {
+        let request = test_request();
+        let arguments = serde_json::json!({
+            "rationale": "streamed generic action",
+            "thought": null,
+            "actions": [{
+                "type": "say",
+                "status": "final",
+                "content_type": "text/plain; charset=utf-8",
+                "text": "done"
+            }]
+        })
+        .to_string();
+        let split = arguments.len() / 2;
+        let mut decoder = OpenAiChatCompletionsStreamDecoder::default();
+        let first = serde_json::json!({
+            "model": "stream-model",
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "submit_maap_",
+                        "arguments": &arguments[..split]
+                    }
+                }]},
+                "finish_reason": null
+            }]
+        });
+        let second = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "function": {
+                        "name": "action_batch",
+                        "arguments": &arguments[split..]
+                    }
+                }]},
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7}
+        });
+
+        assert_eq!(
+            decoder
+                .push_event(&crate::SseEvent {
+                    name: None,
+                    data: first.to_string(),
+                })
+                .unwrap(),
+            None
+        );
+        decoder
+            .push_event(&crate::SseEvent {
+                name: None,
+                data: second.to_string(),
+            })
+            .unwrap();
+        let response = decoder.finish(&request).unwrap();
+
+        assert_eq!(response.model, "stream-model");
+        assert_eq!(response.usage.input_tokens, 11);
+        assert_eq!(response.usage.output_tokens, 7);
+        assert_eq!(
+            response.action_batch.unwrap().rationale,
+            "streamed generic action"
+        );
+    }
+
+    /// Verifies incomplete or malformed streams fail closed instead of
+    /// projecting partial visible text as a successful provider response.
+    #[test]
+    fn openai_chat_completions_stream_requires_valid_terminal_json() {
+        let request = test_request();
+        let mut truncated = OpenAiChatCompletionsStreamDecoder::default();
+        truncated
+            .push_event(&crate::SseEvent {
+                name: None,
+                data: serde_json::json!({
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": "partial"},
+                        "finish_reason": null
+                    }]
+                })
+                .to_string(),
+            })
+            .unwrap();
+        let error = truncated.finish(&request).unwrap_err();
+        assert!(error.to_string().contains("before a terminal event"));
+
+        let mut malformed = OpenAiChatCompletionsStreamDecoder::default();
+        let error = malformed
+            .push_event(&crate::SseEvent {
+                name: None,
+                data: "not-json".to_string(),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("invalid JSON"));
     }
 
     /// Verifies hallucinated or unsupported compatible tool calls fail as

@@ -530,7 +530,14 @@ or `disabled`), `parallel_tool_calls` (`auto`, `enabled`, or `disabled`),
 `maap_output` (`auto`, `tools`, or `structured_json`),
 `structured_output` (`auto`, `json_object`, `json_schema`, or `disabled`),
 `output_token_field` (`max_tokens` or `max_completion_tokens`), and
-`maap_surface` (`canonical_batch` or `content_json`). LM Studio-style model
+`maap_surface` (`canonical_batch` or `content_json`). The string option
+`streaming` defaults to `disabled`; set it to `enabled` only when the backend
+implements standard OpenAI Chat Completions SSE chunks. Enabled streaming does
+not auto-detect or fall back to unary JSON: malformed, non-SSE, provider-error,
+or unterminated responses fail with a compatibility diagnostic. Supported
+enabled aliases are `enable`, `true`, `yes`, and `on`; disabled aliases are
+`disable`, `false`, `no`, and `off`. Provider option values are strings, so use
+`streaming = "true"`, not a bare TOML boolean. LM Studio-style model
 catalog capability tags such as `tool_use` are retained in provider model
 metadata and copied into runtime-generated profile options as
 `model_capabilities`. By default Mezzanine sends the canonical
@@ -565,6 +572,7 @@ maap_output = "structured_json"
 structured_output = "json_schema"
 tool_choice = "required" # only used when maap_output selects native tools
 parallel_tool_calls = "disabled"
+streaming = "enabled" # optional; backend must implement standard OpenAI SSE
 ```
 
 ### `model_profiles.<name>`

@@ -879,3 +879,131 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
     assert!(!body_text.contains(DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME));
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+/// Verifies a generic compatible backend can explicitly opt in to standard
+/// OpenAI Chat Completions SSE without changing the default unary behavior.
+///
+/// The streamed function name and arguments arrive in fragments and must only
+/// become a validated MAAP batch after the terminal event has been observed.
+fn openai_compatible_chat_completions_provider_supports_opt_in_streaming() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-agent-provider-generic-chat-streaming-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
+    let mut request = assemble_model_request(
+        &ModelProfile {
+            provider: "local-openai-chat".to_string(),
+            model: "local-chat-model".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "say hello".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
+    request.allowed_actions =
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
+    let arguments = serde_json::json!({
+        "rationale": "generic compatible streaming completed",
+        "thought": null,
+        "actions": [{
+            "type": "say",
+            "status": "final",
+            "content_type": "text/plain; charset=utf-8",
+            "text": "hello"
+        }]
+    })
+    .to_string();
+    let split = arguments.len() / 2;
+    let stream_body = format!(
+        "data: {}\n\ndata: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+        serde_json::json!({
+            "model": "local-chat-model",
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "submit_maap_",
+                        "arguments": &arguments[..split]
+                    }
+                }]},
+                "finish_reason": null
+            }]
+        }),
+        serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": 0,
+                    "function": {
+                        "name": "action_batch",
+                        "arguments": &arguments[split..]
+                    }
+                }]},
+                "finish_reason": "tool_calls"
+            }]
+        }),
+        serde_json::json!({
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 13,
+                "completion_tokens": 8,
+                "prompt_tokens_details": {"cached_tokens": 3}
+            }
+        })
+    );
+    let transport = FakeProviderHttpTransport {
+        requests: RefCell::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body: stream_body,
+        },
+    };
+    let provider_options =
+        std::collections::BTreeMap::from([("streaming".to_string(), "enabled".to_string())]);
+
+    let provider = openai_compatible_provider_from_auth_store_with_provider_options(
+        &auth_store,
+        "local-openai-chat",
+        Some("http://localhost:1234/v1"),
+        &provider_options,
+        120_000,
+        transport,
+    )
+    .unwrap();
+    let response = provider.send_request(&request).unwrap();
+
+    assert_eq!(response.usage.input_tokens, 13);
+    assert_eq!(response.usage.output_tokens, 8);
+    assert_eq!(response.usage.cached_input_tokens, Some(3));
+    assert_eq!(
+        response.action_batch.unwrap().rationale,
+        "generic compatible streaming completed"
+    );
+    let sent = provider.transport.requests.borrow();
+    assert_eq!(
+        sent[0].headers.get("Accept").map(String::as_str),
+        Some("text/event-stream")
+    );
+    let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+    assert_eq!(body["stream"], true);
+    assert!(body.get("stream_options").is_none());
+    let _ = std::fs::remove_dir_all(root);
+}

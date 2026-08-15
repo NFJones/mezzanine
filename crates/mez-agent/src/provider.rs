@@ -1118,7 +1118,7 @@ impl ProviderCapabilities {
                 supports_thinking_toggle: false,
                 supports_service_tier: false,
                 supports_prompt_cache_retention: false,
-                supports_streaming: false,
+                supports_streaming: true,
                 supports_tool_calls: true,
                 supports_parallel_tool_calls: false,
             },
@@ -2018,6 +2018,18 @@ mod tests {
         assert!(!capabilities.supports_thinking_toggle);
         assert!(!capabilities.supports_service_tier);
         assert!(!capabilities.supports_prompt_cache_retention);
+        assert!(capabilities.supports_streaming);
+        assert!(capabilities.supports_tool_calls);
+        assert!(!capabilities.supports_parallel_tool_calls);
+    }
+
+    /// Verifies the generic Chat Completions adapter advertises implemented
+    /// streaming capability even though each backend must explicitly opt in.
+    #[test]
+    fn openai_chat_completions_capabilities_include_opt_in_streaming() {
+        let capabilities =
+            ProviderCapabilities::for_api(ProviderApiCompatibility::OpenAiChatCompletions);
+
         assert!(capabilities.supports_streaming);
         assert!(capabilities.supports_tool_calls);
         assert!(!capabilities.supports_parallel_tool_calls);

@@ -13,7 +13,7 @@ use crate::{
     AnthropicMessagesOptions, ModelRequest, OpenAiChatCompletionsOptions, ProviderApiCompatibility,
     ProviderRequestAssemblyResult, anthropic_messages_request_body,
     deepseek_chat_completions_request_body_with_strategy, deepseek_effective_stream,
-    deepseek_maap_request_strategy, openai_chat_completions_request_body,
+    deepseek_maap_request_strategy, openai_chat_completions_request_body_with_stream,
     openai_responses_request_body_with_stream,
 };
 
@@ -62,7 +62,11 @@ pub fn provider_request_input_estimate(
         }
         ProviderApiCompatibility::OpenAiChatCompletions => {
             let options = OpenAiChatCompletionsOptions::from_provider_options(provider_options)?;
-            openai_chat_completions_request_body(request, options)?
+            openai_chat_completions_request_body_with_stream(
+                request,
+                options,
+                stream && options.streaming_enabled(),
+            )?
         }
         ProviderApiCompatibility::DeepSeekChatCompletions => {
             let strategy = deepseek_maap_request_strategy(request);
@@ -181,5 +185,31 @@ mod tests {
             assert!(complete_estimate.wire_bytes > minimal_estimate.wire_bytes);
             assert!(complete_estimate.input_tokens >= minimal_estimate.input_tokens);
         }
+    }
+
+    /// Verifies generic Chat Completions accounting renders the configured
+    /// streaming request body rather than estimating the legacy unary shape.
+    #[test]
+    fn generic_chat_accounting_uses_opt_in_stream_mode() {
+        let request = complete_test_request("openai-compatible");
+        let provider_options = BTreeMap::from([("streaming".to_string(), "enabled".to_string())]);
+        let options =
+            OpenAiChatCompletionsOptions::from_provider_options(&provider_options).unwrap();
+        let expected =
+            openai_chat_completions_request_body_with_stream(&request, options, true).unwrap();
+
+        let estimate = provider_request_input_estimate(
+            &request,
+            ProviderApiCompatibility::OpenAiChatCompletions,
+            &provider_options,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(estimate.wire_bytes, expected.len());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&expected).unwrap()["stream"],
+            true
+        );
     }
 }
