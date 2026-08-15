@@ -53,7 +53,7 @@ explicitly.
 - [Sessions and panes](../using-mezzanine/sessions-and-panes.md)
 - [Agent shell](../using-mezzanine/agent-shell.md)
 - [Safety, trust, and security](../safety-and-trust/README.md)
-- [CLI reference](../reference-manual/README.md)
+- [CLI reference](../reference-manual/cli.md)
 
 ## Next step
 

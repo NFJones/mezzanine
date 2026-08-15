@@ -100,6 +100,8 @@ otherwise empty unless a default entry is shown.
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `keys` | table | see below | Prefix and direct key bindings. |
+| `key_preset` | table | see below | Active key-assignment preset. |
+| `key_presets` | map | `{}` | User-defined key-assignment presets. |
 | `frames` | table | see below | Window and pane frame templates. |
 | `theme` | table | see below | Active theme aliases and colors. |
 | `themes` | map | `{}` | User-defined named themes. |
@@ -388,7 +390,8 @@ Built-in theme names include `deepforest`, `apprentice`, `gruvbox_dark`,
 `catppuccin_macchiato`, `catppuccin_mocha`, `one_half_dark`,
 `one_half_light`, `onedark`, `rose_pine`, `rose_pine_moon`, `rose_pine_dawn`,
 `kanagawa`, `everforest_dark`, `everforest_light`, `ayu`, `ayu_dark`,
-`ayu_light`, `ayu_mirage`, `high_contrast_dark`, and `high_contrast_light`.
+`ayu_light`, `ayu_mirage`, `acid_lemon`, `acid_tangerine`, `acid_lime`,
+`acid_grapefruit`, `high_contrast_dark`, and `high_contrast_light`.
 
 Built-ins fall into three fidelity groups. `apprentice`, `nord`, `tokyo_night`,
 `catppuccin_latte`, `catppuccin_frappe`, `catppuccin_macchiato`,
@@ -400,8 +403,8 @@ accent, muted, and danger anchors are expected to remain recognizable against
 the named family. `gruvbox_dark`, `gruvbox_light`, `solarized_dark`, and
 `solarized_light` are interpretive family adaptations that intentionally choose
 Mezzanine UI anchors from canonical families rather than strict editor-theme
-semantic slots. `deepforest`, `high_contrast_dark`, and `high_contrast_light`
-are Mezzanine-native themes.
+semantic slots. `deepforest`, the four `acid_*` themes, `high_contrast_dark`,
+and `high_contrast_light` are Mezzanine-native themes.
 
 ### `history`
 
@@ -755,9 +758,11 @@ preset's `default_model_profile`.
 | `model_presets.<name>.auto_sizing_large_model_profile` | string | `default_model_profile` when omitted | Model-profile id used for large automatically sized turns. |
 | `model_presets.<name>.allowed_reasoning_efforts` | string array | `[]` when omitted | Allowed automatic-sizing reasoning efforts: `low`, `medium`, `high`, or `xhigh`. |
 
-The generated configuration defines `openai`, `deepseek`, and `anthropic`
-presets. Select a preset through the supported model-selection controls; edit
-the referenced profiles when changing provider, model, or provider options.
+The built-in catalog defines `openai`, `deepseek`, and `anthropic` presets.
+Each provider's preset and referenced profiles are materialized after successful
+authentication for that provider. Select a preset through the supported
+model-selection controls; edit the referenced profiles when changing provider,
+model, or provider options.
 
 ### `permissions`
 

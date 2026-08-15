@@ -7,7 +7,7 @@ before handing off a change.
 
 ## Prerequisites
 
-- A Rust 2024 toolchain.
+- A Rust toolchain that supports edition 2024.
 - `just` for the repository recipes.
 - The repository [AGENTS.md](../../AGENTS.md), which is the authoritative
   workflow and handoff guidance.

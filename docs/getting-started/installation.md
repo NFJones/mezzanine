@@ -9,7 +9,7 @@ Mezzanine sessions.
 
 - A Unix-like system with pseudoterminals and a POSIX-style shell.
 - A usable `$SHELL`; Mezzanine falls back to `/bin/sh` when it is executable.
-- A Rust 2024 toolchain when building from this repository.
+- A Rust toolchain that supports edition 2024 when building from this repository.
 
 ## Install from this repository
 

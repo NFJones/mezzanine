@@ -73,6 +73,7 @@ processes that existed when the snapshot was taken.
 | `mez sandbox` | Inspect, plan, enable, disable, manage presets, profiles, project trust, and Bubblewrap-home caches. `mez sandbox trust` supports `list`, `inspect PATH`, `add PATH`, `reject PATH`, and `revoke PATH`. |
 | `mez issue` | Add, show, update, query, and delete local project issues. |
 | `mez memory` | List, inspect, add, edit, delete, archive, mark stale, restore, record use or confirmation, supersede, prune, export, and search persistent memory records. |
+| `mez completion <shell>` | Generate a completion definition for `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
 
 `mez version` prints version information. `mez help` and `mez <command> --help`
 show the generated command contract. Human-readable output is the default;
