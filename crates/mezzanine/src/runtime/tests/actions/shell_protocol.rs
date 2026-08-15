@@ -988,6 +988,83 @@ fn runtime_agent_markdown_lists_keep_content_on_marker_row() {
     );
 }
 
+/// Verifies that a managed Bash parent with an unsubmitted Readline draft is
+/// never claimed as an agent child shell when it rejects the private trigger.
+///
+/// The receiver intentionally rejects admission while `READLINE_LINE` is
+/// nonempty. Hiding agent mode while that handoff is pending must cancel the
+/// bootstrap without sending EOF to the parent, leaving the original draft
+/// executable after the normal prompt resumes.
+#[test]
+fn runtime_bash_dirty_prompt_rejects_agent_admission_without_parent_eof() {
+    let Some(bash_path) = bash_path_for_tests() else {
+        eprintln!("skipping dirty Bash prompt regression because bash is unavailable");
+        return;
+    };
+    let root = temp_root("bash-dirty-agent-admission");
+    let mut service = RuntimeSessionService::with_event_log(
+        Session::new_default(
+            ResolvedShell::new(bash_path, ShellSource::ShellEnv),
+            Size::new(80, 24).unwrap(),
+        ),
+        root.join("default.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+    *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service
+        .write_input_to_pane(&primary, Some("%1"), b"printf '__MEZ_DRAFT_SURVIVED__\\n'")
+        .unwrap();
+
+    let show = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(show.contains("visibility=visible"), "{show}");
+    assert!(
+        !service.agent_subshell_is_active("%1"),
+        "a rejected parent admission must not claim child ownership"
+    );
+
+    let hide = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(hide.contains("visibility=hidden"), "{hide}");
+    assert!(
+        !service.agent_subshell_is_active("%1"),
+        "pending admission cancellation must leave child ownership unset"
+    );
+    service
+        .write_input_to_pane(&primary, Some("%1"), b"\n")
+        .unwrap();
+
+    let mut draft_executed = false;
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("__MEZ_DRAFT_SURVIVED__")
+        {
+            draft_executed = true;
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(draft_executed, "dirty parent draft was not preserved");
+    assert!(service.poll_pane_processes().unwrap().is_empty());
+    assert!(service.pane_processes().contains_pane("%1"));
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies that a bash-backed pane shell survives the first agent shell
 /// transaction after the command is displayed. The user-visible failure mode
 /// was the primary pane exiting immediately after an agent command preview, so

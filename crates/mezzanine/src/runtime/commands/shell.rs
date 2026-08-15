@@ -1167,9 +1167,11 @@ impl RuntimeSessionService {
                     pane_id,
                     agent_subshell_exit_marker_bytes(&exit_marker),
                 );
-                self.enter_agent_subshell(pane_id);
-                self.take_agent_subshell_command_exit(pane_id);
-                self.remember_hidden_shell_render_suppression(pane_id);
+                if classification != ShellClassification::Bash {
+                    self.enter_agent_subshell(pane_id);
+                    self.take_agent_subshell_command_exit(pane_id);
+                    self.remember_hidden_shell_render_suppression(pane_id);
+                }
                 Ok(true)
             }
             Err(error)
@@ -1202,6 +1204,15 @@ impl RuntimeSessionService {
     /// the user's parent shell.
     pub(crate) fn exit_agent_subshell_if_active(&mut self, pane_id: &str) -> Result<bool> {
         if !self.agent_subshell_is_active(pane_id) {
+            if self
+                .cancel_agent_subshell_bootstrap_for_exit(pane_id)
+                .is_some()
+            {
+                self.clear_agent_subshell_state(pane_id);
+                self.clear_agent_subshell_shell_identity(pane_id);
+                self.clear_shell_output_filters_for_foreground_input(pane_id);
+                return Ok(true);
+            }
             return Ok(false);
         }
         if self

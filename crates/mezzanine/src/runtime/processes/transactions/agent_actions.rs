@@ -270,6 +270,9 @@ impl RuntimeSessionService {
             self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
             return Err(error);
         }
+        self.enter_agent_subshell(output_pane_id);
+        self.take_agent_subshell_command_exit(output_pane_id);
+        self.remember_hidden_shell_render_suppression(output_pane_id);
         self.record_bootstrap_sent(output_pane_id, marker)?;
         Ok(1)
     }
