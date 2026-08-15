@@ -2454,6 +2454,56 @@ fn runtime_fish_bootstrap_waits_for_payload_receiver_ready() {
     let _ = process.terminate(Duration::from_millis(10));
 }
 
+/// Verifies prompt readiness cannot consume deferred bootstrap wrappers owned
+/// by managed Fish and Zsh receiver installation.
+///
+/// Both child shells can publish prompt-like output before the authenticated
+/// receiver-installed event is processed. Generic prompt bootstrap dispatch
+/// must leave the wrapper untouched for that event; otherwise Fish reports a
+/// protocol violation and Zsh can remain indefinitely in bootstrapping.
+#[test]
+fn runtime_managed_fish_and_zsh_bootstrap_wait_for_receiver_installation() {
+    for shell_path in ["/usr/bin/fish", "/usr/bin/zsh"] {
+        let mut service = test_runtime_service();
+        service.session.shell =
+            ResolvedShell::new(PathBuf::from(shell_path), ShellSource::ShellEnv).into();
+        service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .start_initial_pane_process(Some("cat >/dev/null"))
+            .unwrap();
+        let pane_id = "%1";
+        service.begin_agent_subshell_shell_handoff(pane_id).unwrap();
+        let (marker, wrapper) = service
+            .prepare_bootstrap_to_pane(pane_id)
+            .unwrap()
+            .expect("managed shell bootstrap should register");
+        service.bind_agent_subshell_bootstrap_marker(pane_id, &marker);
+        service.defer_agent_subshell_bootstrap_wrapper(pane_id, &marker, wrapper);
+        service.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
+        let _ = service.drain_pane_io_transition();
+
+        assert_eq!(
+            service.maybe_bootstrap_ready_panes().unwrap(),
+            0,
+            "{shell_path} prompt readiness must not consume receiver-owned bootstrap"
+        );
+        assert!(
+            service.drain_pane_io_transition().side_effects.is_empty(),
+            "{shell_path} prompt readiness unexpectedly dispatched deferred bootstrap"
+        );
+        assert!(service.pane_bootstrap_is_pending_for_tests(pane_id));
+        assert!(
+            service
+                .running_shell_transactions_for_tests()
+                .contains_key(&marker),
+            "{shell_path} bootstrap transaction should remain receiver-owned"
+        );
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// Verifies pending payload handoff uses a short start-marker deadline.
 ///
 /// Non-stateful shell actions wait for an OSC start marker before sending the

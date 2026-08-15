@@ -260,6 +260,7 @@ impl RuntimeSessionService {
     }
 
     /// Holds a registered bootstrap wrapper until the new child shell reports
+    /// its authenticated receiver installation or, for unmanaged shells,
     /// prompt readiness.
     pub(crate) fn defer_agent_subshell_bootstrap_wrapper(
         &mut self,

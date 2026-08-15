@@ -545,12 +545,16 @@ impl RuntimeSessionService {
                     .pane_shell_handoffs
                     .get(k.as_str())
                     .is_some_and(|handoff| handoff.deferred_bootstrap_wrapper.is_some());
-                let awaits_managed_bash_receiver = has_deferred_wrapper
-                    && self.shell_classification_for_pane(k.as_str())
-                        == mez_agent::ShellClassification::Bash;
+                let awaits_managed_receiver = has_deferred_wrapper
+                    && matches!(
+                        self.shell_classification_for_pane(k.as_str()),
+                        mez_agent::ShellClassification::Bash
+                            | mez_agent::ShellClassification::Fish
+                            | mez_agent::ShellClassification::Zsh
+                    );
                 self.process.pane_bootstrap_pending.contains(k.as_str())
                     && !self.pane_agent_subshell_certification_is_pending(k.as_str())
-                    && !awaits_managed_bash_receiver
+                    && !awaits_managed_receiver
                     && (has_deferred_wrapper
                         || !self
                             .process
