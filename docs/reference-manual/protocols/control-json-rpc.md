@@ -112,7 +112,7 @@ the [baseline method table in `SPEC.md`](../../../SPEC.md#13-control-endpoint).
 | Namespace | Methods | Access and purpose |
 | --- | --- | --- |
 | Control | `control/initialize`, `control/shutdown`, `control/cancel` | Negotiate a connection, close it, or cancel an owned request. Shutdown is naturally idempotent. |
-| Session | `session/list`, `session/get`, `session/attach` | List/get sessions (RO) or attach as primary/observer. Observer attach creates pending metadata only. |
+| Session | `session/list`, `session/get`, `session/attach`, `session/rename`, `session/kill` | List/get sessions (RO), attach as primary/observer, rename a session, or terminate it; termination requires `force` while live panes remain. Observer attach creates pending metadata only. |
 | Client | `client/list`, `client/detach`, `client/select_primary` | Inspect clients, detach a client, or atomically transfer primary ownership. |
 | Observer | `observer/list`, `observer/inspect`, `observer/approve`, `observer/reject`, `observer/revoke` | Inspect and primary-manage observer requests. Pending/approved observers can inspect only their own request-local status. |
 | Window | `window/list`, `window/create`, `window/rename`, `window/select`, `window/close` | Inspect, create, name, select, or close windows. List is RO; rename is naturally idempotent when unchanged. |
