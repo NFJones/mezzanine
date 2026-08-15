@@ -88,13 +88,13 @@ the decision.
 
 ## Schema versions and examples
 
-The current schema is version `54`. Older primary user configurations migrate
+The current schema is version `63`. Older primary user configurations migrate
 on launch; a configuration declaring a newer schema is rejected. Existing
 project overlays must declare the current schema version and are not migrated
 automatically. When `mez config set --scope project` creates or updates an
 eligible overlay, it writes the current version for that managed file. The
 checked-in [example configuration](../examples/config.toml) is generated for
-version 54 and is the baseline for valid default settings.
+version 63 and is the baseline for valid default settings.
 
 ## Related pages
 

@@ -1,5 +1,16 @@
 # Cross-platform release load checks
 
+## Purpose
+
+Run and interpret the report-only responsiveness workload used to compare
+Linux and macOS release builds without treating noisy hosted-runner timing as a
+functional correctness gate.
+
+## Prerequisites
+
+Build from the repository root with the Rust toolchain and `just` described in
+[Development and validation](../contributing/development-and-validation.md).
+
 Mezzanine runs one identical report-only responsiveness workload on Linux and
 macOS. The workload uses a live PTY and the serialized runtime actor to mix a
 one-megabyte output flood with pane input, rendered frames, and foreground
@@ -68,3 +79,14 @@ workers had similar throughput, CPU, memory, and mixed tail-latency results.
 Release-profile experiments also exposed tradeoffs rather than one universal
 winner. Keep these settings configurable and collect the cross-platform CI
 artifacts before changing defaults.
+
+## Related pages
+
+- [Development and validation](../contributing/development-and-validation.md)
+- [Workspace architecture](../contributing/architecture.md)
+- [Operations and troubleshooting](../operations/README.md)
+
+## Next step
+
+Compare repeated reports by platform and worker count before proposing a new
+runtime default or a regression threshold.

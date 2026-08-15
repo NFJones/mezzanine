@@ -15,6 +15,7 @@ This section owns the following contributor guidance:
 
 - [Workspace architecture](architecture.md)
 - [Development and validation](development-and-validation.md)
+- [Cross-platform release load checks](../testing/release-load-checks.md)
 
 ## Related pages
 

@@ -37,7 +37,7 @@ normative behavior and compatibility contract.
 - [Manual reference](reference-manual/README.md): CLI, key, action, terminal,
   and protocol-reference material, with links to normative contracts.
 - [Contributing](contributing/README.md): workspace architecture and local
-  development validation.
+  development validation, including cross-platform release-load checks.
 
 ## Documentation boundaries
 

@@ -43,7 +43,7 @@ configuration error; remove or relocate all but the intended file. See
 [Configuration overview](overview.md) for mutation examples and the layer
 selection workflow.
 
-The current config schema version is `54`. On launch, Mezzanine migrates an
+The current config schema version is `63`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -85,16 +85,18 @@ then return to the schema reference when customizing behavior in detail.
 
 ## Full Config Schema
 
-The tables below list the supported fields, generated defaults, and concise
-descriptions. `omitted` means the field is valid but not written by the
-generated default config. Dynamic maps are empty by default unless a default
-entry is shown.
+The tables below list the supported fields, first-launch defaults where
+applicable, built-in provider catalog values, and concise descriptions.
+`omitted` means the field is valid but not written by the first-launch config.
+Provider connections, model profiles, and model presets are materialized only
+after successful authentication for that built-in provider. Dynamic maps are
+otherwise empty unless a default entry is shown.
 
 ### Top-level fields
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `54` | Config schema version. Do not change this. |
+| `version` | integer | `63` | Config schema version. Do not change this. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `keys` | table | see below | Prefix and direct key bindings. |
@@ -105,10 +107,10 @@ entry is shown.
 | `memory` | table | see below | Persistent memory storage, retrieval, injection, and retention defaults. |
 | `issues` | table | see below | Local project issue tracking storage and availability. |
 | `agents` | table | see below | Agent defaults and limits. |
-| `model_profiles` | map | default profiles shown below | Model profile definitions. |
-| `model_presets` | map | built-in provider presets shown below | Named default and automatic-sizing model-profile selections. |
+| `model_profiles` | map | omitted on first launch; built-in catalog shown below | Model profile definitions. |
+| `model_presets` | map | omitted on first launch; built-in catalog shown below | Named default and automatic-sizing model-profile selections. |
 | `permissions` | table | see below | Approval, command, and authority policy. |
-| `providers` | map | `providers.openai` | Provider connection profiles. |
+| `providers` | map | omitted on first launch; built-in catalog shown below | Provider connection profiles. |
 | `subagents` | map | `{}` | Named subagent profiles. |
 | `personalities` | map | `{}` | User-defined agent personalities. |
 | `mcp_servers` | map | `{}` | MCP server definitions. |
@@ -142,6 +144,8 @@ Use the relevant task and reference pages to inspect those live facilities.
 | `terminal.clipboard` | string | `"external"` | Pane-originated OSC 52 write policy: `external` stores internally then attempts a best-effort host copy, `internal` stores only in the internal `osc52` buffer, and `disabled` rejects the write. Clipboard queries are not answered. |
 | `terminal.clipboard_copy_command` | string or string array | omitted | Host copy command; receives content on stdin. |
 | `terminal.clipboard_paste_command` | string or string array | omitted | Host paste command; writes content to stdout. |
+| `terminal.clipboard_read_timeout_ms` | integer | `250` | Maximum time to wait for a host clipboard helper to return pasted content; must be positive. |
+| `terminal.clipboard_read_max_bytes` | integer | `1048576` | Maximum bytes accepted from a host clipboard read; must be positive. |
 | `terminal.alternate_screen` | boolean | `true` | Support alternate-screen applications. |
 | `terminal.focus_events` | boolean | `true` | Enable focus event reporting when supported. |
 | `terminal.nested_multiplexer` | string | `"auto"` | Nested multiplexer handling mode. |
@@ -251,7 +255,7 @@ max_output_chars = 32
 Default `frames.pane.visible_fields`:
 
 ```toml
-["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
+["pane.index", "pane.title", "pane.id", "history.position", "agent.model", "agent.reasoning", "agent.thinking", "agent.planning", "agent.routing", "agent.latency", "agent.preset", "agent.name", "policy.mode", "agent.context_usage", "agent.status"]
 ```
 
 ### Frame template fields
@@ -267,7 +271,7 @@ Pane templates support `session.id`, `window.id`, `window.index`, `pane.id`,
 `pane.index`, `pane.title`, `pane.active`, `pane.size`, `pane.primary_pid`,
 `pane.process_name`, `pane.exit_status`, `pane.pwd`, `pane.mode`, `agent.id`,
 `agent.name`, `agent.status`, `agent.model`, `agent.reasoning`,
-`agent.thinking`, `agent.routing`, `agent.latency`, `agent.preset`,
+`agent.thinking`, `agent.planning`, `agent.routing`, `agent.latency`, `agent.preset`,
 `agent.context_usage`, `policy.mode`, `observer.pending_count`, and
 `history.position`.
 
@@ -343,6 +347,8 @@ Default color slots:
 | `agent_status_running_bg` | `"primary"` | Running agent status background. |
 | `agent_status_blocked_fg` | `"tertiary_text"` | Blocked agent status foreground. |
 | `agent_status_blocked_bg` | `"tertiary"` | Blocked agent status background. |
+| `agent_approval_attention_fg` | `"danger_text"` | Approval-attention foreground for pane, window, and group pills. |
+| `agent_approval_attention_bg` | `"danger"` | Approval-attention background for pane, window, and group pills. |
 | `agent_status_failed_fg` | `"danger_text"` | Failed agent status foreground. |
 | `agent_status_failed_bg` | `"danger"` | Failed agent status background. |
 | `display_overlay_fg` | `"secondary_foreground"` | Display overlay foreground. |
@@ -459,6 +465,8 @@ description.
 | `agents.auto_sizing` | table | see below | Model auto-sizing settings. |
 | `agents.subagent_placement` | string | `"new-window"` | Where root-spawned subagents are placed. |
 | `agents.max_concurrent_agents` | integer | `4` | Global active-agent limit; parents waiting for routed, joined, or macro dependencies release capacity and reacquire it fairly before continuing. |
+| `agents.max_queued_turns` | integer | `256` | Maximum scheduler-queued agent turns; must be positive. |
+| `agents.max_queued_bytes` | integer | `4194304` | Maximum estimated bytes retained across scheduler-queued turns; must be positive. |
 | `agents.max_root_subagents` | integer | `4` | Maximum subagents a root agent may spawn. |
 | `agents.max_subagents_per_subagent` | integer | `2` | Maximum child subagents for each subagent. |
 | `agents.max_subagent_panes_per_window` | integer | `4` | Maximum subagent panes per window. |
@@ -469,17 +477,27 @@ description.
 
 ### `agents.auto_sizing`
 
+Before provider authentication, every model-profile selector defaults to
+`"default"`, which the runtime can resolve without a materialized provider
+catalog. The first successful built-in provider login replaces these selectors
+with that provider's catalog choices.
+
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
 | `agents.auto_sizing.root_routing_policy` | string | `"subagent"` | Where automatic sizing runs a root turn: `subagent` or `in-place`. |
-| `agents.auto_sizing.router_model_profile` | string | `"auto-size-router"` | Profile used to classify turn size. |
-| `agents.auto_sizing.small_model_profile` | string | `"auto-size-small"` | Profile for small turns. |
-| `agents.auto_sizing.medium_model_profile` | string | `"auto-size-medium"` | Profile for medium turns. |
-| `agents.auto_sizing.large_model_profile` | string | `"auto-size-large"` | Profile for large turns. |
+| `agents.auto_sizing.router_model_profile` | string | `"default"` before login | Profile used to classify turn size. |
+| `agents.auto_sizing.small_model_profile` | string | `"default"` before login | Profile for small turns. |
+| `agents.auto_sizing.medium_model_profile` | string | `"default"` before login | Profile for medium turns. |
+| `agents.auto_sizing.large_model_profile` | string | `"default"` before login | Profile for large turns. |
 | `agents.auto_sizing.allowed_reasoning_efforts` | string array | `["low", "medium", "high", "xhigh"]` | Reasoning efforts the router may select. |
 | `agents.auto_sizing.fallback_policy` | string | `"use-default-profile"` | Fallback for invalid router decisions; routing-model provider request failures are surfaced as turn errors. |
 
 ### `providers.<name>`
+
+The first-launch configuration contains no provider entries. The declarations
+below are built-in catalog values added for a provider after its authentication
+succeeds; later provider logins add their catalog without replacing an existing
+default selection.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
@@ -488,7 +506,7 @@ description.
 | `providers.<name>.auth_profile` | string | `providers.openai.auth_profile = "default"` | Auth profile id. |
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
 | `providers.<name>.models` | string array | see below | Selectable model ids. Empty may use provider built-ins. |
-| `providers.<name>.default_model` | string | `providers.openai.default_model = "gpt-5.6-sol"` | Default model for the provider. |
+| `providers.<name>.default_model` | string | `providers.openai.default_model = "gpt-5.6-terra"` | Default model for the provider. |
 | `providers.<name>.options` | table | `{}` | Provider-specific non-secret options. |
 | `providers.anthropic.options.anthropic_version` | string | omitted | Optional Anthropic Messages API version header; defaults to `2023-06-01`. |
 | `providers.anthropic.options.default_max_tokens` | integer | omitted | Fallback Anthropic `max_tokens` budget when the selected model profile omits `max_output_tokens`; `max_tokens` is accepted as an alias. |
@@ -588,6 +606,7 @@ streaming = "enabled" # optional; backend must implement standard OpenAI SSE
 | `model_profiles.<name>.multimodal` | boolean | omitted | Compatibility multimodal capability flag. |
 | `model_profiles.<name>.context_window_tokens` | integer | profile-specific | Display and compaction context denominator. |
 | `model_profiles.<name>.context_limit_tokens` | integer | omitted | Alternative explicit context limit. |
+| `model_profiles.<name>.max_input_tokens` | integer | profile-specific | Optional hard estimated cap for the complete provider request. Mez compacts eligible context before dispatch when the estimate exceeds this positive limit. |
 | `model_profiles.<name>.max_output_tokens` | integer | profile/provider-specific | Optional provider output-token cap. Generated OpenAI and DeepSeek agent profiles include provider-aware recommended caps; local OpenAI-compatible examples omit the field so the provider default applies. |
 | `model_profiles.<name>.provider_options` | table | see below | Provider-specific non-secret model options. |
 | `model_profiles.<name>.safety_tier` | string | `"high"` in generated profiles | Safety posture label. |
@@ -596,23 +615,23 @@ streaming = "enabled" # optional; backend must implement standard OpenAI SSE
 | `model_profiles.<name>.approval_policy` | string | `"ask"` in generated profiles | Approval policy for this profile: `ask`, `auto-allow`, or `full-access`. |
 | `model_profiles.<name>.fallback_profiles` | string array | `[]` in generated profiles | Ordered fallback profile ids. |
 
-Default model profiles:
+Built-in model-profile catalog:
 
 | Profile | Field | Default declaration |
 | --- | --- | --- |
 | `default` | `provider` | `"openai"` |
-| `default` | `model` | `"gpt-5.6-sol"` |
-| `default` | `reasoning_profile` | `"medium"` |
+| `default` | `model` | `"gpt-5.6-terra"` |
+| `default` | `reasoning_profile` | `"high"` |
 | `default` | `latency_preference` | `"default"` |
 | `default` | `multimodal_required` | `false` |
 | `default` | `context_window_tokens` | `1050000` |
+| `default` | `max_input_tokens` | `922000` |
 | `default` | `max_output_tokens` | `16384` |
 | `default` | `safety_tier` | `"high"` |
 | `default` | `privacy_tier` | `"standard"` |
 | `default` | `residency` | `"global"` |
 | `default` | `approval_policy` | `"ask"` |
 | `default` | `fallback_profiles` | `[]` |
-| `default.provider_options` | `reasoning_effort` | `"medium"` |
 | `auto-size-router` | `provider` | `"openai"` |
 | `auto-size-router` | `model` | `"gpt-5.6-luna"` |
 | `auto-size-router` | `reasoning_profile` | `"low"` |
@@ -625,7 +644,6 @@ Default model profiles:
 | `auto-size-router` | `residency` | `"global"` |
 | `auto-size-router` | `approval_policy` | `"ask"` |
 | `auto-size-router` | `fallback_profiles` | `[]` |
-| `auto-size-router.provider_options` | `reasoning_effort` | `"low"` |
 | `auto-size-small` | `provider` | `"openai"` |
 | `auto-size-small` | `model` | `"gpt-5.6-luna"` |
 | `auto-size-small` | `reasoning_profile` | `"medium"` |
@@ -638,7 +656,6 @@ Default model profiles:
 | `auto-size-small` | `residency` | `"global"` |
 | `auto-size-small` | `approval_policy` | `"ask"` |
 | `auto-size-small` | `fallback_profiles` | `[]` |
-| `auto-size-small.provider_options` | `reasoning_effort` | `"medium"` |
 | `auto-size-medium` | `provider` | `"openai"` |
 | `auto-size-medium` | `model` | `"gpt-5.6-terra"` |
 | `auto-size-medium` | `reasoning_profile` | `"medium"` |
@@ -651,7 +668,6 @@ Default model profiles:
 | `auto-size-medium` | `residency` | `"global"` |
 | `auto-size-medium` | `approval_policy` | `"ask"` |
 | `auto-size-medium` | `fallback_profiles` | `[]` |
-| `auto-size-medium.provider_options` | `reasoning_effort` | `"medium"` |
 | `auto-size-large` | `provider` | `"openai"` |
 | `auto-size-large` | `model` | `"gpt-5.6-sol"` |
 | `auto-size-large` | `reasoning_profile` | `"high"` |
@@ -664,9 +680,8 @@ Default model profiles:
 | `auto-size-large` | `residency` | `"global"` |
 | `auto-size-large` | `approval_policy` | `"ask"` |
 | `auto-size-large` | `fallback_profiles` | `[]` |
-| `auto-size-large.provider_options` | `reasoning_effort` | `"high"` |
 | `anthropic-default` | `provider` | `"anthropic"` |
-| `anthropic-default` | `model` | `"claude-fable-5"` |
+| `anthropic-default` | `model` | `"claude-sonnet-5"` |
 | `anthropic-default` | `reasoning_profile` | `"high"` |
 | `anthropic-default` | `latency_preference` | `"default"` |
 | `anthropic-default` | `multimodal_required` | `false` |
@@ -677,9 +692,9 @@ Default model profiles:
 | `anthropic-default` | `residency` | `"global"` |
 | `anthropic-default` | `approval_policy` | `"ask"` |
 | `anthropic-default` | `fallback_profiles` | `[]` |
+| `anthropic-default.provider_options` | `prompt_caching` | `"enabled"` |
 | `anthropic-fast` | `provider` | `"anthropic"` |
 | `anthropic-fast` | `model` | `"claude-haiku-4-5-20251001"` |
-| `anthropic-fast` | `reasoning_profile` | `"medium"` |
 | `anthropic-fast` | `latency_preference` | `"fast"` |
 | `anthropic-fast` | `multimodal_required` | `false` |
 | `anthropic-fast` | `context_window_tokens` | `200000` |
@@ -689,6 +704,7 @@ Default model profiles:
 | `anthropic-fast` | `residency` | `"global"` |
 | `anthropic-fast` | `approval_policy` | `"ask"` |
 | `anthropic-fast` | `fallback_profiles` | `[]` |
+| `anthropic-fast.provider_options` | `prompt_caching` | `"enabled"` |
 | `deepseek-default` | `provider` | `"deepseek"` |
 | `deepseek-default` | `model` | `"deepseek-v4-pro"` |
 | `deepseek-default` | `reasoning_profile` | `"high"` |
@@ -702,7 +718,6 @@ Default model profiles:
 | `deepseek-default` | `approval_policy` | `"ask"` |
 | `deepseek-default` | `fallback_profiles` | `[]` |
 | `deepseek-default.provider_options` | `thinking` | `"enabled"` |
-| `deepseek-default.provider_options` | `reasoning_effort` | `"high"` |
 | `deepseek-fast` | `provider` | `"deepseek"` |
 | `deepseek-fast` | `model` | `"deepseek-v4-flash"` |
 | `deepseek-fast` | `reasoning_profile` | `"high"` |
@@ -716,7 +731,6 @@ Default model profiles:
 | `deepseek-fast` | `approval_policy` | `"ask"` |
 | `deepseek-fast` | `fallback_profiles` | `[]` |
 | `deepseek-fast.provider_options` | `thinking` | `"enabled"` |
-| `deepseek-fast.provider_options` | `reasoning_effort` | `"high"` |
 
 Provider options under a model profile:
 

@@ -19,10 +19,11 @@ focus, mouse, title, clipboard, and save/restore behaviors. Unimplemented
 capabilities, including DCS controls unless documented otherwise, are marked
 unsupported rather than assumed to work.
 
-Panes normally receive `TERM=screen-256color`. Mez-specific terminfo entries
-can be selected when installed; the safe fallback order is `screen-256color`,
-`screen`, `vt100`, then `dumb`. Mezzanine does not claim the containing host
-terminal's `xterm` identity by default.
+Panes receive `TERM=xterm-256color` by default. Mez-specific terminfo entries
+can be selected when installed. If a selected Mezzanine-specific entry is not
+available, the safe fallback order is `screen-256color`, `screen`, `vt100`,
+then `dumb`. The configured pane identity describes Mezzanine's compatibility
+surface rather than claiming unrestricted passthrough of the host terminal.
 
 ## Rendering and input boundaries
 
