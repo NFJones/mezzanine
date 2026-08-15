@@ -71,11 +71,9 @@ cargo install --path crates/mezzanine --locked
 Cargo normally installs `mez` in `~/.cargo/bin`. Ensure that directory is on
 `PATH`, or invoke `~/.cargo/bin/mez` in the commands below.
 
-From a checkout of this repository, optionally create and inspect the baseline
-configuration before authenticating and starting in a working directory.
-Starting a session also creates the default configuration when none exists. The
-generated file lists annotated built-in defaults and commented optional
-settings; provider catalogs are added separately after successful login:
+Optionally create a baseline configuration, authenticate, and start Mezzanine
+in a working directory. Starting a session creates the default configuration
+when none exists:
 
 ```sh
 mez config init
@@ -84,46 +82,19 @@ cd /path/to/repository
 mez new
 ```
 
-The default interactive `mez auth login` flow opens OpenAI's browser sign-in.
-Choose an explicit provider and credential method when using another provider,
-an API key, or noninteractive authentication; [Getting started](docs/getting-started/README.md)
-documents those flows.
-
-The generic `openai-chat-completions` adapter supports standard SSE streaming
-as an explicit backend compatibility opt-in. Set
-`providers.<name>.options.streaming = "enabled"` only for a backend known to
-implement the OpenAI Chat Completions event shape; omission keeps unary JSON
-behavior. See the [configuration reference](docs/configuration/reference.md)
-for the complete contract.
+The default login flow opens OpenAI's browser sign-in. See
+[Getting started](docs/getting-started/README.md) for other providers, API keys,
+and noninteractive authentication, or the
+[configuration reference](docs/configuration/reference.md) for backend options.
 
 Press `Ctrl+A a` to open the focused pane's agent shell. Begin with a bounded
 task that asks for inspection and focused validation. Press `Ctrl+A d` to detach
 without normally stopping the session.
 
-To prevent automatic idle sleep during active agent work, a primary user may
-set `[agents].active_turn_sleep_inhibition` to `system` or
-`system-and-display`; it is disabled by default. Mez holds one best-effort
-request only while canonical agent turns are Running, including while the
-session is detached, and releases it after the final turn settles or the
-runtime stops. macOS requests native system and display assertions; other
-platforms currently treat the request as unavailable without interrupting
-agent work. This never overrides explicit sleep, lid-close, thermal, or
-critical-battery safeguards, and model-authored configuration cannot change it.
-
-For a complete first-session guide, including API-key and noninteractive
-authentication, see [Getting started](docs/getting-started/README.md).
-
-On macOS with iTerm2, modifier-aware Backspace in Mez command and agent prompts
-can be enabled explicitly:
-
-```toml
-[terminal]
-enhanced_keyboard_reporting = true
-```
-
-Support is best-effort and does not probe terminal capabilities. Mezzanine
-negotiates enhanced keyboard reporting only while a primary Mez-owned readline
-prompt owns input; ordinary process panes and observer clients are unaffected.
+Optional configuration can inhibit idle sleep during active agent turns and
+enable enhanced keyboard reporting in supported terminals. See the
+[configuration reference](docs/configuration/reference.md) for platform support
+and behavior.
 
 ## Everyday use
 
@@ -132,27 +103,13 @@ and `mez attach` to return to one. In a running session, `Ctrl+A :` opens the
 Mezzanine command prompt, `Ctrl+A ?` shows effective key bindings, and
 `Ctrl+A a` toggles the agent shell.
 
-Within an agent pane, `/plan on`, `/plan off`, or `/plan toggle` controls
-pane-local plan-only mode. The `plan` status pill shows that mode and can be
-clicked to toggle it. Its visibility and position are configurable through
-`frames.pane.visible_fields` using the `agent.planning` field.
+Within an agent pane, use `/plan on`, `/plan off`, or `/plan toggle` to control
+pane-local plan-only mode. The clickable `plan` status pill shows the current
+mode.
 
-When entering agent mode from a managed Bash, Zsh, or Fish pane, Mezzanine
-preserves an unfinished command line while the agent child shell runs. The
-original draft, cursor position, and supported editor bind mode return when
-agent mode exits, and the draft runs only if it is later submitted normally.
-Managed Zsh also preserves marks, active regions, multiline buffers, and the
-active `emacs`, `viins`, or `vicmd` keymap. Zsh admission fails closed at a
-continuation prompt, with queued typeahead, or when existing ZLE hook
-composition cannot be preserved. Fish admission fails closed while history
-search, the completion pager, or a text selection is active because those
-transient editor states cannot be restored exactly.
-
-POSIX and unknown shells cannot portably preserve an editor draft. When Mez can
-identify unsubmitted process input in those shells, it interrupts the draft
-instead of submitting or concatenating it with agent transport. Agent entry
-continues only after the parent shell is certified at a fresh prompt; otherwise
-it fails closed and leaves the parent shell available.
+On supported Bash, Zsh, and Fish prompts, Mezzanine preserves an unfinished
+command while agent mode is active and restores it afterward. Unsupported or
+unsafe prompt states fail closed rather than submitting or combining input.
 
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)
@@ -161,17 +118,15 @@ for in-session work.
 
 ### Shell completion
 
-Generate completions from the installed `mez` binary; they cover the same clap
-commands, aliases, and options accepted by the binary. For the current zsh
+Generate shell completions from the installed `mez` binary. For the current zsh
 session, run:
 
 ```sh
 source <(mez completion zsh)
 ```
 
-The `completion` command also supports `bash`, `fish`, `elvish`, and
-`powershell`. Install its generated output using the completion-directory
-conventions for your shell so it is available in future sessions.
+Replace `zsh` with `bash`, `fish`, `elvish`, or `powershell` as needed. Install
+the generated output according to your shell's conventions for future sessions.
 
 ## Safety at a glance
 
@@ -180,18 +135,14 @@ explicit action results. It does not passively receive your terminal screen,
 scrollback, or other panes.
 
 Approval policy decides whether Mezzanine permits an action. OS confinement
-controls what an already-permitted local shell process can access.
-`policy-only` provides no filesystem or shell-network confinement; approval
-policy and optional audit logging remain separate controls. Bubblewrap enforces
-configured boundaries for eligible local shell work; web, fetch, and MCP
-actions have separate capability and approval gates. `host-access` runs local
-shell actions outside the sandbox and is reserved for the primary user.
+separately controls what an already-permitted local shell process can access,
+while web and integration actions have their own capability and approval gates.
 
-Review unfamiliar project overlays before trusting them, and review applicable
-`AGENTS.md` files before acting on their guidance. Project instructions can
-shape workflow but cannot grant authority; overlay trust is a separate decision.
-See [Safety, trust, and security](docs/safety-and-trust/README.md) for approval,
-sandbox, project-trust, and audit guidance.
+Review unfamiliar project overlays and applicable `AGENTS.md` files before
+trusting their guidance. Project instructions can shape workflow but cannot
+grant authority. See
+[Safety, trust, and security](docs/safety-and-trust/README.md) for approval,
+confinement, project-trust, and audit guidance.
 
 ## Documentation
 
