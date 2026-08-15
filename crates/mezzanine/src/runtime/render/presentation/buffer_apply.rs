@@ -1150,11 +1150,12 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Replaces the transient provider `say` preview with formatted assistant rows.
+    /// Replaces the transient provider `say` preview with raw assistant rows.
     ///
-    /// Preview rows reuse ordinary plain-text and Markdown rendering, but are
-    /// intentionally excluded from persistence and copy metadata. Only the
-    /// newest configured number of rendered visual rows remain visible.
+    /// Preview rows deliberately avoid rich rendering while a provider is still
+    /// streaming. They retain ordinary word wrapping, but display Markdown
+    /// delimiters literally and remain excluded from persistence and copy
+    /// metadata. Only the newest configured number of visual rows remain visible.
     pub(crate) fn append_agent_provider_say_preview_to_terminal_buffer(
         &mut self,
         pane_id: &str,
@@ -1162,21 +1163,8 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         self.clear_agent_shell_output_status_line(pane_id)?;
         let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
-        let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
-        let mut rendered_lines = if agent_output_content_type_is_markdown(&preview.content_type) {
-            let body = wrap_rich_text_lines_to_width(
-                render_agent_markdown_body_lines(
-                    &preview.text,
-                    &self.presentation.settings.ui_theme,
-                    table_width,
-                ),
-                frame_width,
-                table_width,
-            );
-            frame_markdown_lines(body, frame_width)
-        } else {
-            wrapped_prefixed_agent_terminal_lines("mez> ", &preview.text, frame_width)
-        };
+        let mut rendered_lines =
+            wrapped_prefixed_agent_terminal_lines("mez> ", &preview.text, frame_width);
         let preview_limit = self.terminal_shell_output_preview_lines();
         if rendered_lines.len() > preview_limit {
             rendered_lines.drain(..rendered_lines.len() - preview_limit);

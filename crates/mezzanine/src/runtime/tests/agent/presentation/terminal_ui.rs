@@ -654,6 +654,127 @@ fn runtime_agent_parent_prompt_persists_raw_source_for_replay() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies streamed `say` previews remain bounded raw shadow text while the
+/// completed Markdown response still uses the ordinary rich renderer.
+///
+/// The provisional path must preserve the shared visual-row limit and
+/// word-wrapping behavior without interpreting incomplete Markdown. Replacing
+/// it with the completed response must remove delimiters and restore rich spans.
+#[test]
+fn runtime_provider_say_preview_is_raw_wrapped_shadow_text_until_completion() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(32, 12).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(32, 12).unwrap(), 120).unwrap(),
+    );
+
+    service
+        .append_agent_provider_say_preview_to_terminal_buffer(
+            "%1",
+            &mez_agent::ProvisionalSayPreview {
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+                text: (1..=7)
+                    .map(|index| format!("preview-{index}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            },
+        )
+        .unwrap();
+    let bounded_lines = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .into_iter()
+        .filter(|line| line.contains("▐ "))
+        .collect::<Vec<_>>();
+    assert_eq!(bounded_lines.len(), 5, "{bounded_lines:?}");
+    assert!(bounded_lines[0].contains("preview-3"), "{bounded_lines:?}");
+    assert!(bounded_lines[4].contains("preview-7"), "{bounded_lines:?}");
+
+    let markdown = "**alpha beta gamma delta epsilon zeta eta theta**";
+    service
+        .append_agent_provider_say_preview_to_terminal_buffer(
+            "%1",
+            &mez_agent::ProvisionalSayPreview {
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+                text: markdown.to_string(),
+            },
+        )
+        .unwrap();
+    let preview_lines = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines()
+        .into_iter()
+        .filter(|line| line.text.contains("▐ "))
+        .collect::<Vec<_>>();
+    assert!(preview_lines.len() > 1, "{preview_lines:?}");
+    assert!(preview_lines.len() <= 5, "{preview_lines:?}");
+    assert!(
+        preview_lines
+            .iter()
+            .any(|line| line.text.contains("**alpha")),
+        "{preview_lines:?}"
+    );
+    assert!(
+        preview_lines
+            .iter()
+            .any(|line| line.text.contains("theta**")),
+        "{preview_lines:?}"
+    );
+    for line in &preview_lines {
+        let body_column = line
+            .text
+            .find(|character: char| character.is_alphabetic())
+            .expect("preview row should contain raw body text");
+        assert!(
+            line.style_spans.iter().any(|span| {
+                body_column >= span.start
+                    && body_column < span.start.saturating_add(span.length)
+                    && span.rendition.dim
+                    && span.rendition.foreground
+                        == Some(service.ui_theme().colors.agent_transcript_status.foreground)
+            }),
+            "preview body should use shadow styling: {line:?}"
+        );
+    }
+
+    service
+        .append_agent_assistant_content_to_terminal_buffer(
+            "%1",
+            markdown,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+        )
+        .unwrap();
+    let completed_lines = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines();
+    assert!(
+        completed_lines.iter().all(|line| !line.text.contains("**")),
+        "{completed_lines:?}"
+    );
+    assert!(
+        completed_lines.iter().any(|line| {
+            line.text.contains("alpha beta")
+                && line.style_spans.iter().any(|span| span.rendition.bold)
+        }),
+        "{completed_lines:?}"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies thinking-log body text retains the muted status rendition used by
 /// its gutter instead of resetting to the terminal's default rendition.
 ///
