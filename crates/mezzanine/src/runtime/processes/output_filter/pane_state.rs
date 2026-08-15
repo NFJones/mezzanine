@@ -631,6 +631,7 @@ impl RuntimeSessionService {
             .pane_agent_subshell_parent_return_pending
             .insert(pane_id.to_string());
         if let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) {
+            restoration.phase = crate::runtime::processes::RuntimeFishHandoffPhase::ExitRequested;
             restoration.started_at_unix_ms = Some(current_unix_millis());
         }
     }
@@ -664,6 +665,10 @@ impl RuntimeSessionService {
             self.process
                 .pane_agent_subshell_exit_markers
                 .remove(pane_id);
+            if let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) {
+                restoration.phase =
+                    crate::runtime::processes::RuntimeFishHandoffPhase::ParentRestoring;
+            }
             let parent_bytes = &pending[start + marker.len()..];
             if self.agent_subshell_input_clear_was_completed(pane_id) {
                 if let Some(parent_bytes) = parent_bytes.strip_prefix(b"^C\r\n") {

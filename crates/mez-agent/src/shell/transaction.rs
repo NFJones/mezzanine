@@ -1964,7 +1964,7 @@ pub fn fish_private_source_input(
     let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
     let chunk_count = chunks.len();
     let wrapper = format!(
-        "\x1b\x07MEZ_FISH_RX1_BEGIN {} {} {} {} {}\n",
+        "\x1b\x07\x1b\x07MEZ_FISH_RX1_BEGIN {} {} {} {} {}\n",
         token.as_str(),
         marker,
         source.len(),
@@ -1997,6 +1997,15 @@ pub fn fish_private_source_input(
         payload: String::new(),
         payload_receiver_acknowledgements: true,
     }
+}
+
+/// Renders an authenticated cancellation record for one pending Fish admission.
+///
+/// The record is valid only before runtime releases the corresponding source
+/// payload. It lets the bound Fish callback restore its saved editor state
+/// without evaluating a partial child-shell handoff.
+pub fn fish_private_source_cancel_input(token: &MarkerToken, marker: &str) -> String {
+    format!("MEZ_FISH_RX1_CANCEL {} {}\n", token.as_str(), marker)
 }
 
 /// Renders a source-free ZLE trigger and deferred authenticated source frame.

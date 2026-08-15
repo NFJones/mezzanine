@@ -1422,6 +1422,154 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies hiding agent mode before Fish installs its child receiver cancels
+/// admission and restores the exact unsubmitted parent draft.
+///
+/// Runtime must retain the synchronous Fish callback even though no agent
+/// child is active yet, send the authenticated cancellation record, and wait
+/// for parent-restored before allowing the draft to be submitted.
+#[test]
+fn runtime_fish_dirty_prompt_exit_before_receiver_installation_restores_draft() {
+    let Some(fish_path) = [
+        "/usr/bin/fish",
+        "/usr/local/bin/fish",
+        "/opt/homebrew/bin/fish",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| path.is_file()) else {
+        eprintln!("skipping early-exit Fish regression because fish is unavailable");
+        return;
+    };
+    let root = temp_root("fish-dirty-agent-early-exit");
+    let mut service = RuntimeSessionService::with_event_log(
+        Session::new_default(
+            ResolvedShell::new(fish_path, ShellSource::ShellEnv),
+            Size::new(80, 24).unwrap(),
+        ),
+        root.join("default.sock"),
+        100,
+        10,
+        1024,
+    )
+    .unwrap();
+    *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(None).unwrap();
+    wait_until_primary_shell_foreground(&mut service, "%1");
+    service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
+    assert_eq!(service.maybe_bootstrap_ready_panes().unwrap(), 1);
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if !service.pane_bootstrap_is_pending_for_tests("%1") {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        !service.pane_bootstrap_is_pending_for_tests("%1"),
+        "initial Fish bootstrap did not settle before early-exit admission"
+    );
+    service
+        .write_input_to_pane(
+            &primary,
+            Some("%1"),
+            b"fish_vi_key_bindings; printf '__MEZ_FISH_EARLY_EXIT_READY__\\n'\n",
+        )
+        .unwrap();
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("__MEZ_FISH_EARLY_EXIT_READY__")
+        {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+
+    let draft = "begin\nprintf '__MEZ_FISH_EARLY_αβ_SURVIVED__\\n'\nend\n";
+    let beta_byte = draft.find('β').unwrap();
+    let cursor_left = draft.chars().count() - draft[..beta_byte].chars().count();
+    let mut draft_input = b"\x1bi\x1b[200~".to_vec();
+    draft_input.extend_from_slice(draft.as_bytes());
+    draft_input.extend_from_slice(b"\x1b[201~");
+    for _ in 0..cursor_left {
+        draft_input.extend_from_slice(b"\x1b[D");
+    }
+    service
+        .write_input_to_pane(&primary, Some("%1"), &draft_input)
+        .unwrap();
+
+    let show = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(show.contains("visibility=visible"), "{show}");
+    assert!(
+        service.fish_parent_restoration_is_pending_for_tests("%1"),
+        "Fish must own the saved draft as soon as admission is triggered"
+    );
+    assert!(
+        !service.agent_subshell_is_active("%1"),
+        "the regression must exit before receiver installation"
+    );
+
+    let hide = service
+        .execute_terminal_command(&primary, "agent-shell")
+        .unwrap();
+    assert!(hide.contains("visibility=hidden"), "{hide}");
+    assert!(service.fish_parent_restoration_is_pending_for_tests("%1"));
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if !service.fish_parent_restoration_is_pending_for_tests("%1") {
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        !service.fish_parent_restoration_is_pending_for_tests("%1"),
+        "authenticated cancellation did not restore the Fish parent"
+    );
+    assert!(!service.agent_subshell_is_active("%1"));
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+
+    service
+        .write_input_to_pane(&primary, Some("%1"), b"X\n")
+        .unwrap();
+    let mut draft_executed = false;
+    for _ in 0..200 {
+        let _ = service.poll_pane_outputs(8192).unwrap();
+        if service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n")
+            .contains("__MEZ_FISH_EARLY_αXβ_SURVIVED__")
+        {
+            draft_executed = true;
+            break;
+        }
+        wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
+    }
+    assert!(
+        draft_executed,
+        "early-exit cancellation did not restore the exact Fish draft; screen={}",
+        service
+            .process_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\\n")
+    );
+    assert!(service.poll_pane_processes().unwrap().is_empty());
+    assert!(service.pane_processes().contains_pane("%1"));
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// Verifies a lost Fish parent-restored event cannot retain foreground input
 /// indefinitely after the child-exit rendering boundary has already settled.
 ///

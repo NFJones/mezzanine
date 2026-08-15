@@ -490,12 +490,33 @@ struct RuntimeShellOutputRenderState {
     discard_frame: bool,
 }
 
-/// Marker-scoped ownership retained until Fish restores its parent editor.
+/// Current phase of one synchronous managed-Fish editor handoff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RuntimeFishHandoffPhase {
+    /// The private editor trigger was written but its source remains retained.
+    TriggerQueued,
+    /// Fish authenticated editor ownership and runtime released the source.
+    SourceDeliveryReleased,
+    /// The persistent child authenticated its installed transaction receiver.
+    ChildInstalled,
+    /// Runtime requested cancellation or child exit and awaits parent return.
+    ExitRequested,
+    /// The child-exit boundary arrived while Fish restores its parent editor.
+    ParentRestoring,
+}
+
+/// Marker- and process-scoped ownership retained until Fish restores its parent editor.
 #[derive(Debug)]
 struct RuntimeFishParentRestoration {
     /// Bootstrap marker carried by the authenticated private receiver event.
     marker: String,
-    /// Time when child exit transferred ownership back to the Fish callback.
+    /// Primary process that owns the private callback and saved editor state.
+    primary_process_id: Option<u32>,
+    /// Shell-interaction generation that launched this exact handoff.
+    interaction_generation: Option<u64>,
+    /// Current ownership phase of the synchronous Fish callback.
+    phase: RuntimeFishHandoffPhase,
+    /// Time when cancellation or child exit began returning ownership.
     started_at_unix_ms: Option<u64>,
     /// Foreground bytes typed after child exit but before editor restoration.
     pending_input: Vec<u8>,
@@ -835,10 +856,14 @@ impl RuntimeSessionService {
             .get(marker)
             .map(|transaction| transaction.pane_id.clone())
         {
+            let handoff = self.process.pane_shell_handoffs.get(&pane_id);
             self.process.pane_fish_parent_restorations.insert(
                 pane_id,
                 RuntimeFishParentRestoration {
                     marker: marker.to_string(),
+                    primary_process_id: handoff.map(|handoff| handoff.primary_process_id),
+                    interaction_generation: handoff.map(|handoff| handoff.interaction_generation),
+                    phase: RuntimeFishHandoffPhase::TriggerQueued,
                     started_at_unix_ms: None,
                     pending_input: Vec::new(),
                 },
@@ -883,6 +908,74 @@ impl RuntimeSessionService {
         self.process
             .pane_fish_parent_restorations
             .contains_key(pane_id)
+    }
+
+    /// Returns the current managed-Fish handoff phase for exit routing.
+    pub(super) fn fish_parent_restoration_phase(
+        &self,
+        pane_id: &str,
+    ) -> Option<RuntimeFishHandoffPhase> {
+        self.process
+            .pane_fish_parent_restorations
+            .get(pane_id)
+            .map(|restoration| restoration.phase)
+    }
+
+    /// Returns the marker owned by one pending managed-Fish handoff.
+    pub(super) fn fish_parent_restoration_marker(&self, pane_id: &str) -> Option<String> {
+        self.process
+            .pane_fish_parent_restorations
+            .get(pane_id)
+            .map(|restoration| restoration.marker.clone())
+    }
+
+    /// Advances a marker-scoped Fish handoff after authenticated admission.
+    pub(super) fn mark_fish_source_delivery_released(
+        &mut self,
+        pane_id: &str,
+        marker: &str,
+    ) -> bool {
+        let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) else {
+            return false;
+        };
+        if restoration.marker != marker
+            || restoration.phase != RuntimeFishHandoffPhase::TriggerQueued
+        {
+            return false;
+        }
+        restoration.phase = RuntimeFishHandoffPhase::SourceDeliveryReleased;
+        true
+    }
+
+    /// Advances a marker-scoped Fish handoff after child receiver installation.
+    pub(super) fn mark_fish_child_installed(&mut self, pane_id: &str, marker: &str) -> bool {
+        let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) else {
+            return false;
+        };
+        if restoration.marker != marker
+            || restoration.phase != RuntimeFishHandoffPhase::SourceDeliveryReleased
+        {
+            return false;
+        }
+        restoration.phase = RuntimeFishHandoffPhase::ChildInstalled;
+        true
+    }
+
+    /// Arms restoration ownership for a pre-child Fish admission cancellation.
+    pub(super) fn remember_fish_admission_cancellation(&mut self, pane_id: &str) {
+        self.process
+            .pane_agent_subshell_exit_echo_pending
+            .remove(pane_id);
+        self.process
+            .pane_agent_subshell_exit_markers
+            .remove(pane_id);
+        self.process
+            .pane_agent_subshell_parent_return_pending
+            .insert(pane_id.to_string());
+        if let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) {
+            restoration.phase = RuntimeFishHandoffPhase::ExitRequested;
+            restoration.started_at_unix_ms = Some(current_unix_millis());
+        }
     }
 
     /// Prepends one persistent Zsh handoff stage released after ZLE admission.

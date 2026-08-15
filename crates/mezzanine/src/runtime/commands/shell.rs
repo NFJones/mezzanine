@@ -1289,6 +1289,36 @@ impl RuntimeSessionService {
     /// the user's parent shell.
     pub(crate) fn exit_agent_subshell_if_active(&mut self, pane_id: &str) -> Result<bool> {
         if !self.agent_subshell_is_active(pane_id) {
+            if let Some(phase) = self.fish_parent_restoration_phase(pane_id) {
+                if matches!(
+                    phase,
+                    crate::runtime::processes::RuntimeFishHandoffPhase::ExitRequested
+                        | crate::runtime::processes::RuntimeFishHandoffPhase::ParentRestoring
+                ) {
+                    return Ok(true);
+                }
+                let marker = self
+                    .fish_parent_restoration_marker(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("Fish parent restoration ownership disappeared")
+                    })?;
+                let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
+                if phase == crate::runtime::processes::RuntimeFishHandoffPhase::TriggerQueued {
+                    let token = self
+                        .fish_receiver_token_for_pane(pane_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            MezError::invalid_state("managed Fish receiver token is unavailable")
+                        })?;
+                    self.remember_fish_admission_cancellation(pane_id);
+                    let cancellation = mez_agent::fish_private_source_cancel_input(&token, &marker);
+                    self.write_runtime_pane_input(pane_id, cancellation.as_bytes())?;
+                    return Ok(true);
+                }
+                self.remember_agent_subshell_exit_echo(pane_id);
+                self.write_runtime_pane_input(pane_id, b"exit\n")?;
+                return Ok(true);
+            }
             if self
                 .cancel_agent_subshell_bootstrap_for_exit(pane_id)
                 .is_some()
@@ -1329,7 +1359,10 @@ impl RuntimeSessionService {
         } else {
             self.clear_shell_output_filters_for_foreground_input(pane_id);
         }
-        self.clear_agent_subshell_shell_identity(pane_id);
+        let fish_parent_restoration_pending = self.fish_parent_restoration_is_pending(pane_id);
+        if !fish_parent_restoration_pending {
+            self.clear_agent_subshell_shell_identity(pane_id);
+        }
         let command_exit = self.take_agent_subshell_command_exit(pane_id);
         self.remember_agent_subshell_exit_echo(pane_id);
         let exit_input = if command_exit {

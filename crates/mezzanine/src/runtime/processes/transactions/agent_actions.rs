@@ -218,6 +218,12 @@ impl RuntimeSessionService {
             self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
             return Ok(0);
         }
+        if self
+            .fish_receiver_token_for_pane(output_pane_id)
+            .is_some_and(|expected| expected.as_str() == token)
+        {
+            self.mark_fish_source_delivery_released(output_pane_id, marker);
+        }
         self.append_agent_trace_turn_event(
             output_pane_id,
             &transaction.turn_id,
@@ -361,6 +367,9 @@ impl RuntimeSessionService {
             self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
             return Err(error);
         }
+        if fish_receiver_installed {
+            self.mark_fish_child_installed(output_pane_id, marker);
+        }
         self.enter_agent_subshell(output_pane_id);
         if fish_receiver_installed || zsh_receiver_installed {
             self.mark_agent_subshell_command_exit(output_pane_id.to_string());
@@ -464,7 +473,16 @@ impl RuntimeSessionService {
         else {
             return Ok(0);
         };
-        if restoration.marker != marker {
+        let current_primary_process_id = self.primary_pid_for_live_pane_process(output_pane_id);
+        let current_interaction_generation = self
+            .process
+            .pane_shell_interaction_generations
+            .get(output_pane_id)
+            .copied();
+        if restoration.marker != marker
+            || restoration.primary_process_id != current_primary_process_id
+            || restoration.interaction_generation != current_interaction_generation
+        {
             self.process
                 .pane_fish_parent_restorations
                 .insert(output_pane_id.to_string(), restoration);
@@ -482,11 +500,21 @@ impl RuntimeSessionService {
                 transaction.pane_id == output_pane_id
                     && transaction.kind == RunningShellTransactionKind::Bootstrap
             });
+        let resume_deferred_entry = !bootstrap_rejected
+            && self.agent_subshell_entry_is_deferred(output_pane_id)
+            && self
+                .agent_shell_store()
+                .get(output_pane_id)
+                .is_some_and(|session| {
+                    session.visibility == mez_agent::AgentShellVisibility::Visible
+                });
         if bootstrap_rejected {
             self.remove_running_shell_transaction(marker);
             self.clear_shell_transaction_protocol_state(marker);
             self.process.pane_bootstrap_pending.remove(output_pane_id);
-            self.clear_agent_subshell_shell_identity(output_pane_id);
+        }
+        self.clear_agent_subshell_shell_identity(output_pane_id);
+        if bootstrap_rejected {
             self.mark_pane_environment_authority_unavailable(
                 output_pane_id,
                 RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTransactionFailed,
@@ -504,15 +532,7 @@ impl RuntimeSessionService {
             self.clear_shell_output_filters_for_foreground_input(output_pane_id);
             self.write_runtime_pane_input(output_pane_id, &restoration.pending_input)?;
         }
-        if !bootstrap_rejected
-            && self.agent_subshell_entry_is_deferred(output_pane_id)
-            && self
-                .agent_shell_store()
-                .get(output_pane_id)
-                .is_some_and(|session| {
-                    session.visibility == mez_agent::AgentShellVisibility::Visible
-                })
-        {
+        if resume_deferred_entry {
             let _ = self.enter_agent_subshell_if_needed(output_pane_id)?;
         }
         Ok(1)

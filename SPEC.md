@@ -1847,7 +1847,14 @@ only after the private receiver has returned from sourcing the child handoff,
 restored the editor state, and queued its repaint. Child-exit rendering markers
 MUST NOT release foreground input. Mezzanine MUST retain bounded foreground
 input until parent-restored arrives and MUST use bounded timeout recovery if
-that event is lost.
+that event is lost. The private receiver MUST save the supported editor state,
+clear the editable buffer, and queue a repaint before publishing receiver-ready
+or launching the child. If agent mode exits before source admission completes,
+runtime MUST send a pane-token- and bootstrap-marker-authenticated cancellation
+record. Fish MUST reject partial source, restore and repaint the exact saved
+editor state, and publish parent-restored without launching a child. Bootstrap
+state MUST remain independent from parent-editor restoration so a saved draft
+cannot block child certification or be released before callback unwind.
 The agent-mode child shell and every Mezzanine-owned non-stateful action shell
 MUST inherit the pane environment except for variables that can trigger shell
 startup files, prompt hooks, editor/pager prompts, or other interactive
@@ -4301,7 +4308,11 @@ utilities without permitting user functions to shadow them. Once an
 authenticated BEGIN record is admitted, Fish MUST drain and acknowledge every
 declared DATA record and the END record even after detecting malformed input.
 It MUST reject the source after draining rather than expose remaining records
-to the ordinary line editor or strand acknowledgement-paced delivery.
+to the ordinary line editor or strand acknowledgement-paced delivery. Before
+the first DATA record is released, Fish MAY instead accept one authenticated
+CANCEL record for the same pane token and bootstrap marker. Cancellation MUST
+acknowledge the record, evaluate no source, restore the saved editor state, and
+emit parent-restored with a cancellation status.
 
 For non-stateful POSIX-compatible actions, the default wrapper MUST execute the
 agent command in a child shell whose environment omits Mezzanine transaction
