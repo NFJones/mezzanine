@@ -118,6 +118,8 @@ pub mod provider_transcript;
 pub mod quota;
 /// Provider-independent pane readiness state and override policy.
 pub mod readiness;
+/// Provider-independent complete request-input estimation.
+pub mod request_accounting;
 /// Provider-response accounting across one agent turn.
 pub mod response_progress;
 pub mod routed_workflow;
@@ -433,6 +435,10 @@ pub use readiness::{
     BootstrapDecision, PaneReadinessOverride, PaneReadinessOverrideStore, PaneReadinessState,
     ReadinessDecision, ReadinessError, ReadinessErrorKind, ReadinessOverrideRevocation,
     ReadinessResult, decide_bootstrap_before_user_prompt, readiness_decision,
+};
+pub use request_accounting::{
+    ProviderRequestInputEstimate, provider_request_input_estimate,
+    provider_text_input_token_estimate,
 };
 pub use response_progress::ProviderResponseProgress;
 pub use routing::{

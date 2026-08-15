@@ -387,7 +387,7 @@ fn openai_chat_completions_messages(
     request: &ModelRequest,
     developer_role: OpenAiDeveloperRole,
 ) -> Vec<serde_json::Value> {
-    request
+    let mut messages = request
         .messages
         .iter()
         .map(|message| {
@@ -410,7 +410,20 @@ fn openai_chat_completions_messages(
                 "content": content
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if let Some(recovery_input) = request
+        .recovery_input
+        .as_deref()
+        .filter(|input| !input.is_empty())
+    {
+        messages.push(serde_json::json!({
+            "role": developer_role.as_str(),
+            "content": format!(
+                "[Mezzanine context; not user-authored]\n{recovery_input}"
+            )
+        }));
+    }
+    messages
 }
 
 fn openai_chat_completions_maap_tool(request: &ModelRequest) -> serde_json::Value {

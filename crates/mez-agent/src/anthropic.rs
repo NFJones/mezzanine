@@ -205,6 +205,17 @@ pub fn anthropic_messages_request_body(
             placement: cache_disposition,
         });
     }
+    if let Some(recovery_input) = request
+        .recovery_input
+        .as_deref()
+        .filter(|input| !input.is_empty())
+    {
+        rendered_messages.push(AnthropicRenderedMessage {
+            role: "user",
+            content: format!("[Mezzanine context; not user-authored]\n{recovery_input}"),
+            placement: ContextPlacement::EphemeralTail,
+        });
+    }
     if rendered_messages.is_empty() {
         return Err(ProviderRequestAssemblyError::invalid_args(
             "Anthropic Messages request requires at least one user or assistant message",

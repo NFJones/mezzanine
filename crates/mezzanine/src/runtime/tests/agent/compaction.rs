@@ -398,6 +398,266 @@ context_window_tokens = 40000
     );
 }
 
+/// Verifies an explicit input cap defers an oversized ordinary provider claim
+/// before provider I/O and resumes only after model-backed context compaction.
+///
+/// Proactive compaction is not provider-error recovery, so it must preserve the
+/// pending logical turn without consuming a provider retry attempt. The rebuilt
+/// request must pass the same complete-wire preflight before becoming claimable.
+#[test]
+fn runtime_configured_input_cap_compacts_before_provider_claim() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "configured-input-cap-preflight".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "configured-input-cap-test"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.configured-input-cap-test]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+max_input_tokens = 20000
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let auth_root = temp_root("configured-input-cap-auth");
+    service.set_auth_store(AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"configured-input-cap-preflight","input":"continue after proactive compaction"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    insert_test_context_block(
+        service.agent_turn_contexts_mut().get_mut("turn-1").unwrap(),
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "proactively compactable result".to_string(),
+            content: format!("configured-cap-marker {}", "compactable ".repeat(20_000)),
+        },
+    );
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let agent_id = AgentId::opaque(task.agent_id).unwrap();
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!service.agent_provider_task_is_pending(&task.turn_id));
+    assert_eq!(
+        service
+            .provider_retry_scheduler_mut()
+            .attempt(&task.turn_id),
+        0
+    );
+    let queued = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap_or_else(|| {
+            let turns = service.agent_turn_ledger().turns();
+            let pane_text = service
+                .pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .join("\n");
+            panic!(
+                "configured input cap should queue active-turn compaction; turns={turns:?}; pane={pane_text}"
+            )
+        });
+    assert_eq!(queued.source, "configured-input-limit");
+    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+        trigger:
+            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit {
+                pass,
+                previous_input_tokens,
+                max_input_tokens,
+            },
+        ..
+    } = &queued.target
+    else {
+        panic!("expected configured-input-limit active-turn compaction");
+    };
+    assert_eq!(*pass, 1);
+    assert!(*previous_input_tokens > *max_input_tokens);
+
+    let compactor_estimate = mez_agent::provider_request_input_estimate(
+        &queued.request,
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        &std::collections::BTreeMap::new(),
+        false,
+    )
+    .unwrap();
+    let compactor_cap = compactor_estimate.input_tokens.saturating_sub(1);
+    assert!(compactor_cap > 0);
+    service
+        .pending_agent_compaction_task_mut_for_tests("%1")
+        .unwrap()
+        .model_profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), compactor_cap.to_string());
+
+    let mut compactor_requests = 0usize;
+    let mut observed_split = false;
+    while service
+        .pending_agent_compaction_task_for_tests("%1")
+        .is_some()
+    {
+        let dispatch = service
+            .claim_agent_compaction_task("%1")
+            .unwrap()
+            .expect("configured-cap compactor request should become claimable");
+        compactor_requests = compactor_requests.saturating_add(1);
+        let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+            pending_blocks,
+            ..
+        } = &dispatch.task.target
+        else {
+            panic!("expected active-turn compactor dispatch");
+        };
+        observed_split |= !pending_blocks.is_empty();
+        assert!(
+            compactor_requests <= 256,
+            "configured-cap compactor recursion did not settle"
+        );
+        assert!(
+            service
+                .apply_agent_compaction_completed_event(
+                    "%1",
+                    runtime_test_compaction_response(&format!(
+                        "proactively compacted summary {compactor_requests}"
+                    ))
+                )
+                .unwrap()
+        );
+    }
+    assert!(observed_split, "oversized compactor source was not split");
+    assert!(compactor_requests > 1);
+    assert!(service.agent_provider_task_is_pending(&task.turn_id));
+    assert_eq!(
+        service
+            .provider_retry_scheduler_mut()
+            .attempt(&task.turn_id),
+        0
+    );
+    let dispatch = service
+        .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
+        .unwrap()
+        .expect("smaller rebuilt request should become claimable");
+    assert!(
+        dispatch
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("proactively compacted summary"))
+    );
+}
+
+/// Verifies an explicit input cap fails before provider dispatch when only
+/// protected request material remains and no durable context is compactable.
+///
+/// The runtime must not queue an ineffective compaction pass or consume a
+/// provider retry attempt. The public claim boundary should settle the turn
+/// through its normal typed provider-failure path with no provider worker.
+#[test]
+fn runtime_configured_input_cap_fails_without_compactable_context() {
+    let mut service = test_runtime_service();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "configured-input-cap-protected-only".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "configured-input-cap-protected-only"
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.configured-input-cap-protected-only]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+max_input_tokens = 1
+"#
+            .to_string(),
+        }])
+        .unwrap();
+    let auth_root = temp_root("configured-input-cap-protected-only-auth");
+    service.set_auth_store(AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&auth_root),
+    ));
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let start = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"configured-input-cap-protected-only","input":"this exact user instruction cannot be compacted"}}"#,
+        &primary,
+    );
+    assert!(start.contains(r#""state":"running""#), "{start}");
+    let task = service.pending_agent_provider_tasks().remove(0);
+    let agent_id = AgentId::opaque(task.agent_id).unwrap();
+
+    assert!(
+        service
+            .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(service.pending_agent_compaction_tasks().is_empty());
+    assert!(!service.agent_provider_task_is_pending(&task.turn_id));
+    assert_eq!(
+        service
+            .provider_retry_scheduler_mut()
+            .attempt(&task.turn_id),
+        0
+    );
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .any(|turn| { turn.turn_id == task.turn_id && turn.state == AgentTurnState::Failed })
+    );
+    let pane_text = service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    let pane_text_unwrapped = pane_text.replace('\n', "").replace("▐ ", "");
+    assert!(
+        pane_text_unwrapped
+            .contains("configured input cap is smaller than fixed provider request overhead"),
+        "{pane_text}"
+    );
+}
+
 /// Verifies synchronous provider recovery completes model-backed compaction
 /// before rebuilding and retrying a request rejected for context length.
 ///

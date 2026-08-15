@@ -157,6 +157,14 @@ impl RuntimeAgentProviderDispatchProvider {
             Self::OpenAiCompatible(provider) => provider.provider_id(),
         }
     }
+
+    /// Returns the wire streaming mode used to serialize provider input.
+    pub(crate) fn request_stream(&self) -> bool {
+        match self {
+            Self::OpenAi(provider) => provider.streams_responses(),
+            Self::DeepSeek(_) | Self::Anthropic(_) | Self::OpenAiCompatible(_) => false,
+        }
+    }
 }
 
 /// Carries Runtime Agent Provider Dispatch state for this subsystem.
@@ -453,6 +461,25 @@ pub struct RuntimeAgentCompactionTask {
     pub target: RuntimeAgentCompactionTarget,
 }
 
+/// Identifies why one active-turn context compaction was requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeActiveTurnCompactionTrigger {
+    /// Recovery after a provider authoritatively rejected the submitted request.
+    ProviderContextLimit {
+        /// Bounded provider retry attempt resumed after compaction.
+        attempt: u32,
+    },
+    /// Proactive enforcement of an explicitly configured request-input cap.
+    ConfiguredInputLimit {
+        /// One-based proactive compaction pass for this request.
+        pass: u32,
+        /// Complete request estimate that triggered this pass.
+        previous_input_tokens: usize,
+        /// Explicit configured input-token cap.
+        max_input_tokens: usize,
+    },
+}
+
 /// Durable target for one model-backed compaction request.
 #[derive(Debug, Clone)]
 pub enum RuntimeAgentCompactionTarget {
@@ -462,6 +489,8 @@ pub enum RuntimeAgentCompactionTarget {
     ActiveTurn {
         /// Running turn that owns the frozen durable context.
         turn_id: String,
+        /// Typed reason this active-turn compaction was requested.
+        trigger: RuntimeActiveTurnCompactionTrigger,
         /// Provider retry attempt deferred while model compaction runs.
         recovery_attempt: u32,
         /// Number of provider context-limit backoff attempts already applied.

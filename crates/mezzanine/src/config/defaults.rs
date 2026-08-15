@@ -444,6 +444,10 @@ max_subagent_panes_per_window = 4
 subagent_wait_policy = "join"
 max_depth = 2
 
+# Model profiles are materialized by authentication/catalog setup. When a
+# profile sets max_input_tokens, Mez treats it as a hard estimated cap on the
+# complete wire request and proactively compacts before provider I/O.
+
 # Automatic model-size routing. First launch uses the synthesized default profile;
 # auth login replaces these references with provider-specific profiles.
 [agents.auto_sizing]

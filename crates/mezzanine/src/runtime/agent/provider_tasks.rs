@@ -752,6 +752,43 @@ impl RuntimeSessionService {
         } else {
             None
         };
+        if let Some(auto_sizing) = auto_sizing.as_ref()
+            && let Some(max_input_tokens) = auto_sizing.router_profile.max_input_tokens()
+        {
+            let router_provider_config = self
+                .provider_registry()
+                .provider(&auto_sizing.router_profile.provider)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::config(format!(
+                        "auto-sizing router provider `{}` is not configured",
+                        auto_sizing.router_profile.provider
+                    ))
+                })?;
+            let router_provider = auto_sizing_provider.as_ref().unwrap_or(&provider);
+            let router_request =
+                mez_agent::auto_sizing_request(auto_sizing, &turn, &provider_context)
+                    .map_err(|error| MezError::invalid_state(error.message()))?;
+            let router_api = resolve_provider_api(
+                &router_provider_config.kind,
+                router_provider_config.api.as_deref(),
+            )?;
+            let estimate = mez_agent::provider_request_input_estimate(
+                &router_request,
+                router_api,
+                &router_provider_config.options,
+                router_provider.request_stream(),
+            )?;
+            if self.defer_agent_provider_for_configured_input_limit(
+                &turn,
+                &auto_sizing.router_profile,
+                &context,
+                estimate,
+                max_input_tokens,
+            )? {
+                return Ok(None);
+            }
+        }
         if let Some(block) = self.run_configured_pre_action_hooks(
             HookEvent::AgentTurnStart,
             &runtime_agent_turn_start_hook_payload(&turn, &model_profile),
@@ -768,6 +805,51 @@ impl RuntimeSessionService {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        if let Some(max_input_tokens) = model_profile.max_input_tokens() {
+            let mut estimated_request = if let Some(request) = macro_judge_request
+                .as_ref()
+                .or(sandbox_failure_assessment_request.as_ref())
+            {
+                request.clone()
+            } else {
+                assemble_model_request(&model_profile, &turn, &provider_context)?
+            };
+            mez_agent::apply_model_request_control(
+                &mut estimated_request,
+                allowed_actions.clone(),
+                interaction_kind,
+            );
+            mez_agent::apply_default_action_gates(
+                &mut estimated_request,
+                &available_mcp_tools,
+                self.runtime_persistent_memory_enabled(),
+                super::issues::runtime_issues_enabled(self),
+            );
+            let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+            let estimate = mez_agent::provider_request_input_estimate(
+                &estimated_request,
+                api,
+                &provider_config.options,
+                provider.request_stream(),
+            )?;
+            if self.defer_agent_provider_for_configured_input_limit(
+                &turn,
+                &model_profile,
+                &context,
+                estimate,
+                max_input_tokens,
+            )? {
+                return Ok(None);
+            }
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "configured_input_limit satisfied estimated_input_tokens={} max_input_tokens={max_input_tokens}",
+                    estimate.input_tokens
+                ),
+            )?;
+        }
         self.append_provider_request_audit(
             &turn,
             &model_profile,

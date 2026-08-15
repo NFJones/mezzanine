@@ -300,6 +300,127 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Defers an oversized configured-cap request into bounded active-turn compaction.
+    ///
+    /// The supplied estimate is for the fully assembled provider wire request.
+    /// Repeated passes must strictly reduce that estimate, and no provider retry
+    /// attempt is consumed because no ordinary provider request has been sent.
+    pub(crate) fn defer_agent_provider_for_configured_input_limit(
+        &mut self,
+        turn: &AgentTurnRecord,
+        model_profile: &ModelProfile,
+        context: &mez_agent::PreparedModelContext,
+        estimate: mez_agent::ProviderRequestInputEstimate,
+        max_input_tokens: usize,
+    ) -> Result<bool> {
+        if !estimate.exceeds_explicit_cap(max_input_tokens) {
+            self.agent
+                .agent_turn_configured_input_compaction_passes
+                .remove(&turn.turn_id);
+            self.agent
+                .agent_turn_configured_input_previous_tokens
+                .remove(&turn.turn_id);
+            return Ok(false);
+        }
+        if let Some(previous) = self
+            .agent
+            .agent_turn_configured_input_previous_tokens
+            .get(&turn.turn_id)
+            .copied()
+            && estimate.input_tokens >= previous
+        {
+            return Err(MezError::invalid_state(format!(
+                "configured input-cap compaction did not reduce the complete request estimate: previous_input_tokens={previous} current_input_tokens={} max_input_tokens={max_input_tokens}",
+                estimate.input_tokens
+            )));
+        }
+        let pass = self
+            .agent
+            .agent_turn_configured_input_compaction_passes
+            .get(&turn.turn_id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1);
+        if pass > 4 {
+            return Err(MezError::invalid_state(format!(
+                "configured input-cap compaction exceeded four bounded passes: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
+                estimate.input_tokens
+            )));
+        }
+
+        let rendered_context_tokens = context
+            .to_agent_context()
+            .blocks()
+            .iter()
+            .map(|block| {
+                mez_agent::provider_text_input_token_estimate(&format!(
+                    "{}{}",
+                    mez_agent::model_context_block_header(block),
+                    block.content
+                ))
+            })
+            .fold(0usize, usize::saturating_add);
+        let fixed_input_tokens = estimate
+            .input_tokens
+            .saturating_sub(rendered_context_tokens);
+        let context_budget_words = max_input_tokens
+            .saturating_sub(fixed_input_tokens)
+            .saturating_mul(3)
+            .saturating_div(4);
+        if context_budget_words == 0 {
+            return Err(MezError::invalid_state(format!(
+                "configured input cap is smaller than fixed provider request overhead: estimated_input_tokens={} fixed_input_tokens={fixed_input_tokens} max_input_tokens={max_input_tokens}",
+                estimate.input_tokens
+            )));
+        }
+        let durable = context.durable();
+        // A configured hard cap cannot reserve an optional raw tail when that
+        // reservation prevents the complete request from fitting. Exact and
+        // post-boundary context remains protected by the compaction planner.
+        let retained_tail_percent = 0;
+        let plan = mez_agent::plan_model_context_compaction_at_consumed_sequence(
+            durable,
+            context_budget_words,
+            retained_tail_percent,
+            durable.event_sequence_high_water_mark(),
+        )
+        .map_err(|error| MezError::invalid_state(error.message()))?;
+        if !plan.changes_context() {
+            return Err(MezError::invalid_state(format!(
+                "configured input cap exceeded but no eligible durable context can be compacted: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
+                estimate.input_tokens
+            )));
+        }
+        if !self.queue_agent_active_turn_compaction(
+            &turn.turn_id,
+            turn.model_profile.clone(),
+            model_profile.clone(),
+            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit {
+                pass,
+                previous_input_tokens: estimate.input_tokens,
+                max_input_tokens,
+            },
+            plan,
+        )? {
+            return Ok(false);
+        }
+        self.agent
+            .agent_turn_configured_input_compaction_passes
+            .insert(turn.turn_id.clone(), pass);
+        self.agent
+            .agent_turn_configured_input_previous_tokens
+            .insert(turn.turn_id.clone(), estimate.input_tokens);
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "configured_input_limit queued pass={pass} estimated_input_tokens={} max_input_tokens={max_input_tokens} fixed_input_tokens={fixed_input_tokens} context_budget_words={context_budget_words} retained_tail_percent={retained_tail_percent}",
+                estimate.input_tokens
+            ),
+        )?;
+        Ok(true)
+    }
+
     /// Records compact-output retry controller state after a provider cuts
     /// generation off at its output-token limit.
     ///

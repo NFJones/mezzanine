@@ -3013,8 +3013,13 @@ MUST be normalized as if `reasoning_profile` were set when the canonical field
 is absent. `context_window_tokens`, `context_limit_tokens`, `max_input_tokens`, and
 `max_output_tokens` MUST be positive token counts when present.
 `context_window_tokens` and `context_limit_tokens` MUST drive context-usage
-display percentages. `max_input_tokens` MUST cap explicit compaction budget
-targets when it is lower than the context-window limit.
+display percentages. An explicitly configured `max_input_tokens` MUST be a
+hard estimated cap on complete provider-visible request input and MUST also cap
+explicit compaction budget targets when it is lower than the context-window
+limit. The estimate MUST be formed after final messages, system instructions,
+request-local recovery input, action and MCP schemas, response wrappers, and
+provider wire controls are assembled. A request whose estimate equals the cap
+MAY dispatch; a request whose estimate exceeds it MUST NOT dispatch.
 Generated default model profiles SHOULD include provider/model-aware recommended
 `max_output_tokens` values for known agent workloads when the selected provider
 exposes a compatible output-budget control. Profiles for unknown or generic
@@ -3022,9 +3027,12 @@ OpenAI-compatible providers MAY omit `max_output_tokens` so the provider default
 applies. Mezzanine MUST send `max_output_tokens` only to providers whose active
 wire API accepts that field, and MUST NOT include it in prompt-cache identity
 material.
-Mezzanine MUST NOT use local fallback context-size estimates as a
-prompt-submission gate or provider-request preflight; provider-reported usage
-and provider context-limit errors are the authoritative context-size signals.
+Mezzanine MUST NOT use advisory context-window or fallback estimates as a
+prompt-submission gate when `max_input_tokens` is absent; provider-reported
+usage and provider context-limit errors remain the authoritative signals in
+that case. When `max_input_tokens` is explicit, Mezzanine MUST use its complete
+request estimate as a pre-dispatch gate while retaining provider context-limit
+errors as fallback recovery for tokenizer or hidden-overhead underestimation.
 When both context fields are absent, Mezzanine SHOULD use built-in provider
 model metadata for known default model families before falling back to a
 conservative local token budget for display and explicit compaction targets.
@@ -4587,6 +4595,18 @@ assembly MUST NOT satisfy local context budgets by byte-slicing context block
 content. When a block cannot fit, the harness MUST replace it with a compact
 diagnostic summary that preserves source, label, byte count, and recovery
 guidance.
+
+For an explicit `max_input_tokens`, the harness MUST defer an over-cap normal
+provider request before audit or provider I/O, subtract fixed and request-local
+overhead from the cap, and compact only eligible durable context. It MUST
+rebuild and re-estimate the complete request after compaction. Proactive passes
+MUST be bounded, MUST strictly reduce the estimate, and MUST NOT consume a
+provider retry attempt. Protected-only overflow, absent eligible context,
+nonshrinking summaries, or exhausted passes MUST fail explicitly without
+ordinary provider I/O. The same explicit-cap accounting MUST apply separately
+to internal auto-sizing router requests and model-compactor requests;
+active-turn compactor source MAY be split into temporary requests while the
+validated summary is applied atomically to the original frozen plan.
 
 ### 9.7 Model Request and Response
 
@@ -9492,8 +9512,9 @@ recovery MUST use the smallest context window among the ordinary default
 profile and the configured `small`, `medium`, and `large` target profiles.
 This prevents pre-decision context handling from fitting the default profile
 while exceeding a smaller target that the router may choose. The router profile
-MUST be budgeted separately for the internal router request and MUST NOT reduce
-the main provider request budget.
+MUST be budgeted separately for the internal router request, including its own
+explicit `max_input_tokens` preflight when configured, and MUST NOT reduce the
+main provider request budget.
 
 If the router request fails, times out, returns malformed output, chooses an
 unavailable bucket, or chooses an unsupported reasoning effort, Mezzanine MUST

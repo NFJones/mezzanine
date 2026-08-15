@@ -26,6 +26,7 @@ use crate::integrations::agent::provider::{
     anthropic_provider_from_auth_store_with_provider_options,
     provider_error_retry_class_from_parts, provider_event_error_kind,
 };
+use crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger;
 use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 use mez_agent::{
@@ -240,6 +241,26 @@ impl RuntimeSessionService {
         recovery_attempt: u32,
         plan: mez_agent::ModelContextCompactionPlan,
     ) -> Result<bool> {
+        self.queue_agent_active_turn_compaction(
+            turn_id,
+            model_profile_name,
+            model_profile,
+            RuntimeActiveTurnCompactionTrigger::ProviderContextLimit {
+                attempt: recovery_attempt,
+            },
+            plan,
+        )
+    }
+
+    /// Queues one typed active-turn compaction while preserving its trigger.
+    pub(crate) fn queue_agent_active_turn_compaction(
+        &mut self,
+        turn_id: &str,
+        model_profile_name: String,
+        model_profile: ModelProfile,
+        trigger: RuntimeActiveTurnCompactionTrigger,
+        plan: mez_agent::ModelContextCompactionPlan,
+    ) -> Result<bool> {
         let Some(turn) = self
             .agent_turn_ledger()
             .turns()
@@ -265,8 +286,17 @@ impl RuntimeSessionService {
             .clone();
         let mut current_blocks = plan.replacement_blocks().to_vec();
         let mut pending_blocks = Vec::new();
-        let rejected_request_bytes = self.claimed_agent_provider_openai_request_bytes(turn_id);
-        let rejected_request_stream = self.claimed_agent_provider_openai_request_stream(turn_id);
+        let recovery_attempt = match trigger {
+            RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { attempt } => attempt,
+            RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => 0,
+        };
+        let (rejected_request_bytes, rejected_request_stream) = match trigger {
+            RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => (
+                self.claimed_agent_provider_openai_request_bytes(turn_id),
+                self.claimed_agent_provider_openai_request_stream(turn_id),
+            ),
+            RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => (None, None),
+        };
         let mut request = runtime_model_compaction_request_for_blocks(
             &model_profile,
             &turn.pane_id,
@@ -297,7 +327,14 @@ impl RuntimeSessionService {
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             pane_id: turn.pane_id.clone(),
             conversation_id,
-            source: "provider-context-limit".to_string(),
+            source: match trigger {
+                RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {
+                    "provider-context-limit".to_string()
+                }
+                RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => {
+                    "configured-input-limit".to_string()
+                }
+            },
             transcript_entries: 0,
             retained_transcript_entries: 0,
             summarized_entries: plan.replacement_blocks().len(),
@@ -307,6 +344,7 @@ impl RuntimeSessionService {
             resume_turn_id: Some(turn.turn_id.clone()),
             target: RuntimeAgentCompactionTarget::ActiveTurn {
                 turn_id: turn.turn_id.clone(),
+                trigger,
                 recovery_attempt,
                 compaction_backoff_attempt: 0,
                 rejected_request_bytes,
@@ -318,10 +356,20 @@ impl RuntimeSessionService {
             },
         });
         self.remove_pending_agent_provider_task(turn_id);
-        self.append_agent_status_text_to_terminal_buffer(
-            &turn.pane_id,
-            "agent: provider rejected context as too large; requesting model-backed context compaction",
-        )?;
+        let status = match trigger {
+            RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {
+                "agent: provider rejected context as too large; requesting model-backed context compaction"
+                    .to_string()
+            }
+            RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit {
+                previous_input_tokens,
+                max_input_tokens,
+                ..
+            } => format!(
+                "agent: configured input cap deferred provider dispatch; requesting model-backed context compaction estimated_input_tokens={previous_input_tokens} max_input_tokens={max_input_tokens}"
+            ),
+        };
+        self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &status)?;
         Ok(true)
     }
 
@@ -345,7 +393,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<Option<RuntimeAgentCompactionDispatch>> {
-        let Some(task) = self.take_pending_agent_compaction_task(pane_id) else {
+        let Some(mut task) = self.take_pending_agent_compaction_task(pane_id) else {
             return Ok(None);
         };
         if !self.agent_is_compacting(pane_id) {
@@ -430,6 +478,38 @@ impl RuntimeSessionService {
                 .map(RuntimeAgentProviderDispatchProvider::Anthropic)
             }
         }?;
+        if let Some(max_input_tokens) = task.model_profile.max_input_tokens() {
+            loop {
+                let estimate = mez_agent::provider_request_input_estimate(
+                    &task.request,
+                    provider_api,
+                    &provider_config.options,
+                    provider.request_stream(),
+                )?;
+                if !estimate.exceeds_explicit_cap(max_input_tokens) {
+                    break;
+                }
+                let RuntimeAgentCompactionTarget::ActiveTurn {
+                    current_blocks,
+                    pending_blocks,
+                    ..
+                } = &mut task.target
+                else {
+                    return Err(MezError::invalid_state(format!(
+                        "conversation compactor request exceeds configured input cap: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
+                        estimate.input_tokens
+                    )));
+                };
+                let Some((first, second)) = runtime_split_compaction_blocks(current_blocks) else {
+                    return Err(MezError::invalid_state(format!(
+                        "active-turn compactor request cannot be split below configured input cap: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
+                        estimate.input_tokens
+                    )));
+                };
+                pending_blocks.push(second);
+                runtime_rebuild_active_turn_compaction_request(&mut task, first)?;
+            }
+        }
         self.append_credential_access_audit(
             &task.model_profile.provider,
             &provider_config.auth_profile,
@@ -526,6 +606,7 @@ impl RuntimeSessionService {
                 })?;
                 let (
                     turn_id,
+                    trigger,
                     recovery_attempt,
                     rejected_request_bytes,
                     rejected_request_stream,
@@ -533,6 +614,7 @@ impl RuntimeSessionService {
                 ) = match &task.target {
                     RuntimeAgentCompactionTarget::ActiveTurn {
                         turn_id,
+                        trigger,
                         recovery_attempt,
                         rejected_request_bytes,
                         rejected_request_stream,
@@ -540,6 +622,7 @@ impl RuntimeSessionService {
                         ..
                     } => (
                         turn_id.clone(),
+                        *trigger,
                         *recovery_attempt,
                         *rejected_request_bytes,
                         *rejected_request_stream,
@@ -631,22 +714,35 @@ impl RuntimeSessionService {
                 }
                 self.agent_turn_contexts_mut()
                     .insert(turn_id.clone(), compacted);
-                self.queue_agent_provider_recovery_task_after_context_compaction(
-                    &turn_id,
-                    recovery_attempt,
-                )?;
-                self.append_agent_status_text_to_terminal_buffer(
-                    pane_id,
-                    &format!(
-                        "agent: provider context recovery applied model summary compacted_blocks={}",
-                        report.compacted_blocks
+                match trigger {
+                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {
+                        self.queue_agent_provider_recovery_task_after_context_compaction(
+                            &turn_id,
+                            recovery_attempt,
+                        )?;
+                    }
+                    RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { .. } => {
+                        self.queue_agent_provider_recovery_task_after_compaction(&turn_id)?;
+                    }
+                }
+                let (status, trace) = match trigger {
+                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => (
+                        format!(
+                            "agent: provider context recovery applied model summary compacted_blocks={}",
+                            report.compacted_blocks
+                        ),
+                        "provider_request recovery_resuming reason=model_context_compaction_completed",
                     ),
-                )?;
-                self.append_agent_trace_turn_event(
-                    pane_id,
-                    &turn_id,
-                    "provider_request recovery_resuming reason=model_context_compaction_completed",
-                )?;
+                    RuntimeActiveTurnCompactionTrigger::ConfiguredInputLimit { pass, .. } => (
+                        format!(
+                            "agent: configured input-cap compaction applied model summary pass={pass} compacted_blocks={}",
+                            report.compacted_blocks
+                        ),
+                        "provider_request preflight_resuming reason=configured_input_limit_compaction_completed",
+                    ),
+                };
+                self.append_agent_status_text_to_terminal_buffer(pane_id, &status)?;
+                self.append_agent_trace_turn_event(pane_id, &turn_id, trace)?;
                 return Ok(());
             }
             let now = current_unix_seconds().max(1);

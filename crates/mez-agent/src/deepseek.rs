@@ -153,6 +153,18 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
             "content": content
         }));
     }
+    if let Some(recovery_input) = request
+        .recovery_input
+        .as_deref()
+        .filter(|input| !input.is_empty())
+    {
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": format!(
+                "[Mezzanine context; not user-authored]\n{recovery_input}"
+            )
+        }));
+    }
     let mut body = serde_json::json!({
         "model": request.model,
         "messages": messages,

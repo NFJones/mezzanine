@@ -279,6 +279,10 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
     /// Configured profile identities retained separately from display labels.
     agent_turn_configured_model_profiles: BTreeMap<String, String>,
+    /// Number of proactive configured-input-limit compaction passes per turn.
+    agent_turn_configured_input_compaction_passes: BTreeMap<String, u32>,
+    /// Complete request estimate that preceded the latest proactive pass.
+    agent_turn_configured_input_previous_tokens: BTreeMap<String, usize>,
     /// Turns whose automatic routing decision has already been applied.
     agent_turn_routing_applied: BTreeSet<String>,
     /// Provider turns queued for worker dispatch.
