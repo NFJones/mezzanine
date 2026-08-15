@@ -1021,6 +1021,8 @@ unsandboxed retry, and the grant is consumed exactly once.
 | `mcp_servers.<name>.approval` | string | omitted | Server-level approval policy. |
 | `mcp_servers.<name>.tool_approvals` | map | omitted | Per-tool approval policy. |
 | `mcp_servers.<name>.external_capability` | table | omitted | Model-visible external capability metadata. The `purpose` field should be a short, non-secret description of when agents should use this server, and `usage_instructions` may provide non-secret user-authored guidance for how agents should use it. |
+| `mcp_servers.<name>.external_capability.purpose` | string | omitted | Concise, non-secret routing metadata describing when agents should use the server. |
+| `mcp_servers.<name>.external_capability.usage_instructions` | string | omitted | Concise, non-secret user guidance for preferred workflows, constraints, or when to avoid the server. |
 | `mcp_servers.<name>.external_capability.mutates_filesystem_outside_shell` | boolean | omitted | Set true when the server can create, edit, delete, or move local files outside shell-mediated actions. |
 | `mcp_servers.<name>.external_capability.executes_processes_outside_shell` | boolean | omitted | Set true when the server can start local processes outside shell-mediated actions. |
 | `mcp_servers.<name>.external_capability.accesses_credentials_outside_shell` | boolean | omitted | Set true when the server can access credentials outside shell-mediated actions. |
