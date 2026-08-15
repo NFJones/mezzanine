@@ -1842,6 +1842,12 @@ cursor position, and the active supported bind mode; the restored draft MUST
 remain unexecuted until the user explicitly submits it. Fish admission MUST fail
 closed without clearing the draft while history search, the completion pager,
 or an active text selection prevents exact editor-state restoration.
+Managed Fish MUST publish a pane-token-authenticated parent-restored boundary
+only after the private receiver has returned from sourcing the child handoff,
+restored the editor state, and queued its repaint. Child-exit rendering markers
+MUST NOT release foreground input. Mezzanine MUST retain bounded foreground
+input until parent-restored arrives and MUST use bounded timeout recovery if
+that event is lost.
 The agent-mode child shell and every Mezzanine-owned non-stateful action shell
 MUST inherit the pane environment except for variables that can trigger shell
 startup files, prompt hooks, editor/pager prompts, or other interactive
@@ -4277,6 +4283,15 @@ fallback. For shells without known history controls, Mezzanine SHOULD make a
 best-effort attempt to avoid persisted history while preserving the transaction
 marker and command-status semantics.
 
+Managed Fish private admission MUST bound declared source bytes, chunk count,
+and physical DATA record length; validate canonical Base64 DATA records,
+sequence, digest, and the matching END record; and invoke external protocol
+utilities without permitting user functions to shadow them. Once an
+authenticated BEGIN record is admitted, Fish MUST drain and acknowledge every
+declared DATA record and the END record even after detecting malformed input.
+It MUST reject the source after draining rather than expose remaining records
+to the ordinary line editor or strand acknowledgement-paced delivery.
+
 For non-stateful POSIX-compatible actions, the default wrapper MUST execute the
 agent command in a child shell whose environment omits Mezzanine transaction
 metadata. The command text SHOULD be provided to the child shell as a script on
@@ -4406,10 +4421,12 @@ transport before constructing action-result content or terminal-observation
 metadata for both successful and failed actions. If bounded observation cuts a
 base64 block before its end marker, Mezzanine MUST decode any complete base64
 prefix it retained and annotate the result as truncated or incomplete.
-Human-visible pane presentation MAY show the encoded transport when that is the
-least disruptive way to keep the pane responsive, provided the model-facing
-result receives decoded output and the user can inspect or decode the retained
-bytes when needed.
+Human-visible pane presentation MUST incrementally decode an admitted transport
+frame and MUST NOT expose its Base64 records as ordinary pane text. Rendering
+MUST retain only bounded marker, encoded-line, and decoder state rather than the
+whole frame. A malformed or overlong admitted frame MUST remain suppressed
+through its matching end marker so later encoded records cannot leak after the
+decoder rejects an earlier record.
 
 After observing a candidate end marker for a non-interactive command, the
 harness MUST perform a fresh readiness check before sending another agent

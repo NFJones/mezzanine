@@ -1964,7 +1964,7 @@ pub fn fish_private_source_input(
     let chunks = encoded.as_bytes().chunks(SHELL_WRAPPER_BASE64_LINE_BYTES);
     let chunk_count = chunks.len();
     let wrapper = format!(
-        "\x07MEZ_FISH_RX1_BEGIN {} {} {} {} {}\n",
+        "\x1b\x07MEZ_FISH_RX1_BEGIN {} {} {} {} {}\n",
         token.as_str(),
         marker,
         source.len(),

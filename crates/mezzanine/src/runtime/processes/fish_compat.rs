@@ -73,9 +73,9 @@ if not functions --query __mez_fish_user_right_prompt
         end
     end
 end
-functions --erase __mez_fish_passive_command_is_internal __mez_fish_passive_prompt_start __mez_fish_passive_preexec __mez_fish_passive_postexec fish_prompt fish_right_prompt 2>/dev/null
+functions --erase __mez_fish_private_receiver __mez_fish_publish_parent_restored __mez_fish_passive_command_is_internal __mez_fish_passive_prompt_start __mez_fish_passive_preexec __mez_fish_passive_postexec fish_prompt fish_right_prompt 2>/dev/null
 set -g __MEZ_FISH_INTEGRATION_OWNER {}
-set -e __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
+set -e __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS __MEZ_FISH_PASSIVE_COMMAND_ACTIVE __MEZ_FISH_PASSIVE_SKIP_POSTEXEC
 function __mez_fish_private_receiver
     set -l unsupported_editor_state 0
     if commandline --search-mode; or commandline --paging-mode; or commandline --selection-start >/dev/null 2>&1; or commandline --selection-end >/dev/null 2>&1
@@ -94,19 +94,32 @@ function __mez_fish_private_receiver
         commandline -f repaint-mode
         return 1
     end
-    if test "$unsupported_editor_state" -eq 1
-        set fish_bind_mode "$saved_bind_mode"
-        commandline -f repaint-mode
-        return 1
-    end
-    commandline --replace ''
     set -l marker "$begin_fields[3]"
     set -l expected_length "$begin_fields[4]"
     set -l expected_digest "$begin_fields[5]"
     set -l expected_chunks "$begin_fields[6]"
+    if test "$expected_length" -gt 16777216; or test "$expected_chunks" -gt 349526
+        commandline --replace -- "$saved_line"
+        commandline --cursor "$saved_cursor"
+        set fish_bind_mode "$saved_bind_mode"
+        commandline -f repaint-mode
+        set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
+        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 125
+        return 1
+    end
+    if test "$unsupported_editor_state" -eq 1
+        commandline --replace -- "$saved_line"
+        commandline --cursor "$saved_cursor"
+        set fish_bind_mode "$saved_bind_mode"
+        commandline -f repaint-mode
+        set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
+        set -g __MEZ_FISH_PARENT_RESTORE_STATUS 125
+        return 1
+    end
+    commandline --replace ''
     builtin printf '\033]133;R;mez_receiver=ready;mez_token=%s;mez_marker=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$marker"
     set -l source_status 1
-    set -l source_file (mktemp); or set source_file ''
+    set -l source_file (command mktemp); or set source_file ''
     set -l encoded_file "$source_file.b64"
     set -l receive_status 0
     set -l sequence 0
@@ -115,43 +128,43 @@ function __mez_fish_private_receiver
     else
         command printf '' > "$encoded_file"; or set receive_status $status
     end
-    while test "$receive_status" -eq 0; and test "$sequence" -lt "$expected_chunks"
+    while test "$sequence" -lt "$expected_chunks"
         set -l data_record
         read -l data_record; or begin; set receive_status 1; break; end
         set -l data_fields (string split -m 4 ' ' -- "$data_record")
-        if test (count $data_fields) -ne 5; or test "$data_fields[1]" != MEZ_FISH_RX1_DATA; or test "$data_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$data_fields[3]" != "$marker"; or test "$data_fields[4]" != "$sequence"
-            set receive_status 1
-        else
-            printf '%s' "$data_fields[5]" >> "$encoded_file"; or set receive_status $status
+        if test "$receive_status" -eq 0
+            if test (count $data_fields) -ne 5; or test "$data_fields[1]" != MEZ_FISH_RX1_DATA; or test "$data_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$data_fields[3]" != "$marker"; or test "$data_fields[4]" != "$sequence"; or test (string length -- "$data_fields[5]") -gt 640; or not string match -rq '^[A-Za-z0-9+/]*={{0,2}}$' -- "$data_fields[5]"
+                set receive_status 1
+            else
+                command printf '%s' "$data_fields[5]" >> "$encoded_file"; or set receive_status $status
+            end
         end
         set sequence (math "$sequence + 1")
-        printf '\036'
+        builtin printf '\036'
     end
     set -l end_record
-    if test "$receive_status" -eq 0
-        read end_record; or set receive_status 1
-    end
-    if test "$receive_status" -eq 0
+    read -l end_record; or set receive_status 1
+    if test -n "$end_record"; and test "$receive_status" -eq 0
         set -l end_fields (string split ' ' -- "$end_record")
         if test (count $end_fields) -ne 6; or test "$end_fields[1]" != MEZ_FISH_RX1_END; or test "$end_fields[2]" != "$__MEZ_FISH_INTEGRATION_OWNER"; or test "$end_fields[3]" != "$marker"; or test "$end_fields[4]" != "$expected_chunks"; or test "$end_fields[5]" != "$expected_length"; or test "$end_fields[6]" != "$expected_digest"
             set receive_status 1
         end
-        printf '\036'
     end
+    builtin printf '\036'
     if test "$receive_status" -eq 0
-        if printf '' | base64 -d >/dev/null 2>&1
-            base64 -d < "$encoded_file" > "$source_file" 2>/dev/null; or set receive_status $status
+        if command printf '' | command base64 -d >/dev/null 2>&1
+            command base64 -d < "$encoded_file" > "$source_file" 2>/dev/null; or set receive_status $status
         else
-            base64 -D < "$encoded_file" > "$source_file"; or set receive_status $status
+            command base64 -D < "$encoded_file" > "$source_file"; or set receive_status $status
         end
     end
     if test "$receive_status" -eq 0
-        set -l actual_length (wc -c < "$source_file" | string trim)
+        set -l actual_length (command wc -c < "$source_file" | string trim)
         set -l actual_digest ''
         if command -q sha256sum
-            set actual_digest (sha256sum -- "$source_file" | string split -f 1 ' ')
+            set actual_digest (command sha256sum -- "$source_file" | string split -f 1 ' ')
         else if command -q shasum
-            set actual_digest (shasum -a 256 -- "$source_file" | string split -f 1 ' ')
+            set actual_digest (command shasum -a 256 -- "$source_file" | string split -f 1 ' ')
         else
             set receive_status 127
         end
@@ -169,12 +182,21 @@ function __mez_fish_private_receiver
     commandline --cursor "$saved_cursor"
     set fish_bind_mode "$saved_bind_mode"
     commandline -f repaint-mode
-    builtin printf '\033]133;R;mez_receiver=complete;mez_token=%s;mez_marker=%s;mez_status=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$marker" "$source_status"
+    set -g __MEZ_FISH_PARENT_RESTORE_MARKER "$marker"
+    set -g __MEZ_FISH_PARENT_RESTORE_STATUS "$source_status"
     return $source_status
 end
-bind -M default \cg __mez_fish_private_receiver
-bind -M insert \cg __mez_fish_private_receiver
-bind -M visual \cg __mez_fish_private_receiver
+function __mez_fish_publish_parent_restored
+    if not set -q __MEZ_FISH_PARENT_RESTORE_MARKER
+        return 0
+    end
+    builtin printf '\033]133;R;mez_parent=restored;mez_token=%s;mez_marker=%s;mez_status=%s\033\\' "$__MEZ_FISH_INTEGRATION_OWNER" "$__MEZ_FISH_PARENT_RESTORE_MARKER" "$__MEZ_FISH_PARENT_RESTORE_STATUS"
+    set -e __MEZ_FISH_PARENT_RESTORE_MARKER __MEZ_FISH_PARENT_RESTORE_STATUS
+end
+bind -M default \e\cg __mez_fish_private_receiver __mez_fish_publish_parent_restored
+bind -M insert \e\cg __mez_fish_private_receiver __mez_fish_publish_parent_restored
+bind -M visual \e\cg __mez_fish_private_receiver __mez_fish_publish_parent_restored
+bind -M replace_one \e\cg __mez_fish_private_receiver __mez_fish_publish_parent_restored
 function __mez_fish_passive_command_is_internal --argument-names command_line
     if string match --quiet '*mez_marker=*' -- "$command_line"; and string match --quiet '*mez_turn=*' -- "$command_line"
         return 0
@@ -820,14 +842,14 @@ mod tests {
                 admission.payload_receiver_acknowledgements,
             )),
         );
-        let complete = format!(
-            "mez_receiver=complete;mez_token={};mez_marker={marker};mez_status=1",
+        let restored = format!(
+            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=1",
             owner.as_str()
         );
         extend_fish_output_until(&mut process, &mut output, |output| {
             output
-                .windows(complete.len())
-                .any(|window| window == complete.as_bytes())
+                .windows(restored.len())
+                .any(|window| window == restored.as_bytes())
         });
         process.write_input(b"\n").unwrap();
         extend_fish_output_until(&mut process, &mut output, |output| {
@@ -835,6 +857,97 @@ mod tests {
                 .windows(b"__MEZ_FAILURE_DRAFT_RESTORED__".len())
                 .any(|window| window == b"__MEZ_FAILURE_DRAFT_RESTORED__")
         });
+
+        process.terminate(Duration::from_millis(100)).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    /// Verifies a malformed DATA record is rejected only after Fish drains and
+    /// acknowledges the complete admitted frame through its END record.
+    ///
+    /// Draining prevents remaining Base64 records from entering the editable
+    /// command line and prevents paced macOS delivery from waiting forever for
+    /// an acknowledgement the receiver abandoned after the first defect.
+    fn managed_fish_private_admission_drains_malformed_frame_before_rejecting() {
+        let Some(fish) = fish_path_for_tests() else {
+            eprintln!(
+                "skipping managed Fish malformed-frame assertion because fish is unavailable"
+            );
+            return;
+        };
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-fish-private-malformed-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let owner = MarkerToken::new("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+        let compatibility = ManagedFishCompatibility::new(owner.clone());
+        let mut process = spawn_managed_fish(&fish, &compatibility, &root);
+        settle_managed_fish_startup(&mut process);
+
+        let marker = "fish-private-malformed-marker";
+        let source = format!(
+            "builtin printf '__MEZ_MALFORMED_SOURCE_RAN__\\n'\n# {}\n",
+            "padding".repeat(256)
+        );
+        let admission = fish_private_source_input(&source, &owner, marker);
+        process.write_input(admission.wrapper.as_bytes()).unwrap();
+        let ready = format!(
+            "mez_receiver=ready;mez_token={};mez_marker={marker}",
+            owner.as_str()
+        );
+        let mut output = read_fish_output_until(&mut process, |output| {
+            output
+                .windows(ready.len())
+                .any(|window| window == ready.as_bytes())
+        });
+        let mut records = admission
+            .receiver_payload
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(
+            records.len() >= 4,
+            "fixture must contain multiple DATA records"
+        );
+        let malformed = records[1]
+            .split_whitespace()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(" ");
+        records[1] = format!("{malformed} not-base64!");
+        let malformed_payload = records.join("\n") + "\n";
+        output.extend(
+            process.write_shell_delivery(&ShellInputDelivery::receiver_acknowledged(
+                malformed_payload.into_bytes(),
+                marker,
+                true,
+            )),
+        );
+        let restored = format!(
+            "mez_parent=restored;mez_token={};mez_marker={marker};mez_status=1",
+            owner.as_str()
+        );
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(restored.len())
+                .any(|window| window == restored.as_bytes())
+        });
+        process
+            .write_input(b"builtin printf '__MEZ_AFTER_MALFORMED_FRAME__\\n'\n")
+            .unwrap();
+        extend_fish_output_until(&mut process, &mut output, |output| {
+            output
+                .windows(b"__MEZ_AFTER_MALFORMED_FRAME__".len())
+                .any(|window| window == b"__MEZ_AFTER_MALFORMED_FRAME__")
+        });
+        assert!(
+            !String::from_utf8_lossy(&output).contains("__MEZ_MALFORMED_SOURCE_RAN__"),
+            "malformed private source must not execute"
+        );
 
         process.terminate(Duration::from_millis(100)).unwrap();
         std::fs::remove_dir_all(root).unwrap();

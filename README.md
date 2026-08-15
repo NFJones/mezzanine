@@ -110,6 +110,9 @@ mode.
 On supported Bash, Zsh, and Fish prompts, Mezzanine preserves an unfinished
 command while agent mode is active and restores it afterward. Unsupported or
 unsafe prompt states fail closed rather than submitting or combining input.
+Fish foreground input remains queued until its authenticated editor-restored
+boundary, while streamed shell output is decoded incrementally so private
+Base64 transport records are never shown as ordinary pane text.
 
 Use `mez --help` and the [CLI reference](docs/reference-manual/cli.md) for the
 current command contract. Use [Sessions and panes](docs/using-mezzanine/sessions-and-panes.md)

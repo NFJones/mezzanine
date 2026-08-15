@@ -137,6 +137,20 @@ impl RuntimeSessionService {
                     "pane process not found",
                 )
             })?;
+        if self.queue_fish_parent_restoration_input(descriptor.pane_id.as_str(), input)? {
+            self.clear_copy_state_for_surface(
+                descriptor.pane_id.as_str(),
+                crate::runtime::PaneSurfaceKind::Process,
+            );
+            self.record_user_process_input(descriptor.pane_id.as_str(), input);
+            return Ok(PaneInputDispatch {
+                session_id: self.session.id.to_string(),
+                window_id: descriptor.window_id.to_string(),
+                pane_id: descriptor.pane_id.to_string(),
+                primary_pid,
+                bytes_written: input.len(),
+            });
+        }
         self.clear_shell_output_filters_for_foreground_input(descriptor.pane_id.as_str());
         self.clear_copy_state_for_surface(
             descriptor.pane_id.as_str(),
@@ -476,6 +490,18 @@ impl RuntimeSessionService {
                                 {
                                     continue;
                                 }
+                                if self.queue_fish_parent_restoration_input(
+                                    descriptor.pane_id.as_str(),
+                                    input,
+                                )? {
+                                    self.clear_copy_state_for_surface(
+                                        descriptor.pane_id.as_str(),
+                                        crate::runtime::PaneSurfaceKind::Process,
+                                    );
+                                    report.forwarded_bytes =
+                                        report.forwarded_bytes.saturating_add(input.len());
+                                    continue;
+                                }
                                 self.clear_shell_output_filters_for_foreground_input(
                                     descriptor.pane_id.as_str(),
                                 );
@@ -514,6 +540,18 @@ impl RuntimeSessionService {
                         continue;
                     };
                     if defer_pane_io {
+                        if self.queue_fish_parent_restoration_input(
+                            descriptor.pane_id.as_str(),
+                            input,
+                        )? {
+                            self.clear_copy_state_for_surface(
+                                descriptor.pane_id.as_str(),
+                                crate::runtime::PaneSurfaceKind::Process,
+                            );
+                            report.forwarded_bytes =
+                                report.forwarded_bytes.saturating_add(input.len());
+                            continue;
+                        }
                         self.clear_shell_output_filters_for_foreground_input(
                             descriptor.pane_id.as_str(),
                         );

@@ -1093,6 +1093,10 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
+        if self.fish_parent_restoration_is_pending(pane_id) {
+            self.defer_agent_subshell_entry(pane_id);
+            return Ok(false);
+        }
         let _ = self.schedule_parent_shell_discovery_for_agent_entry(pane_id);
         if self.pane_bootstrap_awaits_shell_identity(pane_id) {
             self.defer_agent_subshell_entry(pane_id);

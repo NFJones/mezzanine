@@ -58,8 +58,8 @@ use mez_agent::shell_observation::{
 use mez_agent::{AgentActionPayload, ToolInventory};
 use mez_agent::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_END_MARKER,
-    SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, bootstrap_script_for_classification,
-    parse_bootstrap_env_output, readiness_probe_command_for_classification,
+    bootstrap_script_for_classification, parse_bootstrap_env_output,
+    readiness_probe_command_for_classification,
 };
 use mez_mux::process::PaneProcess;
 use mez_terminal::TerminalStyledLine;
@@ -473,6 +473,39 @@ struct RuntimePendingShellDispatchRecoveryObservation {
     started_at_unix_ms: u64,
 }
 
+/// Incremental decoder state for one pane's private shell-output transport.
+///
+/// The renderer retains only a possible begin-marker prefix or one bounded
+/// encoded line. Once a frame is admitted, malformed payload remains hidden
+/// until its matching end marker instead of falling back to literal Base64.
+#[derive(Debug, Default)]
+struct RuntimeShellOutputRenderState {
+    /// Possible prefix of the private begin marker split across PTY reads.
+    marker_prefix: Vec<u8>,
+    /// Current encoded payload or end-marker line split across PTY reads.
+    encoded_line: Vec<u8>,
+    /// Whether the private begin marker has been admitted.
+    in_frame: bool,
+    /// Whether malformed or overlong payload must be suppressed through END.
+    discard_frame: bool,
+}
+
+/// Marker-scoped ownership retained until Fish restores its parent editor.
+#[derive(Debug)]
+struct RuntimeFishParentRestoration {
+    /// Bootstrap marker carried by the authenticated private receiver event.
+    marker: String,
+    /// Time when child exit transferred ownership back to the Fish callback.
+    started_at_unix_ms: Option<u64>,
+    /// Foreground bytes typed after child exit but before editor restoration.
+    pending_input: Vec<u8>,
+}
+
+/// Maximum foreground input retained while Fish restores its parent editor.
+const RUNTIME_FISH_PARENT_RESTORATION_INPUT_LIMIT_BYTES: usize = 64 * 1024;
+/// Maximum wait for Fish to publish authenticated parent-editor restoration.
+const RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS: u64 = 5_000;
+
 /// Owns live process metadata that is private to the pane process subsystem.
 ///
 /// Detached process ids, observed foreground groups, and program-owned title
@@ -620,8 +653,9 @@ pub(crate) struct RuntimeProcessComponent {
     program_owned_pane_titles: std::collections::BTreeMap<String, ProgramOwnedPaneTitle>,
     /// Full terminal parsers retained for visible shell transaction streams.
     pane_transaction_osc_screens: std::collections::BTreeMap<String, TerminalScreen>,
-    /// Incomplete private shell-output frames retained across visible PTY reads.
-    pane_shell_output_render_pending: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Incremental private shell-output decoders keyed by pane id.
+    pane_shell_output_render_pending:
+        std::collections::BTreeMap<String, RuntimeShellOutputRenderState>,
     /// Partial wrapper-filter bytes keyed by pane id.
     pane_mez_wrapper_filter_pending: std::collections::BTreeMap<String, Vec<u8>>,
     /// Pending child-shell exit echo fragments keyed by pane id.
@@ -630,6 +664,8 @@ pub(crate) struct RuntimeProcessComponent {
     pane_agent_subshell_exit_markers: std::collections::BTreeMap<String, Vec<u8>>,
     /// Panes whose retained process presentation owns parent-shell return.
     pane_agent_subshell_parent_return_pending: BTreeSet<String>,
+    /// Managed Fish handoffs awaiting authenticated parent-editor restoration.
+    pane_fish_parent_restorations: std::collections::BTreeMap<String, RuntimeFishParentRestoration>,
     /// Precomputed bounded wrapper-filter commands keyed by pane id.
     pane_mez_wrapper_filter_recent_commands:
         std::collections::BTreeMap<String, std::sync::Arc<[String]>>,
@@ -793,11 +829,60 @@ impl RuntimeSessionService {
         marker: &str,
         payload: mez_mux::process::ShellInputDelivery,
     ) {
+        if let Some(pane_id) = self
+            .process
+            .running_shell_transactions
+            .get(marker)
+            .map(|transaction| transaction.pane_id.clone())
+        {
+            self.process.pane_fish_parent_restorations.insert(
+                pane_id,
+                RuntimeFishParentRestoration {
+                    marker: marker.to_string(),
+                    started_at_unix_ms: None,
+                    pending_input: Vec::new(),
+                },
+            );
+        }
         self.process
             .shell_receiver_pending_payloads
             .entry(marker.to_string())
             .or_default()
             .push_front(payload);
+    }
+
+    /// Retains foreground input until Fish publishes parent-editor restoration.
+    pub(crate) fn queue_fish_parent_restoration_input(
+        &mut self,
+        pane_id: &str,
+        input: &[u8],
+    ) -> Result<bool> {
+        if !self
+            .process
+            .pane_agent_subshell_parent_return_pending
+            .contains(pane_id)
+        {
+            return Ok(false);
+        }
+        let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) else {
+            return Ok(false);
+        };
+        if restoration.pending_input.len().saturating_add(input.len())
+            > RUNTIME_FISH_PARENT_RESTORATION_INPUT_LIMIT_BYTES
+        {
+            return Err(MezError::invalid_state(
+                "foreground input exceeded the Fish parent restoration limit",
+            ));
+        }
+        restoration.pending_input.extend_from_slice(input);
+        Ok(true)
+    }
+
+    /// Reports whether Fish still owns post-child parent-editor restoration.
+    pub(crate) fn fish_parent_restoration_is_pending(&self, pane_id: &str) -> bool {
+        self.process
+            .pane_fish_parent_restorations
+            .contains_key(pane_id)
     }
 
     /// Prepends one persistent Zsh handoff stage released after ZLE admission.
@@ -1586,6 +1671,13 @@ impl RuntimeSessionService {
         self.process
             .sandboxed_shell_transaction_markers
             .contains(marker)
+    }
+
+    /// Reports whether Fish still owns post-child parent restoration.
+    pub(crate) fn fish_parent_restoration_is_pending_for_tests(&self, pane_id: &str) -> bool {
+        self.process
+            .pane_fish_parent_restorations
+            .contains_key(pane_id)
     }
 
     /// Injects one failure while sending Ctrl-C to a pane shell.
@@ -3109,6 +3201,7 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_parent_return_pending
             .remove(pane_id);
+        self.process.pane_fish_parent_restorations.remove(pane_id);
         self.process
             .pane_mez_wrapper_filter_recent_commands
             .remove(pane_id);

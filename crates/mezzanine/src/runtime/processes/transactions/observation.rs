@@ -1249,7 +1249,7 @@ impl RuntimeSessionService {
                     marker,
                     exit_code,
                 } => {
-                    observed = observed.saturating_add(self.observe_shell_receiver_complete(
+                    observed = observed.saturating_add(self.observe_shell_parent_restored(
                         output_pane_id,
                         token,
                         marker,

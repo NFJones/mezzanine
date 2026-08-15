@@ -30,8 +30,12 @@ fn runtime_marker_for_action_uses_fresh_entropy() {
     assert!(second.as_str().len() >= 64);
 }
 
-/// Verifies that runtime shell transaction observation stores bounded terminal
-/// text and reports truncation once the observation cap is exceeded.
+/// Verifies that runtime shell transaction observation remains bounded after
+/// reserving Base64 expansion, line wrapping, and output-frame metadata.
+///
+/// Agent actions retain encoded PTY bytes rather than raw command-output bytes,
+/// so truncation must begin at the expanded transport limit instead of the
+/// smaller raw-output limit.
 #[test]
 fn runtime_shell_transaction_observation_is_bounded_and_truncated() {
     let mut service = test_runtime_service();
@@ -52,7 +56,13 @@ fn runtime_shell_transaction_observation_is_bounded_and_truncated() {
             observed_output_truncated: false,
         },
     );
-    let output = vec![b'x'; 300_000];
+    let raw_limit = 256 * 1024usize;
+    let encoded_bytes = raw_limit.div_ceil(3).saturating_mul(4);
+    let encoded_lines = encoded_bytes.div_ceil(76);
+    let observation_limit = encoded_bytes
+        .saturating_add(encoded_lines)
+        .saturating_add(4 * 1024);
+    let output = vec![b'x'; observation_limit + 4096];
 
     service.record_running_shell_transaction_output("%1", &output);
 
@@ -60,8 +70,8 @@ fn runtime_shell_transaction_observation_is_bounded_and_truncated() {
         .running_shell_transactions_for_tests()
         .get("marker-1")
         .unwrap();
-    assert_eq!(transaction.observed_output_bytes, 300_001);
-    assert_eq!(transaction.observed_output_preview.len(), 262_144);
+    assert_eq!(transaction.observed_output_bytes, output.len() + 1);
+    assert_eq!(transaction.observed_output_preview.len(), observation_limit);
     assert!(transaction.observed_output_truncated);
 }
 
@@ -123,6 +133,63 @@ fn runtime_shell_transaction_observation_retains_trailing_bubblewrap_status() {
     assert_eq!(
         mez_agent::decode_shell_status_transport(&transaction.observed_output_preview).unwrap(),
         "{\"child-pid\":42}\n{\"exit-code\":0}\n"
+    );
+}
+
+/// Verifies non-sandboxed agent actions retain the complete Base64-expanded
+/// output frame rather than applying the raw-output byte limit to PTY bytes.
+///
+/// Encoded transport is used independently of Bubblewrap, so every agent
+/// action must reserve expansion, wrapping, and marker bytes before deciding
+/// that its observation was truncated.
+#[test]
+fn runtime_shell_transaction_observation_sizes_unsandboxed_encoded_output() {
+    let mut service = test_runtime_service();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "marker-1".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "turn-1".to_string(),
+            kind: RunningShellTransactionKind::AgentAction {
+                action_id: "a1".to_string(),
+            },
+            pane_id: "%1".to_string(),
+            command: "produce bounded output".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    let encoded_bytes = mez_agent::SHELL_OUTPUT_BASE64_MAX_RAW_BYTES
+        .div_ceil(3)
+        .saturating_mul(4);
+    let encoded_payload = "e"
+        .repeat(encoded_bytes)
+        .as_bytes()
+        .chunks(76)
+        .map(|chunk| std::str::from_utf8(chunk).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let output = format!(
+        "{}\n{}\n{}\n",
+        mez_agent::SHELL_OUTPUT_BASE64_BEGIN_MARKER,
+        encoded_payload,
+        mez_agent::SHELL_OUTPUT_BASE64_END_MARKER,
+    );
+
+    service.record_running_shell_transaction_output("%1", output.as_bytes());
+
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
+    assert!(!transaction.observed_output_truncated);
+    assert!(
+        transaction
+            .observed_output_preview
+            .contains(mez_agent::SHELL_OUTPUT_BASE64_END_MARKER)
     );
 }
 
@@ -372,6 +439,49 @@ fn runtime_rendering_preserves_split_shell_output_transport() {
 
     assert!(first.is_empty(), "split private marker leaked: {first:?}");
     assert_eq!(second, "€\n".as_bytes());
+}
+
+/// Verifies fragmented output larger than the former whole-frame retention
+/// ceiling is decoded incrementally without exposing private Base64 records.
+#[test]
+fn runtime_rendering_streams_large_shell_output_transport_without_base64_leakage() {
+    use base64::Engine as _;
+
+    let mut service = test_runtime_service();
+    let raw = vec![b'x'; 768 * 1024];
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
+    let payload = encoded
+        .as_bytes()
+        .chunks(76)
+        .map(|chunk| std::str::from_utf8(chunk).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let frame = format!(
+        "{}\n{}\n{}\n",
+        mez_agent::SHELL_OUTPUT_BASE64_BEGIN_MARKER,
+        payload,
+        mez_agent::SHELL_OUTPUT_BASE64_END_MARKER,
+    );
+    let mut rendered = Vec::new();
+    for fragment in frame.as_bytes().chunks(4093) {
+        rendered.extend(service.renderable_pane_output_bytes("%1", fragment));
+    }
+
+    assert_eq!(rendered, raw);
+    assert!(!String::from_utf8_lossy(&rendered).contains("eHh4eHh4"));
+}
+
+/// Verifies one admitted malformed frame remains suppressed through its END
+/// marker instead of exposing later encoded records as ordinary pane text.
+#[test]
+fn runtime_rendering_suppresses_malformed_shell_output_until_end_marker() {
+    let mut service = test_runtime_service();
+    let rendered = service.renderable_pane_output_bytes(
+        "%1",
+        b"__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\nb2sK\nnot-base64!\nc2VjcmV0Cg==\n__MEZ_SHELL_OUTPUT_BASE64_END__\ntail\n",
+    );
+
+    assert_eq!(rendered, b"ok\ntail\n");
 }
 
 /// Verifies async pane write completions are retained in the hidden trace log.
@@ -1245,7 +1355,11 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
     assert!(hide.contains("visibility=hidden"), "{hide}");
     let parent_confirmation_deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < parent_confirmation_deadline {
-        let _ = service.poll_pane_outputs(8192).unwrap();
+        // Read one byte at a time so the generic child-exit marker is applied
+        // before the later authenticated Fish parent-restored event. This
+        // deterministically exercises foreground input arriving while the
+        // private callback is still unwinding.
+        let _ = service.poll_pane_outputs(1).unwrap();
         if service.agent_subshell_exit_marker_for_tests("%1").is_none() {
             break;
         }
@@ -1253,7 +1367,11 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
     }
     assert!(
         service.agent_subshell_exit_marker_for_tests("%1").is_none(),
-        "Fish parent-return boundary did not settle before draft submission"
+        "Fish child-exit rendering boundary did not settle before draft submission"
+    );
+    assert!(
+        service.fish_parent_restoration_is_pending_for_tests("%1"),
+        "Fish editor restoration must remain owned after the earlier child-exit marker"
     );
     assert!(!service.agent_subshell_is_active("%1"));
     assert!(
@@ -1266,6 +1384,10 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
     service
         .write_input_to_pane(&primary, Some("%1"), b"X\n")
         .unwrap();
+    assert!(
+        service.fish_parent_restoration_is_pending_for_tests("%1"),
+        "foreground input must not release Fish restoration ownership"
+    );
 
     let mut draft_executed = false;
     for _ in 0..200 {
@@ -1291,9 +1413,73 @@ fn runtime_fish_dirty_prompt_survives_agent_subshell_admission() {
             .normal_content_lines()
             .join("\\n")
     );
+    assert!(
+        !service.fish_parent_restoration_is_pending_for_tests("%1"),
+        "authenticated parent restoration should release queued foreground input"
+    );
     assert!(service.poll_pane_processes().unwrap().is_empty());
     assert!(service.pane_processes().contains_pane("%1"));
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a lost Fish parent-restored event cannot retain foreground input
+/// indefinitely after the child-exit rendering boundary has already settled.
+///
+/// Timeout recovery must release the exact queued bytes, clear restoration
+/// ownership, and degrade readiness so later agent work re-certifies the pane.
+#[test]
+fn runtime_fish_parent_restoration_timeout_releases_queued_input() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let pane_id = "%1";
+    let mut process = service
+        .take_running_pane_process_for_adapter(pane_id)
+        .unwrap();
+    service.running_shell_transactions_mut_for_tests().insert(
+        "fish-restoration-marker".to_string(),
+        RunningShellTransactionRef {
+            turn_id: "bootstrap-fish-restoration".to_string(),
+            kind: RunningShellTransactionKind::Bootstrap,
+            pane_id: pane_id.to_string(),
+            command: "bootstrap".to_string(),
+            started_at_unix_ms: 0,
+            timeout_ms: None,
+            pending_input_payload: None,
+            observed_output_bytes: 0,
+            observed_output_preview: String::new(),
+            observed_output_truncated: false,
+        },
+    );
+    service.prepend_fish_shell_receiver_payload(
+        "fish-restoration-marker",
+        mez_mux::process::ShellInputDelivery::generated_source(Vec::new()),
+    );
+    service.remember_agent_subshell_exit_echo(pane_id);
+    service
+        .write_input_to_pane(&primary, Some(pane_id), b"queued-after-fish-exit\n")
+        .unwrap();
+    assert!(service.fish_parent_restoration_is_pending_for_tests(pane_id));
+    assert!(pane_input_effects(&service.drain_pane_io_transition().side_effects).is_empty());
+
+    assert_eq!(
+        service
+            .recover_expired_fish_parent_restorations_for_tests(u64::MAX)
+            .unwrap(),
+        1
+    );
+    assert!(!service.fish_parent_restoration_is_pending_for_tests(pane_id));
+    assert_eq!(
+        service.pane_readiness_state(pane_id),
+        PaneReadinessState::Degraded
+    );
+    let effects = service.drain_pane_io_transition().side_effects;
+    let inputs = pane_input_effects(&effects);
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].pane_input_parts().1, b"queued-after-fish-exit\n");
+    process.terminate(Duration::from_millis(100)).unwrap();
 }
 
 /// Verifies that a live POSIX shell discards an unsubmitted process draft

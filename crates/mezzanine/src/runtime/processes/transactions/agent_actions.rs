@@ -3,13 +3,14 @@
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, AgentActionPayload, AgentTurnState,
     ApplyPatchTransactionPhase, EventKind, HookEvent, MezError, PaneReadinessState, Result,
-    RunningShellTransactionKind, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    apply_patch_transaction_phase, current_unix_millis,
-    decode_shell_output_transport_with_diagnostics, json_escape, local_action_plan,
-    postprocess_shell_action_success_output, runtime_agent_turn_state_from_action_results,
-    runtime_agent_turn_state_name, runtime_execution_ready_for_provider_continuation,
-    runtime_post_shell_hook_payload, runtime_running_shell_transaction_kind_name,
-    shell_action_failure_diagnostic, shell_command_result_content,
+    RunningShellTransactionKind, RuntimePaneEnvironmentAuthorityUnavailableReason,
+    RuntimeSessionService, RuntimeShellTransactionActionFailure, apply_patch_transaction_phase,
+    current_unix_millis, decode_shell_output_transport_with_diagnostics, json_escape,
+    local_action_plan, postprocess_shell_action_success_output,
+    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
+    runtime_execution_ready_for_provider_continuation, runtime_post_shell_hook_payload,
+    runtime_running_shell_transaction_kind_name, shell_action_failure_diagnostic,
+    shell_command_result_content,
 };
 use mez_agent::semantic_patch_planning::{
     APPLY_PATCH_RESULT_MARKER, ApplyPatchFileOutcome, parse_apply_patch_file_outcomes,
@@ -371,7 +372,7 @@ impl RuntimeSessionService {
         Ok(1)
     }
 
-    /// Settles a managed-Bash transaction only after callback cleanup completes.
+    /// Settles a managed receiver transaction only after callback cleanup completes.
     pub(crate) fn observe_shell_receiver_complete(
         &mut self,
         output_pane_id: &str,
@@ -387,6 +388,9 @@ impl RuntimeSessionService {
             .is_some_and(|expected| expected.as_str() == token)
             || self
                 .fish_receiver_token_for_pane(output_pane_id)
+                .is_some_and(|expected| expected.as_str() == token)
+            || self
+                .zsh_history_token_for_pane(output_pane_id)
                 .is_some_and(|expected| expected.as_str() == token);
         if transaction.pane_id != output_pane_id
             || !receiver_token_matches
@@ -399,7 +403,7 @@ impl RuntimeSessionService {
                 marker,
                 transaction,
                 "receiver-complete-metadata-mismatch",
-                "Bash receiver-complete metadata does not match runtime dispatch state",
+                "managed receiver-complete metadata does not match runtime dispatch state",
             );
         }
         let Some((turn_id, agent_id, pane_id, exit_code)) =
@@ -409,7 +413,7 @@ impl RuntimeSessionService {
                 marker,
                 transaction,
                 "receiver-complete-before-end",
-                "Bash receiver completed before the evaluated transaction emitted its end marker",
+                "managed receiver completed before the evaluated transaction emitted its end marker",
             );
         };
         self.append_agent_trace_turn_event(
@@ -427,6 +431,91 @@ impl RuntimeSessionService {
             &pane_id,
             exit_code,
         )
+    }
+
+    /// Settles Fish parent restoration independently from bootstrap completion.
+    ///
+    /// Fish sources the persistent child synchronously, so its bootstrap
+    /// transaction normally settles long before control returns to the parent
+    /// line editor. The authenticated restoration event therefore owns queued
+    /// foreground input even when no shell transaction remains.
+    pub(crate) fn observe_shell_parent_restored(
+        &mut self,
+        output_pane_id: &str,
+        token: &str,
+        marker: &str,
+        receiver_exit_code: i32,
+    ) -> Result<usize> {
+        let fish_token_matches = self
+            .fish_receiver_token_for_pane(output_pane_id)
+            .is_some_and(|expected| expected.as_str() == token);
+        if !fish_token_matches {
+            return self.observe_shell_receiver_complete(
+                output_pane_id,
+                token,
+                marker,
+                receiver_exit_code,
+            );
+        }
+        let Some(restoration) = self
+            .process
+            .pane_fish_parent_restorations
+            .remove(output_pane_id)
+        else {
+            return Ok(0);
+        };
+        if restoration.marker != marker {
+            self.process
+                .pane_fish_parent_restorations
+                .insert(output_pane_id.to_string(), restoration);
+            return Ok(0);
+        }
+
+        self.process
+            .pane_agent_subshell_parent_return_pending
+            .remove(output_pane_id);
+        let bootstrap_rejected = self
+            .process
+            .running_shell_transactions
+            .get(marker)
+            .is_some_and(|transaction| {
+                transaction.pane_id == output_pane_id
+                    && transaction.kind == RunningShellTransactionKind::Bootstrap
+            });
+        if bootstrap_rejected {
+            self.remove_running_shell_transaction(marker);
+            self.clear_shell_transaction_protocol_state(marker);
+            self.process.pane_bootstrap_pending.remove(output_pane_id);
+            self.clear_agent_subshell_shell_identity(output_pane_id);
+            self.mark_pane_environment_authority_unavailable(
+                output_pane_id,
+                RuntimePaneEnvironmentAuthorityUnavailableReason::BootstrapTransactionFailed,
+            );
+            self.set_pane_readiness(output_pane_id, PaneReadinessState::Degraded);
+            self.append_agent_status_text_to_terminal_buffer(
+                output_pane_id,
+                "agent: Fish parent rejected the private shell handoff",
+            )?;
+        } else {
+            self.set_pane_readiness(output_pane_id, PaneReadinessState::PromptCandidate);
+        }
+
+        if !restoration.pending_input.is_empty() {
+            self.clear_shell_output_filters_for_foreground_input(output_pane_id);
+            self.write_runtime_pane_input(output_pane_id, &restoration.pending_input)?;
+        }
+        if !bootstrap_rejected
+            && self.agent_subshell_entry_is_deferred(output_pane_id)
+            && self
+                .agent_shell_store()
+                .get(output_pane_id)
+                .is_some_and(|session| {
+                    session.visibility == mez_agent::AgentShellVisibility::Visible
+                })
+        {
+            let _ = self.enter_agent_subshell_if_needed(output_pane_id)?;
+        }
+        Ok(1)
     }
 
     /// Releases a deferred transaction payload after its start proof settles.

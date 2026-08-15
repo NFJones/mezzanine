@@ -2,6 +2,14 @@
 
 use super::super::*;
 use crate::runtime::{RuntimeTimerKey, RuntimeTimerKind};
+use base64::Engine as _;
+
+/// Maximum encoded line retained while incrementally rendering one output frame.
+///
+/// Generated Base64 lines are 76 bytes. The larger ceiling leaves room for a
+/// complete marker and defensive compatibility without permitting an
+/// unterminated line to grow with transaction output.
+const RUNTIME_SHELL_OUTPUT_RENDER_LINE_LIMIT_BYTES: usize = 4 * 1024;
 
 /// Carries Pane Output Render Mode state for this subsystem.
 ///
@@ -469,38 +477,89 @@ impl RuntimeSessionService {
     fn decoded_pane_output_bytes(&mut self, pane_id: &str, transaction_bytes: &[u8]) -> Vec<u8> {
         let begin = SHELL_OUTPUT_BASE64_BEGIN_MARKER.as_bytes();
         let end = SHELL_OUTPUT_BASE64_END_MARKER.as_bytes();
-        let mut pending = self
+        let mut state = self
             .process
             .pane_shell_output_render_pending
             .remove(pane_id)
             .unwrap_or_default();
-        pending.extend_from_slice(transaction_bytes);
+        let mut input = std::mem::take(&mut state.marker_prefix);
+        input.extend_from_slice(transaction_bytes);
+        let mut decoded = Vec::new();
+        let mut offset = 0usize;
 
-        if let Some(begin_index) = find_byte_subsequence(&pending, begin) {
-            let before = renderable_shell_transaction_bytes(&pending[..begin_index]);
-            if find_byte_subsequence(&pending[begin_index + begin.len()..], end).is_some() {
-                let mut decoded = before;
-                decoded.extend(renderable_shell_transaction_bytes(&pending[begin_index..]));
-                return decoded;
+        while offset < input.len() {
+            if !state.in_frame {
+                let remaining = &input[offset..];
+                if let Some(begin_index) = find_byte_subsequence(remaining, begin) {
+                    decoded.extend(renderable_shell_transaction_bytes(
+                        &remaining[..begin_index],
+                    ));
+                    offset = offset
+                        .saturating_add(begin_index)
+                        .saturating_add(begin.len());
+                    state.in_frame = true;
+                    state.discard_frame = false;
+                    state.encoded_line.clear();
+                    continue;
+                }
+                let partial_len = (1..begin.len().min(remaining.len() + 1))
+                    .rev()
+                    .find(|length| remaining.ends_with(&begin[..*length]))
+                    .unwrap_or(0);
+                let render_end = remaining.len().saturating_sub(partial_len);
+                decoded.extend(renderable_shell_transaction_bytes(&remaining[..render_end]));
+                state
+                    .marker_prefix
+                    .extend_from_slice(&remaining[render_end..]);
+                offset = input.len();
+                continue;
             }
-            if pending.len() <= SHELL_OUTPUT_BASE64_MAX_RAW_BYTES.saturating_mul(2) {
-                self.process
-                    .pane_shell_output_render_pending
-                    .insert(pane_id.to_string(), pending[begin_index..].to_vec());
+
+            let remaining = &input[offset..];
+            let Some(newline) = remaining.iter().position(|byte| *byte == b'\n') else {
+                if state.encoded_line.len().saturating_add(remaining.len())
+                    > RUNTIME_SHELL_OUTPUT_RENDER_LINE_LIMIT_BYTES
+                {
+                    state.discard_frame = true;
+                    state.encoded_line.clear();
+                } else if !state.discard_frame {
+                    state.encoded_line.extend_from_slice(remaining);
+                }
+                offset = input.len();
+                continue;
+            };
+            if state.encoded_line.len().saturating_add(newline)
+                <= RUNTIME_SHELL_OUTPUT_RENDER_LINE_LIMIT_BYTES
+            {
+                state.encoded_line.extend_from_slice(&remaining[..newline]);
+            } else {
+                state.discard_frame = true;
+                state.encoded_line.clear();
             }
-            return before;
+            offset = offset.saturating_add(newline).saturating_add(1);
+            let line = state
+                .encoded_line
+                .strip_suffix(b"\r")
+                .unwrap_or(&state.encoded_line);
+            if line == end {
+                state.in_frame = false;
+                state.discard_frame = false;
+                state.encoded_line.clear();
+                continue;
+            }
+            if !state.discard_frame && !line.is_empty() {
+                match base64::engine::general_purpose::STANDARD.decode(line) {
+                    Ok(bytes) => decoded.extend(bytes),
+                    Err(_) => state.discard_frame = true,
+                }
+            }
+            state.encoded_line.clear();
         }
 
-        let partial_len = (1..begin.len().min(pending.len() + 1))
-            .rev()
-            .find(|length| pending.ends_with(&begin[..*length]))
-            .unwrap_or(0);
-        let decode_end = pending.len().saturating_sub(partial_len);
-        let decoded = renderable_shell_transaction_bytes(&pending[..decode_end]);
-        if partial_len > 0 {
+        if state.in_frame || !state.marker_prefix.is_empty() {
             self.process
                 .pane_shell_output_render_pending
-                .insert(pane_id.to_string(), pending[decode_end..].to_vec());
+                .insert(pane_id.to_string(), state);
         }
         decoded
     }
@@ -571,6 +630,9 @@ impl RuntimeSessionService {
         self.process
             .pane_agent_subshell_parent_return_pending
             .insert(pane_id.to_string());
+        if let Some(restoration) = self.process.pane_fish_parent_restorations.get_mut(pane_id) {
+            restoration.started_at_unix_ms = Some(current_unix_millis());
+        }
     }
 
     /// Filters all child-owned teardown before general wrapper filtering.
@@ -695,6 +757,65 @@ impl RuntimeSessionService {
         aged
     }
 
+    /// Releases Fish parent-restoration ownership after its bounded deadline.
+    ///
+    /// A missing authenticated event must not freeze ordinary pane input
+    /// indefinitely. Timeout recovery preserves queued foreground bytes,
+    /// clears stale teardown filtering, and degrades shell readiness so later
+    /// agent work obtains fresh authority before dispatch.
+    fn recover_expired_fish_parent_restorations_at(&mut self, now_unix_ms: u64) -> Result<usize> {
+        let expired = self
+            .process
+            .pane_fish_parent_restorations
+            .iter()
+            .filter(|(_, restoration)| {
+                restoration.started_at_unix_ms.is_some_and(|started_at| {
+                    now_unix_ms.saturating_sub(started_at)
+                        >= RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS
+                })
+            })
+            .map(|(pane_id, _)| pane_id.clone())
+            .collect::<Vec<_>>();
+        for pane_id in &expired {
+            let Some(restoration) = self.process.pane_fish_parent_restorations.remove(pane_id)
+            else {
+                continue;
+            };
+            self.process
+                .pane_agent_subshell_parent_return_pending
+                .remove(pane_id);
+            self.process
+                .pane_agent_subshell_exit_echo_pending
+                .remove(pane_id);
+            self.process
+                .pane_agent_subshell_exit_markers
+                .remove(pane_id);
+            self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","fish_parent_restoration":"timed_out","marker":"{}"}}"#,
+                    json_escape(pane_id),
+                    json_escape(&restoration.marker)
+                ),
+            )?;
+            if !restoration.pending_input.is_empty() {
+                self.clear_shell_output_filters_for_foreground_input(pane_id);
+                self.write_runtime_pane_input(pane_id, &restoration.pending_input)?;
+            }
+        }
+        Ok(expired.len())
+    }
+
+    #[cfg(test)]
+    /// Expires Fish parent restoration at a supplied time for deterministic tests.
+    pub(crate) fn recover_expired_fish_parent_restorations_for_tests(
+        &mut self,
+        now_unix_ms: u64,
+    ) -> Result<usize> {
+        self.recover_expired_fish_parent_restorations_at(now_unix_ms)
+    }
+
     /// Applies runtime idle-cleanup timer work while honoring actor-owned
     /// progress.
     ///
@@ -711,10 +832,14 @@ impl RuntimeSessionService {
             | RuntimeLifecycleState::Detached
             | RuntimeLifecycleState::Stopping => {
                 let hidden_shell_retention_aged = self.tick_hidden_shell_render_retention();
+                let fish_parent_restorations_recovered =
+                    self.recover_expired_fish_parent_restorations_at(current_unix_millis())?;
                 let reconciled = self.reconcile_agent_runtime_progress_paths_with_actor_progress(
                     actor_progress_turn_ids,
                 )?;
-                Ok(hidden_shell_retention_aged.saturating_add(reconciled))
+                Ok(hidden_shell_retention_aged
+                    .saturating_add(fish_parent_restorations_recovered)
+                    .saturating_add(reconciled))
             }
         }
     }
@@ -797,6 +922,11 @@ impl RuntimeSessionService {
             .process
             .pane_hidden_shell_render_recent_polls
             .is_empty()
+            || self
+                .process
+                .pane_fish_parent_restorations
+                .values()
+                .any(|restoration| restoration.started_at_unix_ms.is_some())
     }
 
     /// Reports whether any pending agent shell dispatch may need recovery.

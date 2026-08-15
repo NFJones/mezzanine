@@ -42,6 +42,8 @@ pub(super) const RUNTIME_SHELL_TRANSACTION_OBSERVATION_LIMIT_BYTES: usize = 256 
 /// Additional bounded space reserved for encoded transport framing and trusted
 /// Bubblewrap lifecycle status after the payload output frame.
 const RUNTIME_SANDBOX_STATUS_TRANSPORT_RESERVE_BYTES: usize = 4 * 1024;
+/// Bounded space reserved for encoded output markers and dropped-byte status.
+const RUNTIME_SHELL_OUTPUT_TRANSPORT_RESERVE_BYTES: usize = 4 * 1024;
 /// Width used by the shell `base64` utility for wrapped encoded output.
 const RUNTIME_SHELL_TRANSPORT_BASE64_LINE_BYTES: usize = 76;
 /// Maximum retained snapshot bytes for the read phase of `apply_patch`.
@@ -276,14 +278,22 @@ fn runtime_shell_transaction_observation_limit(
     } else {
         RUNTIME_SHELL_TRANSACTION_OBSERVATION_LIMIT_BYTES
     };
-    if !sandboxed {
+    if !matches!(
+        transaction.kind,
+        RunningShellTransactionKind::AgentAction { .. }
+    ) {
         return raw_limit;
     }
     let encoded_bytes = raw_limit.div_ceil(3).saturating_mul(4);
     let encoded_lines = encoded_bytes.div_ceil(RUNTIME_SHELL_TRANSPORT_BASE64_LINE_BYTES);
     encoded_bytes
         .saturating_add(encoded_lines)
-        .saturating_add(RUNTIME_SANDBOX_STATUS_TRANSPORT_RESERVE_BYTES)
+        .saturating_add(RUNTIME_SHELL_OUTPUT_TRANSPORT_RESERVE_BYTES)
+        .saturating_add(if sandboxed {
+            RUNTIME_SANDBOX_STATUS_TRANSPORT_RESERVE_BYTES
+        } else {
+            0
+        })
 }
 
 mod agent_actions;
