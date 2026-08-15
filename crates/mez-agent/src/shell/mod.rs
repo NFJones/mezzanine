@@ -33,17 +33,21 @@ pub use path_resolution::{
     parse_pane_path_resolution_output,
 };
 pub use transaction::{
-    DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, ManagedZshShell, MarkerToken,
-    SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES,
-    SHELL_TRANSACTION_SIDECAR_FRAME_BYTES, ShellChildArgument, ShellChildLaunch,
-    ShellClassification, ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport,
+    DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, ManagedZshShell,
+    ManagedZshTrigger, MarkerToken, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
+    SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES, SHELL_TRANSACTION_SIDECAR_FRAME_BYTES,
+    ShellChildArgument, ShellChildLaunch, ShellClassification, ShellTransaction,
+    ShellTransactionInput, ShellTransactionOutputTransport, ZSH_PRIVATE_SOURCE_DATA_MAX_BYTES,
+    ZSH_PRIVATE_SOURCE_MAX_BASE64_BYTES, ZSH_PRIVATE_SOURCE_MAX_BYTES,
+    ZSH_PRIVATE_SOURCE_MAX_CHUNKS, ZSH_PRIVATE_SOURCE_MAX_RECORD_BYTES,
     agent_subshell_enter_command, agent_subshell_enter_command_with_shell_compatibility,
     agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
     agent_subshell_enter_command_with_zsh_history_token, agent_subshell_exit_marker_bytes,
     bash_private_source_input, fish_private_source_cancel_input, fish_private_source_input,
     fish_quote, fish_wrapper_receiver_init_command, posix_shell_history_suppression_finish,
     posix_shell_history_suppression_start, shell_command_contains_unquoted_heredoc,
-    validate_agent_authored_shell_command, zsh_private_source_input,
+    validate_agent_authored_shell_command, zsh_private_source_cancel_input,
+    zsh_private_source_input,
 };
 
 /// Categorizes deterministic shell-source validation failures.

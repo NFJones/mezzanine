@@ -56,6 +56,8 @@ impl RuntimeSessionService {
                 | TerminalOscEvent::ShellPromptEnd
                 | TerminalOscEvent::ShellCommandOutputStart
                 | TerminalOscEvent::ShellCommandFinished { .. }
+                | TerminalOscEvent::ShellReceiverAvailable { .. }
+                | TerminalOscEvent::ShellReceiverUnavailable { .. }
                 | TerminalOscEvent::ShellReceiverReady { .. }
                 | TerminalOscEvent::ShellReceiverAwaiting { .. }
                 | TerminalOscEvent::ShellParentRestored { .. }

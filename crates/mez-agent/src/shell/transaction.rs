@@ -187,6 +187,45 @@ impl MarkerToken {
     }
 }
 
+/// One fixed terminal sequence reserved for managed zsh private admission.
+///
+/// Runtime accepts only these identifiers from authenticated startup events,
+/// preventing shell-provided bytes from becoming arbitrary pane input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedZshTrigger {
+    /// Modified function-key sequence ending in the `m` key code.
+    EscapeM,
+    /// Modified function-key sequence ending in the `n` key code.
+    EscapeN,
+}
+
+impl ManagedZshTrigger {
+    /// Parses one protocol identifier emitted by the managed startup shim.
+    pub fn from_protocol_str(value: &str) -> Option<Self> {
+        match value {
+            "escape-m" => Some(Self::EscapeM),
+            "escape-n" => Some(Self::EscapeN),
+            _ => None,
+        }
+    }
+
+    /// Returns the bounded protocol identifier for this trigger.
+    pub fn as_protocol_str(self) -> &'static str {
+        match self {
+            Self::EscapeM => "escape-m",
+            Self::EscapeN => "escape-n",
+        }
+    }
+
+    /// Returns the exact terminal bytes consumed by the managed zsh widget.
+    pub fn input(self) -> &'static str {
+        match self {
+            Self::EscapeM => "\x1b[27;9;109~",
+            Self::EscapeN => "\x1b[27;9;110~",
+        }
+    }
+}
+
 /// Immutable runtime-owned startup state for one managed zsh pane.
 ///
 /// The descriptor keeps the child launch independent from mutable variables in
@@ -199,6 +238,8 @@ pub struct ManagedZshShell {
     token: MarkerToken,
     /// Owner-only directory containing the managed zsh startup files.
     startup_directory: PathBuf,
+    /// Fixed trigger selected without replacing user key bindings.
+    trigger: ManagedZshTrigger,
 }
 
 impl ManagedZshShell {
@@ -209,6 +250,7 @@ impl ManagedZshShell {
     pub fn new(
         token: MarkerToken,
         startup_directory: impl Into<PathBuf>,
+        trigger: ManagedZshTrigger,
     ) -> AgentShellValidationResult<Self> {
         let startup_directory = startup_directory.into();
         if !startup_directory.is_absolute() {
@@ -219,6 +261,7 @@ impl ManagedZshShell {
         Ok(Self {
             token,
             startup_directory,
+            trigger,
         })
     }
 
@@ -230,6 +273,11 @@ impl ManagedZshShell {
     /// Returns the runtime-owned startup directory used by managed children.
     pub fn startup_directory(&self) -> &Path {
         &self.startup_directory
+    }
+
+    /// Returns the fixed private trigger selected by managed startup.
+    pub fn trigger(&self) -> ManagedZshTrigger {
+        self.trigger
     }
 }
 
@@ -503,6 +551,12 @@ pub const SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES: usize = 768;
 /// acknowledging the frame, which preserves bounded flow control while
 /// avoiding one stop-and-wait round trip per physical line.
 pub const SHELL_TRANSACTION_SIDECAR_FRAME_BYTES: usize = 32 * 1024;
+/// Maximum raw source bytes accepted by one managed zsh private admission.
+pub const ZSH_PRIVATE_SOURCE_MAX_BYTES: usize = 1024 * 1024;
+/// Maximum base64 bytes representing one bounded managed zsh source.
+pub const ZSH_PRIVATE_SOURCE_MAX_BASE64_BYTES: usize = ZSH_PRIVATE_SOURCE_MAX_BYTES.div_ceil(3) * 4;
+/// Maximum physical receiver-record bytes accepted by managed zsh.
+pub const ZSH_PRIVATE_SOURCE_MAX_RECORD_BYTES: usize = 1024;
 /// Maximum base64 bytes appended by one shell wrapper transport command.
 ///
 /// Wrapper source is reconstructed through interactive shell input before the
@@ -512,6 +566,11 @@ pub const SHELL_TRANSACTION_SIDECAR_FRAME_BYTES: usize = 32 * 1024;
 pub(crate) const SHELL_WRAPPER_BASE64_LINE_BYTES: usize = 64;
 #[cfg(not(target_os = "macos"))]
 pub(crate) const SHELL_WRAPPER_BASE64_LINE_BYTES: usize = 640;
+/// Maximum Base64 data bytes accepted in one managed zsh DATA record.
+pub const ZSH_PRIVATE_SOURCE_DATA_MAX_BYTES: usize = SHELL_WRAPPER_BASE64_LINE_BYTES;
+/// Maximum DATA records accepted by one managed zsh private admission.
+pub const ZSH_PRIVATE_SOURCE_MAX_CHUNKS: usize =
+    ZSH_PRIVATE_SOURCE_MAX_BASE64_BYTES.div_ceil(SHELL_WRAPPER_BASE64_LINE_BYTES);
 /// Maximum raw output bytes emitted through one base64 shell-output transport.
 pub const SHELL_OUTPUT_BASE64_MAX_RAW_BYTES: usize = 256 * 1024;
 /// Output transport used by isolated shell transactions.
@@ -2090,7 +2149,13 @@ pub fn zsh_private_source_input(
     source: &str,
     token: &MarkerToken,
     marker: &str,
-) -> ShellTransactionInput {
+    trigger: ManagedZshTrigger,
+) -> AgentShellValidationResult<ShellTransactionInput> {
+    if source.len() > ZSH_PRIVATE_SOURCE_MAX_BYTES {
+        return Err(AgentShellValidationError::invalid_args(format!(
+            "managed zsh private source exceeds {ZSH_PRIVATE_SOURCE_MAX_BYTES} bytes"
+        )));
+    }
     let digest = Sha256::digest(source.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -2125,12 +2190,21 @@ pub fn zsh_private_source_input(
         source.len(),
         digest
     ));
-    ShellTransactionInput {
-        wrapper: "\x1b[27;9;109~".to_string(),
+    Ok(ShellTransactionInput {
+        wrapper: trigger.input().to_string(),
         receiver_payload,
         payload: String::new(),
         payload_receiver_acknowledgements: true,
-    }
+    })
+}
+
+/// Renders an authenticated cancellation record for pending zsh admission.
+///
+/// The managed receiver accepts this source-free record only before a BEGIN
+/// frame, allowing runtime to restore the saved parent editor without launching
+/// a child after agent mode has already been hidden.
+pub fn zsh_private_source_cancel_input(token: &MarkerToken, marker: &str) -> String {
+    format!("MEZ_ZSH_RX1_CANCEL {} {}\n", token.as_str(), marker)
 }
 
 /// Encodes a generated Fish wrapper as receiver-consumed base64 records.

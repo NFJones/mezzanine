@@ -124,6 +124,24 @@ pub enum TerminalOscEvent {
         /// Pane-scoped receiver token installed at Zsh startup.
         token: String,
     },
+    /// A managed shell startup shim installed its non-destructive receiver.
+    ShellReceiverAvailable {
+        /// Pane-scoped token authenticating the startup shim.
+        token: String,
+        /// Managed shell that published availability.
+        shell: String,
+        /// Fixed trigger identifier selected without replacing user bindings.
+        trigger: String,
+    },
+    /// A managed shell startup shim could not install safely.
+    ShellReceiverUnavailable {
+        /// Pane-scoped token authenticating the startup shim.
+        token: String,
+        /// Managed shell that published the failure.
+        shell: String,
+        /// Bounded machine-readable failure reason.
+        reason: String,
+    },
     /// A managed Zsh parent restored its saved editor state after admission.
     ShellParentRestored {
         /// Pane-scoped receiver token installed at Zsh startup.

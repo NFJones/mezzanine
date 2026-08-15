@@ -59,6 +59,20 @@ pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalO
                 });
             }
             let token = required_marker_field(&values, "mez_token")?;
+            if values.get("mez_receiver").copied() == Some("available") {
+                return Some(TerminalOscEvent::ShellReceiverAvailable {
+                    token,
+                    shell: required_bounded_field(&values, "mez_shell", 16)?,
+                    trigger: required_bounded_field(&values, "mez_trigger", 32)?,
+                });
+            }
+            if values.get("mez_receiver").copied() == Some("unavailable") {
+                return Some(TerminalOscEvent::ShellReceiverUnavailable {
+                    token,
+                    shell: required_bounded_field(&values, "mez_shell", 16)?,
+                    reason: required_bounded_field(&values, "mez_reason", 64)?,
+                });
+            }
             if values.get("mez_receiver").copied() == Some("awaiting") {
                 return Some(TerminalOscEvent::ShellReceiverAwaiting { token });
             }
@@ -103,9 +117,54 @@ fn required_marker_field(values: &BTreeMap<&str, &str>, key: &str) -> Option<Str
         .map(ToOwned::to_owned)
 }
 
+/// Returns one required non-empty field within its protocol byte bound.
+fn required_bounded_field(
+    values: &BTreeMap<&str, &str>,
+    key: &str,
+    max_bytes: usize,
+) -> Option<String> {
+    required_marker_field(values, key).filter(|value| value.len() <= max_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies managed zsh startup availability records retain only bounded,
+    /// authenticated trigger and failure metadata.
+    #[test]
+    fn zsh_receiver_availability_events_parse_bounded_metadata() {
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_receiver=available;mez_shell=zsh;mez_token=pane-token;mez_trigger=escape-n"
+            ),
+            Some(TerminalOscEvent::ShellReceiverAvailable {
+                token: "pane-token".to_string(),
+                shell: "zsh".to_string(),
+                trigger: "escape-n".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_mez_shell_transaction_osc(
+                "133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=pane-token;mez_reason=no-free-trigger"
+            ),
+            Some(TerminalOscEvent::ShellReceiverUnavailable {
+                token: "pane-token".to_string(),
+                shell: "zsh".to_string(),
+                reason: "no-free-trigger".to_string(),
+            })
+        );
+
+        for payload in [
+            "133;R;mez_receiver=available;mez_shell=zsh;mez_token=;mez_trigger=escape-m",
+            "133;R;mez_receiver=available;mez_shell=zsh;mez_token=pane-token;mez_trigger=",
+            "133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=pane-token;mez_reason=",
+            "133;R;mez_receiver=available;mez_shell=zshhhhhhhhhhhhhhhhh;mez_token=pane-token;mez_trigger=escape-m",
+            "133;R;mez_receiver=unavailable;mez_shell=zsh;mez_token=pane-token;mez_reason=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert_eq!(parse_mez_shell_transaction_osc(payload), None, "{payload}");
+        }
+    }
 
     /// Verifies private Bash receiver admission and completion records retain
     /// their authenticated token, transaction marker, and final eval status.

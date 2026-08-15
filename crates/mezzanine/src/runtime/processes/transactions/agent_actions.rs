@@ -232,6 +232,78 @@ impl RuntimeSessionService {
         Ok(1)
     }
 
+    /// Records authenticated availability of a non-destructive managed-zsh trigger.
+    pub(crate) fn observe_zsh_shell_receiver_available(
+        &mut self,
+        output_pane_id: &str,
+        token: &str,
+        shell: &str,
+        trigger: &str,
+    ) -> Result<usize> {
+        if shell != "zsh"
+            || self
+                .zsh_history_token_for_pane(output_pane_id)
+                .is_none_or(|expected| expected.as_str() != token)
+        {
+            return Ok(0);
+        }
+        let Some(trigger) = mez_agent::ManagedZshTrigger::from_protocol_str(trigger) else {
+            return Ok(0);
+        };
+        let Some(primary_process_id) = self.primary_pid_for_live_pane_process(output_pane_id)
+        else {
+            return Ok(0);
+        };
+        self.process.pane_zsh_admissions.insert(
+            output_pane_id.to_string(),
+            crate::runtime::processes::RuntimeManagedZshAdmission::Ready {
+                primary_process_id,
+                trigger,
+            },
+        );
+        if self.agent_subshell_entry_is_deferred(output_pane_id)
+            && self
+                .agent_shell_store()
+                .get(output_pane_id)
+                .is_some_and(|session| {
+                    session.visibility == mez_agent::AgentShellVisibility::Visible
+                })
+        {
+            let _ = self.enter_agent_subshell_if_needed(output_pane_id)?;
+        }
+        Ok(1)
+    }
+
+    /// Records an authenticated managed-zsh admission failure without touching the parent shell.
+    pub(crate) fn observe_zsh_shell_receiver_unavailable(
+        &mut self,
+        output_pane_id: &str,
+        token: &str,
+        shell: &str,
+        reason: &str,
+    ) -> Result<usize> {
+        if shell != "zsh"
+            || self
+                .zsh_history_token_for_pane(output_pane_id)
+                .is_none_or(|expected| expected.as_str() != token)
+        {
+            return Ok(0);
+        }
+        self.process.pane_zsh_admissions.insert(
+            output_pane_id.to_string(),
+            crate::runtime::processes::RuntimeManagedZshAdmission::Unavailable {
+                reason: reason.to_string(),
+            },
+        );
+        if self.clear_deferred_agent_subshell_entry(output_pane_id) {
+            self.append_agent_status_text_to_terminal_buffer(
+                output_pane_id,
+                &format!("agent: managed zsh integration unavailable ({reason})"),
+            )?;
+        }
+        Ok(1)
+    }
+
     /// Releases managed-Zsh private source records after ZLE accepts its fixed receiver.
     pub(crate) fn observe_zsh_shell_receiver_awaiting(
         &mut self,
@@ -304,6 +376,7 @@ impl RuntimeSessionService {
             self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
             return Err(error);
         }
+        self.mark_fish_source_delivery_released(output_pane_id, &marker);
         self.append_agent_trace_turn_event(
             output_pane_id,
             &transaction.turn_id,
@@ -367,7 +440,7 @@ impl RuntimeSessionService {
             self.fail_shell_transactions_for_pane_write_failure(output_pane_id, error.message())?;
             return Err(error);
         }
-        if fish_receiver_installed {
+        if fish_receiver_installed || zsh_receiver_installed {
             self.mark_fish_child_installed(output_pane_id, marker);
         }
         self.enter_agent_subshell(output_pane_id);
@@ -442,7 +515,7 @@ impl RuntimeSessionService {
         )
     }
 
-    /// Settles Fish parent restoration independently from bootstrap completion.
+    /// Settles managed-shell parent restoration independently from bootstrap completion.
     ///
     /// Fish sources the persistent child synchronously, so its bootstrap
     /// transaction normally settles long before control returns to the parent
@@ -458,7 +531,10 @@ impl RuntimeSessionService {
         let fish_token_matches = self
             .fish_receiver_token_for_pane(output_pane_id)
             .is_some_and(|expected| expected.as_str() == token);
-        if !fish_token_matches {
+        let zsh_token_matches = self
+            .zsh_history_token_for_pane(output_pane_id)
+            .is_some_and(|expected| expected.as_str() == token);
+        if !fish_token_matches && !zsh_token_matches {
             return self.observe_shell_receiver_complete(
                 output_pane_id,
                 token,
@@ -482,6 +558,10 @@ impl RuntimeSessionService {
         if restoration.marker != marker
             || restoration.primary_process_id != current_primary_process_id
             || restoration.interaction_generation != current_interaction_generation
+            || (restoration.shell == crate::runtime::processes::RuntimeManagedShellKind::Fish
+                && !fish_token_matches)
+            || (restoration.shell == crate::runtime::processes::RuntimeManagedShellKind::Zsh
+                && !zsh_token_matches)
         {
             self.process
                 .pane_fish_parent_restorations
@@ -522,8 +602,14 @@ impl RuntimeSessionService {
             self.set_pane_readiness(output_pane_id, PaneReadinessState::Degraded);
             self.append_agent_status_text_to_terminal_buffer(
                 output_pane_id,
-                "agent: Fish parent rejected the private shell handoff",
+                "agent: managed shell parent rejected the private shell handoff",
             )?;
+        } else if self
+            .process
+            .pane_environment_authority_failures
+            .contains_key(output_pane_id)
+        {
+            self.set_pane_readiness(output_pane_id, PaneReadinessState::Degraded);
         } else {
             self.set_pane_readiness(output_pane_id, PaneReadinessState::PromptCandidate);
         }

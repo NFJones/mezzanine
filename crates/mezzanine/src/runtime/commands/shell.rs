@@ -1110,6 +1110,34 @@ impl RuntimeSessionService {
         }
         let shell_identity = self.shell_execution_identity_for_pane(pane_id)?;
         let classification = shell_identity.classification();
+        if classification == ShellClassification::Zsh {
+            match self.managed_zsh_admission_for_pane(pane_id) {
+                Some(crate::runtime::processes::RuntimeManagedZshAdmission::Ready { .. }) => {}
+                Some(crate::runtime::processes::RuntimeManagedZshAdmission::Pending { .. }) => {
+                    self.arm_managed_zsh_admission_deadline(pane_id);
+                    self.defer_agent_subshell_entry(pane_id);
+                    return Ok(false);
+                }
+                Some(crate::runtime::processes::RuntimeManagedZshAdmission::Unavailable {
+                    reason,
+                }) => {
+                    let reason = reason.clone();
+                    self.clear_deferred_agent_subshell_entry(pane_id);
+                    self.append_agent_status_text_to_terminal_buffer(
+                        pane_id,
+                        &format!("agent: managed zsh integration unavailable ({reason})"),
+                    )?;
+                    return Ok(false);
+                }
+                None => {
+                    self.append_agent_status_text_to_terminal_buffer(
+                        pane_id,
+                        "agent: managed zsh integration is unavailable",
+                    )?;
+                    return Ok(false);
+                }
+            }
+        }
         let needs_non_native_input_clear =
             matches!(
                 classification,
@@ -1230,7 +1258,17 @@ impl RuntimeSessionService {
                     "managed Zsh receiver is unavailable for agent subshell handoff",
                 )
             })?;
-            let private_input = mez_agent::zsh_private_source_input(&shell_command, &token, marker);
+            let trigger = managed_zsh
+                .as_ref()
+                .map(mez_agent::ManagedZshShell::trigger)
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "managed Zsh trigger is unavailable for agent subshell handoff",
+                    )
+                })?;
+            let private_input =
+                mez_agent::zsh_private_source_input(&shell_command, &token, marker, trigger)
+                    .map_err(|error| MezError::invalid_state(error.to_string()))?;
             self.prepend_zsh_shell_receiver_payload(
                 marker,
                 mez_mux::process::ShellInputDelivery::receiver_acknowledged(
@@ -1302,18 +1340,27 @@ impl RuntimeSessionService {
                 let marker = self
                     .fish_parent_restoration_marker(pane_id)
                     .ok_or_else(|| {
-                        MezError::invalid_state("Fish parent restoration ownership disappeared")
+                        MezError::invalid_state(
+                            "managed-shell parent restoration ownership disappeared",
+                        )
                     })?;
                 let _ = self.cancel_agent_subshell_bootstrap_for_exit(pane_id);
                 if phase == crate::runtime::processes::RuntimeFishHandoffPhase::TriggerQueued {
-                    let token = self
-                        .fish_receiver_token_for_pane(pane_id)
-                        .cloned()
-                        .ok_or_else(|| {
-                            MezError::invalid_state("managed Fish receiver token is unavailable")
-                        })?;
+                    let zsh_restoration = self.managed_parent_restoration_is_zsh(pane_id);
+                    let token = if zsh_restoration {
+                        self.zsh_history_token_for_pane(pane_id).cloned()
+                    } else {
+                        self.fish_receiver_token_for_pane(pane_id).cloned()
+                    }
+                    .ok_or_else(|| {
+                        MezError::invalid_state("managed shell receiver token is unavailable")
+                    })?;
                     self.remember_fish_admission_cancellation(pane_id);
-                    let cancellation = mez_agent::fish_private_source_cancel_input(&token, &marker);
+                    let cancellation = if zsh_restoration {
+                        mez_agent::zsh_private_source_cancel_input(&token, &marker)
+                    } else {
+                        mez_agent::fish_private_source_cancel_input(&token, &marker)
+                    };
                     self.write_runtime_pane_input(pane_id, cancellation.as_bytes())?;
                     return Ok(true);
                 }

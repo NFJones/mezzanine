@@ -71,7 +71,12 @@ fn agent_subshell_enter_command_suppresses_shell_startup_hooks() {
 /// login shell so the managed `.zlogin` installs the child receiver.
 fn managed_zsh_agent_subshell_uses_runtime_owned_login_startup() {
     let token = marker();
-    let managed = ManagedZshShell::new(token.clone(), "/tmp/mez-managed-zsh").unwrap();
+    let managed = ManagedZshShell::new(
+        token.clone(),
+        "/tmp/mez-managed-zsh",
+        ManagedZshTrigger::EscapeM,
+    )
+    .unwrap();
     let transport = agent_subshell_enter_command_with_shell_compatibility_and_exit_marker(
         Path::new("/bin/zsh"),
         ShellClassification::Zsh,
@@ -93,6 +98,50 @@ fn managed_zsh_agent_subshell_uses_runtime_owned_login_startup() {
     assert!(source.contains("'/bin/zsh' -l -i"), "{source}");
     assert!(!source.contains("$MEZ_ZSH_MANAGED_ZDOTDIR"), "{source}");
     assert!(!source.contains("'/bin/zsh' -c"), "{source}");
+}
+
+#[test]
+/// Verifies managed zsh admission uses only typed fixed triggers and emits an
+/// authenticated source-free cancellation record.
+///
+/// Runtime must never turn a shell-provided trigger string into arbitrary pane
+/// input. Hiding agent mode before BEGIN must also restore the parent without
+/// retaining or evaluating any generated child source.
+fn managed_zsh_trigger_and_cancellation_transport_are_bounded() {
+    let token = marker();
+    let input = zsh_private_source_input(
+        "print -r -- SHOULD_NOT_BE_IN_CANCEL\n",
+        &token,
+        "zsh-cancel-marker",
+        ManagedZshTrigger::EscapeN,
+    )
+    .unwrap();
+    let cancellation = zsh_private_source_cancel_input(&token, "zsh-cancel-marker");
+
+    assert_eq!(input.wrapper, "\u{1b}[27;9;110~");
+    assert_eq!(
+        ManagedZshTrigger::from_protocol_str("escape-m"),
+        Some(ManagedZshTrigger::EscapeM)
+    );
+    assert_eq!(
+        ManagedZshTrigger::from_protocol_str("escape-n"),
+        Some(ManagedZshTrigger::EscapeN)
+    );
+    assert_eq!(ManagedZshTrigger::from_protocol_str("arbitrary"), None);
+    assert_eq!(
+        cancellation,
+        format!("MEZ_ZSH_RX1_CANCEL {} zsh-cancel-marker\n", token.as_str())
+    );
+    assert!(!cancellation.contains("SHOULD_NOT_BE_IN_CANCEL"));
+    assert!(
+        zsh_private_source_input(
+            &"x".repeat(ZSH_PRIVATE_SOURCE_MAX_BYTES + 1),
+            &token,
+            "zsh-oversized-marker",
+            ManagedZshTrigger::EscapeM,
+        )
+        .is_err()
+    );
 }
 
 #[test]

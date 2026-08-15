@@ -812,6 +812,47 @@ impl RuntimeSessionService {
         Ok(expired.len())
     }
 
+    /// Fails closed when managed zsh never publishes startup admission.
+    fn recover_expired_managed_zsh_admissions_at(&mut self, now_unix_ms: u64) -> Result<usize> {
+        let expired = self
+            .process
+            .pane_zsh_admissions
+            .iter()
+            .filter_map(|(pane_id, admission)| match admission {
+                crate::runtime::processes::RuntimeManagedZshAdmission::Pending {
+                    started_at_unix_ms: Some(started_at_unix_ms),
+                    ..
+                } if now_unix_ms.saturating_sub(*started_at_unix_ms)
+                    >= crate::runtime::processes::RUNTIME_MANAGED_ZSH_ADMISSION_TIMEOUT_MS =>
+                {
+                    Some(pane_id.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for pane_id in &expired {
+            self.process.pane_zsh_admissions.insert(
+                pane_id.clone(),
+                crate::runtime::processes::RuntimeManagedZshAdmission::Unavailable {
+                    reason: "startup-admission-timeout".to_string(),
+                },
+            );
+            self.clear_deferred_agent_subshell_entry(pane_id);
+            self.append_agent_status_text_to_terminal_buffer(
+                pane_id,
+                "agent: managed zsh integration unavailable (startup-admission-timeout)",
+            )?;
+            self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","managed_zsh_admission":"timed_out"}}"#,
+                    json_escape(pane_id)
+                ),
+            )?;
+        }
+        Ok(expired.len())
+    }
+
     #[cfg(test)]
     /// Expires Fish parent restoration at a supplied time for deterministic tests.
     pub(crate) fn recover_expired_fish_parent_restorations_for_tests(
@@ -819,6 +860,15 @@ impl RuntimeSessionService {
         now_unix_ms: u64,
     ) -> Result<usize> {
         self.recover_expired_fish_parent_restorations_at(now_unix_ms)
+    }
+
+    #[cfg(test)]
+    /// Expires managed zsh startup admission at a supplied time for deterministic tests.
+    pub(crate) fn recover_expired_managed_zsh_admissions_for_tests(
+        &mut self,
+        now_unix_ms: u64,
+    ) -> Result<usize> {
+        self.recover_expired_managed_zsh_admissions_at(now_unix_ms)
     }
 
     /// Applies runtime idle-cleanup timer work while honoring actor-owned
@@ -839,11 +889,14 @@ impl RuntimeSessionService {
                 let hidden_shell_retention_aged = self.tick_hidden_shell_render_retention();
                 let fish_parent_restorations_recovered =
                     self.recover_expired_fish_parent_restorations_at(current_unix_millis())?;
+                let zsh_admissions_recovered =
+                    self.recover_expired_managed_zsh_admissions_at(current_unix_millis())?;
                 let reconciled = self.reconcile_agent_runtime_progress_paths_with_actor_progress(
                     actor_progress_turn_ids,
                 )?;
                 Ok(hidden_shell_retention_aged
                     .saturating_add(fish_parent_restorations_recovered)
+                    .saturating_add(zsh_admissions_recovered)
                     .saturating_add(reconciled))
             }
         }
@@ -927,6 +980,7 @@ impl RuntimeSessionService {
             .process
             .pane_hidden_shell_render_recent_polls
             .is_empty()
+            || self.managed_zsh_admission_timer_needed()
             || self
                 .process
                 .pane_fish_parent_restorations

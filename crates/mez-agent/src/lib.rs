@@ -471,10 +471,13 @@ pub use sensitive_text::sanitize_hidden_model_note;
 pub use shell::{
     AgentShellValidationError, AgentShellValidationErrorKind, AgentShellValidationResult,
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentGroup,
-    EnvironmentSignature, ManagedZshShell, MarkerToken, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES,
-    SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES, ShellChildArgument, ShellChildLaunch,
-    ShellClassification, ShellIdentityProbeResult, ShellTransaction, ShellTransactionInput,
-    ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory, ToolProbe,
+    EnvironmentSignature, ManagedZshShell, ManagedZshTrigger, MarkerToken,
+    SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES,
+    ShellChildArgument, ShellChildLaunch, ShellClassification, ShellIdentityProbeResult,
+    ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport, ToolDiscoveryCache,
+    ToolInventory, ToolProbe, ZSH_PRIVATE_SOURCE_DATA_MAX_BYTES,
+    ZSH_PRIVATE_SOURCE_MAX_BASE64_BYTES, ZSH_PRIVATE_SOURCE_MAX_BYTES,
+    ZSH_PRIVATE_SOURCE_MAX_CHUNKS, ZSH_PRIVATE_SOURCE_MAX_RECORD_BYTES,
     agent_subshell_enter_command, agent_subshell_enter_command_with_shell_compatibility,
     agent_subshell_enter_command_with_shell_compatibility_and_exit_marker,
     agent_subshell_enter_command_with_zsh_history_token, agent_subshell_exit_marker_bytes,
@@ -485,7 +488,7 @@ pub use shell::{
     readiness_probe_command_for_classification, shell_command_contains_unquoted_heredoc,
     shell_identity_probe_command, shell_quote, tool_discovery_script,
     validate_agent_authored_shell_command, validate_resolved_shell_path,
-    validate_shell_marker_token, zsh_private_source_input,
+    validate_shell_marker_token, zsh_private_source_cancel_input, zsh_private_source_input,
 };
 pub use shell_read_observation::{
     ShellReadObservation, ShellReadObservationKind, ShellReadRange,

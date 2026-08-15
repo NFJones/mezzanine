@@ -490,7 +490,40 @@ struct RuntimeShellOutputRenderState {
     discard_frame: bool,
 }
 
-/// Current phase of one synchronous managed-Fish editor handoff.
+/// Authenticated parent-shell admission state for one managed zsh pane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum RuntimeManagedZshAdmission {
+    /// Startup artifacts exist, but the parent has not confirmed safe ZLE integration.
+    Pending {
+        /// Exact primary process whose startup shim must publish availability.
+        primary_process_id: u32,
+        /// Time when agent entry first began waiting for startup admission.
+        started_at_unix_ms: Option<u64>,
+    },
+    /// The parent installed a fixed trigger without replacing user bindings.
+    Ready {
+        /// Exact primary process that published this admission state.
+        primary_process_id: u32,
+        /// Fixed trigger selected by the managed startup shim.
+        trigger: mez_agent::ManagedZshTrigger,
+    },
+    /// Managed startup could not install without changing user editor behavior.
+    Unavailable {
+        /// Bounded machine-readable reason emitted by the startup shim or adapter.
+        reason: String,
+    },
+}
+
+/// Managed shell whose synchronous editor callback owns parent restoration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeManagedShellKind {
+    /// Fish readline callback ownership.
+    Fish,
+    /// Zsh ZLE callback ownership.
+    Zsh,
+}
+
+/// Current phase of one synchronous managed-shell editor handoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RuntimeFishHandoffPhase {
     /// The private editor trigger was written but its source remains retained.
@@ -505,9 +538,11 @@ pub(super) enum RuntimeFishHandoffPhase {
     ParentRestoring,
 }
 
-/// Marker- and process-scoped ownership retained until Fish restores its parent editor.
+/// Marker- and process-scoped ownership retained until the shell restores its parent editor.
 #[derive(Debug)]
 struct RuntimeFishParentRestoration {
+    /// Managed shell that owns the synchronous callback.
+    shell: RuntimeManagedShellKind,
     /// Bootstrap marker carried by the authenticated private receiver event.
     marker: String,
     /// Primary process that owns the private callback and saved editor state.
@@ -526,6 +561,8 @@ struct RuntimeFishParentRestoration {
 const RUNTIME_FISH_PARENT_RESTORATION_INPUT_LIMIT_BYTES: usize = 64 * 1024;
 /// Maximum wait for Fish to publish authenticated parent-editor restoration.
 const RUNTIME_FISH_PARENT_RESTORATION_TIMEOUT_MS: u64 = 5_000;
+/// Maximum wait for the managed zsh parent to publish startup admission.
+const RUNTIME_MANAGED_ZSH_ADMISSION_TIMEOUT_MS: u64 = 5_000;
 
 /// Owns live process metadata that is private to the pane process subsystem.
 ///
@@ -555,6 +592,8 @@ pub(crate) struct RuntimeProcessComponent {
         std::collections::BTreeMap<String, bash_compat::ManagedBashCompatibility>,
     /// Managed zsh startup and history-authentication state keyed by pane id.
     pane_zsh_compatibility: std::collections::BTreeMap<String, zsh_compat::ManagedZshCompatibility>,
+    /// Authenticated managed-zsh parent admission state keyed by pane id.
+    pane_zsh_admissions: std::collections::BTreeMap<String, RuntimeManagedZshAdmission>,
     /// Canonical path authority keyed by pane environment, config generation,
     /// and the exact bounded resolution request.
     pane_path_scopes: std::collections::BTreeMap<
@@ -860,6 +899,7 @@ impl RuntimeSessionService {
             self.process.pane_fish_parent_restorations.insert(
                 pane_id,
                 RuntimeFishParentRestoration {
+                    shell: RuntimeManagedShellKind::Fish,
                     marker: marker.to_string(),
                     primary_process_id: handoff.map(|handoff| handoff.primary_process_id),
                     interaction_generation: handoff.map(|handoff| handoff.interaction_generation),
@@ -984,14 +1024,39 @@ impl RuntimeSessionService {
         marker: &str,
         payload: mez_mux::process::ShellInputDelivery,
     ) {
+        if let Some(pane_id) = self
+            .process
+            .running_shell_transactions
+            .get(marker)
+            .map(|transaction| transaction.pane_id.clone())
+        {
+            let handoff = self.process.pane_shell_handoffs.get(&pane_id);
+            self.process.pane_fish_parent_restorations.insert(
+                pane_id,
+                RuntimeFishParentRestoration {
+                    shell: RuntimeManagedShellKind::Zsh,
+                    marker: marker.to_string(),
+                    primary_process_id: handoff.map(|handoff| handoff.primary_process_id),
+                    interaction_generation: handoff.map(|handoff| handoff.interaction_generation),
+                    phase: RuntimeFishHandoffPhase::TriggerQueued,
+                    started_at_unix_ms: None,
+                    pending_input: Vec::new(),
+                },
+            );
+        }
         self.process
             .shell_receiver_pending_payloads
             .entry(marker.to_string())
             .or_default()
             .push_front(payload);
+    }
+
+    /// Returns the managed shell that owns one pending parent restoration.
+    pub(super) fn managed_parent_restoration_is_zsh(&self, pane_id: &str) -> bool {
         self.process
-            .shell_receiver_completion_required
-            .insert(marker.to_string());
+            .pane_fish_parent_restorations
+            .get(pane_id)
+            .is_some_and(|restoration| restoration.shell == RuntimeManagedShellKind::Zsh)
     }
 
     /// Reports whether an agent action has a live shell transaction.
@@ -1773,6 +1838,33 @@ impl RuntimeSessionService {
             .contains_key(pane_id)
     }
 
+    /// Installs an expired managed-zsh startup admission for timeout regressions.
+    pub(crate) fn set_expired_managed_zsh_admission_for_tests(&mut self, pane_id: &str) {
+        let primary_process_id = self
+            .primary_pid_for_live_pane_process(pane_id)
+            .expect("the test pane must have a primary process");
+        self.process.pane_zsh_admissions.insert(
+            pane_id.to_string(),
+            RuntimeManagedZshAdmission::Pending {
+                primary_process_id,
+                started_at_unix_ms: Some(0),
+            },
+        );
+    }
+
+    /// Reports whether managed-zsh admission settled to one unavailable reason.
+    pub(crate) fn managed_zsh_admission_unavailable_for_tests(
+        &self,
+        pane_id: &str,
+        expected_reason: &str,
+    ) -> bool {
+        matches!(
+            self.process.pane_zsh_admissions.get(pane_id),
+            Some(RuntimeManagedZshAdmission::Unavailable { reason })
+                if reason == expected_reason
+        )
+    }
+
     /// Injects one failure while sending Ctrl-C to a pane shell.
     pub(crate) fn fail_next_pane_interrupt_write_for_tests(&mut self) {
         self.process.fail_next_pane_interrupt_write = true;
@@ -2039,11 +2131,56 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Result<Option<mez_agent::ManagedZshShell>> {
-        self.process
-            .pane_zsh_compatibility
-            .get(pane_id)
-            .map(zsh_compat::ManagedZshCompatibility::shell_descriptor)
-            .transpose()
+        let Some(compatibility) = self.process.pane_zsh_compatibility.get(pane_id) else {
+            return Ok(None);
+        };
+        let Some(RuntimeManagedZshAdmission::Ready {
+            primary_process_id,
+            trigger,
+        }) = self.process.pane_zsh_admissions.get(pane_id)
+        else {
+            return Ok(None);
+        };
+        if Some(*primary_process_id) != self.primary_pid_for_live_pane_process(pane_id) {
+            return Ok(None);
+        }
+        compatibility.shell_descriptor(*trigger).map(Some)
+    }
+
+    /// Returns the current managed-zsh admission state for child-entry preflight.
+    pub(super) fn managed_zsh_admission_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> Option<&RuntimeManagedZshAdmission> {
+        self.process.pane_zsh_admissions.get(pane_id)
+    }
+
+    /// Arms the bounded startup-admission deadline for one managed zsh pane.
+    pub(super) fn arm_managed_zsh_admission_deadline(&mut self, pane_id: &str) {
+        let current_primary_process_id = self.primary_pid_for_live_pane_process(pane_id);
+        let Some(RuntimeManagedZshAdmission::Pending {
+            primary_process_id,
+            started_at_unix_ms,
+        }) = self.process.pane_zsh_admissions.get_mut(pane_id)
+        else {
+            return;
+        };
+        if Some(*primary_process_id) == current_primary_process_id && started_at_unix_ms.is_none() {
+            *started_at_unix_ms = Some(current_unix_millis());
+        }
+    }
+
+    /// Reports whether a managed zsh startup admission deadline needs polling.
+    pub(crate) fn managed_zsh_admission_timer_needed(&self) -> bool {
+        self.process.pane_zsh_admissions.values().any(|admission| {
+            matches!(
+                admission,
+                RuntimeManagedZshAdmission::Pending {
+                    started_at_unix_ms: Some(_),
+                    ..
+                }
+            )
+        })
     }
 
     /// Returns the managed Bash receiver rcfile for one pane when installed.
@@ -2752,6 +2889,22 @@ impl RuntimeSessionService {
             self.process
                 .pane_zsh_compatibility
                 .insert(descriptor.pane_id.to_string(), compatibility);
+            self.process.pane_zsh_admissions.insert(
+                descriptor.pane_id.to_string(),
+                RuntimeManagedZshAdmission::Pending {
+                    primary_process_id: primary_pid,
+                    started_at_unix_ms: None,
+                },
+            );
+        } else if classification == ShellClassification::Zsh {
+            self.process.pane_zsh_admissions.insert(
+                descriptor.pane_id.to_string(),
+                RuntimeManagedZshAdmission::Unavailable {
+                    reason: zsh_compatibility_diagnostic
+                        .clone()
+                        .unwrap_or_else(|| "managed-startup-unavailable".to_string()),
+                },
+            );
         }
         if let Some(error) = bash_compatibility_diagnostic {
             self.append_lifecycle_event(
@@ -3287,6 +3440,7 @@ impl RuntimeSessionService {
         self.process.pane_fish_compatibility.remove(pane_id);
         self.process.pane_bash_compatibility.remove(pane_id);
         self.process.pane_zsh_compatibility.remove(pane_id);
+        self.process.pane_zsh_admissions.remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
         self.persistence.cleanup_pane_io(pane_id);

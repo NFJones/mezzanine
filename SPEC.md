@@ -1835,26 +1835,42 @@ directory before sending agent-owned shell commands. Agent command side effects
 such as prompt changes, aliases, shell options, and environment mutations MUST
 remain scoped to that child shell unless the user explicitly applies them
 outside agent mode.
-Managed Bash and Fish parents MUST preserve an unfinished editable command line
-while the agent child owns the pane. Managed Fish preservation MUST retain the
-complete multiline buffer including trailing newlines, its Unicode-correct
-cursor position, and the active supported bind mode; the restored draft MUST
-remain unexecuted until the user explicitly submits it. Fish admission MUST fail
-closed without clearing the draft while history search, the completion pager,
-or an active text selection prevents exact editor-state restoration.
-Managed Fish MUST publish a pane-token-authenticated parent-restored boundary
-only after the private receiver has returned from sourcing the child handoff,
-restored the editor state, and queued its repaint. Child-exit rendering markers
-MUST NOT release foreground input. Mezzanine MUST retain bounded foreground
+Managed Bash, Fish, and Zsh parents MUST preserve an unfinished editable
+command line while the agent child owns the pane. Managed Fish preservation
+MUST retain the complete multiline buffer including trailing newlines, its
+Unicode-correct cursor position, and the active supported bind mode; the
+restored draft MUST remain unexecuted until the user explicitly submits it.
+Fish admission MUST fail closed without clearing the draft while history
+search, the completion pager, or an active text selection prevents exact
+editor-state restoration.
+Managed Fish and Zsh MUST publish a pane-token-authenticated parent-restored
+boundary only after the private receiver has returned from sourcing the child
+handoff, restored the editor state, and queued its repaint. Child-exit rendering
+markers MUST NOT release foreground input. Mezzanine MUST retain bounded foreground
 input until parent-restored arrives and MUST use bounded timeout recovery if
 that event is lost. The private receiver MUST save the supported editor state,
 clear the editable buffer, and queue a repaint before publishing receiver-ready
 or launching the child. If agent mode exits before source admission completes,
 runtime MUST send a pane-token- and bootstrap-marker-authenticated cancellation
-record. Fish MUST reject partial source, restore and repaint the exact saved
-editor state, and publish parent-restored without launching a child. Bootstrap
-state MUST remain independent from parent-editor restoration so a saved draft
-cannot block child certification or be released before callback unwind.
+record. Fish and Zsh MUST reject partial source, restore and repaint the exact
+saved editor state, and publish parent-restored without launching a child.
+Bootstrap state MUST remain independent from parent-editor restoration so a
+saved draft cannot block child certification or be released before callback
+unwind.
+Managed Zsh startup MUST preserve native startup-file ordering and RCS option
+semantics, including a user `unsetopt RCS`, while sourcing every startup file
+that native Zsh would read at most once. Before agent-shell admission, the
+parent MUST publish token-authenticated availability for a fixed runtime-known
+trigger. Installation MUST compose with existing ZLE line-init behavior and
+MUST NOT replace an occupied user binding; when no safe trigger or hook is
+available, admission MUST fail closed after a bounded wait without writing a
+handoff. A managed Zsh child MUST receive the runtime-owned startup directory
+directly and execute as one login-interactive Zsh process so its private
+receiver is installed before bootstrap release. Its private source protocol
+MUST bound source bytes, chunks, and physical records; after an authenticated
+BEGIN it MUST acknowledge and drain every declared DATA record and END even
+after detecting malformed input, and MUST evaluate source only after complete
+length, digest, sequence, and canonical Base64 validation.
 The agent-mode child shell and every Mezzanine-owned non-stateful action shell
 MUST inherit the pane environment except for variables that can trigger shell
 startup files, prompt hooks, editor/pager prompts, or other interactive
