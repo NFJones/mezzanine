@@ -132,11 +132,135 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
     assert!(pane_text.contains("▐      delta epsilon"), "{pane_text}");
 }
 
+/// Verifies every published cumulative Markdown and diff prefix is identical
+/// to a fresh static render of the same source snapshot.
+///
+/// Later Markdown fragments may reinterpret prior rows as Setext headings or
+/// tables, while a unified diff becomes progressively more structured. Each
+/// generation must replace the whole provisional component through the
+/// ordinary renderer so no literal tail or stale styling survives.
+#[test]
+fn runtime_streaming_say_prefixes_match_static_rich_renderers() {
+    let cases = [
+        (
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            vec![
+                "Heading",
+                "\n---",
+                "\n\n| Name | Value |",
+                "\n| --- | --- |",
+                "\n| alpha | beta |",
+            ],
+        ),
+        (
+            mez_agent::AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE,
+            vec![
+                "diff --git a/demo.rs b/demo.rs\n",
+                "--- a/demo.rs\n",
+                "+++ b/demo.rs\n",
+                "@@ -1 +1 @@\n",
+                "-old\n",
+                "+new\n",
+            ],
+        ),
+    ];
+
+    for (case_index, (content_type, fragments)) in cases.into_iter().enumerate() {
+        let mut streaming = test_runtime_service();
+        streaming
+            .attach_primary("primary", true, Size::new(52, 20).unwrap(), 200)
+            .unwrap();
+        streaming
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        set_agent_pane_screen_for_test(
+            &mut streaming,
+            "%1",
+            TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+        );
+        streaming
+            .apply_agent_streaming_say_event_to_terminal_buffer(
+                "%1",
+                "turn-prefix",
+                &mez_agent::StreamingSayEvent::Started {
+                    action_index: 0,
+                    status: mez_agent::SayStatus::Progress,
+                    content_type: content_type.to_string(),
+                },
+            )
+            .unwrap();
+
+        let mut source = String::new();
+        for fragment in fragments {
+            source.push_str(fragment);
+            streaming
+                .apply_agent_streaming_say_event_to_terminal_buffer(
+                    "%1",
+                    "turn-prefix",
+                    &mez_agent::StreamingSayEvent::TextDelta {
+                        action_index: 0,
+                        text: fragment.to_string(),
+                    },
+                )
+                .unwrap();
+            let work = streaming
+                .take_agent_streaming_say_projection_work("%1", "turn-prefix")
+                .unwrap()
+                .expect("each non-empty source prefix should be dirty");
+            let projection = RuntimeSessionService::build_agent_streaming_say_projection(work)
+                .expect("each cumulative source prefix should render");
+            assert!(
+                streaming
+                    .apply_agent_streaming_say_projection_result(projection)
+                    .unwrap(),
+                "case {case_index} prefix {source:?} should install"
+            );
+
+            let mut static_render = test_runtime_service();
+            static_render
+                .attach_primary("primary", true, Size::new(52, 20).unwrap(), 200)
+                .unwrap();
+            set_agent_pane_screen_for_test(
+                &mut static_render,
+                "%1",
+                TerminalScreen::new(Size::new(52, 20).unwrap(), 200).unwrap(),
+            );
+            static_render
+                .append_agent_assistant_content_to_terminal_buffer("%1", &source, content_type)
+                .unwrap();
+
+            assert_eq!(
+                streaming
+                    .agent_pane_screen("%1")
+                    .unwrap()
+                    .normal_content_lines(),
+                static_render
+                    .agent_pane_screen("%1")
+                    .unwrap()
+                    .normal_content_lines(),
+                "case {case_index} prefix {source:?} display must match static rendering"
+            );
+            assert_eq!(
+                streaming
+                    .agent_pane_screen("%1")
+                    .unwrap()
+                    .normal_styled_content_lines(),
+                static_render
+                    .agent_pane_screen("%1")
+                    .unwrap()
+                    .normal_styled_content_lines(),
+                "case {case_index} prefix {source:?} styles must match static rendering"
+            );
+        }
+    }
+}
+
 /// Verifies streamed Markdown is the canonical assistant presentation rather
 /// than a bounded preview that is replayed after validated completion.
 ///
-/// The prefix must exist before source text arrives, completed Markdown must
-/// replace its literal delimiters with rich styling, exact reconciliation must
+/// The prefix must exist before source text arrives, cumulative Markdown must
+/// render richly before its source string closes, exact reconciliation must
 /// persist the raw source once, and ordinary completion presentation must not
 /// append a duplicate assistant block.
 #[test]
@@ -188,24 +312,17 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
             },
         )
         .unwrap();
-    service
-        .apply_agent_streaming_say_event_to_terminal_buffer(
-            "%1",
-            "turn-1",
-            &mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
-        )
-        .unwrap();
     let projection_work = service
         .take_agent_streaming_say_projection_work("%1", "turn-1")
         .unwrap()
-        .expect("completed streamed source should produce projection work");
+        .expect("incomplete streamed source should produce projection work");
     let projection = RuntimeSessionService::build_agent_streaming_say_projection(projection_work)
-        .expect("completed streamed source should render off actor");
+        .expect("incomplete streamed source should render off actor");
     assert!(
         service
             .apply_agent_streaming_say_projection_result(projection)
             .unwrap(),
-        "current completed projection should install atomically"
+        "current incomplete projection should install atomically"
     );
     let rendered_before_completion = service
         .agent_pane_screen("%1")
@@ -222,6 +339,27 @@ fn runtime_streaming_say_promotes_rich_output_without_replay() {
         .find(|line| line.text.contains("streamed output"))
         .expect("streamed Markdown line should be visible");
     assert!(!streamed_line.style_spans.is_empty(), "{streamed_line:?}");
+    let projection_before_completion = service.agent_pane_screen("%1").unwrap().clone();
+
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+        )
+        .unwrap();
+    assert!(
+        service
+            .take_agent_streaming_say_projection_work("%1", "turn-1")
+            .unwrap()
+            .is_none(),
+        "completion without new source must not request another projection"
+    );
+    assert_eq!(
+        service.agent_pane_screen("%1").unwrap(),
+        &projection_before_completion,
+        "completion without new source must not alter the visible generation"
+    );
 
     let action = mez_agent::AgentAction {
         id: "say-streamed".to_string(),
@@ -338,17 +476,6 @@ fn runtime_streaming_rationale_and_command_match_static_projection_and_restore()
             .apply_agent_streaming_say_event_to_terminal_buffer("%1", "turn-1", &event)
             .unwrap();
     }
-    let literal = streaming
-        .agent_pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    assert!(
-        literal.contains("thinking: Inspect the current files"),
-        "{literal}"
-    );
-    assert!(literal.contains("$ printf 'alpha beta\\n'"), "{literal}");
-
     let work = streaming
         .take_agent_streaming_say_projection_work("%1", "turn-1")
         .unwrap()
@@ -433,12 +560,12 @@ fn runtime_streaming_rationale_and_command_match_static_projection_and_restore()
     assert_eq!(streaming.agent_pane_screen("%1").unwrap(), &baseline);
 }
 
-/// Verifies a complete rich generation captured before newer source arrived
+/// Verifies a rich generation captured before newer source arrived
 /// cannot replace the pane or expose rows from two streaming generations.
 ///
 /// The renderer may finish after the actor has accepted another action. The
-/// stale candidate must be rejected as a whole, leaving the newer literal
-/// presentation byte-for-byte unchanged.
+/// stale candidate must be rejected as a whole, leaving the newer cumulative
+/// projection byte-for-byte unchanged.
 #[test]
 fn runtime_streaming_say_rejects_stale_projection_generation_atomically() {
     let mut service = test_runtime_service();
@@ -511,6 +638,19 @@ fn runtime_streaming_say_rejects_stale_projection_generation_atomically() {
             },
         )
         .unwrap();
+    let latest_work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .expect("newer cumulative source should produce projection work");
+    let latest_projection =
+        RuntimeSessionService::build_agent_streaming_say_projection(latest_work)
+            .expect("newer cumulative generation should render completely");
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(latest_projection)
+            .unwrap(),
+        "the newest cumulative generation should install atomically"
+    );
     let before_stale_install = service.agent_pane_screen("%1").unwrap().clone();
 
     assert!(
@@ -525,7 +665,8 @@ fn runtime_streaming_say_rejects_stale_projection_generation_atomically() {
         "rejecting stale work must not publish any partial candidate rows"
     );
     let text = before_stale_install.normal_content_lines().join("\n");
-    assert!(text.contains("**old generation**"), "{text}");
+    assert!(text.contains("old generation"), "{text}");
+    assert!(!text.contains("**old generation**"), "{text}");
     assert!(text.contains("new literal generation"), "{text}");
 }
 
@@ -585,6 +726,18 @@ fn runtime_streaming_say_is_untruncated_and_mismatch_restores_baseline() {
             &mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
         )
         .unwrap();
+    let work = service
+        .take_agent_streaming_say_projection_work("%1", "turn-1")
+        .unwrap()
+        .expect("long cumulative source should produce projection work");
+    let projection = RuntimeSessionService::build_agent_streaming_say_projection(work)
+        .expect("long cumulative source should render completely");
+    assert!(
+        service
+            .apply_agent_streaming_say_projection_result(projection)
+            .unwrap(),
+        "the complete long-source generation should install atomically"
+    );
     let streamed = service
         .agent_pane_screen("%1")
         .unwrap()

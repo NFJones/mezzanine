@@ -2100,18 +2100,21 @@ enter this streaming path.
 For every allowlisted source, Mezzanine MUST decode and apply every source
 character exactly once and in order without dropping or truncating deltas.
 Provider deltas and physical client redraws MAY be coalesced only at bounded
-sequence points that preserve source identity and lifecycle barriers. Incomplete
-source MUST remain one literal provisional component and MUST NOT become
+sequence points that preserve source identity and lifecycle barriers. Cumulative
+source MUST remain one provisional semantic component and MUST NOT become
 durable presentation, executable shell input, policy input, audit execution
-state, or model-context material. Completed rich `say`, rationale, and command
-preview projections MUST be built outside the serialized runtime actor from an
-immutable source generation using their ordinary static renderers and MUST
-replace the source-backed region only as one complete screen generation.
-Rendering budgets and cancellation MAY pause or discard private work, but MUST
-NOT publish a partial rich component, partial terminal screen, or rows from
-mixed generations. Results captured before a source, conversation, geometry,
-theme, thinking-visibility, presentation-width, or shell-classification change
-MUST be rejected.
+state, or model-context material. Rich `say`, rationale, and command-preview
+projections MAY be published before their source strings close, but each
+published generation MUST be the ordinary static interpretation of one exact
+cumulative source snapshot. Such projections MUST be built outside the
+serialized runtime actor from immutable source and MUST replace the complete
+source-backed region atomically. A source-completion event with no source or
+render-input change MUST NOT alter the visible projection or require a distinct
+final rerender. Rendering budgets and cancellation MAY coalesce, pause, or
+discard private work, but MUST NOT publish a partial rich component, partial
+terminal screen, or rows from mixed generations. Results captured before a
+source, conversation, geometry, theme, thinking-visibility, presentation-width,
+or shell-classification change MUST be rejected.
 
 After provider completion, an exactly matching validated `say` action index,
 status, content type, and raw text MAY promote the matching atomically published

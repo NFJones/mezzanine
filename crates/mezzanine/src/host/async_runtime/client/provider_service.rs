@@ -22,6 +22,26 @@ use std::time::{Duration, Instant};
 const STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY: usize = 32;
 /// Maximum progress events submitted in one actor request after provider completion.
 const STREAMING_SAY_COMPLETION_BATCH_LIMIT: usize = 16;
+/// Short frame-oriented delay used to collapse bursty source deltas.
+const STREAMING_SAY_PROJECTION_DEBOUNCE: Duration = Duration::from_millis(25);
+/// Maximum fresh generations rendered while settling a completed provider.
+const STREAMING_SAY_PROJECTION_SETTLE_LIMIT: usize = 3;
+
+/// Reports whether one provider event changes visible projection inputs.
+fn streaming_say_event_changes_projection(event: &mez_agent::StreamingSayEvent) -> bool {
+    match event {
+        mez_agent::StreamingSayEvent::RationaleTextDelta { text }
+        | mez_agent::StreamingSayEvent::TextDelta { text, .. }
+        | mez_agent::StreamingSayEvent::ShellCommandTextDelta { text, .. } => !text.is_empty(),
+        mez_agent::StreamingSayEvent::Started { .. }
+        | mez_agent::StreamingSayEvent::RationaleStarted
+        | mez_agent::StreamingSayEvent::ShellCommandStarted { .. }
+        | mez_agent::StreamingSayEvent::TextComplete { .. }
+        | mez_agent::StreamingSayEvent::RationaleTextComplete
+        | mez_agent::StreamingSayEvent::ShellCommandTextComplete { .. } => false,
+    }
+}
+
 /// Appends one progress event while preserving lifecycle barriers.
 fn push_coalesced_streaming_say_event(
     events: &mut Vec<mez_agent::StreamingSayEvent>,
@@ -91,6 +111,60 @@ fn streaming_say_runtime_event_batch(
         ));
     }
     batch
+}
+
+/// Outcome of one latest-generation projection attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamingSayProjectionAttempt {
+    /// Actor state was already current or no longer owned by this turn.
+    NoWork,
+    /// One generation was captured, whether it published or became stale.
+    Rendered,
+}
+
+/// Renders and conditionally publishes the newest cumulative source generation.
+///
+/// Rendering and terminal parsing run on the blocking pool. Actor calls only
+/// capture immutable source and atomically install a fully built generation.
+async fn project_latest_streaming_say_generation(
+    handle: AsyncRuntimeSessionHandle,
+    pane_id: String,
+    turn_id: String,
+    debounce: bool,
+) -> StreamingSayProjectionAttempt {
+    if debounce {
+        sleep(STREAMING_SAY_PROJECTION_DEBOUNCE).await;
+    }
+    let work = match handle
+        .take_streaming_say_projection_work(pane_id, turn_id)
+        .await
+    {
+        Ok(Some(work)) => work,
+        Ok(None) | Err(_) => return StreamingSayProjectionAttempt::NoWork,
+    };
+    let projection = tokio::task::spawn_blocking(move || {
+        crate::runtime::RuntimeSessionService::build_agent_streaming_say_projection(work)
+    })
+    .await;
+    if let Ok(Ok(projection)) = projection {
+        let _ = handle.apply_streaming_say_projection(projection).await;
+    }
+    StreamingSayProjectionAttempt::Rendered
+}
+
+/// Starts one pane-local projection worker when no generation is in flight.
+fn spawn_streaming_say_projection_worker(
+    workers: &mut JoinSet<StreamingSayProjectionAttempt>,
+    handle: &AsyncRuntimeSessionHandle,
+    pane_id: &str,
+    turn_id: &str,
+) {
+    workers.spawn(project_latest_streaming_say_generation(
+        handle.clone(),
+        pane_id.to_string(),
+        turn_id.to_string(),
+        true,
+    ));
 }
 
 /// Runs the run async agent provider service operation for this subsystem.
@@ -463,6 +537,8 @@ async fn monitor_runtime_agent_provider_dispatch(
         dispatch,
         Some(progress_sender),
     ));
+    let mut projection_workers = JoinSet::new();
+    let mut projection_dirty = false;
     loop {
         tokio::select! {
             result = &mut worker => {
@@ -492,18 +568,18 @@ async fn monitor_runtime_agent_provider_dispatch(
                     handle.submit_runtime_events(batch).await?;
                     tokio::task::yield_now().await;
                 }
-                if let Some(work) = handle
-                    .take_streaming_say_projection_work(pane_id.clone(), turn_id.clone())
-                    .await?
-                {
-                    let projection = tokio::task::spawn_blocking(move || {
-                        crate::runtime::RuntimeSessionService::build_agent_streaming_say_projection(
-                            work,
-                        )
-                    })
-                    .await;
-                    if let Ok(Ok(projection)) = projection {
-                        let _ = handle.apply_streaming_say_projection(projection).await?;
+                while projection_workers.join_next().await.is_some() {}
+                for _ in 0..STREAMING_SAY_PROJECTION_SETTLE_LIMIT {
+                    if project_latest_streaming_say_generation(
+                        handle.clone(),
+                        pane_id.clone(),
+                        turn_id.clone(),
+                        false,
+                    )
+                    .await
+                        == StreamingSayProjectionAttempt::NoWork
+                    {
+                        break;
                     }
                 }
                 return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
@@ -521,6 +597,9 @@ async fn monitor_runtime_agent_provider_dispatch(
                     push_coalesced_streaming_say_event(&mut events, event);
                     drained = drained.saturating_add(1);
                 }
+                let projection_changed = events
+                    .iter()
+                    .any(streaming_say_event_changes_projection);
                 let batch = streaming_say_runtime_event_batch(
                     &agent_id,
                     &turn_id,
@@ -528,6 +607,30 @@ async fn monitor_runtime_agent_provider_dispatch(
                     events,
                 );
                 handle.submit_runtime_events(batch).await?;
+                if projection_changed {
+                    if projection_workers.is_empty() {
+                        spawn_streaming_say_projection_worker(
+                            &mut projection_workers,
+                            &handle,
+                            &pane_id,
+                            &turn_id,
+                        );
+                        projection_dirty = false;
+                    } else {
+                        projection_dirty = true;
+                    }
+                }
+            }
+            Some(_projection_result) = projection_workers.join_next(), if !projection_workers.is_empty() => {
+                if projection_dirty {
+                    spawn_streaming_say_projection_worker(
+                        &mut projection_workers,
+                        &handle,
+                        &pane_id,
+                        &turn_id,
+                    );
+                    projection_dirty = false;
+                }
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {

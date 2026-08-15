@@ -363,12 +363,33 @@ pub(crate) struct RuntimeStreamingSayPresentation {
     actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
     /// Established shell-command source keyed by MAAP action index.
     shell_commands: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
-    /// Monotonic source generation used to fence worker projections.
+    /// Monotonic render-input generation used to fence worker projections.
     revision: u64,
-    /// Newest complete projection atomically installed in the pane.
+    /// Newest cumulative-source projection atomically installed in the pane.
     projected_revision: Option<u64>,
+    /// Render inputs used by the newest atomically installed projection.
+    projected_context: Option<RuntimeStreamingSayProjectionContext>,
     /// Worker-rendered action metadata retained for exact promotion.
     projected_actions: Option<Vec<RuntimeStreamingSayProjectedAction>>,
+}
+
+/// Non-source inputs that determine one streaming projection generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeStreamingSayProjectionContext {
+    /// Whether thinking text was visible while the generation was rendered.
+    thinking_enabled: bool,
+    /// Shell dialect used by the command-preview highlighter.
+    shell_classification: mez_agent::ShellClassification,
+    /// Pane presentation width used by the static thinking renderer.
+    presentation_columns: usize,
+    /// Available width inside the agent presentation gutter.
+    frame_width: usize,
+    /// Full terminal width used by table and fenced renderers.
+    table_width: usize,
+    /// Immutable theme used to render the generation.
+    ui_theme: mez_mux::theme::UiTheme,
+    /// Exact terminal geometry used to render the generation.
+    screen_size: Size,
 }
 
 /// Accumulated source and contract fields for one streamed `say` action.
@@ -406,7 +427,7 @@ pub(crate) struct RuntimeStreamingSayProjectedAction {
     pub(crate) copy_lines: Vec<String>,
 }
 
-/// Immutable input for one completed streaming-say projection worker.
+/// Immutable input for one cumulative streaming-say projection worker.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeStreamingSayProjectionWork {
     /// Pane that owns the source-backed presentation.
@@ -419,11 +440,11 @@ pub(crate) struct RuntimeStreamingSayProjectionWork {
     pub(crate) revision: u64,
     /// Pre-stream screen from which the complete candidate is rebuilt.
     pub(crate) baseline_screen: std::sync::Arc<TerminalScreen>,
-    /// Complete batch rationale state captured for this generation.
+    /// Cumulative batch rationale state captured for this generation.
     pub(crate) rationale: Option<RuntimeStreamingTextSource>,
-    /// Complete action state captured for this generation.
+    /// Cumulative action state captured for this generation.
     pub(crate) actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
-    /// Complete shell-command state captured for this generation.
+    /// Cumulative shell-command state captured for this generation.
     pub(crate) shell_commands: std::collections::BTreeMap<usize, RuntimeStreamingTextSource>,
     /// Whether thinking text is visible for this pane.
     pub(crate) thinking_enabled: bool,

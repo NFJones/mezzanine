@@ -560,7 +560,7 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
-    /// Captures immutable completed streaming source for off-actor projection.
+    /// Captures an immutable cumulative streaming generation for off-actor projection.
     pub async fn take_streaming_say_projection_work(
         &self,
         pane_id: String,
@@ -576,7 +576,7 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
-    /// Installs a complete projection only when its captured generation is current.
+    /// Installs an atomic projection only when its captured generation is current.
     pub async fn apply_streaming_say_projection(
         &self,
         result: crate::runtime::RuntimeStreamingSayProjectionResult,

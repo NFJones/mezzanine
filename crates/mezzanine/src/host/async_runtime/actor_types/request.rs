@@ -709,18 +709,18 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<Option<RuntimeAgentRememberDispatch>>>,
     },
-    /// Captures immutable completed streaming-say projection work.
+    /// Captures immutable cumulative streaming-say projection work.
     TakeStreamingSayProjectionWork {
-        /// Pane whose completed literal source should be projected.
+        /// Pane whose newest cumulative source should be projected.
         pane_id: String,
         /// Provider turn that owns the source-backed presentation.
         turn_id: String,
         /// Returns generation-stamped worker input when projection is ready.
         reply: oneshot::Sender<Result<Option<crate::runtime::RuntimeStreamingSayProjectionWork>>>,
     },
-    /// Atomically installs one complete worker-rendered streaming generation.
+    /// Atomically installs one worker-rendered streaming generation.
     ApplyStreamingSayProjection {
-        /// Generation-stamped complete candidate returned by the worker.
+        /// Generation-stamped atomic candidate returned by the worker.
         result: crate::runtime::RuntimeStreamingSayProjectionResult,
         /// Reports whether current actor-owned state accepted the candidate.
         reply: oneshot::Sender<Result<bool>>,
