@@ -92,13 +92,13 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Applies provider output progress through the transport-neutral transition contract.
-    pub(crate) fn apply_agent_provider_output_progress_transition(
+    /// Applies one ordered provider streaming-say event after ownership validation.
+    pub(crate) fn apply_agent_provider_streaming_say_transition(
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
         pane_id: &str,
-        preview: &mez_agent::ProvisionalSayPreview,
+        event: &mez_agent::StreamingSayEvent,
     ) -> crate::runtime::RuntimeTransition {
         let current = self.agent_turn_ledger().turns().iter().any(|turn| {
             turn.turn_id == turn_id
@@ -110,7 +110,7 @@ impl RuntimeSessionService {
             return crate::runtime::RuntimeTransition::default();
         }
         let applied = self
-            .append_agent_provider_say_preview_to_terminal_buffer(pane_id, preview)
+            .apply_agent_streaming_say_event_to_terminal_buffer(pane_id, turn_id, event)
             .is_ok();
         self.runtime_transition_with_render(
             applied,

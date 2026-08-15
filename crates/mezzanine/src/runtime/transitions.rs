@@ -331,20 +331,20 @@ pub enum AgentProviderEvent {
         /// Human-readable worker failure.
         message: String,
     },
-    /// A provider stream established a bounded provisional `say` preview.
+    /// A provider stream established ordered visible `say` source progress.
     #[allow(
         dead_code,
         reason = "transition taxonomy is consumed by the serialized runtime actor"
     )]
-    OutputProgress {
+    StreamingSay {
         /// Agent identity.
         agent_id: AgentId,
         /// Turn identity.
         turn_id: String,
         /// Pane that owns the visible agent log.
         pane_id: String,
-        /// Extractor-validated cumulative `say` text and media type.
-        preview: mez_agent::ProvisionalSayPreview,
+        /// Extractor-validated action lifecycle or newly decoded source text.
+        event: mez_agent::StreamingSayEvent,
     },
     /// Provider work failed before producing an execution.
     Failed {

@@ -16,84 +16,149 @@ const RATIONALE_ENTRY_CHAR_LIMIT: usize = 256;
 /// Minimum shared significant tokens for treating two progress updates as the
 /// same sequence point.
 const PROGRESS_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
-/// Maximum streamed MAAP characters retained while deriving one preview.
-const PROVISIONAL_SAY_INPUT_CHAR_LIMIT: usize = 16 * 1_024;
-/// Maximum visible characters exposed by one provisional preview.
-const PROVISIONAL_SAY_TEXT_CHAR_LIMIT: usize = 1_024;
-
-/// Display-safe provisional text extracted from an incomplete MAAP `say` action.
+/// One ordered presentation event extracted from an incomplete MAAP response.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProvisionalSayPreview {
-    /// Normalized supported media type declared by the provisional action.
-    pub content_type: String,
-    /// Cumulative decoded text available at the current stream boundary.
-    pub text: String,
+pub enum StreamingSayEvent {
+    /// A structurally established supported `say` action is ready for display.
+    Started {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+        /// Declared lifecycle status of the visible action.
+        status: SayStatus,
+        /// Normalized supported media type used to render the source.
+        content_type: String,
+    },
+    /// Newly decoded source text for one established `say` action.
+    TextDelta {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+        /// Ordered source suffix that has not been emitted previously.
+        text: String,
+    },
+    /// The action's JSON `text` string has closed.
+    TextComplete {
+        /// Zero-based position in the MAAP `actions` array.
+        action_index: usize,
+    },
 }
 
-/// Bounded fail-closed extractor for streamed direct or fenced MAAP output.
+/// Per-action source state already exposed by [`StreamingSayExtractor`].
+#[derive(Debug, Clone, Default)]
+struct EmittedStreamingSay {
+    started: bool,
+    text: String,
+    complete: bool,
+}
+
+/// Fail-closed extractor for ordered source events from direct or fenced MAAP.
+///
+/// The provider HTTP response limit remains the resource bound. This extractor
+/// deliberately has no presentation-specific input or visible-text limit.
 #[derive(Debug, Default)]
-pub struct ProvisionalSayExtractor {
+pub struct StreamingSayExtractor {
     input: String,
+    emitted: Vec<EmittedStreamingSay>,
     disabled: bool,
 }
 
-impl ProvisionalSayExtractor {
-    /// Appends one provider delta and returns the newest cumulative safe preview.
-    pub fn push_delta(&mut self, delta: &str) -> Option<ProvisionalSayPreview> {
+impl StreamingSayExtractor {
+    /// Appends one provider fragment and returns every newly established event.
+    pub fn push_delta(&mut self, delta: &str) -> Vec<StreamingSayEvent> {
         if self.disabled {
-            return None;
-        }
-        if self
-            .input
-            .chars()
-            .count()
-            .saturating_add(delta.chars().count())
-            > PROVISIONAL_SAY_INPUT_CHAR_LIMIT
-        {
-            self.disabled = true;
-            self.input.clear();
-            return None;
+            return Vec::new();
         }
         self.input.push_str(delta);
-        provisional_say_preview(&self.input)
+        let Some(actions) = streaming_say_actions(&self.input) else {
+            return Vec::new();
+        };
+        let required_states = actions
+            .last()
+            .map_or(0, |action| action.action_index.saturating_add(1));
+        if self.emitted.len() < required_states {
+            self.emitted
+                .resize_with(required_states, EmittedStreamingSay::default);
+        }
+
+        let mut events = Vec::new();
+        for action in actions {
+            let state = &mut self.emitted[action.action_index];
+            if !state.started {
+                state.started = true;
+                events.push(StreamingSayEvent::Started {
+                    action_index: action.action_index,
+                    status: action.status,
+                    content_type: action.content_type,
+                });
+            }
+            let Some(delta) = action.text.strip_prefix(&state.text) else {
+                self.disable();
+                return Vec::new();
+            };
+            if !delta.is_empty() {
+                events.push(StreamingSayEvent::TextDelta {
+                    action_index: action.action_index,
+                    text: delta.to_string(),
+                });
+                state.text = action.text;
+            }
+            if action.complete && !state.complete {
+                state.complete = true;
+                events.push(StreamingSayEvent::TextComplete {
+                    action_index: action.action_index,
+                });
+            }
+        }
+        events
     }
 
-    /// Permanently suppresses preview extraction for the current provider response.
+    /// Permanently suppresses extraction for the current provider response.
     pub fn disable(&mut self) {
         self.disabled = true;
         self.input.clear();
+        self.emitted.clear();
     }
 }
 
-/// Extracts only a first-action `say` whose type and supported media type are
-/// already complete before its text field begins.
-fn provisional_say_preview(input: &str) -> Option<ProvisionalSayPreview> {
+/// One currently classifiable streamed action and its cumulative source.
+struct StreamingSayAction {
+    action_index: usize,
+    status: SayStatus,
+    content_type: String,
+    text: String,
+    complete: bool,
+}
+
+/// Extracts all structurally established supported `say` actions.
+fn streaming_say_actions(input: &str) -> Option<Vec<StreamingSayAction>> {
     let object = provisional_maap_object(input)?;
-    let actions = json_key_value_start(object, "actions")?;
-    let action_start = actions
+    let actions = direct_json_field_value_start(object, "actions")?
         .trim_start()
-        .strip_prefix('[')?
-        .trim_start()
-        .strip_prefix('{')?;
-    if json_string_field(action_start, "type")?.as_str() != "say" {
-        return None;
+        .strip_prefix('[')?;
+    let mut extracted = Vec::new();
+    for (action_index, action) in direct_json_array_objects(actions).into_iter().enumerate() {
+        if json_string_field(action, "type")?.as_str() != "say" {
+            continue;
+        }
+        let status = SayStatus::parse(&json_string_field(action, "status")?)?;
+        let content_type = json_string_field(action, "content_type")?;
+        let content_type = crate::normalize_agent_output_content_type(Some(&content_type));
+        if content_type != crate::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+            && !crate::agent_output_content_type_is_markdown(&content_type)
+            && !crate::agent_output_content_type_is_diff(&content_type)
+        {
+            continue;
+        }
+        let text_start = direct_json_field_value_start(action, "text")?.trim_start();
+        let (text, complete) = decode_incomplete_json_string(text_start)?;
+        extracted.push(StreamingSayAction {
+            action_index,
+            status,
+            content_type,
+            text,
+            complete,
+        });
     }
-    let content_type = json_string_field(action_start, "content_type")?;
-    let content_type = crate::normalize_agent_output_content_type(Some(&content_type));
-    if !crate::agent_output_content_type_is_markdown(&content_type)
-        && content_type != crate::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-    {
-        return None;
-    }
-    let text_start = json_key_value_start(action_start, "text")?.trim_start();
-    let text = decode_incomplete_json_string(text_start)?;
-    if text.is_empty() {
-        return None;
-    }
-    Some(ProvisionalSayPreview {
-        content_type,
-        text: text.chars().take(PROVISIONAL_SAY_TEXT_CHAR_LIMIT).collect(),
-    })
+    Some(extracted)
 }
 
 /// Returns the direct JSON object or the body of one recognized MAAP fence.
@@ -106,29 +171,100 @@ fn provisional_maap_object(input: &str) -> Option<&str> {
     Some(body.trim_start_matches(['\r', '\n']))
 }
 
-/// Finds one complete JSON string key and returns its value suffix.
-fn json_key_value_start<'a>(input: &'a str, key: &str) -> Option<&'a str> {
-    let needle = serde_json::to_string(key).ok()?;
-    let mut search = input;
-    while let Some(index) = search.find(&needle) {
-        let suffix = &search[index + needle.len()..];
-        if let Some(value) = suffix.trim_start().strip_prefix(':') {
-            return Some(value);
+/// Finds one direct JSON object field and returns its value suffix.
+fn direct_json_field_value_start<'a>(input: &'a str, key: &str) -> Option<&'a str> {
+    let bytes = input.as_bytes();
+    let mut index = input.find('{')?.saturating_add(1);
+    let mut depth = 1_usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                let end = complete_json_string_end(&input[index..])?;
+                if depth == 1
+                    && serde_json::from_str::<String>(&input[index..index + end])
+                        .ok()?
+                        .as_str()
+                        == key
+                {
+                    let suffix = input[index + end..].trim_start();
+                    return suffix.strip_prefix(':');
+                }
+                index += end;
+            }
+            b'{' | b'[' => {
+                depth = depth.saturating_add(1);
+                index += 1;
+            }
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+                index += 1;
+            }
+            _ => index += 1,
         }
-        search = &suffix[1.min(suffix.len())..];
     }
     None
 }
 
+/// Returns each complete or currently incomplete direct object in one array.
+fn direct_json_array_objects(input: &str) -> Vec<&str> {
+    let bytes = input.as_bytes();
+    let mut objects = Vec::new();
+    let mut index = 0_usize;
+    let mut array_depth = 1_usize;
+    while index < bytes.len() && array_depth == 1 {
+        match bytes[index] {
+            b'"' => {
+                let Some(end) = complete_json_string_end(&input[index..]) else {
+                    break;
+                };
+                index += end;
+            }
+            b'[' => {
+                array_depth += 1;
+                index += 1;
+            }
+            b']' => break,
+            b'{' => {
+                let start = index;
+                let mut object_depth = 1_usize;
+                index += 1;
+                while index < bytes.len() && object_depth > 0 {
+                    match bytes[index] {
+                        b'"' => {
+                            let Some(end) = complete_json_string_end(&input[index..]) else {
+                                index = bytes.len();
+                                break;
+                            };
+                            index += end;
+                        }
+                        b'{' => {
+                            object_depth += 1;
+                            index += 1;
+                        }
+                        b'}' => {
+                            object_depth -= 1;
+                            index += 1;
+                        }
+                        _ => index += 1,
+                    }
+                }
+                objects.push(&input[start..index]);
+            }
+            _ => index += 1,
+        }
+    }
+    objects
+}
+
 /// Decodes one complete JSON string field.
 fn json_string_field(input: &str, key: &str) -> Option<String> {
-    let value = json_key_value_start(input, key)?.trim_start();
+    let value = direct_json_field_value_start(input, key)?.trim_start();
     let end = complete_json_string_end(value)?;
     serde_json::from_str(&value[..end]).ok()
 }
 
-/// Decodes the longest valid prefix of an incomplete JSON string.
-fn decode_incomplete_json_string(input: &str) -> Option<String> {
+/// Decodes the longest valid prefix and reports whether the string has closed.
+fn decode_incomplete_json_string(input: &str) -> Option<(String, bool)> {
     let input = input.strip_prefix('"')?;
     let mut escaped = false;
     let mut complete_end = None;
@@ -155,7 +291,7 @@ fn decode_incomplete_json_string(input: &str) -> Option<String> {
     {
         let encoded = format!("\"{}\"", &candidate[..end]);
         if let Ok(decoded) = serde_json::from_str::<String>(&encoded) {
-            return Some(decoded);
+            return Some((decoded, complete_end.is_some()));
         }
     }
     None
@@ -511,46 +647,106 @@ pub fn progress_say_token_is_stopword(token: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Verifies fragmented direct and fenced MAAP expose only established say text.
+    /// Verifies fragmented direct and fenced MAAP emit ordered source events.
     #[test]
-    fn provisional_say_extractor_handles_fragmented_direct_and_fenced_maap() {
+    fn streaming_say_extractor_handles_fragmented_direct_and_fenced_maap() {
         for prefix in ["", "```mezzanine-action-json\n"] {
-            let mut extractor = ProvisionalSayExtractor::default();
-            assert_eq!(extractor.push_delta(prefix), None);
+            let mut extractor = StreamingSayExtractor::default();
+            assert!(extractor.push_delta(prefix).is_empty());
             assert_eq!(
                 extractor.push_delta(
                     r#"{"rationale":"stream","actions":[{"type":"say","status":"final","content_type":"text/markdown; charset=utf-8","text":"Hello "#,
                 ),
-                Some(ProvisionalSayPreview {
-                    content_type: crate::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
-                    text: "Hello ".to_string(),
-                })
+                vec![
+                    StreamingSayEvent::Started {
+                        action_index: 0,
+                        status: SayStatus::Final,
+                        content_type: crate::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+                    },
+                    StreamingSayEvent::TextDelta {
+                        action_index: 0,
+                        text: "Hello ".to_string(),
+                    },
+                ]
             );
             assert_eq!(
-                extractor
-                    .push_delta(r#"**wörld**\nnext"}] }"#)
-                    .unwrap()
-                    .text,
-                "Hello **wörld**\nnext"
+                extractor.push_delta(r#"**wörld**\nnext"}] }"#),
+                vec![
+                    StreamingSayEvent::TextDelta {
+                        action_index: 0,
+                        text: "**wörld**\nnext".to_string(),
+                    },
+                    StreamingSayEvent::TextComplete { action_index: 0 },
+                ]
             );
         }
     }
 
-    /// Verifies non-say, unsupported, and oversized streams fail closed.
+    /// Verifies unsupported fields fail closed without leaking nested text.
     #[test]
-    fn provisional_say_extractor_rejects_unsafe_streams() {
+    fn streaming_say_extractor_rejects_unsafe_streams() {
         for raw in [
             r#"{"actions":[{"type":"shell_command","content_type":"text/plain","text":"secret"}]}"#,
-            r#"{"actions":[{"type":"say","content_type":"text/x-diff","text":"secret"}]}"#,
+            r#"{"rationale":"{\"actions\":[{\"type\":\"say\",\"status\":\"final\",\"content_type\":\"text/plain\",\"text\":\"secret\"}]}","actions":[]}"#,
+            r#"{"actions":[{"type":"say","status":"unknown","content_type":"text/plain","text":"secret"}]}"#,
         ] {
-            assert_eq!(ProvisionalSayExtractor::default().push_delta(raw), None);
+            assert!(StreamingSayExtractor::default().push_delta(raw).is_empty());
         }
-        let mut oversized = ProvisionalSayExtractor::default();
-        assert_eq!(
-            oversized.push_delta(&"x".repeat(PROVISIONAL_SAY_INPUT_CHAR_LIMIT + 1)),
-            None
+    }
+
+    /// Verifies all supported media types, multiple actions, and long text are untruncated.
+    #[test]
+    fn streaming_say_extractor_supports_multiple_untruncated_actions() {
+        let long_text = "x".repeat(20_000);
+        let input = format!(
+            r#"{{"actions":[{{"type":"say","status":"progress","content_type":"text/x-diff","text":"--- a\n+++ b"}},{{"type":"shell_command","summary":"skip","command":"true"}},{{"type":"say","status":"final","content_type":"text/plain","text":"{long_text}"}}]}}"#
         );
-        assert_eq!(oversized.push_delta("safe"), None);
+        let events = StreamingSayExtractor::default().push_delta(&input);
+        assert_eq!(
+            events.first(),
+            Some(&StreamingSayEvent::Started {
+                action_index: 0,
+                status: SayStatus::Progress,
+                content_type: crate::AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE.to_string(),
+            })
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            StreamingSayEvent::TextDelta { action_index: 2, text } if text == &long_text
+        )));
+    }
+
+    /// Verifies incomplete JSON escapes emit only after they decode to full characters.
+    #[test]
+    fn streaming_say_extractor_waits_for_complete_json_escapes() {
+        let mut extractor = StreamingSayExtractor::default();
+        let events = extractor.push_delta(
+            r#"{"actions":[{"type":"say","status":"final","content_type":"text/plain","text":"a\uD83D"#,
+        );
+        assert_eq!(
+            events,
+            vec![
+                StreamingSayEvent::Started {
+                    action_index: 0,
+                    status: SayStatus::Final,
+                    content_type: crate::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+                },
+                StreamingSayEvent::TextDelta {
+                    action_index: 0,
+                    text: "a".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            extractor.push_delta(r#"\uDE00\n"}] }"#),
+            vec![
+                StreamingSayEvent::TextDelta {
+                    action_index: 0,
+                    text: "😀\n".to_string(),
+                },
+                StreamingSayEvent::TextComplete { action_index: 0 },
+            ]
+        );
     }
 
     /// Verifies normalization collapses whitespace and bounds progress entries.

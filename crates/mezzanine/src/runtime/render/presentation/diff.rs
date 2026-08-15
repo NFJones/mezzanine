@@ -97,6 +97,42 @@ pub(crate) fn readable_agent_diff_display_lines_for_width(
     bound_agent_diff_display_lines(wrapped)
 }
 
+/// Builds an unbounded live `say` diff projection for one pane width.
+///
+/// Provider-authored `say` output is canonical assistant presentation rather
+/// than a command preview, so only terminal history and provider response
+/// limits bound this projection. An empty result means the accumulated source
+/// is not structurally recognizable as a diff yet.
+pub(crate) fn streaming_agent_diff_display_lines_for_width(
+    text: &str,
+    ui_theme: &UiTheme,
+    display_width: usize,
+) -> Vec<RichTextLine> {
+    let source_lines = cleaned_agent_diff_source_lines(text);
+    if source_lines.is_empty() {
+        return Vec::new();
+    }
+    let sections = parse_unified_diff_sections(&source_lines);
+    let mut lines = if sections.is_empty() {
+        parse_agent_path_delta_display_lines(&source_lines, ui_theme)
+    } else {
+        render_agent_unified_diff_sections(&sections, ui_theme)
+    };
+    if lines.is_empty() {
+        lines = source_lines
+            .into_iter()
+            .map(|line| {
+                rendered_agent_diff_plain_line(agent_diff_line_style(&line), &line, ui_theme)
+            })
+            .collect();
+    }
+    lines
+        .into_iter()
+        .flat_map(|line| wrap_rich_text_line_to_width(line, display_width.max(1)))
+        .filter(|line| !line.display.trim().is_empty())
+        .collect()
+}
+
 /// Removes Mezzanine wrapper and prompt echo lines around a diff.
 pub(crate) fn cleaned_agent_diff_source_lines(text: &str) -> Vec<String> {
     let mut lines = Vec::new();

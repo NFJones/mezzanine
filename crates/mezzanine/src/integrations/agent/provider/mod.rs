@@ -149,11 +149,11 @@ pub trait AsyncModelProvider: Send + Sync {
         request: &'a ModelRequest,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>;
 
-    /// Sends one request while best-effort reporting bounded visible stream deltas.
+    /// Sends one request while reporting ordered visible streaming say events.
     fn send_request_async_with_progress<'a>(
         &'a self,
         request: &'a ModelRequest,
-        _progress: Option<tokio::sync::mpsc::Sender<mez_agent::ProvisionalSayPreview>>,
+        _progress: Option<tokio::sync::mpsc::UnboundedSender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         self.send_request_async(request)
     }
@@ -893,7 +893,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
     fn send_request_async_with_progress<'a>(
         &'a self,
         request: &'a ModelRequest,
-        progress: Option<tokio::sync::mpsc::Sender<mez_agent::ProvisionalSayPreview>>,
+        progress: Option<tokio::sync::mpsc::UnboundedSender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
         Box::pin(async move {
             if request.provider != AsyncModelProvider::provider_id(self) {
@@ -910,7 +910,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 self.timeout_ms,
             )?;
             let mut stream_decoder = OpenAiResponsesStreamDecoder::default();
-            let mut preview_extractor = mez_agent::ProvisionalSayExtractor::default();
+            let mut streaming_say_extractor = mez_agent::StreamingSayExtractor::default();
             let mut stream_error = None;
             let response = if self.stream {
                 let mut on_event = |event| {
@@ -921,10 +921,11 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                             Err(error) => stream_error = Some(error),
                         }
                         if let Some(fragment) = provider_maap_stream_fragment(&event)
-                            && let Some(preview) = preview_extractor.push_delta(&fragment)
                             && let Some(progress) = progress.as_ref()
                         {
-                            let _ = progress.try_send(preview);
+                            for event in streaming_say_extractor.push_delta(&fragment) {
+                                let _ = progress.send(event);
+                            }
                         }
                     }
                 };

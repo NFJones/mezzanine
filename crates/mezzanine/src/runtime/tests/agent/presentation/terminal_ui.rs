@@ -132,6 +132,271 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
     assert!(pane_text.contains("▐      delta epsilon"), "{pane_text}");
 }
 
+/// Verifies streamed Markdown is the canonical assistant presentation rather
+/// than a bounded preview that is replayed after validated completion.
+///
+/// The prefix must exist before source text arrives, completed Markdown must
+/// replace its literal delimiters with rich styling, exact reconciliation must
+/// persist the raw source once, and ordinary completion presentation must not
+/// append a duplicate assistant block.
+#[test]
+fn runtime_streaming_say_promotes_rich_output_without_replay() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("streaming-say-promotion"));
+    service
+        .attach_primary("primary", true, Size::new(40, 12).unwrap(), 120)
+        .unwrap();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let conversation_id = service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
+    );
+
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Final,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+            },
+        )
+        .unwrap();
+    let started = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(started.contains("mez>"), "{started}");
+
+    let source = "**streamed** output";
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: source.to_string(),
+            },
+        )
+        .unwrap();
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+        )
+        .unwrap();
+    let rendered_before_completion = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines();
+    let rendered_text = rendered_before_completion.join("\n");
+    assert!(rendered_text.contains("streamed output"), "{rendered_text}");
+    assert!(!rendered_text.contains("**streamed**"), "{rendered_text}");
+    let streamed_line = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_styled_content_lines()
+        .into_iter()
+        .find(|line| line.text.contains("streamed output"))
+        .expect("streamed Markdown line should be visible");
+    assert!(!streamed_line.style_spans.is_empty(), "{streamed_line:?}");
+
+    let action = mez_agent::AgentAction {
+        id: "say-streamed".to_string(),
+        rationale: String::new(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: source.to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: source.to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: String::new(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![action],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    assert_eq!(
+        service
+            .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
+            .unwrap(),
+        std::collections::BTreeSet::from([0])
+    );
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_pane_screen("%1")
+            .unwrap()
+            .normal_content_lines(),
+        rendered_before_completion
+    );
+    let entries = transcript_store
+        .inspect_presentation(&conversation_id)
+        .unwrap();
+    let matching = entries
+        .iter()
+        .filter(|entry| entry.source_text.as_deref() == Some(source))
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1, "{entries:?}");
+    assert_eq!(
+        matching[0].source_content_type.as_deref(),
+        Some(mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE)
+    );
+}
+
+/// Verifies streamed source is neither truncated by shell-preview settings nor
+/// retained when validated completion supplies different authoritative text.
+///
+/// Long live output must retain its beginning and end in terminal history. A
+/// later mismatch must restore the pre-stream screen so normal presentation can
+/// append only the validated replacement.
+#[test]
+fn runtime_streaming_say_is_untruncated_and_mismatch_restores_baseline() {
+    let mut service = test_runtime_service();
+    service
+        .attach_primary("primary", true, Size::new(32, 8).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    set_agent_pane_screen_for_test(
+        &mut service,
+        "%1",
+        TerminalScreen::new(Size::new(32, 8).unwrap(), 120).unwrap(),
+    );
+    service
+        .append_agent_status_text_to_terminal_buffer("%1", "baseline")
+        .unwrap();
+    let long_source = (0..24)
+        .map(|index| format!("stream-line-{index:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::Started {
+                action_index: 0,
+                status: mez_agent::SayStatus::Final,
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        )
+        .unwrap();
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::TextDelta {
+                action_index: 0,
+                text: long_source,
+            },
+        )
+        .unwrap();
+    service
+        .apply_agent_streaming_say_event_to_terminal_buffer(
+            "%1",
+            "turn-1",
+            &mez_agent::StreamingSayEvent::TextComplete { action_index: 0 },
+        )
+        .unwrap();
+    let streamed = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(streamed.contains("stream-line-00"), "{streamed}");
+    assert!(streamed.contains("stream-line-23"), "{streamed}");
+
+    let replacement = "validated replacement";
+    let action = mez_agent::AgentAction {
+        id: "say-replacement".to_string(),
+        rationale: String::new(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: replacement.to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture("turn-1"),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: replacement.to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: String::new(),
+                thought: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                actions: vec![action],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    assert!(
+        service
+            .reconcile_agent_streaming_say_completion("%1", "turn-1", &execution)
+            .unwrap()
+            .is_empty()
+    );
+    service
+        .present_agent_response_actions_to_terminal_buffer("%1", &execution)
+        .unwrap();
+    let final_text = service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(final_text.contains("baseline"), "{final_text}");
+    assert!(final_text.contains(replacement), "{final_text}");
+    assert!(!final_text.contains("stream-line-00"), "{final_text}");
+    assert_eq!(final_text.matches(replacement).count(), 1, "{final_text}");
+}
+
 /// Verifies user-visible status rows persist typed source and replay through
 /// their original presentation style after a geometry-aware rebuild.
 #[test]

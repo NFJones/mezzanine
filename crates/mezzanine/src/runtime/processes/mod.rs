@@ -1001,11 +1001,6 @@ impl RuntimeSessionService {
         &self.process.settings.terminal_term
     }
 
-    /// Returns the shared transient preview visual-row limit.
-    pub(crate) fn terminal_shell_output_preview_lines(&self) -> usize {
-        self.process.settings.terminal_shell_output_preview_lines
-    }
-
     /// Applies one parsed generation of terminal process settings.
     pub(crate) fn apply_process_terminal_settings(
         &mut self,

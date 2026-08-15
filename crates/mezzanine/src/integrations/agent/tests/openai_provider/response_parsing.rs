@@ -546,6 +546,123 @@ fn openai_provider_stream_parses_maap_function_call_arguments() {
     }
 }
 
+#[tokio::test]
+/// Verifies provider streaming forwards an ordered `say` event backlog larger
+/// than the former bounded progress channel without dropping source text.
+///
+/// Each source character arrives in its own SSE event. The collected deltas
+/// must reconstruct the exact validated action text and include both lifecycle
+/// events even when more than 32 provider fragments are queued.
+async fn openai_provider_stream_forwards_lossless_say_event_backlog() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            reasoning_profile: None,
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "stream a long answer".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+    let text = (0..96)
+        .map(|index| char::from(b'a' + (index % 26) as u8))
+        .collect::<String>();
+    let maap = serde_json::json!({
+        "rationale": "stream the requested answer",
+        "actions": [{
+            "type": "say",
+            "status": "final",
+            "content_type": "text/plain; charset=utf-8",
+            "text": text,
+        }],
+    })
+    .to_string();
+    let mut body = String::new();
+    for character in maap.chars() {
+        body.push_str("event: response.output_text.delta\n");
+        body.push_str("data: ");
+        body.push_str(
+            &serde_json::json!({
+                "type": "response.output_text.delta",
+                "delta": character.to_string(),
+            })
+            .to_string(),
+        );
+        body.push_str("\n\n");
+    }
+    body.push_str("event: response.completed\n");
+    body.push_str(&format!(
+        "data: {}\n\n",
+        serde_json::json!({
+            "type": "response.completed",
+            "response": {"id": "resp_1", "model": "gpt-test"},
+        })
+    ));
+    let transport = AsyncFakeProviderHttpTransport {
+        requests: std::sync::Mutex::new(Vec::new()),
+        response: ProviderHttpResponse {
+            status_code: 200,
+            headers: Default::default(),
+            body,
+        },
+    };
+    let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+        "test-key",
+        "https://example.test/responses",
+        10,
+        std::collections::BTreeMap::new(),
+        true,
+        transport,
+    )
+    .unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+
+    let response = provider
+        .send_request_async_with_progress(&request, Some(sender))
+        .await
+        .unwrap();
+    let events = std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>();
+
+    assert!(matches!(
+        events.first(),
+        Some(mez_agent::StreamingSayEvent::Started {
+            action_index: 0,
+            status: mez_agent::SayStatus::Final,
+            content_type,
+        }) if content_type == mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+    ));
+    assert!(matches!(
+        events.last(),
+        Some(mez_agent::StreamingSayEvent::TextComplete { action_index: 0 })
+    ));
+    let streamed_text = events
+        .iter()
+        .filter_map(|event| match event {
+            mez_agent::StreamingSayEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(streamed_text, text);
+    assert!(events.len() > 32, "events={}", events.len());
+    let batch = response.action_batch.unwrap();
+    match &batch.actions[0].payload {
+        AgentActionPayload::Say {
+            text: validated, ..
+        } => assert_eq!(validated, &text),
+        payload => panic!("unexpected payload: {payload:?}"),
+    }
+}
+
 #[test]
 /// Verifies cumulative streaming function-call argument snapshots replace the
 /// previous buffer instead of appending forever.

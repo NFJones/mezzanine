@@ -380,7 +380,7 @@ async fn monitor_runtime_agent_provider_dispatch(
         return Ok(None);
     }
     let pane_id = dispatch.turn.pane_id.clone();
-    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::channel(32);
+    let (progress_sender, mut progress_receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut latency = ProviderLatencyTracker::new(Instant::now());
     let mut worker = tokio::spawn(execute_runtime_agent_provider_dispatch(
         dispatch,
@@ -393,17 +393,29 @@ async fn monitor_runtime_agent_provider_dispatch(
                     crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
                     latency.total_elapsed_ms(Instant::now()),
                 );
+                let mut batch = RuntimeEventBatch::new();
+                while let Ok(event) = progress_receiver.try_recv() {
+                    batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::StreamingSay {
+                        agent_id: agent_id.clone(),
+                        turn_id: turn_id.clone(),
+                        pane_id: pane_id.clone(),
+                        event,
+                    }));
+                }
+                if !batch.events.is_empty() {
+                    handle.submit_runtime_events(batch).await?;
+                }
                 return Ok(Some(provider_worker_event(agent_id, turn_id, result)));
             }
-            Some(preview) = progress_receiver.recv() => {
+            Some(event) = progress_receiver.recv() => {
                 let (phase, elapsed_ms) = latency.observe_progress(Instant::now());
                 handle.record_latency_phase(phase, elapsed_ms);
                 let mut batch = RuntimeEventBatch::new();
-                batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::OutputProgress {
+                batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::StreamingSay {
                     agent_id: agent_id.clone(),
                     turn_id: turn_id.clone(),
                     pane_id: pane_id.clone(),
-                    preview,
+                    event,
                 }));
                 handle.submit_runtime_events(batch).await?;
             }
@@ -664,7 +676,9 @@ fn remember_worker_event(
 /// on duplicated control-flow logic.
 async fn execute_runtime_agent_provider_dispatch(
     dispatch: RuntimeAgentProviderDispatch,
-    output_progress_sender: Option<tokio::sync::mpsc::Sender<mez_agent::ProvisionalSayPreview>>,
+    output_progress_sender: Option<
+        tokio::sync::mpsc::UnboundedSender<mez_agent::StreamingSayEvent>,
+    >,
 ) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
         turn,

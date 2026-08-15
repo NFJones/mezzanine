@@ -36,7 +36,7 @@ surface; an absent action family must be requested, not emulated.
 
 | Action | Required fields | Contract boundary |
 | --- | --- | --- |
-| `say` | `status`, `content_type`, `text` | Display-only `progress`, `final`, or `blocked` text. Commands and patches in text do not execute. |
+| `say` | `status`, `content_type`, `text` | Display-only `progress`, `final`, or `blocked` text. Supported plain-text, Markdown, and diff source is rendered while streaming, then validated and promoted in place without truncation or final replay. Commands and patches in text do not execute. |
 | `request_capability` | `capability`, `reason` | Requests a coarse runtime action family; it is not a user permission request. |
 | `shell_command` | `summary`, `command` | Sends exact local shell input through the pane shell. Optional `interactive`, `stateful`, and `timeout_ms` refine execution. |
 | `apply_patch` | `patch` | The only semantic file-content mutation action; payload uses Mezzanine `*** Begin Patch` format. |

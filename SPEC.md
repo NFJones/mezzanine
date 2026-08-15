@@ -2081,17 +2081,27 @@ overwrite it. If a PTY read contains both a Mezzanine transaction-end marker and
 the parent shell's next prompt repaint, prompt bytes after the marker MUST NOT
 be considered command output for this transient preview. The transient preview
 SHOULD use the same muted foreground treatment as agent thinking or status text.
-While a provider response streams, Mezzanine MAY use that same visual-row limit
-for a transient assistant preview only after a bounded incremental MAAP parser
-has established one supported `say` action and decoded its `text/plain` or
-Markdown text. Raw provider deltas, rationale, non-`say` actions, malformed or
-ambiguous MAAP, unsupported content types, and oversized streams MUST NOT become
-visible previews. Accepted previews MUST use normal assistant wrapping and
-Markdown rendering with muted styling, MUST replace prior preview rows, MUST
-remain nonpersistent and non-copyable, and MUST be cleared on completion,
-failure, cancellation, retry, claim loss, or pane/session replacement. Final
-validated MAAP output remains authoritative and MUST produce exactly the normal
-durable assistant presentation independently of any transient preview.
+While a provider response streams, Mezzanine MUST treat each structurally
+established supported `say` action as the canonical assistant presentation, not
+as a command-style preview. It MUST display `mez> ` before the first text
+character, decode and apply every source character in order without dropping or
+truncating deltas, and MUST NOT apply `terminal.shell_output_preview_lines` to
+streamed `say` output. Physical client redraws MAY be coalesced by the global
+render-rate limit, but the terminal model MUST receive every decoded character.
+Mezzanine MUST render accumulated `text/plain`, Markdown, and unified-diff source
+according to the action's normalized `content_type`. Incomplete source MUST
+remain visible literally, and when additional characters make a rich projection
+parseable, Mezzanine MUST replace the same source-backed region with that
+projection instead of appending another block. Raw provider fields other than a
+structurally established `say.text`, including rationale and non-`say` action
+payloads, MUST NOT become visible through this streaming path.
+After provider completion, an exactly matching validated action index, status,
+content type, and raw text MUST promote the existing live region in place,
+persist its semantic source once, and suppress ordinary immediate or deferred
+replay. A mismatch MUST restore the pre-stream pane state and present only the
+validated action through the normal renderer. Provider failure, cancellation,
+retry, stale completion, claim loss, or pane/session replacement MUST discard
+unvalidated live state and restore that pre-stream state.
 Mezzanine MUST NOT impose a total per-turn automatic shell dispatch count cap,
 because broad but finite inspection batches are ordinary agent work. Mezzanine
 MUST still prevent provably duplicate file mutations from replaying after the

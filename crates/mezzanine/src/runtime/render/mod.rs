@@ -263,8 +263,12 @@ pub(crate) struct RuntimePresentationComponent {
         std::collections::BTreeMap<String, RuntimeAgentSelectorCandidateRefresh>,
     /// Pane-local transient shell-output status rows.
     agent_shell_output_status_lines: std::collections::BTreeMap<String, Vec<String>>,
-    /// Pane-local transient formatted provider `say` preview rows.
-    agent_provider_say_preview_lines: std::collections::BTreeMap<String, Vec<String>>,
+    /// Source-backed provider `say` output awaiting validated completion.
+    agent_streaming_say_presentations:
+        std::collections::BTreeMap<String, RuntimeStreamingSayPresentation>,
+    /// Streamed action indices already installed as validated presentation.
+    agent_promoted_streaming_say_actions:
+        std::collections::BTreeMap<(String, String), std::collections::BTreeSet<usize>>,
     /// Panes replaying durable agent presentation entries.
     agent_presentation_replay_panes: std::collections::BTreeSet<String>,
     /// Newest pane size awaiting source-backed agent presentation replay.
@@ -344,12 +348,40 @@ pub(super) struct RuntimeAgentSelectorCandidateRefresh {
     receiver: std::sync::mpsc::Receiver<Vec<SelectorExtraCandidate>>,
 }
 
+/// One source-backed provider response currently projected into an agent pane.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeStreamingSayPresentation {
+    /// Turn whose provider stream owns this presentation.
+    turn_id: String,
+    /// Conversation binding captured before the first streamed action.
+    conversation_id: String,
+    /// Exact pane state restored before each rich-source reprojection.
+    baseline_screen: TerminalScreen,
+    /// Established streamed actions keyed by their MAAP array index.
+    actions: std::collections::BTreeMap<usize, RuntimeStreamingSayAction>,
+}
+
+/// Accumulated source and contract fields for one streamed `say` action.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeStreamingSayAction {
+    /// Lifecycle status established before source text became visible.
+    status: mez_agent::SayStatus,
+    /// Normalized presentation media type.
+    content_type: String,
+    /// Complete decoded source received so far.
+    text: String,
+    /// Whether the JSON source string has closed.
+    complete: bool,
+}
+
 /// Pane-local presentation state restored when conversation resume fails.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeAgentResumePresentationSnapshot {
     prompt_input: Option<RuntimeAgentPromptInput>,
     shell_output_status_lines: Option<Vec<String>>,
-    provider_say_preview_lines: Option<Vec<String>>,
+    streaming_say_presentation: Option<RuntimeStreamingSayPresentation>,
+    promoted_streaming_say_actions:
+        std::collections::BTreeMap<(String, String), std::collections::BTreeSet<usize>>,
     projection: Option<(String, Size)>,
     pending_resize: Option<Size>,
     replay_active: bool,
@@ -410,7 +442,9 @@ impl RuntimePresentationComponent {
         self.agent_prompt_inputs.remove(pane_id);
         self.agent_prompt_selector_refreshes.remove(pane_id);
         self.agent_shell_output_status_lines.remove(pane_id);
-        self.agent_provider_say_preview_lines.remove(pane_id);
+        self.agent_streaming_say_presentations.remove(pane_id);
+        self.agent_promoted_streaming_say_actions
+            .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
         self.agent_presentation_replay_panes.remove(pane_id);
         self.pending_agent_presentation_resize_sizes.remove(pane_id);
         self.agent_presentation_projection_cache.remove(pane_id);
@@ -428,8 +462,6 @@ impl RuntimePresentationComponent {
             .insert(pane_id.to_string(), default_runtime_agent_prompt_input());
         self.agent_shell_output_status_lines
             .insert(pane_id.to_string(), vec!["pending status".to_string()]);
-        self.agent_provider_say_preview_lines
-            .insert(pane_id.to_string(), vec!["pending preview".to_string()]);
         self.agent_presentation_replay_panes
             .insert(pane_id.to_string());
         self.pending_agent_presentation_resize_sizes
@@ -443,7 +475,11 @@ impl RuntimePresentationComponent {
     pub(crate) fn has_agent_presentation_state_for_tests(&self, pane_id: &str) -> bool {
         self.agent_prompt_inputs.contains_key(pane_id)
             || self.agent_shell_output_status_lines.contains_key(pane_id)
-            || self.agent_provider_say_preview_lines.contains_key(pane_id)
+            || self.agent_streaming_say_presentations.contains_key(pane_id)
+            || self
+                .agent_promoted_streaming_say_actions
+                .keys()
+                .any(|(candidate_pane_id, _turn_id)| candidate_pane_id == pane_id)
             || self.agent_presentation_replay_panes.contains(pane_id)
             || self
                 .pending_agent_presentation_resize_sizes
@@ -509,11 +545,18 @@ impl RuntimeSessionService {
                 .agent_shell_output_status_lines
                 .get(pane_id)
                 .cloned(),
-            provider_say_preview_lines: self
+            streaming_say_presentation: self
                 .presentation
-                .agent_provider_say_preview_lines
+                .agent_streaming_say_presentations
                 .get(pane_id)
                 .cloned(),
+            promoted_streaming_say_actions: self
+                .presentation
+                .agent_promoted_streaming_say_actions
+                .iter()
+                .filter(|((candidate_pane_id, _turn_id), _indices)| candidate_pane_id == pane_id)
+                .map(|(key, indices)| (key.clone(), indices.clone()))
+                .collect(),
             projection: self
                 .presentation
                 .agent_presentation_projection_cache
@@ -590,13 +633,19 @@ impl RuntimeSessionService {
                 .insert(pane_id.to_string(), value);
         }
         self.presentation
-            .agent_provider_say_preview_lines
+            .agent_streaming_say_presentations
             .remove(pane_id);
-        if let Some(value) = snapshot.provider_say_preview_lines {
+        if let Some(value) = snapshot.streaming_say_presentation {
             self.presentation
-                .agent_provider_say_preview_lines
+                .agent_streaming_say_presentations
                 .insert(pane_id.to_string(), value);
         }
+        self.presentation
+            .agent_promoted_streaming_say_actions
+            .retain(|(candidate_pane_id, _turn_id), _indices| candidate_pane_id != pane_id);
+        self.presentation
+            .agent_promoted_streaming_say_actions
+            .extend(snapshot.promoted_streaming_say_actions);
         self.presentation
             .agent_presentation_projection_cache
             .remove(pane_id);

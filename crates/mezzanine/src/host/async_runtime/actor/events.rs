@@ -861,6 +861,8 @@ impl AsyncRuntimeSessionActor {
             } => {
                 let claim_cancellations = self.provider_claim_cancel_timer_side_effects(&turn_id);
                 self.service.clear_claimed_agent_provider_task(&turn_id);
+                self.service
+                    .discard_agent_streaming_say_presentations_for_turn(&turn_id)?;
                 let retry_class = provider_error_retry_class_from_parts(
                     provider_event_error_kind(&kind),
                     &message,
@@ -942,16 +944,14 @@ impl AsyncRuntimeSessionActor {
                 transition.side_effects.extend(claim_cancellations);
                 Ok(transition)
             }
-            AgentProviderEvent::OutputProgress {
+            AgentProviderEvent::StreamingSay {
                 agent_id,
                 turn_id,
                 pane_id,
-                preview,
-            } => Ok(self
-                .service
-                .apply_agent_provider_output_progress_transition(
-                    &agent_id, &turn_id, &pane_id, &preview,
-                )),
+                event,
+            } => Ok(self.service.apply_agent_provider_streaming_say_transition(
+                &agent_id, &turn_id, &pane_id, &event,
+            )),
             AgentProviderEvent::Completed {
                 agent_id,
                 turn_id,

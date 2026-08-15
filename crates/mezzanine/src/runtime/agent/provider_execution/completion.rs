@@ -29,11 +29,13 @@ impl RuntimeSessionService {
         else {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            self.discard_agent_streaming_say_presentations_for_turn(turn_id)?;
             return Ok(false);
         };
         if turn.state != AgentTurnState::Running {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            self.discard_agent_streaming_say_presentations_for_turn(turn_id)?;
             return Ok(false);
         }
         if self
@@ -99,6 +101,7 @@ impl RuntimeSessionService {
         if consumed_high_water_mark.is_some_and(|consumed| current_high_water_mark > consumed) {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            self.discard_agent_streaming_say_presentation(&turn.pane_id, Some(turn_id))?;
             self.agent
                 .pending_agent_provider_tasks
                 .insert(turn_id.to_string());
@@ -185,6 +188,7 @@ impl RuntimeSessionService {
             );
             return Ok(true);
         }
+        self.reconcile_agent_streaming_say_completion(&turn.pane_id, turn_id, &execution)?;
         let execution_profile = mez_agent::apply_auto_sizing_execution_profile(
             model_profile.clone(),
             &execution.request,

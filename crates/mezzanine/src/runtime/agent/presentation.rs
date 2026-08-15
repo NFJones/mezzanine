@@ -177,7 +177,7 @@ impl RuntimeSessionService {
             .actions
             .iter()
             .any(runtime_agent_action_has_runtime_visible_effect);
-        for action in &batch.actions {
+        for (action_index, action) in batch.actions.iter().enumerate() {
             let rationale_key = normalize_agent_user_visible_text(&action.rationale);
             if !action.rationale.trim().is_empty()
                 && !runtime_agent_action_rationale_repeats_visible_summary(action)
@@ -198,6 +198,14 @@ impl RuntimeSessionService {
                     text,
                     content_type,
                 } => {
+                    if self.agent_streaming_say_action_is_promoted(
+                        pane_id,
+                        &execution.request.turn_id,
+                        action_index,
+                    ) {
+                        emitted_user_visible_action = true;
+                        continue;
+                    }
                     if text.trim().is_empty() {
                         continue;
                     }
@@ -252,6 +260,9 @@ impl RuntimeSessionService {
                 "agent: completed without a user-facing response",
             )?;
         }
+        if !has_runtime_visible_action {
+            self.clear_promoted_agent_streaming_say_actions(pane_id, &execution.request.turn_id);
+        }
         Ok(())
     }
 
@@ -277,13 +288,20 @@ impl RuntimeSessionService {
         }
 
         let mut emitted = 0usize;
-        for action in &batch.actions {
+        for (action_index, action) in batch.actions.iter().enumerate() {
             if let AgentActionPayload::Say {
                 status,
                 text,
                 content_type,
             } = &action.payload
             {
+                if self.agent_streaming_say_action_is_promoted(
+                    pane_id,
+                    &execution.request.turn_id,
+                    action_index,
+                ) {
+                    continue;
+                }
                 if *status == SayStatus::Progress || text.trim().is_empty() {
                     continue;
                 }
@@ -295,6 +313,7 @@ impl RuntimeSessionService {
                 emitted = emitted.saturating_add(1);
             }
         }
+        self.clear_promoted_agent_streaming_say_actions(pane_id, &execution.request.turn_id);
         Ok(emitted)
     }
 

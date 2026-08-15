@@ -1576,6 +1576,7 @@ impl RuntimeSessionService {
         self.agent.pending_agent_provider_tasks.clear();
         self.agent.claimed_agent_provider_tasks.clear();
         for pane_id in pane_ids {
+            let _ = self.discard_agent_streaming_say_presentation(&pane_id, None);
             let _ = self.clear_agent_shell_output_status_line(&pane_id);
         }
     }

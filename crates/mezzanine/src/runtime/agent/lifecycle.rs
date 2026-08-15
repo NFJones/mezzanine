@@ -109,6 +109,13 @@ impl RuntimeSessionService {
                 session.visibility == AgentShellVisibility::HidePendingTaskCompletion
             });
 
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            self.discard_agent_streaming_say_presentation(pane_id, Some(turn_id))?;
+        }
+
         if !suppress_exit_output
             && state == AgentTurnState::Failed
             && let Some(execution) = self.agent_turn_executions().get(turn_id).cloned()
@@ -248,6 +255,12 @@ impl RuntimeSessionService {
         let conversation_still_owned = current_conversation == Some(turn.conversation_id.as_str());
         let conversation_was_replaced = current_conversation
             .is_some_and(|conversation_id| conversation_id != turn.conversation_id);
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            self.discard_agent_streaming_say_presentation(&turn.pane_id, Some(&turn.turn_id))?;
+        }
         if pane_present
             && conversation_still_owned
             && state == AgentTurnState::Failed
