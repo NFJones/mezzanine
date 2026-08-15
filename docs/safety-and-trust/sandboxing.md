@@ -14,10 +14,12 @@ replace the decision to approve an action.
 
 `permissions.sandbox = "policy-only"` does not confine filesystem or
 shell-network access. Approval policy and optional audit logging remain
-separate controls. `bubblewrap` launches
-eligible local shell workloads in a constrained Linux namespace. It requires a
-configured `bwrap` executable available in the active pane environment; Mez
-does not install a privileged helper.
+separate controls. `bubblewrap` is the current OS-confinement backend and
+requires a Linux pane environment. It launches eligible shell workloads in a
+constrained Linux namespace and requires a configured `bwrap` executable in
+that environment; Mez does not install a privileged helper. Other pane
+environments use `policy-only`, which remains an approval and coordination
+boundary rather than process isolation.
 
 Use `mez sandbox status --verbose` to inspect configured and effective state,
 and `mez sandbox plan` to preview guided setup. The agent-shell `/sandbox`

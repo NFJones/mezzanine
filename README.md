@@ -51,7 +51,7 @@ while you inspect, edit, and validate work.
 - **Reviewable actions:** visible shell commands, patches, approvals, MCP calls,
   and subagent work.
 - **Safety controls:** approval policy, project trust, and optional OS-level
-  confinement are distinct, visible controls.
+  confinement in Linux pane environments are distinct, visible controls.
 
 ## Prerequisites
 
@@ -137,6 +137,9 @@ scrollback, or other panes.
 Approval policy decides whether Mezzanine permits an action. OS confinement
 separately controls what an already-permitted local shell process can access,
 while web and integration actions have their own capability and approval gates.
+The current confinement backend is Bubblewrap in Linux pane environments.
+Other pane environments use the policy-only backend, which does not provide
+OS-level isolation.
 
 Review unfamiliar project overlays and applicable `AGENTS.md` files before
 trusting their guidance. Project instructions can shape workflow but cannot

@@ -31,9 +31,10 @@ authentication, MCP, issue, memory, sandbox, and snapshot commands.
 
 ## Before enabling confinement
 
-Bubblewrap confinement requires a configured `bwrap` executable in the active
-pane environment; Mezzanine does not install a privileged helper. Review its
-authority, network, and approval settings before enabling it.
+Bubblewrap confinement requires a Linux pane environment and a configured
+`bwrap` executable there; Mezzanine does not install a privileged helper. Other
+pane environments use `policy-only`, which does not provide OS-level isolation.
+Review Bubblewrap authority, network, and approval settings before enabling it.
 
 ## Related pages
 
