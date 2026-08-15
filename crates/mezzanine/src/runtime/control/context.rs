@@ -114,12 +114,9 @@ fn runtime_transcript_context_source_kind(entry: &TranscriptEntry) -> ContextSou
 /// that is useful for durable audit but harmful as future prompt context.
 fn runtime_transcript_entry_context_content(entry: &TranscriptEntry) -> Option<String> {
     match entry.role {
-        TranscriptRole::System
-            if ProviderTranscriptEvent::from_transcript_content(&entry.content).is_some() =>
-        {
-            Some(entry.content.clone())
-        }
-        TranscriptRole::System => None,
+        TranscriptRole::System => ProviderTranscriptEvent::from_transcript_content(&entry.content)
+            .and_then(|event| event.sanitized_for_historical_replay())
+            .map(|event| event.to_transcript_content()),
         TranscriptRole::Tool => runtime_transcript_tool_context_content(&entry.content),
         TranscriptRole::User if transcript_content_looks_like_skill_context(&entry.content) => None,
         TranscriptRole::Assistant

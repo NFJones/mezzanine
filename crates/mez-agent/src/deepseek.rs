@@ -659,7 +659,8 @@ mod tests {
         };
         let tool_event = ProviderTranscriptEvent::DeepSeekToolResult {
             tool_call_id: "call_1".to_string(),
-            content: "action_id=a1 status=success".to_string(),
+            content: "[action_result a1 shell_command succeeded]\nexit_code: 0\noutput:\ndeepseek-live-output-sentinel"
+                .to_string(),
         };
         let request = deepseek_test_request(vec![
             ModelMessage {
@@ -714,6 +715,16 @@ mod tests {
         assert_eq!(messages[2]["tool_calls"][0]["id"], "call_1");
         assert_eq!(messages[3]["role"], "tool");
         assert_eq!(messages[3]["tool_call_id"], "call_1");
+        assert_eq!(
+            messages[3]["content"],
+            "[action_result a1 shell_command succeeded]\nexit_code: 0\noutput:\ndeepseek-live-output-sentinel"
+        );
+        assert!(
+            !messages[3]["content"]
+                .as_str()
+                .unwrap()
+                .contains("historical_output: omitted")
+        );
         assert_eq!(messages[4]["role"], "user");
         assert_eq!(messages[4]["content"], "continue");
     }

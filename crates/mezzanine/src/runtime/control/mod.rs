@@ -1184,7 +1184,8 @@ mod tests {
     fn runtime_transcript_context_preserves_provider_native_system_entries() {
         let provider_event = ProviderTranscriptEvent::DeepSeekToolResult {
             tool_call_id: "call_1".to_string(),
-            content: "action result".to_string(),
+            content: "[action_result action-1 shell_command succeeded]\noutput:\nnative-secret"
+                .to_string(),
         }
         .to_transcript_content();
         let routed_handoff = TranscriptContextEvent::RoutedHandoff {
@@ -1266,12 +1267,19 @@ mod tests {
         let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
 
         assert_eq!(blocks.len(), 4);
-        assert_eq!(blocks[0].content, provider_event);
         assert_eq!(
             blocks[0].source,
             mez_agent::ContextSourceKind::TranscriptTool
         );
-        assert!(ProviderTranscriptEvent::from_transcript_content(&blocks[0].content).is_some());
+        let restored_provider_event =
+            ProviderTranscriptEvent::from_transcript_content(&blocks[0].content).unwrap();
+        let ProviderTranscriptEvent::DeepSeekToolResult { content, .. } = restored_provider_event
+        else {
+            panic!("expected restored DeepSeek tool result");
+        };
+        assert!(content.contains("[action_result action-1 shell_command succeeded]"));
+        assert!(content.contains("historical_output: omitted"));
+        assert!(!content.contains("native-secret"));
         assert_eq!(
             blocks[1].source,
             mez_agent::ContextSourceKind::RoutedHandoff

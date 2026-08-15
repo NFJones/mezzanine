@@ -171,7 +171,8 @@ mod tests {
         };
         let openai_result = ProviderTranscriptEvent::OpenAiFunctionCallOutput {
             call_id: "call_openai".to_string(),
-            output: "[action_result action-1 shell_command succeeded]".to_string(),
+            output: "[action_result action-1 shell_command succeeded]\nexit_code: 0\noutput:\nopenai-live-output-sentinel"
+                .to_string(),
         };
         let request = ModelRequest {
             provider: "openai".to_string(),
@@ -238,6 +239,8 @@ mod tests {
         assert!(rendered_json.contains("opaque-openai-ciphertext"));
         assert!(rendered_json.contains("\"call_id\":\"call_openai\""));
         assert!(rendered_json.contains("function_call_output"));
+        assert!(rendered_json.contains("openai-live-output-sentinel"));
+        assert!(!rendered_json.contains("historical_output: omitted"));
         assert!(!rendered.instructions.contains("DeepSeek-only reasoning"));
         assert!(!rendered_json.contains("reasoning_content"));
         assert!(!rendered_json.contains("call_1"));

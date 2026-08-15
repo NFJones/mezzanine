@@ -131,7 +131,7 @@ impl ProviderTranscriptEvent {
                 }
                 Some(Self::OpenAiFunctionCallOutput {
                     call_id: call_id.to_string(),
-                    output: crate::historical_tool_result_context_content(output)?,
+                    output: output.to_string(),
                 })
             }
             (DEEPSEEK_PROVIDER_ID, DEEPSEEK_ASSISTANT_TOOL_CALL_KIND) => {
@@ -153,13 +153,44 @@ impl ProviderTranscriptEvent {
                     tool_calls,
                 })
             }
-            (DEEPSEEK_PROVIDER_ID, DEEPSEEK_TOOL_RESULT_KIND) => Some(Self::DeepSeekToolResult {
-                tool_call_id: value.get("tool_call_id")?.as_str()?.to_string(),
-                content: crate::historical_tool_result_context_content(
-                    value.get("content")?.as_str()?,
-                )?,
-            }),
+            (DEEPSEEK_PROVIDER_ID, DEEPSEEK_TOOL_RESULT_KIND) => {
+                let tool_call_id = value.get("tool_call_id")?.as_str()?;
+                if tool_call_id.is_empty() {
+                    return None;
+                }
+                Some(Self::DeepSeekToolResult {
+                    tool_call_id: tool_call_id.to_string(),
+                    content: value.get("content")?.as_str()?.to_string(),
+                })
+            }
             _ => None,
+        }
+    }
+
+    /// Returns a secret-safe event suitable for replay from durable history.
+    ///
+    /// Decoding remains lossless so current-turn provider continuations retain
+    /// complete action output. Durable transcript import calls this method to
+    /// reduce provider-native tool results to canonical status metadata before
+    /// they re-enter model context.
+    pub fn sanitized_for_historical_replay(&self) -> Option<Self> {
+        match self {
+            Self::OpenAiFunctionCallOutput { call_id, output } => {
+                Some(Self::OpenAiFunctionCallOutput {
+                    call_id: call_id.clone(),
+                    output: crate::historical_tool_result_context_content(output)?,
+                })
+            }
+            Self::DeepSeekToolResult {
+                tool_call_id,
+                content,
+            } => Some(Self::DeepSeekToolResult {
+                tool_call_id: tool_call_id.clone(),
+                content: crate::historical_tool_result_context_content(content)?,
+            }),
+            Self::OpenAiResponseOutput { .. } | Self::DeepSeekAssistantToolCall { .. } => {
+                Some(self.clone())
+            }
         }
     }
 
@@ -395,25 +426,59 @@ mod tests {
         );
     }
 
+    /// Verifies decoding preserves live provider-native tool output while the
+    /// explicit durable-history policy removes raw result bodies.
+    ///
+    /// Current provider continuations and historical transcript restoration
+    /// share the event encoding, so this boundary test prevents either live
+    /// output loss or disclosure of persisted command output.
     #[test]
-    /// Verifies legacy provider-native tool results cannot replay raw output
-    /// bodies while canonical action identity and status remain available.
-    fn deepseek_tool_result_replay_omits_legacy_raw_output() {
-        let event = ProviderTranscriptEvent::DeepSeekToolResult {
+    fn provider_tool_results_are_lossless_until_historical_sanitization() {
+        let deepseek_event = ProviderTranscriptEvent::DeepSeekToolResult {
             tool_call_id: "call_1".to_string(),
             content: "[action_result a1 shell_command succeeded]\noutput:\nnative-secret"
                 .to_string(),
         };
-
-        let decoded =
-            ProviderTranscriptEvent::from_transcript_content(&event.to_transcript_content())
-                .unwrap();
-        let ProviderTranscriptEvent::DeepSeekToolResult { content, .. } = decoded else {
-            panic!("expected DeepSeek tool result");
+        let openai_event = ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+            call_id: "call_2".to_string(),
+            output: "[action_result a2 shell_command succeeded]\noutput:\nopenai-secret"
+                .to_string(),
         };
 
-        assert!(content.contains("[action_result a1 shell_command succeeded]"));
-        assert!(content.contains("historical_output: omitted"));
-        assert!(!content.contains("native-secret"));
+        for (event, secret) in [
+            (deepseek_event, "native-secret"),
+            (openai_event, "openai-secret"),
+        ] {
+            let decoded =
+                ProviderTranscriptEvent::from_transcript_content(&event.to_transcript_content())
+                    .unwrap();
+            assert_eq!(decoded, event);
+
+            let historical = decoded.sanitized_for_historical_replay().unwrap();
+            let encoded = historical.to_transcript_content();
+            assert!(encoded.contains("historical_output: omitted"));
+            assert!(!encoded.contains(secret));
+        }
+    }
+
+    /// Verifies provider-native tool results require non-empty provider call
+    /// identities before adapters can claim and replay the hidden event.
+    #[test]
+    fn provider_tool_results_reject_empty_call_ids() {
+        for event in [
+            ProviderTranscriptEvent::DeepSeekToolResult {
+                tool_call_id: String::new(),
+                content: "result".to_string(),
+            },
+            ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+                call_id: String::new(),
+                output: "result".to_string(),
+            },
+        ] {
+            assert_eq!(
+                ProviderTranscriptEvent::from_transcript_content(&event.to_transcript_content()),
+                None
+            );
+        }
     }
 }
